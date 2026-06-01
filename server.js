@@ -146,14 +146,30 @@ app.post("/api/bot/stop", async (req, res) => {
 // START SERVER
 // ─────────────────────────────────────────────
 server.listen(PORT, HOST, () => {
-  const display = HOST === "0.0.0.0" ? "localhost" : HOST;
+  const os = require("os");
+  const getLocalIP = () => {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name]) {
+        if (iface.family === "IPv4" && !iface.internal) {
+          return iface.address;
+        }
+      }
+    }
+    return "127.0.0.1";
+  };
+
+  const displayIP = HOST === "0.0.0.0" ? getLocalIP() : HOST;
+
   console.log("\n╔══════════════════════════════════════════════╗");
   console.log("║      Quantara API Server — Ready             ║");
   console.log("╚══════════════════════════════════════════════╝");
-  console.log(`  HTTP  : http://${display}:${PORT}`);
-  console.log(`  WS    : ws://${display}:${PORT}`);
+  console.log(`  HTTP  : http://${displayIP}:${PORT}`);
+  console.log(`  WS    : ws://${displayIP}:${PORT}`);
+  console.log(`  External: https://187.77.135.156:${PORT}`);
   console.log(`  Mode  : ${process.env.DRY_RUN !== "false" ? "DRY RUN" : "LIVE TRADING"}`);
-  console.log(`  Exchange: ${process.env.EXCHANGE || "bitget"}\n`);
+  console.log(`  Exchange: ${process.env.EXCHANGE || "bitget"}`);
+  console.log(`  CORS for: ${process.env.FE_URL || "all origins"}\n`);
 });
 
 // Graceful shutdown
