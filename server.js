@@ -1,388 +1,173 @@
 // ─────────────────────────────────────────────
-// server.js — Express API + WebSocket Server
-// Multi-bot management with real-time updates
+// server.js — Quantara API Server
+// HTTP + WebSocket server untuk FE integration
+//
+// Cara pakai:
+//   node server.js        (production)
+//   nodemon server.js     (development)
+//   npm run dev
 // ─────────────────────────────────────────────
 
 require("dotenv").config();
 
 const express = require("express");
-const cors = require("cors");
-const http = require("http");
+const cors    = require("cors");
+const http    = require("http");
 const { WebSocketServer } = require("ws");
 const BotEngine = require("./bot-engine");
-const logger = require("./logger");
-const { createExchangeClient } = require("./exchange-factory");
 
-// ==========================================
-// SETUP
-// ==========================================
+const PORT = parseInt(process.env.PORT) || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
+
+// ── Express ──
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
-app.use(cors({
-  origin: process.env.FE_URL || "*",
-  credentials: true,
-}));
+app.use(cors());           // Allow all origins (dev friendly)
 app.use(express.json());
 
-// Global bots registry
-const bots = new Map();
+// ── HTTP + WebSocket server ──
+const server = http.createServer(app);
+const wss    = new WebSocketServer({ server });
 
-// ==========================================
-// MIDDLEWARE
-// ==========================================
-app.use((req, res, next) => {
-  res.header("Content-Type", "application/json");
-  next();
-});
+// ── Bot engine ──
+const bot = new BotEngine();
 
-// ==========================================
-// HEALTH CHECK
-// ==========================================
-app.get("/", (req, res) => {
-  res.json({
-    name: "Quantara Bot API",
-    version: "1.0.0",
-    status: "running",
-    botsCount: bots.size,
+// ── Broadcast ke semua WS client ──
+function broadcast(data) {
+  const msg = JSON.stringify(data);
+  wss.clients.forEach(ws => {
+    if (ws.readyState === ws.OPEN) ws.send(msg);
   });
+}
+
+// Forward bot events ke WS
+bot.on("log",    entry => broadcast({ type: "log",    data: entry }));
+bot.on("status", state => broadcast({ type: "status", data: state }));
+
+// ── WebSocket connection ──
+wss.on("connection", ws => {
+  console.log("[WS] Client terhubung");
+
+  // Kirim 100 log terakhir saat konek
+  bot.getLogs(100).forEach(entry => {
+    ws.send(JSON.stringify({ type: "log", data: entry }));
+  });
+
+  // Kirim status saat ini
+  ws.send(JSON.stringify({ type: "status", data: bot.getState() }));
+
+  ws.on("close", () => console.log("[WS] Client terputus"));
+  ws.on("error", err => console.error("[WS] Error:", err.message));
 });
 
+// ─────────────────────────────────────────────
+// HTTP ROUTES
+// ─────────────────────────────────────────────
+
+// Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: Date.now() });
-});
-
-// ==========================================
-// BOT STATUS ENDPOINTS
-// ==========================================
-
-// Get all bots status
-app.get("/api/bot/status", (req, res) => {
-  const statuses = Array.from(bots.values()).map(bot => bot.getSnapshot());
   res.json({
-    success: true,
-    bots: statuses,
-    count: bots.size,
+    ok:        true,
+    timestamp: new Date().toISOString(),
+    version:   "1.0.0",
+    bot:       bot.getState().running ? "running" : "stopped",
   });
 });
 
-// Get specific bot status
-app.get("/api/bot/:botId/status", (req, res) => {
-  const bot = bots.get(req.params.botId);
+// Status bot
+app.get("/api/status", (req, res) => {
+  res.json(bot.getState());
+});
 
-  if (!bot) {
-    return res.status(404).json({
-      success: false,
-      error: "Bot not found",
-    });
+// Konfigurasi bot (tanpa API key)
+app.get("/api/config", (req, res) => {
+  res.json(bot.getConfig());
+});
+
+// Log history
+app.get("/api/logs", (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+  res.json(bot.getLogs(limit));
+});
+
+// Balance dari exchange
+app.get("/api/balance", async (req, res) => {
+  try {
+    const bal = await bot.client.getBalance("USDT");
+    res.json(bal);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  res.json({
-    success: true,
-    bot: bot.getSnapshot(),
-  });
 });
 
-// Get specific bot trades
-app.get("/api/bot/:botId/trades", (req, res) => {
-  const bot = bots.get(req.params.botId);
-
-  if (!bot) {
-    return res.status(404).json({
-      success: false,
-      error: "Bot not found",
-    });
+// Posisi terbuka dari exchange
+app.get("/api/positions", async (req, res) => {
+  try {
+    const pos = await bot.client.getPositions(bot.config.symbol);
+    res.json(pos);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  res.json({
-    success: true,
-    botId: req.params.botId,
-    trades: bot.state.trades,
-    count: bot.state.trades.length,
-  });
 });
 
-// Get all trades across all bots
-app.get("/api/trades", (req, res) => {
-  const allTrades = Array.from(bots.values())
-    .flatMap(bot => bot.state.trades.map(trade => ({
-      ...trade,
-      botId: bot.botId,
-      symbol: bot.config.symbol,
-    })));
-
-  res.json({
-    success: true,
-    trades: allTrades,
-    count: allTrades.length,
-  });
+// Candles (untuk backtest di FE)
+app.get("/api/candles", async (req, res) => {
+  try {
+    const symbol   = req.query.symbol   || bot.config.symbol;
+    const interval = req.query.interval || bot.config.interval;
+    const limit    = Math.min(parseInt(req.query.limit) || 200, 500);
+    const candles  = await bot.client.getCandles(symbol, interval, limit);
+    res.json(candles);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// ==========================================
-// BOT CONTROL ENDPOINTS
-// ==========================================
-
-// Start new bot
+// Start bot
 app.post("/api/bot/start", async (req, res) => {
   try {
-    const { symbol, params, exchange = "bitget", dryRun = true } = req.body;
-
-    if (!symbol || !params) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing symbol or params",
-      });
-    }
-
-    const botId = `bot_${symbol}_${Date.now()}`;
-
-    const config = {
-      symbol,
-      exchange,
-      dryRun,
-      marginCoin: params.marginCoin || "USDT",
-      emaFast: params.emaFast || 9,
-      emaSlow: params.emaSlow || 21,
-      rsiPeriod: params.rsiPeriod || 14,
-      rsiOverbought: params.rsiOverbought || 70,
-      rsiOversold: params.rsiOversold || 30,
-      atrPeriod: params.atrPeriod || 14,
-      atrMultiplier: params.atrMultiplier || 2,
-      riskReward: params.riskReward || 3,
-      riskPerTrade: params.riskPerTrade || 0.02,
-      maxPositions: params.maxPositions || 1,
-      leverage: params.leverage || 3,
-      useBothSides: params.useBothSides || false,
-      interval: params.interval || "4H",
-      checkInterval: params.checkInterval || 60000,
-    };
-
-    const bot = new BotEngine(botId, config);
-
-    // Attach event listeners untuk WebSocket broadcast
-    bot.on("price", (data) => broadcastUpdate(botId, "price", data));
-    bot.on("trade", (data) => broadcastUpdate(botId, "trade", data));
-    bot.on("balance", (data) => broadcastUpdate(botId, "balance", data));
-    bot.on("error", (data) => broadcastUpdate(botId, "error", data));
-    bot.on("started", (data) => broadcastUpdate("all", "started", { ...data, symbol }));
-    bot.on("stopped", (data) => broadcastUpdate("all", "stopped", { ...data, symbol }));
-
-    bots.set(botId, bot);
-
-    // Start bot asynchronously
-    bot.start().catch(err => logger.error(`[${botId}] Start failed:`, err.message));
-
-    res.json({
-      success: true,
-      botId,
-      symbol,
-      message: `Bot ${symbol} started`,
-    });
+    await bot.start();
+    res.json({ ok: true, message: "Bot berhasil dijalankan" });
   } catch (err) {
-    logger.error("POST /api/bot/start error:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
+    res.status(400).json({ ok: false, error: err.message });
   }
 });
 
 // Stop bot
 app.post("/api/bot/stop", async (req, res) => {
   try {
-    const { botId } = req.body;
-
-    if (!botId) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing botId",
-      });
-    }
-
-    const bot = bots.get(botId);
-
-    if (!bot) {
-      return res.status(404).json({
-        success: false,
-        error: "Bot not found",
-      });
-    }
-
     await bot.stop();
-    bots.delete(botId);
-
-    res.json({
-      success: true,
-      message: `Bot ${botId} stopped`,
-    });
+    res.json({ ok: true, message: "Bot berhasil dihentikan" });
   } catch (err) {
-    logger.error("POST /api/bot/stop error:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
+    res.status(400).json({ ok: false, error: err.message });
   }
 });
 
-// ==========================================
-// EXCHANGE ENDPOINTS
-// ==========================================
-
-// Test exchange connection
-app.post("/api/exchange/connect", async (req, res) => {
-  try {
-    const client = createExchangeClient();
-    const balance = await client.getBalance("USDT");
-
-    res.json({
-      success: true,
-      balance,
-      message: "Connected to exchange",
-    });
-  } catch (err) {
-    logger.error("Exchange connect error:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
+// ─────────────────────────────────────────────
+// START SERVER
+// ─────────────────────────────────────────────
+server.listen(PORT, HOST, () => {
+  const display = HOST === "0.0.0.0" ? "localhost" : HOST;
+  console.log("\n╔══════════════════════════════════════════════╗");
+  console.log("║      Quantara API Server — Ready             ║");
+  console.log("╚══════════════════════════════════════════════╝");
+  console.log(`  HTTP  : http://${display}:${PORT}`);
+  console.log(`  WS    : ws://${display}:${PORT}`);
+  console.log(`  Mode  : ${process.env.DRY_RUN !== "false" ? "DRY RUN" : "LIVE TRADING"}`);
+  console.log(`  Exchange: ${process.env.EXCHANGE || "bitget"}\n`);
 });
 
-// Get balance
-app.get("/api/balance", async (req, res) => {
-  try {
-    const client = createExchangeClient();
-    const balance = await client.getBalance("USDT");
-
-    res.json({
-      success: true,
-      balance,
-    });
-  } catch (err) {
-    logger.error("GET /api/balance error:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-
-// ==========================================
-// WEBSOCKET
-// ==========================================
-
-function broadcastUpdate(botId, type, payload) {
-  const message = JSON.stringify({
-    type,
-    botId,
-    payload,
-    timestamp: Date.now(),
-  });
-
-  wss.clients.forEach((client) => {
-    if (client.readyState === 1) { // OPEN
-      client.send(message);
-    }
-  });
-}
-
-wss.on("connection", (ws) => {
-  logger.info("WebSocket client connected");
-
-  // Send initial state
-  const initialState = {
-    type: "init",
-    payload: {
-      bots: Array.from(bots.values()).map(bot => bot.getSnapshot()),
-    },
-    timestamp: Date.now(),
-  };
-
-  ws.send(JSON.stringify(initialState));
-
-  ws.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data);
-      logger.debug("WebSocket message:", msg);
-      // Handle client messages if needed
-    } catch (err) {
-      logger.warn("Invalid WebSocket message:", err.message);
-    }
-  });
-
-  ws.on("close", () => {
-    logger.info("WebSocket client disconnected");
-  });
-
-  ws.on("error", (err) => {
-    logger.error("WebSocket error:", err.message);
-  });
-});
-
-// ==========================================
-// ERROR HANDLING
-// ==========================================
-
-app.use((err, req, res, next) => {
-  logger.error("Express error:", err.message);
-  res.status(500).json({
-    success: false,
-    error: err.message,
-  });
-});
-
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: "Not found",
-  });
-});
-
-// ==========================================
-// GRACEFUL SHUTDOWN
-// ==========================================
-
-async function shutdown() {
-  logger.warn("Shutting down server...");
-
-  // Stop all bots
-  for (const [botId, bot] of bots) {
-    await bot.stop();
-  }
-
-  // Close WebSocket server
-  wss.close();
-
-  // Close HTTP server
+// Graceful shutdown
+async function shutdown(sig) {
+  console.log(`\n[${sig}] Server shutting down...`);
+  if (bot.getState().running) await bot.stop();
   server.close(() => {
-    logger.info("Server closed");
+    console.log("Server closed.");
     process.exit(0);
   });
-
-  // Force exit after 10 seconds
-  setTimeout(() => {
-    logger.error("Forced shutdown");
-    process.exit(1);
-  }, 10000);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-
-// ==========================================
-// START SERVER
-// ==========================================
-
-const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "0.0.0.0";
-
-server.listen(PORT, HOST, () => {
-  logger.separator("QUANTARA BOT API SERVER");
-  logger.info(`🚀 Server running on http://${HOST}:${PORT}`);
-  logger.info(`📡 WebSocket: ws://${HOST}:${PORT}`);
-  logger.info(`🔗 CORS enabled for: ${process.env.FE_URL || "all origins"}`);
-  logger.separator();
+process.on("SIGINT",  () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", err => {
+  console.error("[FATAL]", err.message, err.stack);
 });
-
-module.exports = server;
