@@ -1,0 +1,23 @@
+{
+  "name": "quantara-bot",
+  "version": "1.0.0",
+  "description": "Quantara — Automated Trading Bot for Bitget & OKX",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "backtest": "node backtest.js",
+    "cli": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^16.3.1",
+    "ws": "^8.16.0",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
