@@ -120,12 +120,15 @@ class BotEngine extends EventEmitter {
       exchange:      this.config.exchange,
       exchangeLabel: this.config.exchangeLabel,
       dryRun:        this.config.dryRun,
-      capital:       this.state.capital,
-      startCapital:  this.state.startCapital,
-      openPositions: this.state.openPositions,
-      trades:        this.state.trades.slice(-50),
-      totalTrades:   this.state.trades.length,
-      lastSignal:    this.state.lastSignal,
+      capital:        this.state.capital,
+      startCapital:   this.state.startCapital,
+      openPositions:  this.state.openPositions,
+      trades:         this.state.trades.slice(-50),
+      // totalTrades = open + closed (bukan hanya closed)
+      totalTrades:    this.state.trades.length + this.state.openPositions.length,
+      closedTrades:   this.state.trades.length,
+      openTradeCount: this.state.openPositions.length,
+      lastSignal:     this.state.lastSignal,
       checkCount:    this.state.checkCount,
       errors:        this.state.errors,
       lastTick:      this.state.lastTick,
@@ -342,6 +345,14 @@ class BotEngine extends EventEmitter {
       }
 
       this.state.errors = 0;
+
+      // Refresh capital dari exchange setiap 5 menit (live mode)
+      if (!this.config.dryRun && this.state.checkCount % 5 === 0) {
+        try {
+          const bal = await this.client.getBalance(this.config.marginCoin);
+          if (bal.available > 0) this.state.capital = bal.available;
+        } catch { /* silent — pakai nilai sebelumnya */ }
+      }
 
       // Snapshot equity ke DB setiap tick
       if (this.sessionId) {
