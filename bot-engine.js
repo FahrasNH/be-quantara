@@ -277,7 +277,9 @@ class BotEngine extends EventEmitter {
       return this._generateDryRunCandles();
     }
     try {
-      return await this.client.getCandles(this.config.symbol, this.config.interval, 200);
+      // Convert interval ke lowercase untuk CCXT (4H -> 4h)
+      const timeframe = this.config.interval.toLowerCase();
+      return await this.client.getCandles(this.config.symbol, timeframe, 200);
     } catch (err) {
       this._log("warn", `Gagal ambil candles dari API, pakai simulasi: ${err.message}`);
       return this._generateDryRunCandles();
