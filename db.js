@@ -157,6 +157,14 @@ const stmts = {
   getOpenTrades: db.prepare(`
     SELECT * FROM trades WHERE session_id = ? AND close_time IS NULL
   `),
+  // Cari semua posisi terbuka untuk symbol tertentu lintas semua sesi
+  getOpenTradesBySymbol: db.prepare(`
+    SELECT t.*, s.exchange AS _exchange
+    FROM trades t
+    JOIN bot_sessions s ON s.id = t.session_id
+    WHERE t.symbol = ? AND t.close_time IS NULL
+    ORDER BY t.open_time ASC
+  `),
   getTrades: db.prepare(`
     SELECT * FROM trades
     WHERE (:session_id IS NULL OR session_id = :session_id)
@@ -336,6 +344,14 @@ function getOpenTrades(sessionId) {
   return stmts.getOpenTrades.all(sessionId);
 }
 
+/**
+ * Ambil semua posisi terbuka (close_time IS NULL) untuk symbol tertentu,
+ * lintas SEMUA sesi — digunakan saat bot restart untuk restore posisi lama.
+ */
+function getOpenTradesBySymbol(symbol) {
+  return stmts.getOpenTradesBySymbol.all(symbol);
+}
+
 // ── Equity ────────────────────────────────────
 
 function snapshotEquity({ sessionId, capital, price, openPositions }) {
@@ -421,6 +437,7 @@ module.exports = {
   getTrades,
   getTradeStats,
   getOpenTrades,
+  getOpenTradesBySymbol,
   // equity
   snapshotEquity,
   getEquity,
