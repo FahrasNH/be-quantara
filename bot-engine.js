@@ -7,6 +7,7 @@
 const EventEmitter = require("events");
 const { createExchangeClient, getExchangeInfo } = require("./exchange-factory");
 const { calcIndicators, detectSignal, calcPositionSize } = require("./indicators");
+const { getStrategy } = require("./strategies");
 const db = require("./db");
 
 class BotEngine extends EventEmitter {
@@ -16,7 +17,8 @@ class BotEngine extends EventEmitter {
    */
   constructor(configOverrides = {}) {
     super();
-    const ei = getExchangeInfo();
+    const ei   = getExchangeInfo();
+    const strat = getStrategy(configOverrides.strategy || process.env.STRATEGY);
 
     this.config = {
       exchange:      ei.id,
@@ -26,21 +28,28 @@ class BotEngine extends EventEmitter {
                        : (process.env.SYMBOL       || "BTCUSDT"),
       marginCoin:    process.env.MARGIN_COIN      || "USDT",
       capital:       parseFloat(process.env.CAPITAL)       || 500,
-      emaFast:       parseInt(process.env.EMA_FAST)        || 9,
-      emaSlow:       parseInt(process.env.EMA_SLOW)        || 21,
-      rsiPeriod:     parseInt(process.env.RSI_PERIOD)      || 14,
-      rsiOverbought: parseInt(process.env.RSI_OVERBOUGHT)  || 70,
-      rsiOversold:   parseInt(process.env.RSI_OVERSOLD)    || 30,
-      atrPeriod:     parseInt(process.env.ATR_PERIOD)      || 14,
-      atrMultiplier: parseFloat(process.env.ATR_MULTIPLIER)|| 2,
-      riskReward:    parseFloat(process.env.RISK_REWARD)   || 3,
-      riskPerTrade:  parseFloat(process.env.RISK_PER_TRADE)|| 0.02,
+      // Gunakan nilai dari strategi sebagai default, bisa di-override oleh .env
+      emaFast:       parseInt(process.env.EMA_FAST)        || strat.emaFast,
+      emaSlow:       parseInt(process.env.EMA_SLOW)        || strat.emaSlow,
+      emaTrend:      strat.emaTrend || 20,
+      rsiPeriod:     parseInt(process.env.RSI_PERIOD)      || strat.rsiPeriod,
+      rsiOverbought: parseInt(process.env.RSI_OVERBOUGHT)  || strat.rsiOverbought,
+      rsiOversold:   parseInt(process.env.RSI_OVERSOLD)    || strat.rsiOversold,
+      atrPeriod:     parseInt(process.env.ATR_PERIOD)      || strat.atrPeriod,
+      atrMultiplier: parseFloat(process.env.ATR_MULTIPLIER)|| strat.atrMultiplier,
+      riskReward:    parseFloat(process.env.RISK_REWARD)   || strat.riskReward,
+      riskPerTrade:  parseFloat(process.env.RISK_PER_TRADE)|| strat.riskPerTrade,
       maxPositions:  parseInt(process.env.MAX_OPEN_POSITIONS)|| 1,
-      leverage:      parseInt(process.env.LEVERAGE)        || 3,
+      leverage:      parseInt(process.env.LEVERAGE)        || strat.leverage,
       useBothSides:  process.env.USE_BOTH_SIDES === "true",
-      interval:      process.env.CANDLE_INTERVAL           || "4H",
-      checkInterval: parseInt(process.env.CHECK_INTERVAL_MS)|| 60000,
+      interval:      process.env.CANDLE_INTERVAL           || "5m",
+      checkInterval: strat.checkInterval || parseInt(process.env.CHECK_INTERVAL_MS) || 60000,
       dryRun:        process.env.DRY_RUN !== "false",
+      // Strategy info
+      strategyKey:   strat.name,
+      strategyLabel: strat.label,
+      signalType:    strat.signalType,
+      higherTf:      strat.higherTf || null,
       // Override config per-instance (e.g. symbol berbeda per bot)
       ...configOverrides,
     };
@@ -215,10 +224,12 @@ class BotEngine extends EventEmitter {
     this._sep(`QUANTARA BOT — ${this.config.exchangeLabel.toUpperCase()}`);
     this._log("info", `Exchange   : ${this.config.exchangeLabel}`);
     this._log("info", `Mode       : ${this.config.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING"}`);
+    this._log("info", `Strategi   : [${this.config.strategyKey}] ${this.config.strategyLabel}`);
     this._log("info", `Symbol     : ${this.config.symbol}`);
-    this._log("info", `Interval   : ${this.config.interval}`);
+    this._log("info", `Interval   : ${this.config.interval}${this.config.higherTf ? ` + ${this.config.higherTf} (trend filter)` : ""}`);
     this._log("info", `EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
-    this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(0)}%  |  Leverage: ${this.config.leverage}x`);
+    this._log("info", `RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
+    this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
     this._sep();
 
     const apiKey = this.config.exchange === "okx" ? process.env.OKX_API_KEY : process.env.BITGET_API_KEY;
@@ -271,9 +282,25 @@ class BotEngine extends EventEmitter {
       const indicators = calcIndicators(candles, {
         emaFast:   this.config.emaFast,
         emaSlow:   this.config.emaSlow,
+        emaTrend:  this.config.emaTrend,
         rsiPeriod: this.config.rsiPeriod,
         atrPeriod: this.config.atrPeriod,
       });
+
+      // Fetch higher timeframe untuk Strategi C (15m)
+      let higherTfIndicators = null;
+      if (this.config.higherTf) {
+        try {
+          const htfCandles = await this.client.getCandles(this.config.symbol, this.config.higherTf, 100);
+          if (htfCandles && htfCandles.length > 25) {
+            const htfIndicators = calcIndicators(htfCandles, { emaTrend: this.config.emaTrend });
+            higherTfIndicators  = {
+              emaTrend: htfIndicators.emaTrend,
+              closes:   htfCandles.map(c => c.close),
+            };
+          }
+        } catch { /* 15m fetch gagal, lanjut tanpa filter */ }
+      }
 
       const lastIdx = candles.length - 2;
       const price   = candles[lastIdx].close;
@@ -289,7 +316,7 @@ class BotEngine extends EventEmitter {
           `${this.config.symbol} $${price.toLocaleString()} | ` +
           `EMA(${this.config.emaFast})=${emaF?.toFixed(2)} EMA(${this.config.emaSlow})=${emaS?.toFixed(2)} | ` +
           `RSI=${rsi?.toFixed(1)} ATR=${atr?.toFixed(2)} | ` +
-          `Trend: ${emaF > emaS ? "↑ BULLISH" : "↓ BEARISH"}`
+          `Trend: ${emaF > emaS ? "↑ BULLISH" : "↓ BEARISH"} | Strat: ${this.config.strategyKey}`
         );
       }
 
@@ -300,7 +327,8 @@ class BotEngine extends EventEmitter {
           rsiOverbought: this.config.rsiOverbought,
           rsiOversold:   this.config.rsiOversold,
           useBothSides:  this.config.useBothSides,
-        });
+          signalType:    this.config.signalType,
+        }, higherTfIndicators);
 
         if (signal && signal !== this.state.lastSignal) {
           await this._handleSignal(signal, price, atr);
