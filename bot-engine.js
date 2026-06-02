@@ -463,12 +463,32 @@ class BotEngine extends EventEmitter {
         const side  = signal === "LONG" ? "open_long" : "open_short";
         const order = await this.client.openPosition(this.config.symbol, side, size);
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
-        const holdSide = signal === "LONG" ? "long" : "short";
-        await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
-        await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
-        this._log("trade", "SL/TP dipasang ✓");
 
-        const pos = { id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr };
+        const pos = { id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr, manualSLTP: false };
+
+        // ── SELALU pasang SL/TP, dengan retry 2x ──────────────────
+        const holdSide = signal === "LONG" ? "long" : "short";
+        let slOk = false, tpOk = false;
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          if (!slOk) {
+            const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
+            slOk = r.success;
+          }
+          if (!tpOk) {
+            const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
+            tpOk = r.success;
+          }
+          if (slOk && tpOk) break;
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1500)); // tunggu 1.5s lalu retry
+        }
+
+        if (slOk && tpOk) {
+          this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
+        } else {
+          this._log("warn", `⚠️ SL: ${slOk ? "✓" : "GAGAL"} | TP: ${tpOk ? "✓" : "GAGAL"} — bot monitor manual`);
+          pos.manualSLTP = true; // bot akan cek SL/TP manual di _checkOpenPositions
+        }
 
         // Simpan ke DB
         if (this.sessionId) {
@@ -520,11 +540,53 @@ class BotEngine extends EventEmitter {
 
     if (!this.config.dryRun) {
       try {
-        const live = await this.client.getPositions(this.config.symbol);
-        this.state.openPositions = this.state.openPositions.filter(p =>
-          live.some(lp => lp.side === p.side)
-        );
-      } catch { /* pakai state lokal */ }
+        const live      = await this.client.getPositions(this.config.symbol);
+        const liveByKey = new Map(live.map(p => [p.side, p]));
+
+        // Posisi yang ada di state tapi tidak lagi di exchange (SL/TP hit)
+        const closedLocal = this.state.openPositions.filter(p => !liveByKey.has(p.side));
+        for (const pos of closedLocal) {
+          const exitPrice = price;
+          const pnl       = pos.side === "LONG"
+            ? (exitPrice - pos.entry) * pos.size
+            : (pos.entry - exitPrice) * pos.size;
+
+          this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
+          this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
+          this._log("trade", `Entry: $${pos.entry} | Exit: ~$${exitPrice.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`);
+          this._log("trade", `Modal sekarang: $${(this.state.capital + pnl).toFixed(2)}`);
+
+          this.state.capital += pnl;
+          this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+
+          if (this.sessionId && pos.dbId) {
+            try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
+          }
+        }
+
+        // Update state: hanya posisi yang masih ada di exchange
+        this.state.openPositions = this.state.openPositions.filter(p => liveByKey.has(p.side));
+
+        // Update unrealized PnL + markPrice dari exchange
+        for (const pos of this.state.openPositions) {
+          const lp = liveByKey.get(pos.side);
+          if (lp) { pos.unrealizedPL = lp.unrealizedPL; pos.markPrice = lp.markPrice; }
+
+          // Jika SL/TP gagal dipasang tadi, monitor manual sekarang
+          if (pos.manualSLTP) {
+            const hitSL = pos.side === "LONG" ? price <= pos.sl : price >= pos.sl;
+            const hitTP = pos.side === "LONG" ? price >= pos.tp : price <= pos.tp;
+            if (hitSL || hitTP) {
+              this._log("warn", `Manual close ${pos.side} — ${hitTP ? "TP ✅" : "SL ❌"} (manual monitor)`);
+              try {
+                await this.client.closePosition(this.config.symbol, pos.side === "LONG" ? "close_long" : "close_short", pos.size);
+              } catch (e) { this._log("error", `Manual close gagal: ${e.message}`); }
+            }
+          }
+        }
+      } catch (err) {
+        this._log("warn", `Sync positions error: ${err.message} — pakai state lokal`);
+      }
       return;
     }
 

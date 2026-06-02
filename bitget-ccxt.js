@@ -119,16 +119,20 @@ class BitgetCCXTClient {
         return [];
       }
 
+      // FIX: filter by contracts (bukan percentage yang bisa null/0)
       return positions
-        .filter(p => p.percentage && Math.abs(p.percentage) > 0)
+        .filter(p => p.contracts && Math.abs(parseFloat(p.contracts)) > 0)
         .map(p => ({
-          symbol: p.symbol,
-          side: p.side === "long" ? "LONG" : "SHORT",
-          size: Math.abs(p.contracts || 0),
-          entryPrice: p.markPrice || p.contractSize || 0,
-          unrealizedPL: p.unrealizedPnl || 0,
-          leverage: p.leverage || 1,
-          liquidationPrice: p.liquidationPrice || 0,
+          symbol:           p.symbol,
+          side:             p.side === "long" ? "LONG" : "SHORT",
+          size:             Math.abs(parseFloat(p.contracts) || 0),
+          // FIX: entryPrice bukan markPrice
+          entryPrice:       parseFloat(p.entryPrice || p.info?.averageOpenPrice || p.info?.openPriceAvg || 0),
+          markPrice:        parseFloat(p.markPrice || 0),
+          unrealizedPL:     parseFloat(p.unrealizedPnl || 0),
+          leverage:         parseFloat(p.leverage || 1),
+          liquidationPrice: parseFloat(p.liquidationPrice || 0),
+          percentage:       parseFloat(p.percentage || 0),
         }));
     } catch (err) {
       throw new Error(`getPositions error: ${err.message}`);
@@ -235,26 +239,57 @@ class BitgetCCXTClient {
   }
 
   async setTPSL(symbol, planType, triggerPrice, holdSide, size, marginCoin = "USDT") {
+    // planType: "profit_plan" | "loss_plan"
+    // holdSide: "long" | "short"
+    let marketSymbol = symbol;
+    if (!marketSymbol.includes("/")) {
+      const base = marketSymbol.slice(0, -4);
+      marketSymbol = `${base}/USDT:USDT`;
+    }
+
+    const isTP      = planType === "profit_plan";
+    const isLong    = holdSide === "long";
+    const closeSide = isLong ? "sell" : "buy";   // arah close
+    const trigPrice = parseFloat(triggerPrice);
+
+    // FIX: gunakan stopMarket / takeProfitMarket (bukan limit)
+    // tradeSide: 'close' + reduceOnly: true = trigger order yang reduce posisi
+    const orderType = isTP ? "takeProfitMarket" : "stopMarket";
+
     try {
-      // planType: "profit_plan" | "loss_plan"
-      // holdSide: "long" | "short"
-      let marketSymbol = symbol;
-      if (!marketSymbol.includes("/")) {
-        const base = marketSymbol.slice(0, -4);
-        marketSymbol = `${base}/USDT:USDT`;
-      }
-
-      const params = {
-        triggerPrice,
-        type: planType === "profit_plan" ? "takeProfit" : "stopLoss",
-        side: holdSide,
-      };
-
-      return await this.exchange.createOrder(marketSymbol, "limit", "sell", size, triggerPrice, params);
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        orderType,
+        closeSide,
+        size,
+        trigPrice,
+        {
+          triggerPrice: trigPrice,
+          reduceOnly:   true,
+          tradeSide:    "close",
+        }
+      );
+      return { success: true, orderId: order.id };
     } catch (err) {
-      // CCXT mungkin tidak support plan orders, fallback
-      console.warn(`setTPSL warning: ${err.message}`);
-      return { success: false, message: "Plan orders tidak fully supported" };
+      // Fallback: coba dengan stopPrice param (CCXT versi lain)
+      try {
+        const order = await this.exchange.createOrder(
+          marketSymbol,
+          isTP ? "takeProfit" : "stop",
+          closeSide,
+          size,
+          trigPrice,
+          {
+            stopPrice:  trigPrice,
+            reduceOnly: true,
+            tradeSide:  "close",
+          }
+        );
+        return { success: true, orderId: order.id };
+      } catch (err2) {
+        console.warn(`setTPSL (${planType}) warning: ${err2.message}`);
+        return { success: false, message: err2.message };
+      }
     }
   }
 
