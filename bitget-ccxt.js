@@ -24,8 +24,13 @@ class BitgetCCXTClient {
 
   async getCandles(symbol, timeframe = "4h", limit = 200) {
     try {
-      // CCXT format untuk Bitget futures
-      const marketSymbol = symbol.includes("_") ? symbol : `${symbol}:USDT`;
+      // CCXT Bitget format: BTC/USDT:USDT (untuk swap/futures)
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        // Convert BTCUSDT -> BTC/USDT
+        const base = marketSymbol.slice(0, -4); // Remove USDT suffix
+        marketSymbol = `${base}/USDT:USDT`;
+      }
 
       const candles = await this.exchange.fetchOHLCV(
         marketSymbol,
@@ -54,7 +59,13 @@ class BitgetCCXTClient {
 
   async getTicker(symbol) {
     try {
-      const ticker = await this.exchange.fetchTicker(symbol);
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
+      const ticker = await this.exchange.fetchTicker(marketSymbol);
       return {
         symbol,
         last: ticker.last,
@@ -96,7 +107,13 @@ class BitgetCCXTClient {
 
   async getPositions(symbol, productType = "umcbl") {
     try {
-      const positions = await this.exchange.fetchPositions([symbol]);
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
+      const positions = await this.exchange.fetchPositions([marketSymbol]);
 
       if (!Array.isArray(positions) || positions.length === 0) {
         return [];
@@ -120,7 +137,12 @@ class BitgetCCXTClient {
 
   async getOrderHistory(symbol, limit = 20) {
     try {
-      const orders = await this.exchange.fetchClosedOrders(symbol, undefined, limit);
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+      const orders = await this.exchange.fetchClosedOrders(marketSymbol, undefined, limit);
       return Array.isArray(orders) ? orders : [];
     } catch (err) {
       throw new Error(`getOrderHistory error: ${err.message}`);
@@ -133,7 +155,12 @@ class BitgetCCXTClient {
 
   async setLeverage(symbol, leverage, marginCoin = "USDT") {
     try {
-      return await this.exchange.setLeverage(leverage, symbol, {
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+      return await this.exchange.setLeverage(leverage, marketSymbol, {
         marginCoin: marginCoin,
       });
     } catch (err) {
@@ -156,10 +183,16 @@ class BitgetCCXTClient {
   async openPosition(symbol, side, size, marginCoin = "USDT") {
     try {
       // side: "open_long" -> "long", "open_short" -> "short"
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
       const orderSide = side.includes("long") ? "long" : "short";
 
       const order = await this.exchange.createMarketOrder(
-        symbol,
+        marketSymbol,
         orderSide === "long" ? "buy" : "sell",
         size
       );
@@ -175,11 +208,17 @@ class BitgetCCXTClient {
 
   async closePosition(symbol, side, size, marginCoin = "USDT") {
     try {
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
       // side: "close_long" -> sell, "close_short" -> buy
       const orderSide = side.includes("long") ? "sell" : "buy";
 
       const order = await this.exchange.createMarketOrder(
-        symbol,
+        marketSymbol,
         orderSide,
         size
       );
@@ -197,6 +236,11 @@ class BitgetCCXTClient {
     try {
       // planType: "profit_plan" | "loss_plan"
       // holdSide: "long" | "short"
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
 
       const params = {
         triggerPrice,
@@ -204,7 +248,7 @@ class BitgetCCXTClient {
         side: holdSide,
       };
 
-      return await this.exchange.createOrder(symbol, "limit", "sell", size, triggerPrice, params);
+      return await this.exchange.createOrder(marketSymbol, "limit", "sell", size, triggerPrice, params);
     } catch (err) {
       // CCXT mungkin tidak support plan orders, fallback
       console.warn(`setTPSL warning: ${err.message}`);
@@ -214,7 +258,12 @@ class BitgetCCXTClient {
 
   async cancelAllPlanOrders(symbol, planType = "profit_loss", marginCoin = "USDT") {
     try {
-      return await this.exchange.cancelAllOrders(symbol);
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+      return await this.exchange.cancelAllOrders(marketSymbol);
     } catch (err) {
       throw new Error(`cancelAllPlanOrders error: ${err.message}`);
     }
