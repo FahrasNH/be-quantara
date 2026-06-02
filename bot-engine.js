@@ -10,7 +10,11 @@ const { calcIndicators, detectSignal, calcPositionSize } = require("./indicators
 const db = require("./db");
 
 class BotEngine extends EventEmitter {
-  constructor() {
+  /**
+   * @param {object} configOverrides  — override nilai default dari .env
+   *   Contoh: new BotEngine({ symbol: "ETHUSDT", capital: 200 })
+   */
+  constructor(configOverrides = {}) {
     super();
     const ei = getExchangeInfo();
 
@@ -21,6 +25,7 @@ class BotEngine extends EventEmitter {
                        ? (process.env.OKX_INST_ID || "BTC-USDT-SWAP")
                        : (process.env.SYMBOL       || "BTCUSDT"),
       marginCoin:    process.env.MARGIN_COIN      || "USDT",
+      capital:       parseFloat(process.env.CAPITAL)       || 500,
       emaFast:       parseInt(process.env.EMA_FAST)        || 9,
       emaSlow:       parseInt(process.env.EMA_SLOW)        || 21,
       rsiPeriod:     parseInt(process.env.RSI_PERIOD)      || 14,
@@ -36,6 +41,8 @@ class BotEngine extends EventEmitter {
       interval:      process.env.CANDLE_INTERVAL           || "4H",
       checkInterval: parseInt(process.env.CHECK_INTERVAL_MS)|| 60000,
       dryRun:        process.env.DRY_RUN !== "false",
+      // Override config per-instance (e.g. symbol berbeda per bot)
+      ...configOverrides,
     };
 
     this.state = {
