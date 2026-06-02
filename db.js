@@ -114,9 +114,24 @@ const stmts = {
         losses        = @losses
     WHERE id = @id
   `),
+  updateSessionStats: db.prepare(`
+    UPDATE bot_sessions
+    SET final_capital = @final_capital,
+        total_trades  = @total_trades,
+        wins          = @wins,
+        losses        = @losses
+    WHERE id = @id
+  `),
   getSession: db.prepare(`SELECT * FROM bot_sessions WHERE id = ?`),
   getSessions: db.prepare(`
     SELECT * FROM bot_sessions ORDER BY started_at DESC LIMIT ?
+  `),
+  // Cari sesi yang masih terbuka (belum ada stopped_at) untuk resume
+  getLastOpenSession: db.prepare(`
+    SELECT * FROM bot_sessions
+    WHERE exchange = ? AND symbol = ? AND stopped_at IS NULL
+    ORDER BY started_at DESC
+    LIMIT 1
   `),
 
   // Trades
@@ -227,8 +242,31 @@ function openSession({ exchange, symbol, mode, initialCapital, config }) {
   return result.lastInsertRowid;
 }
 
+/**
+ * Cari sesi terakhir yang masih terbuka (stopped_at IS NULL) untuk resume
+ * @returns {object|null} session row atau null
+ */
+function getLastOpenSession(exchange, symbol) {
+  const row = stmts.getLastOpenSession.get(exchange, symbol);
+  return row ? parseSession(row) : null;
+}
+
 function closeSession(sessionId, { finalCapital, totalTrades, wins, losses }) {
   stmts.closeSession.run({
+    id:            sessionId,
+    final_capital: finalCapital ?? 0,
+    total_trades:  totalTrades  ?? 0,
+    wins:          wins         ?? 0,
+    losses:        losses       ?? 0,
+  });
+}
+
+/**
+ * Update stats sesi tanpa menutupnya (stopped_at tetap NULL)
+ * Digunakan saat bot stop tapi masih ada posisi terbuka → sesi bisa di-resume
+ */
+function updateSessionStats(sessionId, { finalCapital, totalTrades, wins, losses }) {
+  stmts.updateSessionStats.run({
     id:            sessionId,
     final_capital: finalCapital ?? 0,
     total_trades:  totalTrades  ?? 0,
@@ -371,8 +409,10 @@ function getDbPath() { return DB_PATH; }
 // Export
 module.exports = {
   // sessions
+  getLastOpenSession,
   openSession,
   closeSession,
+  updateSessionStats,
   getSessions,
   getSession,
   // trades

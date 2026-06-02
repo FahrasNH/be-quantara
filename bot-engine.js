@@ -178,15 +178,115 @@ class BotEngine extends EventEmitter {
     await this._startup();
     this.state.running = true;
 
-    // Buat sesi baru di DB
-    this.sessionId = db.openSession({
-      exchange:       this.config.exchange,
-      symbol:         this.config.symbol,
-      mode:           this.config.dryRun ? "dry_run" : "live",
-      initialCapital: this.state.startCapital,
-      config:         this.config,
-    });
-    this._log("info", `Session DB #${this.sessionId} dibuat`);
+    // ── Cek apakah ada sesi terbuka yang bisa di-resume ──────────────────
+    let resumed = false;
+    try {
+      const lastSession = db.getLastOpenSession(this.config.exchange, this.config.symbol);
+      if (lastSession) {
+        this.sessionId = lastSession.id;
+        resumed = true;
+        this._log("info", `↩ Melanjutkan sesi DB #${this.sessionId} (dimulai ${lastSession.started_at})`);
+
+        // Restore open trades dari DB
+        const openDbTrades = db.getOpenTrades(this.sessionId);
+        if (openDbTrades.length > 0) {
+          this._log("info", `Ditemukan ${openDbTrades.length} posisi terbuka di DB — sinkronisasi...`);
+
+          if (!this.config.dryRun) {
+            // Sync dengan exchange: cek posisi mana yang masih terbuka
+            try {
+              const livePosns = await this.client.getPositions(this.config.symbol);
+              const liveByKey = new Map(livePosns.map(p => [p.side, p]));
+
+              for (const dbTrade of openDbTrades) {
+                if (liveByKey.has(dbTrade.side)) {
+                  // Masih terbuka di exchange → restore ke state
+                  const lp = liveByKey.get(dbTrade.side);
+                  this.state.openPositions.push({
+                    id:           dbTrade.order_id || `restored_${dbTrade.id}`,
+                    dbId:         dbTrade.id,
+                    side:         dbTrade.side,
+                    entry:        dbTrade.entry_price,
+                    sl:           dbTrade.sl,
+                    tp:           dbTrade.tp,
+                    size:         dbTrade.size,
+                    openTime:     new Date(dbTrade.open_time).getTime(),
+                    atr:          dbTrade.atr,
+                    manualSLTP:   false,
+                    unrealizedPL: lp.unrealizedPL ?? 0,
+                    markPrice:    lp.markPrice    ?? dbTrade.entry_price,
+                  });
+                  this._log("trade", `✓ Posisi ${dbTrade.side} @$${dbTrade.entry_price} dipulihkan dari DB`);
+                } else {
+                  // Tidak ditemukan di exchange → ditutup saat bot offline (SL/TP hit)
+                  const exitPrice = this.state.lastPrice || dbTrade.entry_price;
+                  const pnl       = dbTrade.side === "LONG"
+                    ? (exitPrice - dbTrade.entry_price) * (dbTrade.size || 0)
+                    : (dbTrade.entry_price - exitPrice) * (dbTrade.size || 0);
+                  this._log("warn", `Posisi ${dbTrade.side} tidak ada di exchange — ditutup saat bot offline, PnL ≈ $${pnl.toFixed(2)}`);
+                  try {
+                    db.closeTrade(dbTrade.id, {
+                      exitPrice,
+                      pnl,
+                      reason:    "Closed_Offline",
+                      closeTime: new Date().toISOString(),
+                    });
+                  } catch { /* jangan crash */ }
+                }
+              }
+            } catch (err) {
+              // Exchange tidak bisa dihubungi → restore semua dari DB sebagai fallback
+              this._log("warn", `Gagal sync exchange: ${err.message} — restore posisi dari DB`);
+              for (const dbTrade of openDbTrades) {
+                this.state.openPositions.push({
+                  id:         dbTrade.order_id || `restored_${dbTrade.id}`,
+                  dbId:       dbTrade.id,
+                  side:       dbTrade.side,
+                  entry:      dbTrade.entry_price,
+                  sl:         dbTrade.sl,
+                  tp:         dbTrade.tp,
+                  size:       dbTrade.size,
+                  openTime:   new Date(dbTrade.open_time).getTime(),
+                  atr:        dbTrade.atr,
+                  manualSLTP: false,
+                });
+              }
+            }
+          } else {
+            // Dry run: restore langsung dari DB
+            for (const dbTrade of openDbTrades) {
+              this.state.openPositions.push({
+                id:       dbTrade.order_id || `restored_${dbTrade.id}`,
+                dbId:     dbTrade.id,
+                side:     dbTrade.side,
+                entry:    dbTrade.entry_price,
+                sl:       dbTrade.sl,
+                tp:       dbTrade.tp,
+                size:     dbTrade.size,
+                openTime: new Date(dbTrade.open_time).getTime(),
+                atr:      dbTrade.atr,
+              });
+            }
+          }
+
+          this._log("info", `${this.state.openPositions.length} posisi aktif dipulihkan`);
+        }
+      }
+    } catch (err) {
+      this._log("warn", `Gagal cek sesi lama: ${err.message}`);
+    }
+
+    // Tidak ada sesi yang bisa di-resume → buat sesi baru
+    if (!resumed) {
+      this.sessionId = db.openSession({
+        exchange:       this.config.exchange,
+        symbol:         this.config.symbol,
+        mode:           this.config.dryRun ? "dry_run" : "live",
+        initialCapital: this.state.startCapital,
+        config:         this.config,
+      });
+      this._log("info", `Session DB #${this.sessionId} baru dibuat`);
+    }
 
     this.emit("status", this.getState());
 
@@ -205,17 +305,34 @@ class BotEngine extends EventEmitter {
     this._reportInterval = null;
     this.state.running   = false;
 
-    // Tutup sesi di DB
+    // Tutup / update sesi di DB
     if (this.sessionId) {
-      const wins   = this.state.trades.filter(t => t.pnl > 0).length;
-      const losses = this.state.trades.filter(t => t.pnl <= 0).length;
-      db.closeSession(this.sessionId, {
-        finalCapital: this.state.capital,
-        totalTrades:  this.state.trades.length,
-        wins,
-        losses,
-      });
-      this._log("warn", `Session DB #${this.sessionId} ditutup`);
+      const wins        = this.state.trades.filter(t => t.pnl > 0).length;
+      const losses      = this.state.trades.filter(t => t.pnl <= 0).length;
+      const openCount   = this.state.openPositions.length;
+      const totalTrades = this.state.trades.length + openCount;
+
+      if (openCount > 0) {
+        // Masih ada posisi terbuka → JANGAN tutup sesi (stopped_at tetap NULL)
+        // supaya start() berikutnya bisa resume & restore posisi ini
+        db.updateSessionStats(this.sessionId, {
+          finalCapital: this.state.capital,
+          totalTrades,
+          wins,
+          losses,
+        });
+        this._log("warn", `Session DB #${this.sessionId} disimpan (${openCount} posisi open — akan di-resume saat start)`);
+      } else {
+        // Tidak ada posisi terbuka → tutup sesi secara normal
+        db.closeSession(this.sessionId, {
+          finalCapital: this.state.capital,
+          totalTrades,
+          wins,
+          losses,
+        });
+        this._log("warn", `Session DB #${this.sessionId} ditutup`);
+      }
+
       this.sessionId = null;
     }
 
