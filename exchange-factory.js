@@ -12,7 +12,7 @@
 
 require("dotenv").config();
 
-const BitgetClient = require("./bitget");
+const BitgetCCXTClient = require("./bitget-ccxt");
 const OKXClient    = require("./okx");
 
 const EXCHANGE = (process.env.EXCHANGE || "bitget").toLowerCase();
@@ -31,12 +31,12 @@ function createExchangeClient() {
     return new OKXClient(apiKey, secretKey, passphrase, demo);
   }
 
-  // Default: Bitget
+  // Default: Bitget (menggunakan CCXT untuk V2 API support)
   const apiKey     = process.env.BITGET_API_KEY     || "";
   const secretKey  = process.env.BITGET_SECRET_KEY  || "";
   const passphrase = process.env.BITGET_PASSPHRASE  || "";
 
-  return new BitgetClient(apiKey, secretKey, passphrase);
+  return new BitgetCCXTClient(apiKey, secretKey, passphrase);
 }
 
 /**
