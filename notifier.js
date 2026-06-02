@@ -1,37 +1,53 @@
 // ─────────────────────────────────────────────
-// notifier.js — WhatsApp Notification via CallMeBot
+// notifier.js — Quantara Notification Service
 //
-// Setup:
-// 1. Tambah +34 644 59 77 85 ke kontak WhatsApp kamu
-// 2. Kirim pesan: "I allow callmebot to send me messages"
-// 3. Kamu akan dapat API key via WhatsApp
+// Mendukung: Telegram Bot (gratis, instan)
+//
+// Setup Telegram:
+// 1. Chat @BotFather di Telegram → /newbot → ikuti instruksi
+// 2. Simpan TOKEN yang diberikan BotFather
+// 3. Kirim pesan ke bot kamu → buka browser:
+//    https://api.telegram.org/bot{TOKEN}/getUpdates
+//    Cari "chat":{"id":...} → itu CHAT_ID kamu
 // 4. Isi di .env:
-//      WHATSAPP_NUMBER=628xxxxxxxxxx   (format internasional, tanpa +)
-//      WHATSAPP_APIKEY=xxxxxxxx
+//    TELEGRAM_BOT_TOKEN=123456789:AABBccdd...
+//    TELEGRAM_CHAT_ID=123456789
 // ─────────────────────────────────────────────
 
-const PHONE  = process.env.WHATSAPP_NUMBER;
-const APIKEY = process.env.WHATSAPP_APIKEY;
-const ENABLED = !!(PHONE && APIKEY);
+const TG_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
+const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const ENABLED    = !!(TG_TOKEN && TG_CHAT_ID);
 
 if (!ENABLED) {
-  console.log("[Notifier] WhatsApp notifikasi NONAKTIF — set WHATSAPP_NUMBER & WHATSAPP_APIKEY di .env");
+  console.log("[Notifier] Notifikasi Telegram NONAKTIF — set TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID di .env");
+} else {
+  console.log(`[Notifier] ✅ Notifikasi Telegram AKTIF → Chat ID: ${TG_CHAT_ID}`);
 }
 
-// ── Core send ──────────────────────────────────────────────────────────────
+// ── Core send ke Telegram ──────────────────────────────────────────────────
 
-async function send(text) {
+async function send(text, parseMode = "HTML") {
   if (!ENABLED) return;
   try {
-    const encoded = encodeURIComponent(text);
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${PHONE}&text=${encoded}&apikey=${APIKEY}`;
-    const res  = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    const url  = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
+    const body = JSON.stringify({
+      chat_id:    TG_CHAT_ID,
+      text,
+      parse_mode: parseMode,
+    });
+    const res = await fetch(url, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal:  AbortSignal.timeout(10_000),
+    });
     if (!res.ok) {
-      console.warn(`[Notifier] Gagal kirim WA: HTTP ${res.status}`);
+      const errBody = await res.text();
+      console.warn(`[Notifier] Telegram error: ${res.status} — ${errBody}`);
     }
   } catch (err) {
     // Jangan sampai error notifikasi menghentikan bot
-    console.warn("[Notifier] Error kirim WA:", err.message);
+    console.warn("[Notifier] Gagal kirim Telegram:", err.message);
   }
 }
 
@@ -47,8 +63,16 @@ function fmtPct(n) {
 }
 
 function fmtPnl(n) {
-  const sign = n >= 0 ? "+" : "";
+  const sign = n >= 0 ? "+" : "-";
   return `${sign}$${Math.abs(Number(n)).toFixed(2)}`;
+}
+
+function nowStr() {
+  return new Date().toLocaleString("id-ID", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone:  "Asia/Jakarta",
+  });
 }
 
 // ── Notifikasi Open Posisi ─────────────────────────────────────────────────
@@ -62,21 +86,22 @@ function notifyOpen(trade) {
     sl, tp, leverage = 1, dryRun = false,
   } = trade;
 
-  const sideLabel  = side === "LONG" ? "🟢 LONG" : "🔴 SHORT";
-  const modeLabel  = dryRun ? "[DRY RUN] " : "[LIVE] ";
-  const coin       = symbol.replace("USDT", "");
+  const coin      = symbol.replace("USDT", "");
+  const sideEmoji = side === "LONG" ? "🟢" : "🔴";
+  const modeTag   = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
 
   const lines = [
-    `${modeLabel}*Quantara — Open Posisi*`,
+    `${sideEmoji} <b>OPEN POSISI${modeTag}</b>`,
+    `<b>${coin}/USDT</b> — ${side}`,
     ``,
-    `${sideLabel} ${coin}/USDT`,
-    `📍 Entry  : $${fmtPrice(entryPrice)}`,
-    size  != null ? `📦 Size   : ${Number(size).toFixed(4)} ${coin}` : null,
-    sl    != null ? `🛡️ SL     : $${fmtPrice(sl)}` : null,
-    tp    != null ? `🎯 TP     : $${fmtPrice(tp)}` : null,
-    leverage > 1  ? `⚡ Leverage: ${leverage}x` : null,
+    `📍 Entry     : <code>$${fmtPrice(entryPrice)}</code>`,
+    size  != null ? `📦 Size      : <code>${Number(size).toFixed(4)} ${coin}</code>` : null,
+    sl    != null ? `🛡️ Stop Loss  : <code>$${fmtPrice(sl)}</code>` : null,
+    tp    != null ? `🎯 Take Profit: <code>$${fmtPrice(tp)}</code>` : null,
+    leverage > 1  ? `⚡ Leverage   : <code>${leverage}x</code>` : null,
     ``,
-    `🕐 ${new Date().toLocaleString("id-ID")}`,
+    `🕐 <i>${nowStr()} WIB</i>`,
+    `📡 <i>Quantara Trading Bot</i>`,
   ].filter(Boolean).join("\n");
 
   return send(lines);
@@ -93,26 +118,31 @@ function notifyClose(trade) {
     pnl, pnlPct, reason, dryRun = false,
   } = trade;
 
-  const isWin     = (pnl ?? 0) >= 0;
-  const sideLabel = side === "LONG" ? "🟢 LONG" : "🔴 SHORT";
-  const resultIco = isWin ? "✅ PROFIT" : "❌ LOSS";
-  const modeLabel = dryRun ? "[DRY RUN] " : "[LIVE] ";
   const coin      = symbol.replace("USDT", "");
+  const isWin     = (pnl ?? 0) >= 0;
+  const resultIco = isWin ? "✅" : "❌";
+  const modeTag   = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
 
-  const reasonMap = { TP: "Take Profit 🎯", SL: "Stop Loss 🛡️", Reversal: "Reversal ↩️" };
+  const reasonMap = {
+    TP:       "Take Profit 🎯",
+    SL:       "Stop Loss 🛡️",
+    Reversal: "Reversal ↩️",
+    Exchange: "Ditutup Exchange",
+  };
   const reasonStr = reasonMap[reason] ?? reason ?? "—";
 
   const lines = [
-    `${modeLabel}*Quantara — Close Posisi*`,
+    `${resultIco} <b>CLOSE POSISI${modeTag}</b>`,
+    `<b>${coin}/USDT</b> — ${side}`,
     ``,
-    `${resultIco} | ${sideLabel} ${coin}/USDT`,
-    `📍 Entry  : $${fmtPrice(entryPrice)}`,
-    `📤 Exit   : $${fmtPrice(exitPrice)}`,
-    pnl    != null ? `💰 PnL    : ${fmtPnl(pnl)}` : null,
-    pnlPct != null ? `📈 ROI    : ${fmtPct(pnlPct)}` : null,
+    `📍 Entry  : <code>$${fmtPrice(entryPrice)}</code>`,
+    `📤 Exit   : <code>$${fmtPrice(exitPrice)}</code>`,
+    pnl    != null ? `💰 PnL    : <b>${fmtPnl(pnl)}</b>` : null,
+    pnlPct != null ? `📈 ROI    : <code>${fmtPct(pnlPct)}</code>` : null,
     `📋 Alasan : ${reasonStr}`,
     ``,
-    `🕐 ${new Date().toLocaleString("id-ID")}`,
+    `🕐 <i>${nowStr()} WIB</i>`,
+    `📡 <i>Quantara Trading Bot</i>`,
   ].filter(Boolean).join("\n");
 
   return send(lines);
