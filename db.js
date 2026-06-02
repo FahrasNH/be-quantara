@@ -87,6 +87,13 @@ db.exec(`
     message    TEXT     NOT NULL
   );
 
+  -- Pengaturan pengguna (key-value, persist across restarts)
+  CREATE TABLE IF NOT EXISTS user_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+  );
+
   -- Index untuk query umum
   CREATE INDEX IF NOT EXISTS idx_trades_session   ON trades(session_id);
   CREATE INDEX IF NOT EXISTS idx_trades_symbol    ON trades(symbol, open_time DESC);
@@ -414,6 +421,24 @@ function getLogs(sessionId, limit = 200) {
   return stmts.getLogs.all(sessionId, limit);
 }
 
+// ── User Settings ─────────────────────────────
+
+const _getSetting = db.prepare(`SELECT value FROM user_settings WHERE key = ?`);
+const _setSetting = db.prepare(`
+  INSERT INTO user_settings (key, value, updated_at)
+  VALUES (?, ?, datetime('now'))
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+`);
+
+function getSetting(key, defaultValue = null) {
+  const row = _getSetting.get(key);
+  return row ? row.value : defaultValue;
+}
+
+function setSetting(key, value) {
+  _setSetting.run(key, String(value));
+}
+
 // ── Utils ─────────────────────────────────────
 
 function safeParseJSON(str) {
@@ -448,7 +473,10 @@ module.exports = {
   // logs
   insertLog,
   getLogs,
+  // user settings
+  getSetting,
+  setSetting,
   // meta
   getDbPath,
-  _db: db, // ekspor raw db untuk testing / migration
+  _db: db,
 };

@@ -46,10 +46,11 @@ const sharedClient = createExchangeClient();
 const bots = new Map();
 
 for (const sym of SYMBOLS_LIST) {
-  // Per-symbol capital override: CAPITAL_BTCUSDT, CAPITAL_ETHUSDT, dst.
   const capKey    = `CAPITAL_${sym}`;
   const capital   = parseFloat(process.env[capKey]) || parseFloat(process.env.CAPITAL) || 500;
-  const bot       = new BotEngine({ symbol: sym, capital });
+  // Baca strategy yang terakhir disimpan user dari DB (persist across restarts)
+  const savedStrategy = db.getSetting(`strategy_${sym}`) || process.env.STRATEGY || "B";
+  const bot       = new BotEngine({ symbol: sym, capital, strategy: savedStrategy });
   bots.set(sym, bot);
 }
 
@@ -321,6 +322,9 @@ app.post("/api/bots/:symbol/strategy", async (req, res) => {
   // Stop bot lama
   if (wasRunning) await oldBot.stop();
   oldBot.removeAllListeners();
+
+  // Simpan pilihan strategi ke DB agar persist saat server restart
+  db.setSetting(`strategy_${sym}`, strategy);
 
   // Buat bot baru dengan strategi baru
   const capKey  = `CAPITAL_${sym}`;
