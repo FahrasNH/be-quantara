@@ -133,7 +133,9 @@ class BitgetCCXTClient {
 
   async setLeverage(symbol, leverage, marginCoin = "USDT") {
     try {
-      return await this.exchange.setLeverage(leverage, symbol);
+      return await this.exchange.setLeverage(leverage, symbol, {
+        marginCoin: marginCoin,
+      });
     } catch (err) {
       throw new Error(`setLeverage error: ${err.message}`);
     }
@@ -143,7 +145,9 @@ class BitgetCCXTClient {
     try {
       // mode: "isolated" atau "crossed"
       const marginMode = mode === "crossed" ? "cross" : "isolated";
-      return await this.exchange.setMarginType(marginMode, symbol);
+      return await this.exchange.setMarginType(marginMode, symbol, {
+        marginCoin: marginCoin,
+      });
     } catch (err) {
       throw new Error(`setMarginMode error: ${err.message}`);
     }
