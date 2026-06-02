@@ -9,6 +9,7 @@ const { createExchangeClient, getExchangeInfo } = require("./exchange-factory");
 const { calcIndicators, detectSignal, calcPositionSize } = require("./indicators");
 const { getStrategy } = require("./strategies");
 const db = require("./db");
+const notifier = require("./notifier");
 
 class BotEngine extends EventEmitter {
   /**
@@ -624,6 +625,17 @@ class BotEngine extends EventEmitter {
         }
 
         this.state.openPositions.push(pos);
+
+        // Notifikasi WhatsApp — open posisi live
+        notifier.notifyOpen({
+          symbol:     this.config.symbol,
+          side:       signal,
+          entryPrice: price,
+          size,
+          sl, tp,
+          leverage:   this.config.leverage,
+          dryRun:     false,
+        });
       } catch (err) {
         this._log("error", `Gagal buka posisi: ${err.message}`);
       }
@@ -648,6 +660,17 @@ class BotEngine extends EventEmitter {
       }
 
       this.state.openPositions.push(pos);
+
+      // Notifikasi WhatsApp — open posisi dry run
+      notifier.notifyOpen({
+        symbol:     this.config.symbol,
+        side:       signal,
+        entryPrice: price,
+        size,
+        sl, tp,
+        leverage:   this.config.leverage,
+        dryRun:     true,
+      });
     }
   }
 
@@ -736,6 +759,18 @@ class BotEngine extends EventEmitter {
             db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
           } catch { /* jangan crash */ }
         }
+
+        // Notifikasi WhatsApp — close posisi
+        notifier.notifyClose({
+          symbol:     this.config.symbol,
+          side:       pos.side,
+          entryPrice: pos.entry,
+          exitPrice,
+          pnl,
+          pnlPct,
+          reason,
+          dryRun:     this.config.dryRun,
+        });
 
         this.state.trades.push({ ...pos, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
         toClose.push(pos.id);
