@@ -706,6 +706,9 @@ class BotEngine extends EventEmitter {
           }
         }
 
+        // Sync session stats ke DB jika ada posisi yang baru ditutup
+        if (closedLocal.length > 0) this._syncSessionStats();
+
         // Update state: hanya posisi yang masih ada di exchange
         this.state.openPositions = this.state.openPositions.filter(p => liveByKey.has(p.side));
 
@@ -777,6 +780,24 @@ class BotEngine extends EventEmitter {
       }
     }
     this.state.openPositions = this.state.openPositions.filter(p => !toClose.includes(p.id));
+
+    // Sync session stats ke DB setelah posisi ditutup (dry run)
+    if (toClose.length > 0) this._syncSessionStats();
+  }
+
+  // ─────────────────────────────────────────────
+  // SYNC SESSION STATS — update DB setelah tiap trade tutup
+  // ─────────────────────────────────────────────
+  _syncSessionStats() {
+    if (!this.sessionId) return;
+    try {
+      const wins      = this.state.trades.filter(t => t.pnl > 0).length;
+      const losses    = this.state.trades.filter(t => t.pnl <= 0).length;
+      const total     = this.state.trades.length + this.state.openPositions.length;
+      const tradePnL  = this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0);
+      const finalCap  = this.state.startCapital + tradePnL;
+      db.updateSessionStats(this.sessionId, { finalCapital: finalCap, totalTrades: total, wins, losses });
+    } catch { /* jangan crash */ }
   }
 
   // ─────────────────────────────────────────────
