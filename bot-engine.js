@@ -133,6 +133,9 @@ class BotEngine extends EventEmitter {
       totalPnL:      this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0),
       winRate:       this._winRate(),
       params: {
+        strategyKey:   this.config.strategyKey,
+        strategyLabel: this.config.strategyLabel,
+        signalType:    this.config.signalType,
         emaFast:       this.config.emaFast,
         emaSlow:       this.config.emaSlow,
         rsiPeriod:     this.config.rsiPeriod,

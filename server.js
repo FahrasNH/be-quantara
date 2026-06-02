@@ -17,6 +17,7 @@ const { WebSocketServer } = require("ws");
 const BotEngine = require("./bot-engine");
 const db        = require("./db");
 const { createExchangeClient } = require("./exchange-factory");
+const { listStrategies }       = require("./strategies");
 
 const PORT = parseInt(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -291,6 +292,60 @@ app.get("/api/candles/backtest", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─────────────────────────────────────────────
+// STRATEGY ENDPOINTS
+// ─────────────────────────────────────────────
+
+// List semua strategi tersedia
+app.get("/api/strategies", (req, res) => {
+  res.json(listStrategies());
+});
+
+// Switch strategi untuk satu bot
+// POST /api/bots/:symbol/strategy  { "strategy": "B" }
+app.post("/api/bots/:symbol/strategy", async (req, res) => {
+  const sym      = req.params.symbol.toUpperCase();
+  const strategy = (req.body.strategy || "").toUpperCase();
+
+  if (!["A", "B", "C"].includes(strategy)) {
+    return res.status(400).json({ error: "Strategy tidak valid. Pilih: A, B, atau C" });
+  }
+
+  const oldBot = getBot(sym);
+  if (!oldBot) return res.status(404).json({ error: "Symbol tidak tersedia" });
+
+  const wasRunning = oldBot.getState().running;
+
+  // Stop bot lama
+  if (wasRunning) await oldBot.stop();
+  oldBot.removeAllListeners();
+
+  // Buat bot baru dengan strategi baru
+  const capKey  = `CAPITAL_${sym}`;
+  const capital = parseFloat(process.env[capKey]) || parseFloat(process.env.CAPITAL) || 500;
+  const newBot  = new BotEngine({ symbol: sym, capital, strategy });
+
+  // Register event listeners
+  newBot.on("log",    entry => broadcast({ type: "log",    symbol: sym, data: entry }));
+  newBot.on("status", state => broadcast({ type: "status", symbol: sym, data: state }));
+
+  // Update map
+  bots.set(sym, newBot);
+
+  // Restart kalau sebelumnya running
+  if (wasRunning) await newBot.start();
+
+  res.json({
+    ok:            true,
+    symbol:        sym,
+    strategy:      strategy,
+    strategyLabel: newBot.config.strategyLabel,
+    signalType:    newBot.config.signalType,
+    restarted:     wasRunning,
+    message:       `Strategi diganti ke [${strategy}] ${newBot.config.strategyLabel}${wasRunning ? " — bot di-restart otomatis" : ""}`,
+  });
 });
 
 // ─────────────────────────────────────────────
