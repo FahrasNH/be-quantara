@@ -182,25 +182,27 @@ class BitgetCCXTClient {
 
   async openPosition(symbol, side, size, marginCoin = "USDT") {
     try {
-      // side: "open_long" -> "long", "open_short" -> "short"
+      // side: "open_long" -> buy, "open_short" -> sell
       let marketSymbol = symbol;
       if (!marketSymbol.includes("/")) {
         const base = marketSymbol.slice(0, -4);
         marketSymbol = `${base}/USDT:USDT`;
       }
 
-      const orderSide = side.includes("long") ? "long" : "short";
+      const isBuy    = side.includes("long");
+      const direction = isBuy ? "buy" : "sell";
 
+      // FIX error 40774: Bitget one-way mode butuh 'tradeSide: open'
+      // Tanpa ini, Bitget bingung apakah ini open atau close posisi
       const order = await this.exchange.createMarketOrder(
         marketSymbol,
-        orderSide === "long" ? "buy" : "sell",
-        size
+        direction,
+        size,
+        undefined,
+        { tradeSide: "open" }
       );
 
-      return {
-        orderId: order.id,
-        ...order,
-      };
+      return { orderId: order.id, ...order };
     } catch (err) {
       throw new Error(`openPosition error: ${err.message}`);
     }
@@ -214,19 +216,19 @@ class BitgetCCXTClient {
         marketSymbol = `${base}/USDT:USDT`;
       }
 
-      // side: "close_long" -> sell, "close_short" -> buy
-      const orderSide = side.includes("long") ? "sell" : "buy";
+      // close_long → sell, close_short → buy
+      const direction = side.includes("long") ? "sell" : "buy";
 
+      // FIX: tradeSide: close + reduceOnly supaya tidak buka posisi baru
       const order = await this.exchange.createMarketOrder(
         marketSymbol,
-        orderSide,
-        size
+        direction,
+        size,
+        undefined,
+        { tradeSide: "close", reduceOnly: true }
       );
 
-      return {
-        orderId: order.id,
-        ...order,
-      };
+      return { orderId: order.id, ...order };
     } catch (err) {
       throw new Error(`closePosition error: ${err.message}`);
     }
