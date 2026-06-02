@@ -179,9 +179,17 @@ class BotEngine extends EventEmitter {
     } else {
       try {
         const bal = await this.client.getBalance(this.config.marginCoin);
-        this.state.capital = bal.available;
-        this.state.startCapital = bal.available;
-        this._log("info", `Balance    : $${bal.available.toFixed(2)} USDT`);
+
+        // DRY RUN: jika balance $0 atau error, gunakan $500 simulasi
+        if (this.config.dryRun && (!bal.available || bal.available <= 0)) {
+          this.state.capital = this.state.startCapital = 500;
+          this._log("warn", `Balance kosong, gunakan simulasi dengan modal $500`);
+        } else {
+          this.state.capital = bal.available;
+          this.state.startCapital = bal.available;
+          this._log("info", `Balance    : $${bal.available.toFixed(2)} USDT`);
+        }
+
         if (!this.config.dryRun) {
           await this.client.setLeverage(this.config.symbol, this.config.leverage);
           await this.client.setMarginMode(this.config.symbol, "crossed");
