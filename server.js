@@ -15,6 +15,7 @@ const cors    = require("cors");
 const http    = require("http");
 const { WebSocketServer } = require("ws");
 const BotEngine = require("./bot-engine");
+const db        = require("./db");
 
 const PORT = parseInt(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -139,6 +140,88 @@ app.post("/api/bot/stop", async (req, res) => {
     res.json({ ok: true, message: "Bot berhasil dihentikan" });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────
+// DATABASE ENDPOINTS
+// ─────────────────────────────────────────────
+
+// Daftar sesi bot dari DB
+app.get("/api/sessions", (req, res) => {
+  try {
+    const limit    = Math.min(parseInt(req.query.limit) || 20, 100);
+    const sessions = db.getSessions(limit);
+    res.json(sessions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Detail satu sesi
+app.get("/api/sessions/:id", (req, res) => {
+  try {
+    const session = db.getSession(parseInt(req.params.id));
+    if (!session) return res.status(404).json({ error: "Session tidak ditemukan" });
+    res.json(session);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Riwayat trade dari DB
+app.get("/api/trades", (req, res) => {
+  try {
+    const sessionId = req.query.session_id ? parseInt(req.query.session_id) : null;
+    const symbol    = req.query.symbol    || null;
+    const limit     = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const trades    = db.getTrades({ sessionId, symbol, limit });
+    res.json(trades);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Statistik trade per sesi
+app.get("/api/trades/stats/:sessionId", (req, res) => {
+  try {
+    const stats = db.getTradeStats(parseInt(req.params.sessionId));
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Equity curve dari DB
+app.get("/api/equity/:sessionId", (req, res) => {
+  try {
+    const equity = db.getEquity(parseInt(req.params.sessionId));
+    res.json(equity);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Log dari DB (sesi tertentu)
+app.get("/api/db/logs/:sessionId", (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
+    const logs  = db.getLogs(parseInt(req.params.sessionId), limit);
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Info database
+app.get("/api/db/info", (req, res) => {
+  try {
+    res.json({
+      path:     db.getDbPath(),
+      sessions: db.getSessions(1).length > 0 ? "ada data" : "kosong",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

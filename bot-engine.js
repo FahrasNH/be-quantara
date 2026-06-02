@@ -7,6 +7,7 @@
 const EventEmitter = require("events");
 const { createExchangeClient, getExchangeInfo } = require("./exchange-factory");
 const { calcIndicators, detectSignal, calcPositionSize } = require("./indicators");
+const db = require("./db");
 
 class BotEngine extends EventEmitter {
   constructor() {
@@ -50,27 +51,36 @@ class BotEngine extends EventEmitter {
       lastPrice:     null,
     };
 
-    this.logs = [];        // circular buffer max 1000
-    this.client = createExchangeClient();
+    this.logs      = [];   // circular buffer max 1000 (WS streaming)
+    this.sessionId = null; // DB session ID saat ini
+    this.client    = createExchangeClient();
     this._interval = null;
     this._reportInterval = null;
   }
 
   // ─────────────────────────────────────────────
-  // INTERNAL LOGGER — console + emit event
+  // INTERNAL LOGGER — console + WS event + DB
   // ─────────────────────────────────────────────
   _log(level, ...args) {
-    const msg  = args.map(a => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
-    const time = new Date().toISOString();
+    const msg   = args.map(a => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+    const time  = new Date().toISOString();
     const entry = { time, level, msg };
 
+    // Buffer in-memory untuk WS
     this.logs.push(entry);
     if (this.logs.length > 1000) this.logs.shift();
     this.emit("log", entry);
 
-    const C = { info: "\x1b[36m", warn: "\x1b[33m", error: "\x1b[31m", trade: "\x1b[32m", price: "\x1b[34m" };
+    // Persist ke DB hanya level penting
+    if (this.sessionId && (level === "trade" || level === "error" || level === "warn")) {
+      try {
+        db.insertLog({ sessionId: this.sessionId, level, message: msg });
+      } catch { /* jangan crash bot karena log error */ }
+    }
+
+    const C      = { info: "\x1b[36m", warn: "\x1b[33m", error: "\x1b[31m", trade: "\x1b[32m", price: "\x1b[34m" };
     const prefix = { info: "INFO ", warn: "WARN ", error: "ERROR", trade: "TRADE", price: "PRICE" };
-    const ts = `\x1b[90m[${new Date().toLocaleTimeString("id-ID")}]\x1b[0m`;
+    const ts     = `\x1b[90m[${new Date().toLocaleTimeString("id-ID")}]\x1b[0m`;
     console.log(`${ts} ${C[level] || "\x1b[37m"}[${prefix[level] || level.toUpperCase()}] ${msg}\x1b[0m`);
   }
 
@@ -89,6 +99,7 @@ class BotEngine extends EventEmitter {
   getState() {
     return {
       running:       this.state.running,
+      sessionId:     this.sessionId,
       symbol:        this.config.symbol,
       exchange:      this.config.exchange,
       exchangeLabel: this.config.exchangeLabel,
@@ -134,13 +145,32 @@ class BotEngine extends EventEmitter {
 
   async start() {
     if (this.state.running) throw new Error("Bot sudah berjalan");
+
+    // Reset in-memory state
+    this.state.trades        = [];
+    this.state.openPositions = [];
+    this.state.lastSignal    = null;
+    this.state.checkCount    = 0;
+    this.state.errors        = 0;
+
     await this._startup();
     this.state.running = true;
+
+    // Buat sesi baru di DB
+    this.sessionId = db.openSession({
+      exchange:       this.config.exchange,
+      symbol:         this.config.symbol,
+      mode:           this.config.dryRun ? "dry_run" : "live",
+      initialCapital: this.state.startCapital,
+      config:         this.config,
+    });
+    this._log("info", `Session DB #${this.sessionId} dibuat`);
+
     this.emit("status", this.getState());
 
     await this._tick();
 
-    this._interval = setInterval(() => this._tick(), this.config.checkInterval);
+    this._interval       = setInterval(() => this._tick(), this.config.checkInterval);
     this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
 
     this._log("info", `Bot berjalan — cek setiap ${this.config.checkInterval / 1000}s`);
@@ -152,6 +182,21 @@ class BotEngine extends EventEmitter {
     this._interval       = null;
     this._reportInterval = null;
     this.state.running   = false;
+
+    // Tutup sesi di DB
+    if (this.sessionId) {
+      const wins   = this.state.trades.filter(t => t.pnl > 0).length;
+      const losses = this.state.trades.filter(t => t.pnl <= 0).length;
+      db.closeSession(this.sessionId, {
+        finalCapital: this.state.capital,
+        totalTrades:  this.state.trades.length,
+        wins,
+        losses,
+      });
+      this._log("warn", `Session DB #${this.sessionId} ditutup`);
+      this.sessionId = null;
+    }
+
     this._log("warn", "Bot dihentikan");
     this.emit("status", this.getState());
   }
@@ -179,17 +224,14 @@ class BotEngine extends EventEmitter {
     } else {
       try {
         const bal = await this.client.getBalance(this.config.marginCoin);
-
-        // DRY RUN: jika balance $0 atau error, gunakan $500 simulasi
         if (this.config.dryRun && (!bal.available || bal.available <= 0)) {
           this.state.capital = this.state.startCapital = 500;
-          this._log("warn", `Balance kosong, gunakan simulasi dengan modal $500`);
+          this._log("warn", "Balance kosong, gunakan simulasi dengan modal $500");
         } else {
-          this.state.capital = bal.available;
+          this.state.capital      = bal.available;
           this.state.startCapital = bal.available;
           this._log("info", `Balance    : $${bal.available.toFixed(2)} USDT`);
         }
-
         if (!this.config.dryRun) {
           await this.client.setLeverage(this.config.symbol, this.config.leverage);
           await this.client.setMarginMode(this.config.symbol, "crossed");
@@ -262,6 +304,19 @@ class BotEngine extends EventEmitter {
       }
 
       this.state.errors = 0;
+
+      // Snapshot equity ke DB setiap tick
+      if (this.sessionId) {
+        try {
+          db.snapshotEquity({
+            sessionId:     this.sessionId,
+            capital:       this.state.capital,
+            price,
+            openPositions: this.state.openPositions.length,
+          });
+        } catch { /* jangan crash karena snapshot error */ }
+      }
+
       this.emit("status", this.getState());
 
     } catch (err) {
@@ -275,7 +330,7 @@ class BotEngine extends EventEmitter {
   }
 
   // ─────────────────────────────────────────────
-  // FETCH CANDLES
+  // FETCH CANDLES — dengan cache DB
   // ─────────────────────────────────────────────
   async _fetchCandles() {
     const apiKey = this.config.exchange === "okx" ? process.env.OKX_API_KEY : process.env.BITGET_API_KEY;
@@ -284,10 +339,26 @@ class BotEngine extends EventEmitter {
     if (this.config.dryRun && noKey) {
       return this._generateDryRunCandles();
     }
+
+    // 1. Coba cache dulu (valid 15 menit)
     try {
-      // Convert interval ke lowercase untuk CCXT (4H -> 4h)
+      const cached = db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 900);
+      if (cached && cached.length >= this.config.emaSlow + 20) {
+        return cached;
+      }
+    } catch { /* cache error tidak masalah */ }
+
+    // 2. Fetch dari exchange API
+    try {
       const timeframe = this.config.interval.toLowerCase();
-      return await this.client.getCandles(this.config.symbol, timeframe, 200);
+      const candles   = await this.client.getCandles(this.config.symbol, timeframe, 200);
+
+      // Simpan ke cache
+      try {
+        db.cacheCandles(this.config.exchange, this.config.symbol, this.config.interval, candles);
+      } catch { /* cache write error tidak masalah */ }
+
+      return candles;
     } catch (err) {
       this._log("warn", `Gagal ambil candles dari API, pakai simulasi: ${err.message}`);
       return this._generateDryRunCandles();
@@ -322,7 +393,7 @@ class BotEngine extends EventEmitter {
   }
 
   // ─────────────────────────────────────────────
-  // HANDLE SIGNAL
+  // HANDLE SIGNAL — simpan trade ke DB
   // ─────────────────────────────────────────────
   async _handleSignal(signal, price, atr) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
@@ -336,7 +407,7 @@ class BotEngine extends EventEmitter {
     try {
       if (!this.config.dryRun) {
         const bal = await this.client.getBalance(this.config.marginCoin);
-        availCap = bal.available;
+        availCap  = bal.available;
       }
     } catch { /* pakai default */ }
 
@@ -347,6 +418,8 @@ class BotEngine extends EventEmitter {
     this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
     this._log("trade", `Entry: $${price.toLocaleString()} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | Size: ${size}`);
 
+    const openTime = Date.now();
+
     if (!this.config.dryRun) {
       try {
         const side  = signal === "LONG" ? "open_long" : "open_short";
@@ -356,19 +429,53 @@ class BotEngine extends EventEmitter {
         await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
         await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
         this._log("trade", "SL/TP dipasang ✓");
-        this.state.openPositions.push({ id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime: Date.now(), atr });
+
+        const pos = { id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr };
+
+        // Simpan ke DB
+        if (this.sessionId) {
+          pos.dbId = db.insertTrade({
+            sessionId:  this.sessionId,
+            exchange:   this.config.exchange,
+            symbol:     this.config.symbol,
+            side:       signal,
+            entryPrice: price,
+            sl, tp, size, openTime, atr,
+            dryRun:     false,
+            orderId:    order?.orderId,
+          });
+        }
+
+        this.state.openPositions.push(pos);
       } catch (err) {
         this._log("error", `Gagal buka posisi: ${err.message}`);
       }
     } else {
       this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
       this.state.capital -= availCap * this.config.riskPerTrade;
-      this.state.openPositions.push({ id: `dry_${Date.now()}`, side: signal, entry: price, sl, tp, size, openTime: Date.now(), atr });
+
+      const pos = { id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size, openTime, atr };
+
+      // Simpan ke DB (dry run)
+      if (this.sessionId) {
+        pos.dbId = db.insertTrade({
+          sessionId:  this.sessionId,
+          exchange:   this.config.exchange,
+          symbol:     this.config.symbol,
+          side:       signal,
+          entryPrice: price,
+          sl, tp, size, openTime, atr,
+          dryRun: true,
+          orderId: pos.id,
+        });
+      }
+
+      this.state.openPositions.push(pos);
     }
   }
 
   // ─────────────────────────────────────────────
-  // CHECK OPEN POSITIONS
+  // CHECK OPEN POSITIONS — tutup trade di DB
   // ─────────────────────────────────────────────
   async _checkOpenPositions(price, atr) {
     if (this.state.openPositions.length === 0) return;
@@ -390,19 +497,28 @@ class BotEngine extends EventEmitter {
 
       if (hitTP || hitSL) {
         const exitPrice = hitTP ? pos.tp : pos.sl;
-        const pnl = pos.side === "LONG"
+        const pnl       = pos.side === "LONG"
           ? (exitPrice - pos.entry) * pos.size
           : (pos.entry - exitPrice) * pos.size;
+        const pnlPct    = ((pnl / (pos.entry * pos.size)) * 100);
 
         this.state.capital += pnl + pos.entry * pos.size * this.config.riskPerTrade;
-        const reason = hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌";
+        const reason    = hitTP ? "TP" : "SL";
+        const closeTime = Date.now();
 
-        this._sep(`POSISI DITUTUP — ${reason}`);
-        this._log("trade", `CLOSE ${pos.side} — ${reason}`);
+        this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
+        this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
         this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`);
         this._log("trade", `Modal sekarang: $${this.state.capital.toFixed(2)}`);
 
-        this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason, closedAt: Date.now() });
+        // Tutup di DB
+        if (this.sessionId && pos.dbId) {
+          try {
+            db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
+          } catch { /* jangan crash */ }
+        }
+
+        this.state.trades.push({ ...pos, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
         toClose.push(pos.id);
       }
     }
