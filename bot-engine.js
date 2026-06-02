@@ -307,8 +307,13 @@ class BotEngine extends EventEmitter {
       const totalTrades = this.state.trades.length + this.state.openPositions.length;
       const openCount   = this.state.openPositions.length;
 
+      // ── finalCapital = modal awal bot ini + PnL trade bot ini sendiri ──
+      // JANGAN pakai this.state.capital (balance exchange bersama 3 bot!)
+      const tradePnL   = this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0);
+      const finalCapital = this.state.startCapital + tradePnL;
+
       db.closeSession(this.sessionId, {
-        finalCapital: this.state.capital,
+        finalCapital,
         totalTrades,
         wins,
         losses,
