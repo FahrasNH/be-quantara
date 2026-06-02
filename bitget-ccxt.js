@@ -22,7 +22,7 @@ class BitgetCCXTClient {
   // MARKET DATA
   // ─────────────────────────────────────────────
 
-  async getCandles(symbol, timeframe = "4h", limit = 200) {
+  async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
     try {
       // CCXT Bitget format: BTC/USDT:USDT (untuk swap/futures)
       let marketSymbol = symbol;
@@ -35,7 +35,7 @@ class BitgetCCXTClient {
       const candles = await this.exchange.fetchOHLCV(
         marketSymbol,
         timeframe,
-        undefined,
+        since,
         Math.min(limit, 500)
       );
 

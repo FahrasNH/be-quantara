@@ -123,6 +123,46 @@ app.get("/api/candles", async (req, res) => {
   }
 });
 
+// Candles historis untuk backtest — fetch paginated hingga 1000 candles
+const INTERVAL_MS = {
+  "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+  "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000, "12h": 43_200_000,
+  "1d": 86_400_000, "1w": 604_800_000,
+};
+app.get("/api/candles/backtest", async (req, res) => {
+  try {
+    const symbol    = req.query.symbol   || bot.config.symbol;
+    const timeframe = req.query.interval || "1d";
+    const total     = Math.min(parseInt(req.query.limit) || 500, 1000);
+    const PAGE      = 200;
+    const msPerBar  = INTERVAL_MS[timeframe] || 86_400_000;
+
+    const allCandles = [];
+    // Fetch from oldest to newest: calculate starting point
+    let since = Date.now() - total * msPerBar;
+
+    while (allCandles.length < total) {
+      const remaining = total - allCandles.length;
+      const batch = await bot.client.getCandles(symbol, timeframe, Math.min(remaining, PAGE), since);
+      if (!batch || batch.length === 0) break;
+      allCandles.push(...batch);
+      // Advance since past last candle
+      since = batch[batch.length - 1].timestamp + msPerBar;
+      if (batch.length < Math.min(remaining, PAGE)) break; // reached end
+    }
+
+    // Deduplicate by timestamp, sort ascending
+    const seen   = new Set();
+    const unique = allCandles
+      .filter(c => { if (seen.has(c.timestamp)) return false; seen.add(c.timestamp); return true; })
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    res.json(unique);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Start bot
 app.post("/api/bot/start", async (req, res) => {
   try {
