@@ -54,7 +54,8 @@ db.exec(`
     close_time   DATETIME,           -- NULL jika masih terbuka
     atr          REAL,
     dry_run      INTEGER DEFAULT 1,  -- 1 = simulasi, 0 = live
-    order_id     TEXT                -- exchange order ID (live only)
+    order_id     TEXT,               -- exchange order ID (live only)
+    indicators   TEXT                -- JSON snapshot indikator saat entry (untuk analitik/ML)
   );
 
   CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -103,6 +104,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_candle_lookup    ON candle_cache(exchange, symbol, interval, timestamp DESC);
 `);
 
+// ── Migration: tambah kolom indicators jika belum ada ────────────────────────
+// SQLite tidak support ALTER TABLE ADD COLUMN IF NOT EXISTS, pakai try-catch
+try {
+  db.exec(`ALTER TABLE trades ADD COLUMN indicators TEXT`);
+} catch { /* kolom sudah ada — abaikan */ }
+
 // ─────────────────────────────────────────────
 // PREPARED STATEMENTS
 // ─────────────────────────────────────────────
@@ -145,10 +152,10 @@ const stmts = {
   // Trades
   insertTrade: db.prepare(`
     INSERT INTO trades
-      (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id)
+      (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators)
     VALUES
       (@session_id, @exchange, @symbol, @side, @entry_price, @sl, @tp, @size,
-       @open_time, @atr, @dry_run, @order_id)
+       @open_time, @atr, @dry_run, @order_id, @indicators)
   `),
   closeTrade: db.prepare(`
     UPDATE trades
@@ -306,7 +313,7 @@ function parseSession(row) {
 
 // ── Trades ────────────────────────────────────
 
-function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId }) {
+function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators }) {
   const result = stmts.insertTrade.run({
     session_id:  sessionId,
     exchange,
@@ -320,6 +327,7 @@ function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, si
     atr:         atr  ?? null,
     dry_run:     dryRun ? 1 : 0,
     order_id:    orderId ?? null,
+    indicators:  indicators ? JSON.stringify(indicators) : null,
   });
   return result.lastInsertRowid;
 }
@@ -350,6 +358,63 @@ function getTradeStats(sessionId) {
 
 function getOpenTrades(sessionId) {
   return stmts.getOpenTrades.all(sessionId);
+}
+
+/**
+ * Export data trade lengkap dengan snapshot indikator — untuk analitik / ML.
+ * Hanya trade yang sudah tertutup (punya exit_price dan pnl).
+ *
+ * @param {{ symbol?: string, dryRun?: boolean, limit?: number }} opts
+ * @returns {Array<{rsi, atr, atrPct, volumeRatio, emaTrend, htfTrend, side, strategy, result, pnl, pnlPct, openTime, closeTime}>}
+ */
+function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
+  let where = `close_time IS NOT NULL AND indicators IS NOT NULL`;
+  const params = [];
+  if (symbol) { where += ` AND symbol = ?`; params.push(symbol); }
+  if (dryRun !== null) { where += ` AND dry_run = ?`; params.push(dryRun ? 1 : 0); }
+  params.push(Math.min(limit, 5000));
+
+  const rows = db.prepare(`
+    SELECT t.*, s.mode, s.exchange AS _exchange
+    FROM trades t
+    LEFT JOIN bot_sessions s ON s.id = t.session_id
+    WHERE ${where}
+    ORDER BY t.open_time DESC
+    LIMIT ?
+  `).all(...params);
+
+  return rows.map(row => {
+    const ind = safeParseJSON(row.indicators);
+    return {
+      // Snapshot indikator saat entry
+      rsi:         ind.rsi         ?? null,
+      atr:         ind.atr         ?? null,
+      atrPct:      ind.atrPct      ?? null,
+      volumeRatio: ind.volumeRatio ?? null,
+      emaFast:     ind.emaFast     ?? null,
+      emaSlow:     ind.emaSlow     ?? null,
+      emaTrendBias: ind.emaTrendBias ?? null, // "bullish" | "bearish" | null
+      htfTrend:    ind.htfTrend    ?? null,
+      strategy:    ind.strategy    ?? null,
+      // Trade info
+      side:        row.side,
+      symbol:      row.symbol,
+      entryPrice:  row.entry_price,
+      exitPrice:   row.exit_price,
+      sl:          row.sl,
+      tp:          row.tp,
+      size:        row.size,
+      pnl:         row.pnl,
+      pnlPct:      row.pnl_pct,
+      reason:      row.reason,
+      dryRun:      row.dry_run === 1,
+      openTime:    row.open_time,
+      closeTime:   row.close_time,
+      // Label untuk ML
+      result:      row.pnl > 0 ? "win" : "loss",
+      rMultiple:   row.sl && row.entry_price ? parseFloat(((row.exit_price - row.entry_price) / Math.abs(row.entry_price - row.sl)).toFixed(2)) : null,
+    };
+  });
 }
 
 /**
@@ -464,6 +529,7 @@ module.exports = {
   getTradeStats,
   getOpenTrades,
   getOpenTradesBySymbol,
+  getInsights,
   // equity
   snapshotEquity,
   getEquity,

@@ -631,7 +631,22 @@ class BotEngine extends EventEmitter {
           }
 
           if (filteredSignal && filteredSignal !== this.state.lastSignal) {
-            await this._handleSignal(filteredSignal, price, atr);
+            // ── Snapshot indikator saat entry (untuk analitik / ML) ─────────────
+            const vol    = indicators.volumes[lastIdx]  ?? 0;
+            const volSMA = indicators.volSMA[lastIdx]   ?? 1;
+            const indicatorSnapshot = {
+              rsi:          rsi     != null ? parseFloat(rsi.toFixed(2))   : null,
+              atr:          atr     != null ? parseFloat(atr.toFixed(4))   : null,
+              atrPct:       atr && price ? parseFloat(((atr / price) * 100).toFixed(3)) : null,
+              emaFast:      emaF    != null ? parseFloat(emaF.toFixed(4))  : null,
+              emaSlow:      emaS    != null ? parseFloat(emaS.toFixed(4))  : null,
+              emaTrendVal:  emaTrend != null ? parseFloat(emaTrend.toFixed(4)) : null,
+              emaTrendBias: emaTrend != null ? (price > emaTrend ? "bullish" : "bearish") : null,
+              volumeRatio:  volSMA > 0 ? parseFloat((vol / volSMA).toFixed(2)) : null,
+              htfTrend:     this.state.htfTrend ?? null,
+              strategy:     this.config.strategyKey ?? null,
+            };
+            await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot);
             this.state.lastSignal = filteredSignal;
           } else if (!filteredSignal) {
             this.state.lastSignal = null;
@@ -743,7 +758,7 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
   // HANDLE SIGNAL — simpan trade ke DB
   // ─────────────────────────────────────────────
-  async _handleSignal(signal, price, atr) {
+  async _handleSignal(signal, price, atr, indicatorSnapshot = null) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
     const slDist = atr * this.config.atrMultiplier;
@@ -844,6 +859,7 @@ class BotEngine extends EventEmitter {
             sl, tp, size, openTime, atr,
             dryRun:     false,
             orderId:    order?.orderId,
+            indicators: indicatorSnapshot,
           });
         }
 
@@ -884,8 +900,9 @@ class BotEngine extends EventEmitter {
           side:       signal,
           entryPrice: price,
           sl, tp, size, openTime, atr,
-          dryRun: true,
-          orderId: pos.id,
+          dryRun:     true,
+          orderId:    pos.id,
+          indicators: indicatorSnapshot,
         });
       }
 

@@ -72,5 +72,58 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
   });
 
+  // ── GET /api/insights ─────────────────────────────────────────────────────
+  // Export snapshot indikator + hasil trade untuk analitik / ML.
+  //
+  // Query params:
+  //   symbol  — filter per koin   (contoh: ETHUSDT)
+  //   dry_run — "true" | "false"  (default: semua)
+  //   limit   — max rows          (default 500, max 5000)
+  //   format  — "json" (default) | "csv"
+  //
+  // Contoh response item:
+  //   { rsi, atr, atrPct, volumeRatio, emaTrendBias, htfTrend, strategy,
+  //     side, result, pnl, rMultiple, openTime, closeTime, ... }
+  router.get("/insights", (req, res) => {
+    try {
+      const symbol  = req.query.symbol  || null;
+      const limit   = Math.min(parseInt(req.query.limit) || 500, 5000);
+      const dryRun  = req.query.dry_run === undefined ? null
+        : req.query.dry_run === "true";
+      const format  = req.query.format || "json";
+
+      const data = db.getInsights({ symbol, dryRun, limit });
+
+      if (format === "csv") {
+        if (data.length === 0) return res.status(200).send("No data");
+        const headers = Object.keys(data[0]).join(",");
+        const rows    = data.map(r =>
+          Object.values(r).map(v => (v === null ? "" : String(v))).join(",")
+        ).join("\n");
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="quantara-insights-${Date.now()}.csv"`);
+        return res.send(`${headers}\n${rows}`);
+      }
+
+      // JSON default — sertakan summary statistik
+      const wins   = data.filter(d => d.result === "win").length;
+      const losses = data.filter(d => d.result === "loss").length;
+      const avgRsi = data.length ? +(data.reduce((s, d) => s + (d.rsi || 0), 0) / data.length).toFixed(1) : null;
+      const avgVol = data.length ? +(data.reduce((s, d) => s + (d.volumeRatio || 0), 0) / data.length).toFixed(2) : null;
+
+      res.json({
+        total:   data.length,
+        wins,
+        losses,
+        winRate: data.length ? +((wins / data.length) * 100).toFixed(1) : 0,
+        avgRsiAtEntry:    avgRsi,
+        avgVolumeRatio:   avgVol,
+        trades: data,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 };
