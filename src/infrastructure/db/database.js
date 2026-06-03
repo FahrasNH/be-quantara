@@ -7,7 +7,8 @@
 const Database = require("better-sqlite3");
 const path     = require("path");
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "quantara.db");
+// __dirname = src/infrastructure/db/ → naik 3 level ke root project
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../../../quantara.db");
 
 // Buka / buat database
 const db = new Database(DB_PATH);
