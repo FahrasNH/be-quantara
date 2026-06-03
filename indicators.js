@@ -1,7 +1,14 @@
 // ─────────────────────────────────────────────
 // indicators.js — Kalkulasi indikator teknikal
-// EMA, RSI, ATR, Bollinger Bands, Volume SMA
-// Support 3 signal types: RSI_REVERSAL, EMA_MOMENTUM, MULTI_TF
+//
+// Implementasi berdasarkan:
+// "Dokumentasi Panduan Strategi Trading"
+//   Aggressive Scalping, Day Trading, Swing Trading
+//
+// Signal types:
+//   PDF_SCALPING   → Strategi A (EMA9/21 + RSI zona + volume)
+//   PDF_DAYTRADING → Strategi B (EMA9/21/50 + RSI 50-70 + volume)
+//   PDF_SWING      → Strategi C (EMA21/50/200 + pullback RSI 40-60)
 // ─────────────────────────────────────────────
 
 // ─────────────────────────────────────────────
@@ -77,9 +84,6 @@ function calcATR(highs, lows, closes, period = 14) {
   return result;
 }
 
-/**
- * SMA — Simple Moving Average
- */
 function calcSMA(values, period) {
   const result = new Array(period - 1).fill(null);
   for (let i = period - 1; i < values.length; i++) {
@@ -89,9 +93,6 @@ function calcSMA(values, period) {
   return result;
 }
 
-/**
- * Bollinger Bands (untuk Strategy B momentum)
- */
 function calcBollingerBands(closes, period = 20, stdDev = 2) {
   const sma = calcSMA(closes, period);
   const upper = [], lower = [];
@@ -108,9 +109,6 @@ function calcBollingerBands(closes, period = 20, stdDev = 2) {
   return { middle: sma, upper, lower };
 }
 
-/**
- * Volume SMA — deteksi volume spike
- */
 function calcVolumeSMA(volumes, period = 20) {
   return calcSMA(volumes, period);
 }
@@ -123,11 +121,11 @@ function calcIndicators(candles, config = {}) {
   const {
     emaFast    = 9,
     emaSlow    = 21,
-    emaTrend   = 20,
+    emaTrend   = 50,
     rsiPeriod  = 14,
     atrPeriod  = 14,
     withBB     = false,
-    withVolume = false,
+    withVolume = true,     // Volume aktif by default
   } = config;
 
   const closes  = candles.map(c => c.close);
@@ -138,172 +136,247 @@ function calcIndicators(candles, config = {}) {
   const result = {
     emaFast:  calcEMA(closes, emaFast),
     emaSlow:  calcEMA(closes, emaSlow),
-    emaTrend: calcEMA(closes, emaTrend),
     rsi:      calcRSI(closes, rsiPeriod),
     atr:      calcATR(highs, lows, closes, atrPeriod),
+    volSMA:   calcVolumeSMA(volumes, 20),  // Selalu hitung volume SMA
+    closes,
+    volumes,
   };
 
-  if (withBB)     result.bb     = calcBollingerBands(closes);
-  if (withVolume) result.volSMA = calcVolumeSMA(volumes);
+  // EMA trend filter (EMA50 untuk Day Trading, EMA200 untuk Swing)
+  if (emaTrend && emaTrend > 0) {
+    result.emaTrend = calcEMA(closes, emaTrend);
+  }
+
+  if (withBB) result.bb = calcBollingerBands(closes);
 
   return result;
 }
 
 // ─────────────────────────────────────────────
-// SIGNAL DETECTION — 3 STRATEGI
+// SIGNAL DETECTION — BERDASARKAN PDF
 // ─────────────────────────────────────────────
 
 /**
- * STRATEGI A — RSI Reversal (Aggressive Scalping)
+ * STRATEGI A — Aggressive Scalping (PDF 2.4–2.5)
  *
- * LONG : RSI baru keluar dari oversold (RSI[-1] < oversold, RSI[0] > oversold) + EMA Fast > EMA Slow
- * SHORT: RSI baru keluar dari overbought (RSI[-1] > overbought, RSI[0] < overbought) + EMA Fast < EMA Slow
+ * LONG:  EMA9 > EMA21 AND Close > EMA9 AND RSI 50–70 AND Volume naik
+ * SHORT: EMA9 < EMA21 AND Close < EMA9 AND RSI 30–50 AND Volume naik
+ *
+ * Timeframe: 1M–5M
  */
-function detectSignalA(indicators, i, config = {}) {
-  const { rsiOverbought = 70, rsiOversold = 30, useBothSides = false } = config;
-  const { emaFast, emaSlow, rsi } = indicators;
+function detectSignalPdfScalping(indicators, i, config = {}) {
+  const {
+    useBothSides  = false,
+    rsiLongMin    = 50,
+    rsiLongMax    = 70,
+    rsiShortMin   = 30,
+    rsiShortMax   = 50,
+  } = config;
+
+  const { emaFast, emaSlow, rsi, volSMA, volumes, closes } = indicators;
+
+  if (i < 2) return null;
+  if (!emaFast[i] || !emaSlow[i] || !rsi[i]) return null;
+
+  const price   = closes[i];
+  const emaF    = emaFast[i];
+  const emaS    = emaSlow[i];
+  const rsiCurr = rsi[i];
+  const vol     = volumes[i];
+  const volAvg  = volSMA[i];
+
+  // Volume naik = candle saat ini di atas rata-rata volume (20 candle)
+  const volUp = !volAvg || vol > volAvg * 0.9;  // Sedikit toleransi 90%
+
+  // ── LONG: EMA9>EMA21, harga di atas EMA9, RSI 50–70, volume naik ──────────
+  if (emaF > emaS && price > emaF && rsiCurr >= rsiLongMin && rsiCurr <= rsiLongMax && volUp) {
+    return "LONG";
+  }
+
+  // ── SHORT: EMA9<EMA21, harga di bawah EMA9, RSI 30–50, volume naik ────────
+  if (useBothSides && emaF < emaS && price < emaF && rsiCurr >= rsiShortMin && rsiCurr <= rsiShortMax && volUp) {
+    return "SHORT";
+  }
+
+  return null;
+}
+
+/**
+ * STRATEGI B — Day Trading (PDF 3.4–3.5)
+ *
+ * LONG:  EMA9 > EMA21 AND Price > EMA50 (trend bullish) AND RSI 50–70 AND Volume naik
+ * SHORT: EMA9 < EMA21 AND Price < EMA50 (trend bearish) AND RSI < 50 AND Volume naik
+ *
+ * Timeframe: 15M–1H
+ * Tambahan: tidak entry jika RSI di tengah tanpa momentum (RSI tidak bergerak)
+ */
+function detectSignalPdfDayTrading(indicators, i, config = {}) {
+  const {
+    useBothSides  = false,
+    rsiLongMin    = 50,
+    rsiLongMax    = 70,
+    rsiShortMin   = 30,
+    rsiShortMax   = 50,
+  } = config;
+
+  const { emaFast, emaSlow, emaTrend, rsi, volSMA, volumes, closes } = indicators;
 
   if (i < 2) return null;
   if (!emaFast[i] || !emaSlow[i] || !rsi[i] || !rsi[i-1]) return null;
 
-  const rsiPrev = rsi[i - 1];
-  const rsiCurr = rsi[i];
-  const emaUp   = emaFast[i] > emaSlow[i];  // Trend bullish
-
-  // LONG: RSI keluar dari oversold zone (reversal naik) + trend bullish
-  const rsiExitOversold = rsiPrev < rsiOversold && rsiCurr >= rsiOversold;
-  if (rsiExitOversold && emaUp) return "LONG";
-
-  // SHORT: RSI keluar dari overbought zone (reversal turun) + trend bearish
-  if (useBothSides) {
-    const emaDown = emaFast[i] < emaSlow[i];
-    const rsiExitOverbought = rsiPrev > rsiOverbought && rsiCurr <= rsiOverbought;
-    if (rsiExitOverbought && emaDown) return "SHORT";
-  }
-
-  return null;
-}
-
-/**
- * STRATEGI B — EMA Momentum Breakout (Recommended)
- *
- * LONG : EMA fast cross UP slow + RSI < rsiOverbought + RSI trending up (momentum)
- * SHORT: EMA fast cross DOWN slow + RSI > rsiOversold + RSI trending down
- *
- * Perbedaan dengan default: cek MOMENTUM RSI (apakah RSI sedang naik/turun)
- * bukan hanya posisi RSI saat ini.
- */
-function detectSignalB(indicators, i, config = {}) {
-  const { rsiOverbought = 60, rsiOversold = 40, useBothSides = false } = config;
-  const { emaFast, emaSlow, rsi } = indicators;
-
-  if (i < 2) return null;
-  if (!emaFast[i] || !emaSlow[i] || !emaFast[i-1] || !emaSlow[i-1]) return null;
-  if (!rsi[i] || !rsi[i-1] || !rsi[i-2]) return null;
-
-  const prevFast = emaFast[i - 1], currFast = emaFast[i];
-  const prevSlow = emaSlow[i - 1], currSlow = emaSlow[i];
+  const price    = closes[i];
+  const emaF     = emaFast[i];
+  const emaS     = emaSlow[i];
+  const ema50    = emaTrend ? emaTrend[i] : null;
   const rsiCurr  = rsi[i];
   const rsiPrev  = rsi[i - 1];
-  const rsiMom   = rsiCurr - rsiPrev;  // RSI momentum (positif = naik)
+  const vol      = volumes[i];
+  const volAvg   = volSMA[i];
+  const volUp    = !volAvg || vol > volAvg * 0.9;
 
-  // Golden cross: EMA fast naik melewati EMA slow
-  const goldenCross = prevFast <= prevSlow && currFast > currSlow;
-  // RSI tidak overbought DAN RSI trending up (momentum bullish)
-  const longOk = rsiCurr < rsiOverbought && rsiMom > 0;
+  // RSI harus punya momentum (sedang bergerak ke arah yang benar)
+  const rsiMomUp   = rsiCurr > rsiPrev;   // RSI naik (bullish momentum)
+  const rsiMomDown = rsiCurr < rsiPrev;   // RSI turun (bearish momentum)
 
-  if (goldenCross && longOk) return "LONG";
+  // Filter EMA50: price harus di atas EMA50 untuk long (trend besar bullish)
+  const trendBullish = !ema50 || price > ema50;
+  const trendBearish = !ema50 || price < ema50;
 
-  if (useBothSides) {
-    // Death cross: EMA fast turun melewati EMA slow
-    const deathCross = prevFast >= prevSlow && currFast < currSlow;
-    // RSI tidak oversold DAN RSI trending down (momentum bearish)
-    const shortOk = rsiCurr > rsiOversold && rsiMom < 0;
-    if (deathCross && shortOk) return "SHORT";
+  // ── LONG ──────────────────────────────────────────────────────────────────
+  if (
+    emaF > emaS &&           // EMA9 > EMA21 (trend jangka pendek bullish)
+    trendBullish &&          // Price di atas EMA50 (trend besar bullish)
+    rsiCurr >= rsiLongMin && // RSI di zona momentum bullish
+    rsiCurr <= rsiLongMax && // RSI belum overbought
+    rsiMomUp &&              // RSI sedang naik (momentum menguat)
+    volUp                    // Volume di atas rata-rata
+  ) {
+    return "LONG";
+  }
+
+  // ── SHORT ─────────────────────────────────────────────────────────────────
+  if (
+    useBothSides &&
+    emaF < emaS &&           // EMA9 < EMA21 (trend jangka pendek bearish)
+    trendBearish &&          // Price di bawah EMA50 (trend besar bearish)
+    rsiCurr >= rsiShortMin &&
+    rsiCurr <= rsiShortMax &&// RSI di zona momentum bearish
+    rsiMomDown &&            // RSI sedang turun (momentum melemah)
+    volUp
+  ) {
+    return "SHORT";
   }
 
   return null;
 }
 
 /**
- * STRATEGI C — Multi-Timeframe Pro
+ * STRATEGI C — Swing Trading (PDF 4.4–4.5)
  *
- * Membutuhkan 2 set candles: higherTfCandles (15m) dan candles (5m)
+ * LONG:
+ *   - Price > EMA50 (trend besar bullish)
+ *   - Price > EMA200 (konfirmasi tren besar)
+ *   - RSI dalam zona sehat 40–60 dan mulai naik (pullback selesai)
+ *   - EMA21 > EMA50 (short-term trend bullish)
+ *   - Candle konfirmasi bullish (close > open candle sebelumnya)
  *
- * LONG : 15m bullish (close > EMA20) + 5m EMA fast cross UP slow + RSI < rsiOverbought
- * SHORT: 15m bearish (close < EMA20) + 5m EMA fast cross DOWN slow + RSI > rsiOversold
+ * SHORT:
+ *   - Price < EMA50 (trend besar bearish)
+ *   - Price < EMA200
+ *   - RSI dalam zona 40–60 dan mulai turun (pullback ke resistance selesai)
+ *   - EMA21 < EMA50
+ *   - Candle konfirmasi bearish (close < open candle sebelumnya)
  *
- * @param {Object} indicators - Dari 5m candles
- * @param {number} i - index 5m candle
- * @param {Object} config
- * @param {Object|null} higherTfIndicators - Dari 15m candles (opsional)
+ * Timeframe: 4H–1D
  */
-function detectSignalC(indicators, i, config = {}, higherTfIndicators = null) {
-  const { rsiOverbought = 60, rsiOversold = 40, useBothSides = false } = config;
-  const { emaFast, emaSlow, rsi } = indicators;
+function detectSignalPdfSwing(indicators, i, config = {}) {
+  const {
+    useBothSides  = false,
+    rsiLongMin    = 40,
+    rsiLongMax    = 60,
+    rsiShortMin   = 40,
+    rsiShortMax   = 60,
+  } = config;
 
-  if (i < 2) return null;
-  if (!emaFast[i] || !emaSlow[i] || !emaFast[i-1] || !emaSlow[i-1]) return null;
-  if (!rsi[i]) return null;
+  const { emaFast, emaSlow, emaTrend, rsi, closes } = indicators;
 
-  const prevFast = emaFast[i - 1], currFast = emaFast[i];
-  const prevSlow = emaSlow[i - 1], currSlow = emaSlow[i];
+  if (i < 3) return null;
+  if (!emaFast[i] || !emaSlow[i] || !rsi[i] || !rsi[i-1] || !rsi[i-2]) return null;
+
+  const price    = closes[i];
+  const pricePrev = closes[i - 1];
+  const ema21    = emaFast[i];    // EMA21 untuk Swing
+  const ema50    = emaSlow[i];    // EMA50
+  const ema200   = emaTrend ? emaTrend[i] : null;
   const rsiCurr  = rsi[i];
+  const rsiPrev  = rsi[i - 1];
+  const rsiPrev2 = rsi[i - 2];
 
-  // ── 15m Trend Filter ──────────────────────────────
-  let higherTfBullish = true;   // Default: allow semua jika tidak ada 15m data
-  let higherTfBearish = true;
+  // RSI mulai naik dari area pullback (RSI[-2] < RSI[-1] < RSI[0] atau ada reversal)
+  const rsiBouncingUp   = rsiCurr > rsiPrev && rsiCurr > rsiPrev2;
+  const rsiBouncingDown = rsiCurr < rsiPrev && rsiCurr < rsiPrev2;
 
-  if (higherTfIndicators) {
-    const { emaTrend: ema15, closes: closes15 } = higherTfIndicators;
-    const lastIdx15 = ema15 ? ema15.length - 2 : -1;
+  // Candle konfirmasi: penutupan di atas high candle sebelumnya (bullish) atau sebaliknya
+  const candleBullish = price > pricePrev;   // Close candle ini lebih tinggi
+  const candleBearish = price < pricePrev;
 
-    if (lastIdx15 >= 0 && ema15[lastIdx15] && closes15) {
-      const price15  = closes15[lastIdx15];
-      const trend15  = ema15[lastIdx15];
-      higherTfBullish = price15 > trend15;  // 15m bullish: price di atas EMA20
-      higherTfBearish = price15 < trend15;  // 15m bearish: price di bawah EMA20
-    }
+  // Trend filter EMA200
+  const aboveEma200 = !ema200 || price > ema200;
+  const belowEma200 = !ema200 || price < ema200;
+
+  // ── LONG: Trend besar bullish + RSI pullback ke zona sehat + konfirmasi ───
+  if (
+    ema21 > ema50 &&          // Short-term bullish (EMA21 > EMA50)
+    price > ema50 &&          // Price di atas EMA50 (tren besar bullish)
+    aboveEma200 &&            // Konfirmasi EMA200
+    rsiCurr >= rsiLongMin &&  // RSI di zona sehat (bukan ekstrem)
+    rsiCurr <= rsiLongMax &&
+    rsiBouncingUp &&          // RSI mulai naik = pullback selesai
+    candleBullish             // Konfirmasi candle bullish
+  ) {
+    return "LONG";
   }
 
-  // ── Entry Signal (5m) ─────────────────────────────
-  const goldenCross = prevFast <= prevSlow && currFast > currSlow;
-  const longOk      = rsiCurr < rsiOverbought;
-
-  // LONG hanya jika 15m bullish (atau tidak ada 15m data)
-  if (goldenCross && longOk && higherTfBullish) return "LONG";
-
-  if (useBothSides) {
-    const deathCross = prevFast >= prevSlow && currFast < currSlow;
-    const shortOk    = rsiCurr > rsiOversold;
-    // SHORT hanya jika 15m bearish
-    if (deathCross && shortOk && higherTfBearish) return "SHORT";
+  // ── SHORT: Trend besar bearish + RSI pullback ke resistance + konfirmasi ──
+  if (
+    useBothSides &&
+    ema21 < ema50 &&          // Short-term bearish (EMA21 < EMA50)
+    price < ema50 &&          // Price di bawah EMA50
+    belowEma200 &&            // Konfirmasi EMA200
+    rsiCurr >= rsiShortMin &&
+    rsiCurr <= rsiShortMax &&
+    rsiBouncingDown &&        // RSI mulai turun = pullback ke resistance selesai
+    candleBearish             // Konfirmasi candle bearish
+  ) {
+    return "SHORT";
   }
 
   return null;
 }
 
 /**
- * Deteksi sinyal berdasarkan strategi yang dipilih
- * @param {Object} indicators
- * @param {number} i
- * @param {Object} config - Harus include signalType dan strategy params
- * @param {Object|null} higherTfIndicators - Untuk Strategi C
+ * Router utama: pilih detector berdasarkan signalType
  */
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
-  const signalType = config.signalType || "EMA_CROSSOVER";
+  const signalType = config.signalType || "PDF_DAYTRADING";
 
   switch (signalType) {
-    case "RSI_REVERSAL":  return detectSignalA(indicators, i, config);
-    case "EMA_MOMENTUM":  return detectSignalB(indicators, i, config);
-    case "MULTI_TF":      return detectSignalC(indicators, i, config, higherTfIndicators);
-    default:              return detectSignalLegacy(indicators, i, config);
+    case "PDF_SCALPING":    return detectSignalPdfScalping(indicators, i, config);
+    case "PDF_DAYTRADING":  return detectSignalPdfDayTrading(indicators, i, config);
+    case "PDF_SWING":       return detectSignalPdfSwing(indicators, i, config);
+
+    // Legacy support (backward compat jika ada data lama)
+    case "RSI_REVERSAL":    return detectSignalLegacy(indicators, i, { ...config, mode: "rsi_reversal" });
+    case "EMA_MOMENTUM":    return detectSignalLegacy(indicators, i, config);
+    case "MULTI_TF":        return detectSignalLegacy(indicators, i, config);
+    default:                return detectSignalLegacy(indicators, i, config);
   }
 }
 
 /**
- * Legacy signal detection (strategi lama, fallback)
- * EMA crossover + RSI posisi
+ * Legacy fallback — EMA crossover + RSI posisi
+ * Dipertahankan untuk kompatibilitas data historis
  */
 function detectSignalLegacy(indicators, i, config = {}) {
   const { rsiOverbought = 70, rsiOversold = 30, useBothSides = false } = config;
@@ -349,9 +422,9 @@ module.exports = {
   calcVolumeSMA,
   calcIndicators,
   detectSignal,
-  detectSignalA,
-  detectSignalB,
-  detectSignalC,
+  detectSignalPdfScalping,
+  detectSignalPdfDayTrading,
+  detectSignalPdfSwing,
   detectSignalLegacy,
   calcPositionSize,
 };

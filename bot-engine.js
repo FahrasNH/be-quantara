@@ -32,10 +32,15 @@ class BotEngine extends EventEmitter {
       // Gunakan nilai dari strategi sebagai default, bisa di-override oleh .env
       emaFast:       parseInt(process.env.EMA_FAST)        || strat.emaFast,
       emaSlow:       parseInt(process.env.EMA_SLOW)        || strat.emaSlow,
-      emaTrend:      strat.emaTrend || 20,
+      emaTrend:      strat.emaTrend || 0,
       rsiPeriod:     parseInt(process.env.RSI_PERIOD)      || strat.rsiPeriod,
       rsiOverbought: parseInt(process.env.RSI_OVERBOUGHT)  || strat.rsiOverbought,
       rsiOversold:   parseInt(process.env.RSI_OVERSOLD)    || strat.rsiOversold,
+      // RSI zona entry (dari PDF per strategi)
+      rsiLongMin:    strat.rsiLongMin  || 50,
+      rsiLongMax:    strat.rsiLongMax  || 70,
+      rsiShortMin:   strat.rsiShortMin || 30,
+      rsiShortMax:   strat.rsiShortMax || 50,
       atrPeriod:     parseInt(process.env.ATR_PERIOD)      || strat.atrPeriod,
       atrMultiplier: parseFloat(process.env.ATR_MULTIPLIER)|| strat.atrMultiplier,
       riskReward:    parseFloat(process.env.RISK_REWARD)   || strat.riskReward,
@@ -43,14 +48,15 @@ class BotEngine extends EventEmitter {
       maxPositions:  parseInt(process.env.MAX_OPEN_POSITIONS)|| 1,
       leverage:      parseInt(process.env.LEVERAGE)        || strat.leverage,
       useBothSides:  process.env.USE_BOTH_SIDES === "true",
-      interval:      process.env.CANDLE_INTERVAL           || "5m",
+      // Interval dari strategi sebagai default (bisa di-override .env)
+      interval:      process.env.CANDLE_INTERVAL           || strat.interval || "15m",
       checkInterval: strat.checkInterval || parseInt(process.env.CHECK_INTERVAL_MS) || 60000,
       dryRun:        process.env.DRY_RUN !== "false",
       // Strategy info
       strategyKey:   strat.name,
       strategyLabel: strat.label,
       signalType:    strat.signalType,
-      higherTf:      strat.higherTf || null,
+      higherTf:      null,   // Multi-TF tidak dipakai lagi (strategi PDF standalone)
       // Override config per-instance (e.g. symbol berbeda per bot)
       ...configOverrides,
     };
@@ -341,7 +347,7 @@ class BotEngine extends EventEmitter {
     this._log("info", `Mode       : ${this.config.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING"}`);
     this._log("info", `Strategi   : [${this.config.strategyKey}] ${this.config.strategyLabel}`);
     this._log("info", `Symbol     : ${this.config.symbol}`);
-    this._log("info", `Interval   : ${this.config.interval}${this.config.higherTf ? ` + ${this.config.higherTf} (trend filter)` : ""}`);
+    this._log("info", `Interval   : ${this.config.interval}`);
     this._log("info", `EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
     this._log("info", `RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
     this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
@@ -402,36 +408,28 @@ class BotEngine extends EventEmitter {
         atrPeriod: this.config.atrPeriod,
       });
 
-      // Fetch higher timeframe untuk Strategi C (15m)
-      let higherTfIndicators = null;
-      if (this.config.higherTf) {
-        try {
-          const htfCandles = await this.client.getCandles(this.config.symbol, this.config.higherTf, 100);
-          if (htfCandles && htfCandles.length > 25) {
-            const htfIndicators = calcIndicators(htfCandles, { emaTrend: this.config.emaTrend });
-            higherTfIndicators  = {
-              emaTrend: htfIndicators.emaTrend,
-              closes:   htfCandles.map(c => c.close),
-            };
-          }
-        } catch { /* 15m fetch gagal, lanjut tanpa filter */ }
-      }
+      // Tidak lagi pakai higher timeframe terpisah (strategi PDF standalone)
 
-      const lastIdx = candles.length - 2;
-      const price   = candles[lastIdx].close;
-      const emaF    = indicators.emaFast[lastIdx];
-      const emaS    = indicators.emaSlow[lastIdx];
-      const rsi     = indicators.rsi[lastIdx];
-      const atr     = indicators.atr[lastIdx];
+      const lastIdx  = candles.length - 2;
+      const price    = candles[lastIdx].close;
+      const emaF     = indicators.emaFast[lastIdx];
+      const emaS     = indicators.emaSlow[lastIdx];
+      const emaTrend = this.config.emaTrend > 0 && indicators.emaTrend ? indicators.emaTrend[lastIdx] : null;
+      const rsi      = indicators.rsi[lastIdx];
+      const atr      = indicators.atr[lastIdx];
 
       this.state.lastPrice = price;
 
       if (this.state.checkCount % 5 === 1) {
+        const trendLabel = emaTrend
+          ? (price > emaTrend ? "↑ MAJOR" : "↓ MAJOR")
+          : (emaF > emaS ? "↑ BULLISH" : "↓ BEARISH");
         this._log("price",
           `${this.config.symbol} $${price.toLocaleString()} | ` +
-          `EMA(${this.config.emaFast})=${emaF?.toFixed(2)} EMA(${this.config.emaSlow})=${emaS?.toFixed(2)} | ` +
+          `EMA${this.config.emaFast}=${emaF?.toFixed(2)} EMA${this.config.emaSlow}=${emaS?.toFixed(2)}` +
+          (emaTrend ? ` EMA${this.config.emaTrend}=${emaTrend?.toFixed(2)}` : "") + ` | ` +
           `RSI=${rsi?.toFixed(1)} ATR=${atr?.toFixed(2)} | ` +
-          `Trend: ${emaF > emaS ? "↑ BULLISH" : "↓ BEARISH"} | Strat: ${this.config.strategyKey}`
+          `Trend: ${trendLabel} | Strat: [${this.config.strategyKey}]`
         );
       }
 
@@ -441,9 +439,13 @@ class BotEngine extends EventEmitter {
         const signal = detectSignal(indicators, lastIdx, {
           rsiOverbought: this.config.rsiOverbought,
           rsiOversold:   this.config.rsiOversold,
+          rsiLongMin:    this.config.rsiLongMin,
+          rsiLongMax:    this.config.rsiLongMax,
+          rsiShortMin:   this.config.rsiShortMin,
+          rsiShortMax:   this.config.rsiShortMax,
           useBothSides:  this.config.useBothSides,
           signalType:    this.config.signalType,
-        }, higherTfIndicators);
+        });
 
         if (signal && signal !== this.state.lastSignal) {
           await this._handleSignal(signal, price, atr);
