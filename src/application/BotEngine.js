@@ -1,15 +1,15 @@
 // ─────────────────────────────────────────────
-// bot-engine.js — Quantara BotEngine
-// Class yang bisa di-start/stop oleh server.js
+// src/application/BotEngine.js — Quantara BotEngine
+// Class yang bisa di-start/stop oleh server
 // Memancarkan event 'log' untuk streaming ke WS
 // ─────────────────────────────────────────────
 
 const EventEmitter = require("events");
-const { createExchangeClient, getExchangeInfo } = require("./exchange-factory");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize } = require("./indicators");
-const { getStrategy } = require("./strategies");
-const db = require("./db");
-const notifier = require("./notifier");
+const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exchange");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize } = require("../domain/indicators");
+const { getStrategy } = require("../domain/strategies");
+const db       = require("../infrastructure/db/database");
+const notifier = require("../infrastructure/notifications/TelegramNotifier");
 
 class BotEngine extends EventEmitter {
   /**
@@ -24,9 +24,7 @@ class BotEngine extends EventEmitter {
     this.config = {
       exchange:      ei.id,
       exchangeLabel: ei.label,
-      symbol:        ei.id === "okx"
-                       ? (process.env.OKX_INST_ID || "BTC-USDT-SWAP")
-                       : (process.env.SYMBOL       || "BTCUSDT"),
+      symbol:        process.env.SYMBOL || "BTCUSDT",
       marginCoin:    process.env.MARGIN_COIN      || "USDT",
       capital:       parseFloat(process.env.CAPITAL)       || 500,
       // Gunakan nilai dari strategi sebagai default, bisa di-override oleh .env
@@ -400,11 +398,11 @@ class BotEngine extends EventEmitter {
     this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
     this._sep();
 
-    const apiKey = this.config.exchange === "okx" ? process.env.OKX_API_KEY : process.env.BITGET_API_KEY;
+    const apiKey = process.env.BITGET_API_KEY || "";
     const noKey  = !apiKey || apiKey === "your_api_key_here" || apiKey === "your_bitget_api_key";
 
     if (noKey) {
-      if (!this.config.dryRun) throw new Error("API Key belum diisi di .env — set DRY_RUN=true untuk simulasi");
+      if (!this.config.dryRun) throw new Error("BITGET_API_KEY belum diisi di .env — set DRY_RUN=true untuk simulasi");
       this._log("warn", "API Key kosong — DRY RUN tanpa koneksi exchange");
       this.state.capital = this.state.startCapital = 500;
     } else {
@@ -668,7 +666,7 @@ class BotEngine extends EventEmitter {
   // FETCH CANDLES — dengan cache DB
   // ─────────────────────────────────────────────
   async _fetchCandles() {
-    const apiKey = this.config.exchange === "okx" ? process.env.OKX_API_KEY : process.env.BITGET_API_KEY;
+    const apiKey = process.env.BITGET_API_KEY || "";
     const noKey  = !apiKey || apiKey === "your_api_key_here" || apiKey === "your_bitget_api_key";
 
     if (this.config.dryRun && noKey) {

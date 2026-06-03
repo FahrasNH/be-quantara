@@ -1,34 +1,24 @@
 // ─────────────────────────────────────────────
-// backtest.js — Jalankan backtest historis
+// scripts/backtest.js — Jalankan backtest historis (Bitget only)
 //
 // Cara pakai:
-//   node backtest.js
-//   node backtest.js --symbol ETHUSDT --days 365
-//   node backtest.js --exchange okx --symbol BTC-USDT-SWAP
-//   node backtest.js --exchange okx --symbol ETH-USDT-SWAP --days 180
+//   node scripts/backtest.js
+//   node scripts/backtest.js --symbol ETHUSDT --days 365
+//   node scripts/backtest.js --symbol BTCUSDT --interval 4H --days 180
 // ─────────────────────────────────────────────
 
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
 
-const { createExchangeClient, getExchangeInfo, EXCHANGE: DEFAULT_EXCHANGE } = require("./exchange-factory");
-const { calcIndicators, detectSignal, calcPositionSize } = require("./indicators");
+const { createExchangeClient } = require("../src/infrastructure/exchange");
+const { calcIndicators, detectSignal, calcPositionSize } = require("../src/domain/indicators");
 
 // Parse args
 const args = process.argv.slice(2);
 const getArg = (key) => { const i = args.indexOf(key); return i !== -1 ? args[i + 1] : null; };
 
-// --exchange flag override env EXCHANGE
-const EXCHANGE_ARG = getArg("--exchange") || DEFAULT_EXCHANGE;
-if (EXCHANGE_ARG !== DEFAULT_EXCHANGE) process.env.EXCHANGE = EXCHANGE_ARG;
+const DEFAULT_SYMBOL = process.env.SYMBOL || "BTCUSDT";
 
-const exchangeInfo = getExchangeInfo();
-
-// Default symbol tergantung exchange
-const DEFAULT_SYMBOL = exchangeInfo.id === "okx"
-  ? (process.env.OKX_INST_ID || "BTC-USDT-SWAP")
-  : (process.env.SYMBOL       || "BTCUSDT");
-
-const SYMBOL   = getArg("--symbol") || DEFAULT_SYMBOL;
+const SYMBOL = getArg("--symbol") || DEFAULT_SYMBOL;
 const DAYS     = parseInt(getArg("--days") || "365");
 const INTERVAL = getArg("--interval") || process.env.CANDLE_INTERVAL || "4H";
 const CAPITAL  = parseFloat(getArg("--capital") || "500");
@@ -310,24 +300,21 @@ function printReport(result, symbol, interval) {
 
 // ── MAIN ──
 async function main() {
-  const exchLabel = exchangeInfo.label;
-  console.log(`\n${C.cyan}${C.bold}  Menjalankan backtest [${exchLabel}] ${SYMBOL} — ${INTERVAL} — ${DAYS} hari...${C.reset}\n`);
+  console.log(`\n${C.cyan}${C.bold}  Menjalankan backtest [Bitget] ${SYMBOL} — ${INTERVAL} — ${DAYS} hari...${C.reset}\n`);
 
   let candles;
 
-  // Coba ambil data dari exchange yang dipilih
-  const apiKeyEnv = exchangeInfo.id === "okx" ? process.env.OKX_API_KEY : process.env.BITGET_API_KEY;
-  const hasApiKey = apiKeyEnv && apiKeyEnv !== "your_api_key_here";
+  const apiKey    = process.env.BITGET_API_KEY || "";
+  const hasApiKey = apiKey && apiKey !== "your_api_key_here" && apiKey !== "your_bitget_api_key";
 
-  if (hasApiKey || exchangeInfo.id === "okx") {
-    // OKX market data endpoint publik (tidak butuh API key)
+  if (hasApiKey) {
     try {
       const client = createExchangeClient();
       const limit  = Math.min(DAYS * (INTERVAL === "4H" ? 6 : INTERVAL === "1H" ? 24 : 1), 300);
       candles = await client.getCandles(SYMBOL, INTERVAL, limit);
-      console.log(`  Data dari ${exchLabel}: ${candles.length} candles`);
+      console.log(`  Data dari Bitget: ${candles.length} candles`);
     } catch (err) {
-      console.log(`  Gagal dari ${exchLabel} (${err.message}), pakai data simulasi`);
+      console.log(`  Gagal dari Bitget (${err.message}), pakai data simulasi`);
     }
   }
 
