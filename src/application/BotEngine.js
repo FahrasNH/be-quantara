@@ -501,8 +501,8 @@ class BotEngine extends EventEmitter {
     // 6. ATR range filter
     if (atr && price) {
       const atrPct = (atr / price) * 100;
-      const minPct = this.config.atrMinMult * 0.1; // atrMinMult sebagai batas bawah ATR%
-      const maxPct = this.config.atrMaxMult * 0.1;
+      const minPct = this.config.atrMinMult; // % langsung — misal 0.3 = 0.3% dari harga
+      const maxPct = this.config.atrMaxMult; // % langsung — misal 3.0 = 3.0% dari harga
       if (atrPct < minPct) {
         return { ok: false, reason: `ATR terlalu kecil (${atrPct.toFixed(3)}%) — market terlalu sepi` };
       }
