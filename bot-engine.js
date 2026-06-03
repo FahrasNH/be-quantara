@@ -734,10 +734,39 @@ class BotEngine extends EventEmitter {
             const hitSL = pos.side === "LONG" ? price <= pos.sl : price >= pos.sl;
             const hitTP = pos.side === "LONG" ? price >= pos.tp : price <= pos.tp;
             if (hitSL || hitTP) {
-              this._log("warn", `Manual close ${pos.side} — ${hitTP ? "TP ✅" : "SL ❌"} (manual monitor)`);
+              const reason = hitTP ? "TP ✅" : "SL ❌";
+              this._log("warn", `Manual close ${pos.side} — ${reason} (manual monitor) @ $${price.toFixed(2)}`);
               try {
-                await this.client.closePosition(this.config.symbol, pos.side === "LONG" ? "close_long" : "close_short", pos.size);
-              } catch (e) { this._log("error", `Manual close gagal: ${e.message}`); }
+                await this.client.closePosition(
+                  this.config.symbol,
+                  pos.side === "LONG" ? "close_long" : "close_short",
+                  pos.size,
+                );
+                this._log("trade", `Posisi ditutup manual ✓`);
+              } catch (e) {
+                const isAlreadyClosed =
+                  e.message?.includes("22002") ||
+                  e.message?.toLowerCase().includes("no position to close") ||
+                  e.message?.includes("position not exist");
+
+                if (isAlreadyClosed) {
+                  // Exchange sudah menutup posisi (SL/TP exchange order kena duluan)
+                  // Hapus dari state agar tidak jadi "ghost position"
+                  this._log("info", `Posisi ${pos.side} sudah ditutup oleh exchange ✓ (state sync)`);
+                  const exitPrice = price;
+                  const pnl = pos.side === "LONG"
+                    ? (exitPrice - pos.entry) * pos.size
+                    : (pos.entry - exitPrice) * pos.size;
+                  this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+                  if (this.sessionId && pos.dbId) {
+                    try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
+                  }
+                  this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
+                  this._syncSessionStats();
+                } else {
+                  this._log("error", `Manual close gagal: ${e.message}`);
+                }
+              }
             }
           }
         }
