@@ -105,10 +105,32 @@ db.exec(`
 `);
 
 // ── Migration: tambah kolom indicators jika belum ada ────────────────────────
-// SQLite tidak support ALTER TABLE ADD COLUMN IF NOT EXISTS, pakai try-catch
+try { db.exec(`ALTER TABLE trades ADD COLUMN indicators TEXT`); } catch { /* sudah ada */ }
+
+// ── Startup repair: recalc sesi yang statsnya tidak sinkron dengan trade records ──
+// Ini memperbaiki bug cross-session (trade buka di sesi A, tutup di sesi B)
+// tanpa perlu curl manual setiap kali.
 try {
-  db.exec(`ALTER TABLE trades ADD COLUMN indicators TEXT`);
-} catch { /* kolom sudah ada — abaikan */ }
+  const _allSessions = db.prepare(`SELECT id, initial_capital, wins, losses, total_trades FROM bot_sessions`).all();
+  const _recalcStmt  = db.prepare(`SELECT pnl FROM trades WHERE session_id = ? AND close_time IS NOT NULL AND pnl IS NOT NULL`);
+  const _updateStmt  = db.prepare(`UPDATE bot_sessions SET wins=@wins, losses=@losses, total_trades=@total, final_capital=@finalCap WHERE id=@id`);
+
+  for (const s of _allSessions) {
+    const rows      = _recalcStmt.all(s.id);
+    if (rows.length === 0) continue;
+    const wins      = rows.filter(r => r.pnl > 0).length;
+    const losses    = rows.filter(r => r.pnl <= 0).length;
+    const totalPnL  = rows.reduce((sum, r) => sum + r.pnl, 0);
+    const finalCap  = (s.initial_capital || 0) + totalPnL;
+    const mismatch  = s.wins !== wins || s.losses !== losses || s.total_trades !== rows.length;
+    if (mismatch) {
+      _updateStmt.run({ id: s.id, wins, losses, total: rows.length, finalCap });
+      console.log(`[DB repair] Sesi #${s.id}: wins ${s.wins}→${wins}, losses ${s.losses}→${losses}, total ${s.total_trades}→${rows.length}, finalCap $${finalCap.toFixed(2)}`);
+    }
+  }
+} catch (e) {
+  console.warn(`[DB repair] Gagal: ${e.message}`);
+}
 
 // ─────────────────────────────────────────────
 // PREPARED STATEMENTS
