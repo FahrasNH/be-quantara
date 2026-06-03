@@ -154,6 +154,103 @@ function calcIndicators(candles, config = {}) {
 }
 
 // ─────────────────────────────────────────────
+// RSI PULLBACK PATTERN DETECTOR
+// ─────────────────────────────────────────────
+
+/**
+ * Deteksi pola RSI pullback + bounce (3 fase):
+ *
+ *  LONG  fase 1: RSI sebelumnya tinggi (> pullbackZoneHigh)
+ *        fase 2: RSI turun ke zona pullback (pullbackZoneLow–pullbackZoneHigh)
+ *        fase 3: RSI kini naik kembali dari zona itu
+ *
+ *  SHORT fase 1: RSI sebelumnya rendah (< pullbackZoneLow)
+ *        fase 2: RSI naik ke zona pullback
+ *        fase 3: RSI kini turun kembali dari zona itu
+ *
+ * @param {number[]} rsi        - Array RSI
+ * @param {number}   i          - Index candle saat ini
+ * @param {string}   direction  - "LONG" | "SHORT"
+ * @param {Object}   opts
+ * @param {number}   opts.pullbackZoneLow   - Batas bawah zona pullback (default 50)
+ * @param {number}   opts.pullbackZoneHigh  - Batas atas zona pullback (default 62)
+ * @param {number}   opts.lookback          - Berapa candle ke belakang untuk cari fase 1-2 (default 6)
+ * @param {number}   opts.minBounce         - RSI harus naik minimal sekian dari lembah (default 2)
+ */
+function detectRsiPullbackBounce(rsi, i, direction, opts = {}) {
+  const {
+    pullbackZoneLow  = 50,
+    pullbackZoneHigh = 62,
+    lookback         = 6,
+    minBounce        = 1.5,
+  } = opts;
+
+  if (i < lookback + 2) return false;
+
+  const rsiNow  = rsi[i];
+  const rsiPrev = rsi[i - 1];
+  if (!rsiNow || !rsiPrev) return false;
+
+  if (direction === "LONG") {
+    // Fase 3: RSI saat ini dalam zona pullback dan SEDANG NAIK
+    if (rsiNow < pullbackZoneLow || rsiNow > pullbackZoneHigh) return false;
+    if (rsiNow <= rsiPrev) return false; // Harus naik dari candle sebelumnya
+
+    // Cari fase 2: ada titik lembah (RSI minimum lokal) dalam zona pullback
+    let valleyRsi = Infinity;
+    for (let j = i - 1; j >= Math.max(1, i - lookback); j--) {
+      if (!rsi[j]) continue;
+      if (rsi[j] >= pullbackZoneLow && rsi[j] <= pullbackZoneHigh) {
+        valleyRsi = Math.min(valleyRsi, rsi[j]);
+      }
+    }
+
+    // RSI harus sudah bounced minimal minBounce point dari lembah
+    if (rsiNow < valleyRsi + minBounce) return false;
+
+    // Fase 1: di dalam lookback, ada RSI yang sempat di ATAS zona pullback (> pullbackZoneHigh)
+    // artinya momentum bullish yang lalu memang ada sebelum pullback
+    for (let j = i - 1; j >= Math.max(1, i - lookback); j--) {
+      if (rsi[j] && rsi[j] > pullbackZoneHigh) return true;
+    }
+
+    // Fallback: jika tidak ketemu fase 1 tapi momentum jelas naik, tetap valid
+    // (untuk scalping dimana RSI belum sempat ke > 62 tapi sudah mulai trending)
+    return rsiNow > rsiPrev && rsiPrev > (rsi[i - 2] || 0);
+  }
+
+  if (direction === "SHORT") {
+    // Zona pullback SHORT: RSI naik ke 38–50, lalu turun lagi
+    const shortZoneLow  = 38;
+    const shortZoneHigh = 50;
+
+    // Fase 3: RSI saat ini dalam zona pullback SHORT dan SEDANG TURUN
+    if (rsiNow < shortZoneLow || rsiNow > shortZoneHigh) return false;
+    if (rsiNow >= rsiPrev) return false; // Harus turun dari candle sebelumnya
+
+    // Cari puncak (RSI maximum lokal) dalam zona pullback
+    let peakRsi = -Infinity;
+    for (let j = i - 1; j >= Math.max(1, i - lookback); j--) {
+      if (!rsi[j]) continue;
+      if (rsi[j] >= shortZoneLow && rsi[j] <= shortZoneHigh) {
+        peakRsi = Math.max(peakRsi, rsi[j]);
+      }
+    }
+
+    if (rsiNow > peakRsi - minBounce) return false;
+
+    // Fase 1: ada RSI yang sempat di BAWAH zona pullback (< shortZoneLow)
+    for (let j = i - 1; j >= Math.max(1, i - lookback); j--) {
+      if (rsi[j] && rsi[j] < shortZoneLow) return true;
+    }
+
+    return rsiNow < rsiPrev && rsiPrev < (rsi[i - 2] || 100);
+  }
+
+  return false;
+}
+
+// ─────────────────────────────────────────────
 // SIGNAL DETECTION — BERDASARKAN PDF
 // ─────────────────────────────────────────────
 
@@ -176,7 +273,7 @@ function detectSignalPdfScalping(indicators, i, config = {}) {
 
   const { emaFast, emaSlow, rsi, volSMA, volumes, closes } = indicators;
 
-  if (i < 2) return null;
+  if (i < 8) return null;
   if (!emaFast[i] || !emaSlow[i] || !rsi[i]) return null;
 
   const price   = closes[i];
@@ -185,17 +282,42 @@ function detectSignalPdfScalping(indicators, i, config = {}) {
   const rsiCurr = rsi[i];
   const vol     = volumes[i];
   const volAvg  = volSMA[i];
+  const volUp   = !volAvg || vol > volAvg * 0.9;
 
-  // Volume naik = candle saat ini di atas rata-rata volume (20 candle)
-  const volUp = !volAvg || vol > volAvg * 0.9;  // Sedikit toleransi 90%
+  // RSI pullback pattern:
+  //   LONG  → RSI pullback ke 50-60 lalu naik lagi (dari zona bullish > 60)
+  //   SHORT → RSI pullback ke 40-50 lalu turun lagi (dari zona bearish < 40)
+  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG",  {
+    pullbackZoneLow: rsiLongMin, pullbackZoneHigh: 63, lookback: 5, minBounce: 1.5,
+  });
+  const rsiPullbackShort = detectRsiPullbackBounce(rsi, i, "SHORT", {
+    lookback: 5, minBounce: 1.5,
+  });
 
-  // ── LONG: EMA9>EMA21, harga di atas EMA9, RSI 50–70, volume naik ──────────
-  if (emaF > emaS && price > emaF && rsiCurr >= rsiLongMin && rsiCurr <= rsiLongMax && volUp) {
+  // ── LONG ──────────────────────────────────────────────────────────────────
+  // EMA9>EMA21 (trend) + price>EMA9 (harga di atas trend) + RSI pullback zone
+  // + RSI tidak ekstrem overbought + volume naik
+  if (
+    emaF > emaS &&                   // Trend EMA bullish
+    price > emaF &&                  // Harga di atas EMA fast (konfirmasi)
+    rsiCurr >= rsiLongMin &&         // RSI minimal 50
+    rsiCurr <= rsiLongMax &&         // RSI tidak overbought ekstrem
+    rsiPullbackLong &&               // Pola pullback RSI ke 50-60 lalu naik
+    volUp                            // Volume mendukung
+  ) {
     return "LONG";
   }
 
-  // ── SHORT: EMA9<EMA21, harga di bawah EMA9, RSI 30–50, volume naik ────────
-  if (useBothSides && emaF < emaS && price < emaF && rsiCurr >= rsiShortMin && rsiCurr <= rsiShortMax && volUp) {
+  // ── SHORT ─────────────────────────────────────────────────────────────────
+  if (
+    useBothSides &&
+    emaF < emaS &&
+    price < emaF &&
+    rsiCurr >= rsiShortMin &&
+    rsiCurr <= rsiShortMax &&
+    rsiPullbackShort &&
+    volUp
+  ) {
     return "SHORT";
   }
 
@@ -222,7 +344,7 @@ function detectSignalPdfDayTrading(indicators, i, config = {}) {
 
   const { emaFast, emaSlow, emaTrend, rsi, volSMA, volumes, closes } = indicators;
 
-  if (i < 2) return null;
+  if (i < 8) return null;
   if (!emaFast[i] || !emaSlow[i] || !rsi[i] || !rsi[i-1]) return null;
 
   const price    = closes[i];
@@ -230,39 +352,48 @@ function detectSignalPdfDayTrading(indicators, i, config = {}) {
   const emaS     = emaSlow[i];
   const ema50    = emaTrend ? emaTrend[i] : null;
   const rsiCurr  = rsi[i];
-  const rsiPrev  = rsi[i - 1];
   const vol      = volumes[i];
   const volAvg   = volSMA[i];
   const volUp    = !volAvg || vol > volAvg * 0.9;
 
-  // RSI harus punya momentum (sedang bergerak ke arah yang benar)
-  const rsiMomUp   = rsiCurr > rsiPrev;   // RSI naik (bullish momentum)
-  const rsiMomDown = rsiCurr < rsiPrev;   // RSI turun (bearish momentum)
-
-  // Filter EMA50: price harus di atas EMA50 untuk long (trend besar bullish)
+  // Harga di atas/bawah EMA trend (EMA50)
   const trendBullish = !ema50 || price > ema50;
   const trendBearish = !ema50 || price < ema50;
 
+  // RSI pullback pattern (zona lebih ketat untuk day trading):
+  //   LONG  → RSI pullback ke zona 50-65, lalu naik lagi (dari > 65)
+  //   SHORT → RSI pullback ke zona 35-50, lalu turun lagi (dari < 35)
+  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG",  {
+    pullbackZoneLow: rsiLongMin, pullbackZoneHigh: 65, lookback: 6, minBounce: 2,
+  });
+  const rsiPullbackShort = detectRsiPullbackBounce(rsi, i, "SHORT", {
+    lookback: 6, minBounce: 2,
+  });
+
   // ── LONG ──────────────────────────────────────────────────────────────────
+  // EMA9>EMA21 + price di atas EMA50 + RSI pullback ke 50-65 lalu naik
+  // + RSI tidak overbought ekstrem (> 70) + volume mendukung
   if (
     emaF > emaS &&           // EMA9 > EMA21 (trend jangka pendek bullish)
-    trendBullish &&          // Price di atas EMA50 (trend besar bullish)
-    rsiCurr >= rsiLongMin && // RSI di zona momentum bullish
-    rsiCurr <= rsiLongMax && // RSI belum overbought
-    rsiMomUp &&              // RSI sedang naik (momentum menguat)
-    volUp                    // Volume di atas rata-rata
+    trendBullish &&          // Harga di atas EMA50 (trend besar bullish)
+    rsiCurr >= rsiLongMin && // RSI tidak oversold (minimal 50)
+    rsiCurr <= rsiLongMax && // RSI tidak overbought ekstrem
+    rsiPullbackLong &&       // Pola pullback RSI ke 50-65 lalu naik lagi
+    volUp                    // Volume mendukung
   ) {
     return "LONG";
   }
 
   // ── SHORT ─────────────────────────────────────────────────────────────────
+  // EMA9<EMA21 + price di bawah EMA50 + RSI pullback ke 35-50 lalu turun
+  // + RSI tidak oversold ekstrem (< 30) + volume mendukung
   if (
     useBothSides &&
     emaF < emaS &&           // EMA9 < EMA21 (trend jangka pendek bearish)
-    trendBearish &&          // Price di bawah EMA50 (trend besar bearish)
-    rsiCurr >= rsiShortMin &&
-    rsiCurr <= rsiShortMax &&// RSI di zona momentum bearish
-    rsiMomDown &&            // RSI sedang turun (momentum melemah)
+    trendBearish &&          // Harga di bawah EMA50
+    rsiCurr >= rsiShortMin &&// RSI tidak oversold ekstrem
+    rsiCurr <= rsiShortMax &&// RSI masih di zona bearish (< 50)
+    rsiPullbackShort &&      // Pola pullback RSI ke 35-50 lalu turun lagi
     volUp
   ) {
     return "SHORT";
@@ -304,50 +435,58 @@ function detectSignalPdfSwing(indicators, i, config = {}) {
   if (i < 3) return null;
   if (!emaFast[i] || !emaSlow[i] || !rsi[i] || !rsi[i-1] || !rsi[i-2]) return null;
 
-  const price    = closes[i];
+  const price     = closes[i];
   const pricePrev = closes[i - 1];
-  const ema21    = emaFast[i];    // EMA21 untuk Swing
-  const ema50    = emaSlow[i];    // EMA50
-  const ema200   = emaTrend ? emaTrend[i] : null;
-  const rsiCurr  = rsi[i];
-  const rsiPrev  = rsi[i - 1];
-  const rsiPrev2 = rsi[i - 2];
-
-  // RSI mulai naik dari area pullback (RSI[-2] < RSI[-1] < RSI[0] atau ada reversal)
-  const rsiBouncingUp   = rsiCurr > rsiPrev && rsiCurr > rsiPrev2;
-  const rsiBouncingDown = rsiCurr < rsiPrev && rsiCurr < rsiPrev2;
-
-  // Candle konfirmasi: penutupan di atas high candle sebelumnya (bullish) atau sebaliknya
-  const candleBullish = price > pricePrev;   // Close candle ini lebih tinggi
-  const candleBearish = price < pricePrev;
+  const ema21     = emaFast[i];   // EMA21 untuk Swing
+  const ema50     = emaSlow[i];   // EMA50
+  const ema200    = emaTrend ? emaTrend[i] : null;
+  const rsiCurr   = rsi[i];
 
   // Trend filter EMA200
   const aboveEma200 = !ema200 || price > ema200;
   const belowEma200 = !ema200 || price < ema200;
 
-  // ── LONG: Trend besar bullish + RSI pullback ke zona sehat + konfirmasi ───
+  // Candle konfirmasi bullish/bearish
+  const candleBullish = price > pricePrev;
+  const candleBearish = price < pricePrev;
+
+  // RSI pullback pattern (zona swing 40–60):
+  //   LONG  → RSI pullback ke zona 40-58, lalu naik kembali (momentum resume)
+  //   SHORT → RSI pullback ke zona 42-60, lalu turun kembali
+  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG",  {
+    pullbackZoneLow: rsiLongMin,   // 40
+    pullbackZoneHigh: 58,
+    lookback: 8,
+    minBounce: 1.5,
+  });
+  const rsiPullbackShort = detectRsiPullbackBounce(rsi, i, "SHORT", {
+    lookback: 8,
+    minBounce: 1.5,
+  });
+
+  // ── LONG: Trend besar bullish + RSI pullback ke 40-58 lalu naik + candle confirm ──
   if (
-    ema21 > ema50 &&          // Short-term bullish (EMA21 > EMA50)
-    price > ema50 &&          // Price di atas EMA50 (tren besar bullish)
-    aboveEma200 &&            // Konfirmasi EMA200
-    rsiCurr >= rsiLongMin &&  // RSI di zona sehat (bukan ekstrem)
-    rsiCurr <= rsiLongMax &&
-    rsiBouncingUp &&          // RSI mulai naik = pullback selesai
-    candleBullish             // Konfirmasi candle bullish
+    ema21 > ema50 &&          // EMA21 > EMA50: trend menengah bullish
+    price > ema50 &&          // Harga di atas EMA50 (trend besar bullish)
+    aboveEma200 &&            // Harga di atas EMA200 (konfirmasi tren panjang)
+    rsiCurr >= rsiLongMin &&  // RSI tidak oversold ekstrem
+    rsiCurr <= rsiLongMax &&  // RSI tidak overbought (< 60)
+    rsiPullbackLong &&        // Pola pullback RSI ke zona sehat lalu naik
+    candleBullish             // Candle konfirmasi bullish
   ) {
     return "LONG";
   }
 
-  // ── SHORT: Trend besar bearish + RSI pullback ke resistance + konfirmasi ──
+  // ── SHORT: Trend besar bearish + RSI pullback ke 42-60 lalu turun + candle confirm ──
   if (
     useBothSides &&
-    ema21 < ema50 &&          // Short-term bearish (EMA21 < EMA50)
-    price < ema50 &&          // Price di bawah EMA50
-    belowEma200 &&            // Konfirmasi EMA200
-    rsiCurr >= rsiShortMin &&
-    rsiCurr <= rsiShortMax &&
-    rsiBouncingDown &&        // RSI mulai turun = pullback ke resistance selesai
-    candleBearish             // Konfirmasi candle bearish
+    ema21 < ema50 &&          // EMA21 < EMA50: trend menengah bearish
+    price < ema50 &&          // Harga di bawah EMA50
+    belowEma200 &&            // Harga di bawah EMA200
+    rsiCurr >= rsiShortMin && // RSI tidak oversold ekstrem
+    rsiCurr <= rsiShortMax && // RSI tidak overbought (pullback ke zona bearish)
+    rsiPullbackShort &&       // Pola pullback RSI ke zona resistansi lalu turun
+    candleBearish             // Candle konfirmasi bearish
   ) {
     return "SHORT";
   }
@@ -481,6 +620,7 @@ module.exports = {
   calcIndicators,
   detectSignal,
   detectHTFTrend,
+  detectRsiPullbackBounce,
   detectSignalPdfScalping,
   detectSignalPdfDayTrading,
   detectSignalPdfSwing,
