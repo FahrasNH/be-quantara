@@ -1124,6 +1124,19 @@ class BotEngine extends EventEmitter {
             try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
           }
 
+          // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
+          const pnlPct = pos.entry > 0 ? ((exitPrice - pos.entry) / pos.entry * 100 * (pos.side === "LONG" ? 1 : -1)) : 0;
+          notifier.notifyClose({
+            symbol:     this.config.symbol,
+            side:       pos.side,
+            entryPrice: pos.entry,
+            exitPrice,
+            pnl,
+            pnlPct,
+            reason:     "Exchange (TP/SL)",
+            dryRun:     this.config.dryRun,
+          });
+
           // Catat sesi mana yang perlu diupdate statsnya
           // pos.restoredFrom = sesi asal trade ini (bisa berbeda dari sesi aktif)
           const ownerSession = pos.restoredFrom || this.sessionId;
