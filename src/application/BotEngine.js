@@ -412,9 +412,12 @@ class BotEngine extends EventEmitter {
           this.state.capital = this.state.startCapital = 500;
           this._log("warn", "Balance kosong, gunakan simulasi dengan modal $500");
         } else {
-          this.state.capital      = bal.available;
-          this.state.startCapital = bal.available;
-          this._log("info", `Balance    : $${bal.available.toFixed(2)} USDT`);
+          // Gunakan equity total (available + margin terkunci) bukan available saja.
+          // Saat posisi terbuka, available turun (margin dikunci) tapi equity tetap.
+          const totalEquity = (bal.equity > 0 ? bal.equity : bal.available);
+          this.state.capital      = totalEquity;
+          this.state.startCapital = totalEquity;
+          this._log("info", `Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
         }
         if (!this.config.dryRun) {
           await this.client.setLeverage(this.config.symbol, this.config.leverage);
@@ -631,10 +634,12 @@ class BotEngine extends EventEmitter {
       this.state.errors = 0;
 
       // Refresh capital dari exchange setiap 5 menit (live mode)
+      // Pakai equity total (bukan available) agar grafik tidak anjlok saat posisi terbuka
       if (!this.config.dryRun && this.state.checkCount % 5 === 0) {
         try {
           const bal = await this.client.getBalance(this.config.marginCoin);
-          if (bal.available > 0) this.state.capital = bal.available;
+          const totalEquity = bal.equity > 0 ? bal.equity : bal.available;
+          if (totalEquity > 0) this.state.capital = totalEquity;
         } catch { /* silent — pakai nilai sebelumnya */ }
       }
 
@@ -897,9 +902,8 @@ class BotEngine extends EventEmitter {
           this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
           this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
           this._log("trade", `Entry: $${pos.entry} | Exit: ~$${exitPrice.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`);
-          this._log("trade", `Modal sekarang: $${(this.state.capital + pnl).toFixed(2)}`);
-
-          this.state.capital += pnl;
+          // Tidak manual update state.capital di LIVE — akan di-refresh dari exchange (equity total) di _tick
+          this._log("trade", `PnL ditambahkan — balance akan diperbarui dari exchange`);
           this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
           this._updateRiskAfterClose(pnl);
 
