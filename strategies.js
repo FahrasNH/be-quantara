@@ -4,10 +4,18 @@
 // Berdasarkan: "Dokumentasi Panduan Strategi Trading"
 //   Aggressive Scalping, Day Trading, dan Swing Trading
 //
+// Alur eksekusi per strategi:
+//   1. HTF trend filter  → Bullish / Bearish / Sideways
+//   2. Volume filter     → volume > volSMA × threshold
+//   3. ATR filter        → ATR min/max agar TP realistis
+//   4. Entry signal      → EMA + RSI + candle confirm
+//   5. Risk management   → dailyLoss, maxTradesDay, cooldown
+//   6. Kirim order
+//
 // Switch strategi via .env:
-//   STRATEGY=A  → Aggressive Scalping  (1M–5M, EMA9/21)
-//   STRATEGY=B  → Day Trading          (15M–1H, EMA9/21/50)
-//   STRATEGY=C  → Swing Trading        (4H, EMA21/50/200)
+//   STRATEGY=A  → Aggressive Scalping  (HTF:15m, Entry:1m)
+//   STRATEGY=B  → Day Trading          (HTF:1H,  Entry:15m)
+//   STRATEGY=C  → Swing Trading        (HTF:1D,  Entry:4H)
 // ─────────────────────────────────────────────
 
 const STRATEGIES = {
@@ -15,34 +23,59 @@ const STRATEGIES = {
   // ─────────────────────────────────────────────
   // STRATEGI A — Aggressive Scalping
   //
-  // Sumber PDF:
-  //   TF: 1M–5M | EMA Fast 9 / Slow 21 | RSI 7–14
-  //   Long : EMA9 > EMA21 + Close > EMA9 + RSI 50-70 + Volume naik
-  //   Short: EMA9 < EMA21 + Close < EMA9 + RSI 30-50 + Volume naik
-  //   TP = 1.0x ATR | SL = 0.5x ATR | Risk/trade = 0.5%–1%
+  //   HTF Trend Filter : 15m (EMA9/21 + close vs EMA)
+  //   Entry TF         : 1m (default)
+  //   EMA              : 9 / 21
+  //   RSI              : 7 | Long >50, Short <50
+  //   Volume           : Wajib di atas rata-rata
+  //   SL               : 0.5x ATR | TP: 1x ATR (RR 1:2)
+  //   Risk/trade       : 0.5%–1%
   // ─────────────────────────────────────────────
   A: {
     name:          "A",
     label:         "Aggressive Scalping",
     description:   "EMA9/21 + RSI zona momentum + volume spike. Frekuensi tinggi, cocok market volatile",
 
+    // EMA entry
     emaFast:       9,
     emaSlow:       21,
-    emaTrend:      0,          // Tidak pakai trend filter
-    rsiPeriod:     7,          // RSI sensitif untuk scalping
-    rsiOverbought: 70,         // Filter: RSI tidak boleh > 70 saat Long
-    rsiOversold:   30,         // Filter: RSI tidak boleh < 30 saat Short
-    rsiLongMin:    50,         // Long hanya jika RSI >= 50 (zona momentum bullish)
-    rsiLongMax:    70,         // Long hanya jika RSI <= 70 (belum overbought)
-    rsiShortMin:   30,         // Short hanya jika RSI >= 30 (belum oversold)
-    rsiShortMax:   50,         // Short hanya jika RSI <= 50 (zona momentum bearish)
+    emaTrend:      0,          // Tidak pakai EMA trend di entry TF (pakai HTF saja)
+
+    // RSI
+    rsiPeriod:     7,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    50,         // Long: RSI di zona momentum bullish
+    rsiLongMax:    70,
+    rsiShortMin:   30,
+    rsiShortMax:   50,
+
+    // ATR
     atrPeriod:     14,
-    atrMultiplier: 0.5,        // SL = 0.5x ATR (ketat, sesuai PDF)
-    riskReward:    2,          // TP = 2x SL = 1.0x ATR (sesuai PDF)
-    riskPerTrade:  0.01,       // 1% per trade (batas atas PDF: 0.5%–1%)
+    atrMultiplier: 0.5,        // SL = 0.5x ATR
+    riskReward:    2,          // TP = 2x SL = 1.0x ATR
+    atrMinMult:    0.3,        // ATR minimum = 0.3x price% (market tidak terlalu sepi)
+    atrMaxMult:    3.0,        // ATR maximum = 3.0x price% (market tidak terlalu liar)
+
+    // HTF trend filter
+    higherTf:      "15m",      // Higher timeframe untuk filter trend
+    htfEmaFast:    9,          // EMA HTF untuk deteksi trend
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.15, // EMA spread < 0.15% = sideways → no trade
+
+    // Volume
+    volSmaMultiplier: 1.0,     // Volume harus >= 1.0x vol SMA
+
+    // Risk management
+    riskPerTrade:     0.01,    // 1% per trade
+    maxDailyLossPct:  0.03,    // Stop trading jika loss harian >= 3%
+    maxTradesPerDay:  20,       // Maks 20 trade/hari (scalping frekuensi tinggi)
+    cooldownAfterLoss: 2,       // Cooldown 2 menit setelah loss
+    maxConsecLoss:    3,        // Stop trading jika 3 loss berturut-turut
+
     leverage:      3,
-    interval:      "1m",       // Default timeframe scalping
-    checkInterval: 30000,      // Cek setiap 30 detik
+    interval:      "1m",
+    checkInterval: 30000,
 
     signalType:    "PDF_SCALPING",
 
@@ -55,11 +88,13 @@ const STRATEGIES = {
   // ─────────────────────────────────────────────
   // STRATEGI B — Day Trading ⭐ RECOMMENDED
   //
-  // Sumber PDF:
-  //   TF: 15M–1H | EMA Fast 9 / Slow 21 / Trend 50 | RSI 14
-  //   Long : EMA9 > EMA21 + price > EMA50 + RSI 50-70 + Volume naik
-  //   Short: EMA9 < EMA21 + price < EMA50 + RSI < 50 + Volume naik
-  //   TP = 1.5–3x ATR | SL = 1x ATR | Risk/trade = 1%–2%
+  //   HTF Trend Filter : 1H (EMA9/21 + close vs EMA50)
+  //   Entry TF         : 15m (default)
+  //   EMA              : 9 / 21 + EMA50 trend filter
+  //   RSI              : 14 | Long 50-70, Short 30-50
+  //   Volume           : Wajib di atas rata-rata
+  //   SL               : 1x ATR | TP: 1.5–3x ATR (RR 1:2)
+  //   Risk/trade       : 1%–2%
   // ─────────────────────────────────────────────
   B: {
     name:          "B",
@@ -68,21 +103,39 @@ const STRATEGIES = {
 
     emaFast:       9,
     emaSlow:       21,
-    emaTrend:      50,         // Filter trend: price harus di atas/bawah EMA50
+    emaTrend:      50,         // Filter trend entry: price harus di atas/bawah EMA50
+
     rsiPeriod:     14,
     rsiOverbought: 70,
     rsiOversold:   30,
-    rsiLongMin:    50,         // Long: RSI zona momentum bullish
-    rsiLongMax:    70,         // Long: RSI belum overbought
+    rsiLongMin:    50,
+    rsiLongMax:    70,
     rsiShortMin:   30,
-    rsiShortMax:   50,         // Short: RSI zona momentum bearish
+    rsiShortMax:   50,
+
     atrPeriod:     14,
-    atrMultiplier: 1.0,        // SL = 1x ATR (sesuai PDF)
-    riskReward:    2,          // TP = 2x SL = 2x ATR (tengah range PDF: 1.5–3x)
-    riskPerTrade:  0.015,      // 1.5% per trade
+    atrMultiplier: 1.0,        // SL = 1x ATR
+    riskReward:    2,          // TP = 2x ATR
+    atrMinMult:    0.2,
+    atrMaxMult:    4.0,
+
+    // HTF trend filter
+    higherTf:      "1h",
+    htfEmaFast:    9,
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.2,
+
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:     0.015,
+    maxDailyLossPct:  0.04,    // Stop jika loss harian >= 4%
+    maxTradesPerDay:  8,
+    cooldownAfterLoss: 5,       // Cooldown 5 menit
+    maxConsecLoss:    3,
+
     leverage:      3,
-    interval:      "15m",      // Default timeframe day trading
-    checkInterval: 60000,      // Cek setiap 60 detik
+    interval:      "15m",
+    checkInterval: 60000,
 
     signalType:    "PDF_DAYTRADING",
 
@@ -94,11 +147,13 @@ const STRATEGIES = {
   // ─────────────────────────────────────────────
   // STRATEGI C — Swing Trading
   //
-  // Sumber PDF:
-  //   TF: 4H–1D | EMA Fast 21 / Slow 50 / Trend 200 | RSI 14
-  //   Long : price > EMA50 + pullback ke support + RSI 40-60 naik + candle bullish
-  //   Short: price < EMA50 + pullback ke resistance + RSI 50-60 turun + candle bearish
-  //   TP = 3–6x ATR | SL = 1.5–2x ATR | Risk/trade = 1%–2%
+  //   HTF Trend Filter : 1D (close vs EMA200)
+  //   Entry TF         : 4H
+  //   EMA              : 21 / 50 + EMA200 trend filter
+  //   RSI              : 14 | Sesuai pullback trend (40-60)
+  //   Volume           : Wajib di atas rata-rata
+  //   SL               : 1.5x ATR | TP: 4.5x ATR (RR 1:3)
+  //   Risk/trade       : 1%–2%
   // ─────────────────────────────────────────────
   C: {
     name:          "C",
@@ -107,21 +162,39 @@ const STRATEGIES = {
 
     emaFast:       21,
     emaSlow:       50,
-    emaTrend:      200,        // Filter tren besar: price vs EMA200
+    emaTrend:      200,        // Filter tren besar di entry TF (4H)
+
     rsiPeriod:     14,
-    rsiOverbought: 60,         // Swing lebih ketat (hindari entry di overbought)
-    rsiOversold:   40,         // Swing lebih ketat
-    rsiLongMin:    40,         // Long saat RSI pullback ke zona sehat
+    rsiOverbought: 60,
+    rsiOversold:   40,
+    rsiLongMin:    40,
     rsiLongMax:    60,
     rsiShortMin:   40,
     rsiShortMax:   60,
+
     atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5x ATR (sesuai PDF: 1.5–2x)
-    riskReward:    3,          // TP = 3x SL = 4.5x ATR (dalam range PDF: 3–6x)
-    riskPerTrade:  0.015,      // 1.5% per trade
-    leverage:      2,          // Leverage lebih kecil untuk swing
-    interval:      "4h",       // Timeframe swing trading
-    checkInterval: 300000,     // Cek setiap 5 menit (karena 4H candle)
+    atrMultiplier: 1.5,        // SL = 1.5x ATR
+    riskReward:    3,          // TP = 4.5x ATR (RR 1:3)
+    atrMinMult:    0.1,
+    atrMaxMult:    6.0,
+
+    // HTF trend filter
+    higherTf:      "1d",
+    htfEmaFast:    21,
+    htfEmaSlow:    50,
+    sidewaysThresholdPct: 0.3, // Swing lebih toleran sideways (EMA spread < 0.3%)
+
+    volSmaMultiplier: 0.8,     // Swing: volume sedikit lebih longgar
+
+    riskPerTrade:     0.015,
+    maxDailyLossPct:  0.05,    // Swing tahan floating lebih besar
+    maxTradesPerDay:  3,
+    cooldownAfterLoss: 60,      // Cooldown 1 jam setelah loss swing
+    maxConsecLoss:    2,        // Stop setelah 2 loss berturut
+
+    leverage:      2,
+    interval:      "4h",
+    checkInterval: 300000,
 
     signalType:    "PDF_SWING",
 
@@ -131,25 +204,16 @@ const STRATEGIES = {
   },
 };
 
-/**
- * Ambil strategi berdasarkan key
- * Default: B
- */
 function getStrategy(overrideKey = null) {
   const key = (overrideKey || process.env.STRATEGY || "B").toUpperCase();
   const strat = STRATEGIES[key];
-
   if (!strat) {
-    console.warn(`[WARN] Strategi "${key}" tidak ditemukan, pakai B (Day Trading)`);
+    console.warn(`[WARN] Strategi "${key}" tidak ditemukan, pakai B`);
     return STRATEGIES["B"];
   }
-
   return strat;
 }
 
-/**
- * List semua strategi tersedia
- */
 function listStrategies() {
   return Object.values(STRATEGIES).map(s => ({
     key:         s.name,

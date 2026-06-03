@@ -355,6 +355,64 @@ function detectSignalPdfSwing(indicators, i, config = {}) {
   return null;
 }
 
+// ─────────────────────────────────────────────
+// HTF TREND DETECTOR
+// ─────────────────────────────────────────────
+
+/**
+ * Deteksi arah tren dari Higher Timeframe candles.
+ *
+ * Returns:
+ *   "BULLISH"  → hanya cari LONG
+ *   "BEARISH"  → hanya cari SHORT
+ *   "SIDEWAYS" → no trade
+ *
+ * Logic:
+ *   1. Hitung EMA fast/slow dari HTF candles
+ *   2. Jika spread EMA < sidewaysThresholdPct% → SIDEWAYS
+ *   3. EMA fast > EMA slow + price > EMA fast → BULLISH
+ *   4. EMA fast < EMA slow + price < EMA fast → BEARISH
+ *   5. Otherwise → SIDEWAYS (konflik sinyal)
+ *
+ * @param {Array}  htfCandles - Candle array dari HTF (15m/1H/1D)
+ * @param {Object} config
+ * @param {number} config.htfEmaFast            - EMA fast HTF (default 9)
+ * @param {number} config.htfEmaSlow            - EMA slow HTF (default 21)
+ * @param {number} config.sidewaysThresholdPct  - % spread min untuk dianggap trending (default 0.2)
+ */
+function detectHTFTrend(htfCandles, config = {}) {
+  const {
+    htfEmaFast           = 9,
+    htfEmaSlow           = 21,
+    sidewaysThresholdPct = 0.2,
+  } = config;
+
+  if (!htfCandles || htfCandles.length < htfEmaSlow + 5) return "SIDEWAYS";
+
+  const closes = htfCandles.map(c => c.close);
+  const emaF   = calcEMA(closes, htfEmaFast);
+  const emaS   = calcEMA(closes, htfEmaSlow);
+
+  // Ambil 2 candle terakhir yang closed (hindari candle live/saat ini)
+  const idx   = htfCandles.length - 2;
+  const ef    = emaF[idx];
+  const es    = emaS[idx];
+  const price = closes[idx];
+
+  if (!ef || !es) return "SIDEWAYS";
+
+  // Spread EMA relatif terhadap harga (dalam %)
+  const spreadPct = Math.abs(ef - es) / price * 100;
+
+  if (spreadPct < sidewaysThresholdPct) return "SIDEWAYS";
+
+  if (ef > es && price > ef) return "BULLISH";
+  if (ef < es && price < ef) return "BEARISH";
+
+  // EMA sudah terbentuk tapi harga masih di antara — sideways
+  return "SIDEWAYS";
+}
+
 /**
  * Router utama: pilih detector berdasarkan signalType
  */
@@ -422,6 +480,7 @@ module.exports = {
   calcVolumeSMA,
   calcIndicators,
   detectSignal,
+  detectHTFTrend,
   detectSignalPdfScalping,
   detectSignalPdfDayTrading,
   detectSignalPdfSwing,

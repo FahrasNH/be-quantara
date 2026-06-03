@@ -6,7 +6,7 @@
 
 const EventEmitter = require("events");
 const { createExchangeClient, getExchangeInfo } = require("./exchange-factory");
-const { calcIndicators, detectSignal, calcPositionSize } = require("./indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize } = require("./indicators");
 const { getStrategy } = require("./strategies");
 const db = require("./db");
 const notifier = require("./notifier");
@@ -56,7 +56,26 @@ class BotEngine extends EventEmitter {
       strategyKey:   strat.name,
       strategyLabel: strat.label,
       signalType:    strat.signalType,
-      higherTf:      null,   // Multi-TF tidak dipakai lagi (strategi PDF standalone)
+
+      // HTF trend filter
+      higherTf:             strat.higherTf      || null,
+      htfEmaFast:           strat.htfEmaFast    || 9,
+      htfEmaSlow:           strat.htfEmaSlow    || 21,
+      sidewaysThresholdPct: strat.sidewaysThresholdPct || 0.2,
+
+      // ATR filter — pastikan pasar tidak terlalu sepi/liar
+      atrMinMult:    strat.atrMinMult || 0.1,
+      atrMaxMult:    strat.atrMaxMult || 5.0,
+
+      // Volume filter multiplier
+      volSmaMultiplier: strat.volSmaMultiplier || 1.0,
+
+      // Risk management harian
+      maxDailyLossPct:   strat.maxDailyLossPct  || 0.04,
+      maxTradesPerDay:   strat.maxTradesPerDay   || 10,
+      cooldownAfterLoss: strat.cooldownAfterLoss || 5,   // menit
+      maxConsecLoss:     strat.maxConsecLoss     || 3,
+
       // Override config per-instance (e.g. symbol berbeda per bot)
       ...configOverrides,
     };
@@ -72,6 +91,17 @@ class BotEngine extends EventEmitter {
       errors:        0,
       lastTick:      null,
       lastPrice:     null,
+
+      // Risk management tracking
+      dailyTradeCount: 0,        // Jumlah trade hari ini
+      dailyLoss:       0,        // Total loss hari ini (dalam USD)
+      dailyStartCapital: 0,      // Modal awal hari ini (reset tiap hari)
+      lastDayReset:    null,     // Timestamp reset terakhir
+      consecLoss:      0,        // Loss berturut-turut
+      cooldownUntil:   null,     // Timestamp cooldown selesai
+
+      // HTF trend state
+      htfTrend:        "UNKNOWN", // BULLISH / BEARISH / SIDEWAYS / UNKNOWN
     };
 
     this.logs      = [];   // circular buffer max 1000 (WS streaming)
@@ -142,12 +172,28 @@ class BotEngine extends EventEmitter {
       lastPrice:     this.state.lastPrice,
       totalPnL:      this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0),
       winRate:       this._winRate(),
+
+      // Risk management state
+      riskState: {
+        htfTrend:        this.state.htfTrend,
+        higherTf:        this.config.higherTf,
+        dailyTradeCount: this.state.dailyTradeCount,
+        maxTradesPerDay: this.config.maxTradesPerDay,
+        dailyLoss:       this.state.dailyLoss,
+        maxDailyLossPct: this.config.maxDailyLossPct,
+        consecLoss:      this.state.consecLoss,
+        maxConsecLoss:   this.config.maxConsecLoss,
+        cooldownUntil:   this.state.cooldownUntil,
+        inCooldown:      !!(this.state.cooldownUntil && Date.now() < this.state.cooldownUntil),
+      },
+
       params: {
         strategyKey:   this.config.strategyKey,
         strategyLabel: this.config.strategyLabel,
         signalType:    this.config.signalType,
         emaFast:       this.config.emaFast,
         emaSlow:       this.config.emaSlow,
+        emaTrend:      this.config.emaTrend,
         rsiPeriod:     this.config.rsiPeriod,
         rsiOverbought: this.config.rsiOverbought,
         rsiOversold:   this.config.rsiOversold,
@@ -159,6 +205,7 @@ class BotEngine extends EventEmitter {
         useBothSides:  this.config.useBothSides,
         interval:      this.config.interval,
         checkInterval: this.config.checkInterval,
+        higherTf:      this.config.higherTf,
       },
     };
   }
@@ -387,11 +434,101 @@ class BotEngine extends EventEmitter {
   }
 
   // ─────────────────────────────────────────────
+  // RISK MANAGEMENT HELPERS
+  // ─────────────────────────────────────────────
+
+  /** Reset counter harian jika sudah ganti hari */
+  _resetDailyIfNeeded() {
+    const now     = new Date();
+    const todayStr = now.toISOString().slice(0, 10); // "2026-06-03"
+    if (this.state.lastDayReset !== todayStr) {
+      this.state.dailyTradeCount   = 0;
+      this.state.dailyLoss         = 0;
+      this.state.dailyStartCapital = this.state.capital;
+      this.state.lastDayReset      = todayStr;
+      this.state.consecLoss        = 0;
+      this.state.cooldownUntil     = null;
+      this._log("info", `📅 Hari baru — daily counter di-reset`);
+    }
+  }
+
+  /**
+   * Periksa apakah boleh buka trade baru.
+   * Returns { ok: true } atau { ok: false, reason: string }
+   */
+  _checkRiskGates(atr, price) {
+    // 1. Cooldown setelah loss
+    if (this.state.cooldownUntil && Date.now() < this.state.cooldownUntil) {
+      const remaining = Math.ceil((this.state.cooldownUntil - Date.now()) / 60000);
+      return { ok: false, reason: `Cooldown aktif — tunggu ${remaining} menit lagi` };
+    }
+
+    // 2. Loss berturut-turut
+    if (this.state.consecLoss >= this.config.maxConsecLoss) {
+      return { ok: false, reason: `${this.state.consecLoss} loss berturut — stop trading hari ini` };
+    }
+
+    // 3. Max trades per hari
+    if (this.state.dailyTradeCount >= this.config.maxTradesPerDay) {
+      return { ok: false, reason: `Maks ${this.config.maxTradesPerDay} trade/hari sudah tercapai` };
+    }
+
+    // 4. Daily loss limit
+    const dailyLossPct = this.state.capital > 0
+      ? this.state.dailyLoss / (this.state.dailyStartCapital || this.state.capital)
+      : 0;
+    if (dailyLossPct >= this.config.maxDailyLossPct) {
+      return {
+        ok: false,
+        reason: `Daily loss ${(dailyLossPct * 100).toFixed(2)}% sudah melewati batas ${(this.config.maxDailyLossPct * 100)}%`,
+      };
+    }
+
+    // 5. HTF Sideways
+    if (this.state.htfTrend === "SIDEWAYS") {
+      return { ok: false, reason: `HTF ${this.config.higherTf} = SIDEWAYS — tidak ada trade` };
+    }
+
+    // 6. ATR range filter
+    if (atr && price) {
+      const atrPct = (atr / price) * 100;
+      const minPct = this.config.atrMinMult * 0.1; // atrMinMult sebagai batas bawah ATR%
+      const maxPct = this.config.atrMaxMult * 0.1;
+      if (atrPct < minPct) {
+        return { ok: false, reason: `ATR terlalu kecil (${atrPct.toFixed(3)}%) — market terlalu sepi` };
+      }
+      if (atrPct > maxPct) {
+        return { ok: false, reason: `ATR terlalu besar (${atrPct.toFixed(3)}%) — volatilitas ekstrem` };
+      }
+    }
+
+    return { ok: true };
+  }
+
+  /** Panggil setelah trade ditutup untuk update counter risk */
+  _updateRiskAfterClose(pnl) {
+    if (pnl < 0) {
+      this.state.dailyLoss   += Math.abs(pnl);
+      this.state.consecLoss  += 1;
+      // Set cooldown
+      if (this.config.cooldownAfterLoss > 0) {
+        this.state.cooldownUntil = Date.now() + this.config.cooldownAfterLoss * 60 * 1000;
+        this._log("warn", `🕐 Cooldown ${this.config.cooldownAfterLoss} menit aktif setelah loss`);
+      }
+    } else {
+      this.state.consecLoss = 0; // Reset streak setelah win
+    }
+  }
+
+  // ─────────────────────────────────────────────
   // MAIN TICK
   // ─────────────────────────────────────────────
   async _tick() {
     this.state.checkCount++;
     this.state.lastTick = new Date().toISOString();
+
+    // Reset daily counter jika hari baru
+    this._resetDailyIfNeeded();
 
     try {
       const candles = await this._fetchCandles();
@@ -408,7 +545,22 @@ class BotEngine extends EventEmitter {
         atrPeriod: this.config.atrPeriod,
       });
 
-      // Tidak lagi pakai higher timeframe terpisah (strategi PDF standalone)
+      // ── HTF Trend Filter ───────────────────────────────────────────────────
+      if (this.config.higherTf) {
+        try {
+          const htfCandles = await this.client.getCandles(
+            this.config.symbol, this.config.higherTf,
+            Math.max(this.config.htfEmaSlow + 10, 50)
+          );
+          this.state.htfTrend = detectHTFTrend(htfCandles, {
+            htfEmaFast:           this.config.htfEmaFast,
+            htfEmaSlow:           this.config.htfEmaSlow,
+            sidewaysThresholdPct: this.config.sidewaysThresholdPct,
+          });
+        } catch {
+          this.state.htfTrend = "UNKNOWN"; // Tidak bisa fetch HTF → allow trade
+        }
+      }
 
       const lastIdx  = candles.length - 2;
       const price    = candles[lastIdx].close;
@@ -421,6 +573,7 @@ class BotEngine extends EventEmitter {
       this.state.lastPrice = price;
 
       if (this.state.checkCount % 5 === 1) {
+        const htfLabel   = this.config.higherTf ? ` | HTF(${this.config.higherTf}): ${this.state.htfTrend}` : "";
         const trendLabel = emaTrend
           ? (price > emaTrend ? "↑ MAJOR" : "↓ MAJOR")
           : (emaF > emaS ? "↑ BULLISH" : "↓ BEARISH");
@@ -429,29 +582,51 @@ class BotEngine extends EventEmitter {
           `EMA${this.config.emaFast}=${emaF?.toFixed(2)} EMA${this.config.emaSlow}=${emaS?.toFixed(2)}` +
           (emaTrend ? ` EMA${this.config.emaTrend}=${emaTrend?.toFixed(2)}` : "") + ` | ` +
           `RSI=${rsi?.toFixed(1)} ATR=${atr?.toFixed(2)} | ` +
-          `Trend: ${trendLabel} | Strat: [${this.config.strategyKey}]`
+          `Trend: ${trendLabel}${htfLabel} | Strat: [${this.config.strategyKey}]`
         );
       }
 
       await this._checkOpenPositions(price, atr);
 
       if (this.state.openPositions.length < this.config.maxPositions) {
-        const signal = detectSignal(indicators, lastIdx, {
-          rsiOverbought: this.config.rsiOverbought,
-          rsiOversold:   this.config.rsiOversold,
-          rsiLongMin:    this.config.rsiLongMin,
-          rsiLongMax:    this.config.rsiLongMax,
-          rsiShortMin:   this.config.rsiShortMin,
-          rsiShortMax:   this.config.rsiShortMax,
-          useBothSides:  this.config.useBothSides,
-          signalType:    this.config.signalType,
-        });
+        // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
+        const gate = this._checkRiskGates(atr, price);
+        if (!gate.ok) {
+          if (this.state.checkCount % 10 === 1) {
+            this._log("info", `🚫 Skip entry: ${gate.reason}`);
+          }
+        } else {
+          // ── STEP 2: Deteksi sinyal entry di TF utama ────────────────────────
+          const signal = detectSignal(indicators, lastIdx, {
+            rsiOverbought: this.config.rsiOverbought,
+            rsiOversold:   this.config.rsiOversold,
+            rsiLongMin:    this.config.rsiLongMin,
+            rsiLongMax:    this.config.rsiLongMax,
+            rsiShortMin:   this.config.rsiShortMin,
+            rsiShortMax:   this.config.rsiShortMax,
+            useBothSides:  this.config.useBothSides,
+            signalType:    this.config.signalType,
+          });
 
-        if (signal && signal !== this.state.lastSignal) {
-          await this._handleSignal(signal, price, atr);
-          this.state.lastSignal = signal;
-        } else if (!signal) {
-          this.state.lastSignal = null;
+          // ── STEP 3: Saring sinyal berdasarkan HTF trend ─────────────────────
+          let filteredSignal = signal;
+          if (signal && this.state.htfTrend !== "UNKNOWN") {
+            if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
+              filteredSignal = null;
+              this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
+            }
+            if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
+              filteredSignal = null;
+              this._log("info", `🟢 SHORT diblok — HTF ${this.config.higherTf} BULLISH`);
+            }
+          }
+
+          if (filteredSignal && filteredSignal !== this.state.lastSignal) {
+            await this._handleSignal(filteredSignal, price, atr);
+            this.state.lastSignal = filteredSignal;
+          } else if (!filteredSignal) {
+            this.state.lastSignal = null;
+          }
         }
       }
 
@@ -574,9 +749,13 @@ class BotEngine extends EventEmitter {
     const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
 
+    // Increment trade counter harian
+    this.state.dailyTradeCount += 1;
+
     this._sep(`SINYAL ${signal}`);
     this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
     this._log("trade", `Entry: $${price.toLocaleString()} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | Size: ${size}`);
+    this._log("info",  `📊 Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
 
     const openTime = Date.now();
 
@@ -722,6 +901,7 @@ class BotEngine extends EventEmitter {
 
           this.state.capital += pnl;
           this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+          this._updateRiskAfterClose(pnl);
 
           if (this.sessionId && pos.dbId) {
             try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
@@ -768,6 +948,7 @@ class BotEngine extends EventEmitter {
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
                   this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+                  this._updateRiskAfterClose(pnl);
                   if (this.sessionId && pos.dbId) {
                     try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
                   }
@@ -827,6 +1008,7 @@ class BotEngine extends EventEmitter {
         });
 
         this.state.trades.push({ ...pos, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
+        this._updateRiskAfterClose(pnl);  // Update daily loss, cooldown, consecLoss
         toClose.push(pos.id);
       }
     }
