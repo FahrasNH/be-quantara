@@ -64,8 +64,27 @@ for (const [sym, bot] of bots) {
   bot.on("status", state => broadcast({ type: "status", symbol: sym, data: state }));
 }
 
+// ── WebSocket heartbeat — cegah Nginx/proxy timeout ──────────────────────
+// Ping setiap 25 detik; jika client tidak jawab → putus & hapus
+const WS_PING_INTERVAL = 25_000;
+const wsPingTimer = setInterval(() => {
+  wss.clients.forEach(ws => {
+    if (!ws.isAlive) {
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    ws.ping();   // browser WebSocket otomatis kirim pong
+  });
+}, WS_PING_INTERVAL);
+
+wss.on("close", () => clearInterval(wsPingTimer));
+
 // Kirim status semua bot + recent logs saat WS connect
 wss.on("connection", ws => {
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; }); // tandai client masih hidup
+
   console.log("[WS] Client terhubung");
   for (const [sym, bot] of bots) {
     bot.getLogs(50).forEach(entry =>
@@ -74,7 +93,7 @@ wss.on("connection", ws => {
     ws.send(JSON.stringify({ type: "status", symbol: sym, data: bot.getState() }));
   }
   ws.on("close", () => console.log("[WS] Client terputus"));
-  ws.on("error", err => console.error("[WS] Error:", err.message));
+  ws.on("error", err => console.error("[WS] WS error:", err.message));
 });
 
 // ── Routes ─────────────────────────────────────────────────────────────────
@@ -150,7 +169,13 @@ async function shutdown(sig) {
 process.on("SIGINT",  () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("uncaughtException", err => {
-  console.error("[FATAL]", err.message, err.stack);
+  console.error("[FATAL] uncaughtException:", err.message, err.stack);
+  // Jangan exit — biarkan PM2 yang restart jika perlu
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] unhandledRejection:", reason instanceof Error ? reason.stack : reason);
+  // Jangan crash — log saja, PM2 akan restart jika process mati
 });
 
 module.exports = { app, server, bots, getBot };

@@ -654,10 +654,12 @@ class BotEngine extends EventEmitter {
 
     } catch (err) {
       this.state.errors++;
-      this._log("error", `Tick error (${this.state.errors}): ${err.message}`);
-      if (this.state.errors >= 5) {
-        this._log("error", "5 error berturut-turut! Bot berhenti.");
-        await this.stop();
+      this._log("error", `Tick error (${this.state.errors}/10): ${err.message}`);
+      // Naikkan threshold 5 → 10 dan jangan stop permanen — skip tick saja
+      if (this.state.errors >= 10) {
+        this._log("error", "10 error berturut-turut — skip 2 menit, lanjut otomatis.");
+        this.state.errors = 0; // reset agar bot tidak mati permanen
+        await new Promise(r => setTimeout(r, 120_000)); // tunggu 2 menit
       }
     }
   }
