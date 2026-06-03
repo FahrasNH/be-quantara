@@ -241,56 +241,77 @@ class BitgetCCXTClient {
   async setTPSL(symbol, planType, triggerPrice, holdSide, size, marginCoin = "USDT") {
     // planType: "profit_plan" | "loss_plan"
     // holdSide: "long" | "short"
+    const isTP      = planType === "profit_plan";
+    const isLong    = holdSide === "long";
+    const closeSide = isLong ? "sell" : "buy";
+    const trigPrice = parseFloat(triggerPrice);
+
+    // Format symbol untuk CCXT (BTC/USDT:USDT)
     let marketSymbol = symbol;
     if (!marketSymbol.includes("/")) {
       const base = marketSymbol.slice(0, -4);
       marketSymbol = `${base}/USDT:USDT`;
     }
 
-    const isTP      = planType === "profit_plan";
-    const isLong    = holdSide === "long";
-    const closeSide = isLong ? "sell" : "buy";   // arah close
-    const trigPrice = parseFloat(triggerPrice);
+    // Format symbol untuk Bitget native API V1 (BTCUSDTUMCBL)
+    const symV1 = symbol.replace("USDT", "USDT_UMCBL").replace("/USDT:USDT", "USDT_UMCBL");
 
-    // FIX: gunakan stopMarket / takeProfitMarket (bukan limit)
-    // tradeSide: 'close' + reduceOnly: true = trigger order yang reduce posisi
-    const orderType = isTP ? "takeProfitMarket" : "stopMarket";
+    const errors = [];
 
+    // ── Pendekatan 1: Bitget native plan order API (paling reliable) ──────────
+    // Endpoint: POST /api/mix/v1/plan/placeTPSL
+    try {
+      const res = await this.exchange.privateMixPostPlanPlaceTPSL({
+        symbol:       symV1,
+        marginCoin,
+        planType,
+        triggerPrice: String(trigPrice),
+        triggerType:  "market_price",
+        holdSide,
+        size:         String(size),
+      });
+      if (res?.code === "00000" || res?.data) {
+        return { success: true, method: "nativeV1", orderId: res?.data?.orderId };
+      }
+      errors.push(`nativeV1: code=${res?.code} msg=${res?.msg}`);
+    } catch (e1) {
+      errors.push(`nativeV1: ${e1.message}`);
+    }
+
+    // ── Pendekatan 2: CCXT takeProfitMarket / stopMarket ─────────────────────
     try {
       const order = await this.exchange.createOrder(
         marketSymbol,
-        orderType,
+        isTP ? "takeProfitMarket" : "stopMarket",
         closeSide,
         size,
         trigPrice,
-        {
-          triggerPrice: trigPrice,
-          reduceOnly:   true,
-          tradeSide:    "close",
-        }
+        { triggerPrice: trigPrice, stopPrice: trigPrice, reduceOnly: true, tradeSide: "close" }
       );
-      return { success: true, orderId: order.id };
-    } catch (err) {
-      // Fallback: coba dengan stopPrice param (CCXT versi lain)
-      try {
-        const order = await this.exchange.createOrder(
-          marketSymbol,
-          isTP ? "takeProfit" : "stop",
-          closeSide,
-          size,
-          trigPrice,
-          {
-            stopPrice:  trigPrice,
-            reduceOnly: true,
-            tradeSide:  "close",
-          }
-        );
-        return { success: true, orderId: order.id };
-      } catch (err2) {
-        console.warn(`setTPSL (${planType}) warning: ${err2.message}`);
-        return { success: false, message: err2.message };
-      }
+      return { success: true, method: "ccxtStopMarket", orderId: order.id };
+    } catch (e2) {
+      errors.push(`ccxtStopMarket: ${e2.message}`);
     }
+
+    // ── Pendekatan 3: CCXT takeProfit / stop (fallback lama) ─────────────────
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        isTP ? "takeProfit" : "stop",
+        closeSide,
+        size,
+        trigPrice,
+        { stopPrice: trigPrice, reduceOnly: true, tradeSide: "close" }
+      );
+      return { success: true, method: "ccxtStop", orderId: order.id };
+    } catch (e3) {
+      errors.push(`ccxtStop: ${e3.message}`);
+    }
+
+    // Semua gagal — return error detail agar bisa di-log oleh bot
+    const detail = errors.join(" | ");
+    console.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
+    return { success: false, message: detail };
   }
 
   async cancelAllPlanOrders(symbol, planType = "profit_loss", marginCoin = "USDT") {

@@ -586,28 +586,40 @@ class BotEngine extends EventEmitter {
 
         const pos = { id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr, manualSLTP: false };
 
-        // ── SELALU pasang SL/TP, dengan retry 2x ──────────────────
+        // ── Pasang SL/TP — tunggu 2s dulu agar posisi settle di exchange ──────
         const holdSide = signal === "LONG" ? "long" : "short";
         let slOk = false, tpOk = false;
+        let slErr = "", tpErr = "";
 
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        this._log("info", `Menunggu 2s sebelum pasang SL/TP...`);
+        await new Promise(r => setTimeout(r, 2000));
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
           if (!slOk) {
             const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
             slOk = r.success;
+            if (!slOk) slErr = r.message || "unknown";
           }
           if (!tpOk) {
             const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
             tpOk = r.success;
+            if (!tpOk) tpErr = r.message || "unknown";
           }
           if (slOk && tpOk) break;
-          if (attempt < 2) await new Promise(r => setTimeout(r, 1500)); // tunggu 1.5s lalu retry
+          if (attempt < 3) {
+            this._log("info", `SL/TP attempt ${attempt} gagal, retry dalam 3s...`);
+            await new Promise(r => setTimeout(r, 3000));
+          }
         }
 
         if (slOk && tpOk) {
           this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
         } else {
+          // Log error asli dari exchange agar bisa debug
+          if (!slOk) this._log("error", `SL gagal: ${slErr}`);
+          if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
           this._log("warn", `⚠️ SL: ${slOk ? "✓" : "GAGAL"} | TP: ${tpOk ? "✓" : "GAGAL"} — bot monitor manual`);
-          pos.manualSLTP = true; // bot akan cek SL/TP manual di _checkOpenPositions
+          pos.manualSLTP = true;
         }
 
         // Simpan ke DB
