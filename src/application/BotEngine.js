@@ -177,6 +177,7 @@ class BotEngine extends EventEmitter {
       lastTick:      this.state.lastTick,
       lastPrice:     this.state.lastPrice,
       totalPnL:      this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0),
+      unrealizedPnL: this.state.openPositions.reduce((s, p) => s + (p.unrealizedPL || 0), 0),
       winRate:       this._winRate(),
 
       // Risk management state
