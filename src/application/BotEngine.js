@@ -1250,9 +1250,11 @@ class BotEngine extends EventEmitter {
   _syncSessionStats() {
     if (!this.sessionId) return;
     try {
-      const wins      = this.state.trades.filter(t => t.pnl > 0).length;
-      const losses    = this.state.trades.filter(t => t.pnl <= 0).length;
-      const total     = this.state.trades.length + this.state.openPositions.length;
+      const closed    = this.state.trades.filter(t => !t.partial); // hanya trade utama (bukan partial SL+)
+      const wins      = closed.filter(t => t.pnl > 0).length;
+      const losses    = closed.filter(t => t.pnl <= 0).length;
+      // total_trades = closed saja, open positions belum dihitung agar win rate tidak anomali
+      const total     = closed.length;
       const tradePnL  = this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0);
       const finalCap  = this.state.startCapital + tradePnL;
       db.updateSessionStats(this.sessionId, { finalCapital: finalCap, totalTrades: total, wins, losses });
