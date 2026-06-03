@@ -161,7 +161,26 @@ const stmts = {
   `),
   getSession: db.prepare(`SELECT * FROM bot_sessions WHERE id = ?`),
   getSessions: db.prepare(`
-    SELECT * FROM bot_sessions ORDER BY started_at DESC LIMIT ?
+    SELECT
+      s.*,
+      COALESCE(t.actual_pnl,    0) AS actual_pnl,
+      COALESCE(t.actual_wins,   0) AS actual_wins,
+      COALESCE(t.actual_losses, 0) AS actual_losses,
+      COALESCE(t.actual_total,  0) AS actual_total
+    FROM bot_sessions s
+    LEFT JOIN (
+      SELECT
+        session_id,
+        SUM(pnl)                                        AS actual_pnl,
+        SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)      AS actual_wins,
+        SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)      AS actual_losses,
+        COUNT(*)                                        AS actual_total
+      FROM trades
+      WHERE close_time IS NOT NULL AND pnl IS NOT NULL
+      GROUP BY session_id
+    ) t ON t.session_id = s.id
+    ORDER BY s.started_at DESC
+    LIMIT ?
   `),
   // Cari sesi yang masih terbuka (belum ada stopped_at) untuk resume
   getLastOpenSession: db.prepare(`
