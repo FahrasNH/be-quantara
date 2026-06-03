@@ -184,7 +184,7 @@ class BitgetCCXTClient {
     }
   }
 
-  async openPosition(symbol, side, size, marginCoin = "USDT") {
+  async openPosition(symbol, side, size, marginCoin = "USDT", slPrice = undefined, tpPrice = undefined) {
     try {
       // side: "open_long" -> buy, "open_short" -> sell
       let marketSymbol = symbol;
@@ -193,20 +193,29 @@ class BitgetCCXTClient {
         marketSymbol = `${base}/USDT:USDT`;
       }
 
-      const isBuy    = side.includes("long");
+      const isBuy     = side.includes("long");
       const direction = isBuy ? "buy" : "sell";
 
-      // FIX error 40774: Bitget one-way mode butuh 'tradeSide: open'
-      // Tanpa ini, Bitget bingung apakah ini open atau close posisi
+      const extraParams = { tradeSide: "open" };
+
+      // Embed SL/TP atomik dalam order entry (CCXT v4.5 Bitget V2 support)
+      // presetStopLossPrice & presetStopSurplusPrice dikirim bersamaan order masuk
+      if (slPrice) {
+        extraParams.stopLoss = { triggerPrice: parseFloat(slPrice) };
+      }
+      if (tpPrice) {
+        extraParams.takeProfit = { triggerPrice: parseFloat(tpPrice) };
+      }
+
       const order = await this.exchange.createMarketOrder(
         marketSymbol,
         direction,
         size,
         undefined,
-        { tradeSide: "open" }
+        extraParams
       );
 
-      return { orderId: order.id, ...order };
+      return { orderId: order.id, presetSLTP: !!(slPrice && tpPrice), ...order };
     } catch (err) {
       throw new Error(`openPosition error: ${err.message}`);
     }
@@ -253,29 +262,24 @@ class BitgetCCXTClient {
       marketSymbol = `${base}/USDT:USDT`;
     }
 
-    // Format symbol untuk Bitget native API V1 (BTCUSDTUMCBL)
-    const symV1 = symbol.replace("USDT", "USDT_UMCBL").replace("/USDT:USDT", "USDT_UMCBL");
-
     const errors = [];
 
-    // ── Pendekatan 1: Bitget native plan order API (paling reliable) ──────────
-    // Endpoint: POST /api/mix/v1/plan/placeTPSL
+    // ── Pendekatan 1: CCXT V2 — stopLossPrice / takeProfitPrice ──────────────
+    // CCXT v4.5+ Bitget secara internal memanggil privateMixPostV2MixOrderPlaceTpslOrder
+    // planType otomatis: pos_loss (SL) atau pos_profit (TP)
     try {
-      const res = await this.exchange.privateMixPostPlanPlaceTPSL({
-        symbol:       symV1,
-        marginCoin,
-        planType,
-        triggerPrice: String(trigPrice),
-        triggerType:  "market_price",
-        holdSide,
-        size:         String(size),
-      });
-      if (res?.code === "00000" || res?.data) {
-        return { success: true, method: "nativeV1", orderId: res?.data?.orderId };
-      }
-      errors.push(`nativeV1: code=${res?.code} msg=${res?.msg}`);
+      const priceKey = isTP ? "takeProfitPrice" : "stopLossPrice";
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        "market",
+        closeSide,
+        size,
+        undefined,
+        { [priceKey]: trigPrice, reduceOnly: true }
+      );
+      return { success: true, method: "ccxtV2TPSL", orderId: order.id };
     } catch (e1) {
-      errors.push(`nativeV1: ${e1.message}`);
+      errors.push(`ccxtV2TPSL: ${e1.message}`);
     }
 
     // ── Pendekatan 2: CCXT takeProfitMarket / stopMarket ─────────────────────
@@ -286,14 +290,14 @@ class BitgetCCXTClient {
         closeSide,
         size,
         trigPrice,
-        { triggerPrice: trigPrice, stopPrice: trigPrice, reduceOnly: true, tradeSide: "close" }
+        { triggerPrice: trigPrice, reduceOnly: true }
       );
       return { success: true, method: "ccxtStopMarket", orderId: order.id };
     } catch (e2) {
       errors.push(`ccxtStopMarket: ${e2.message}`);
     }
 
-    // ── Pendekatan 3: CCXT takeProfit / stop (fallback lama) ─────────────────
+    // ── Pendekatan 3: CCXT takeProfit / stop ─────────────────────────────────
     try {
       const order = await this.exchange.createOrder(
         marketSymbol,
@@ -301,7 +305,7 @@ class BitgetCCXTClient {
         closeSide,
         size,
         trigPrice,
-        { stopPrice: trigPrice, reduceOnly: true, tradeSide: "close" }
+        { stopPrice: trigPrice, reduceOnly: true }
       );
       return { success: true, method: "ccxtStop", orderId: order.id };
     } catch (e3) {

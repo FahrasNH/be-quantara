@@ -580,46 +580,54 @@ class BotEngine extends EventEmitter {
 
     if (!this.config.dryRun) {
       try {
-        const side  = signal === "LONG" ? "open_long" : "open_short";
-        const order = await this.client.openPosition(this.config.symbol, side, size);
+        const side     = signal === "LONG" ? "open_long" : "open_short";
+        const holdSide = signal === "LONG" ? "long" : "short";
+
+        // ── Buka posisi + embed preset SL/TP atomik (CCXT v4.5 Bitget V2) ──────
+        const order = await this.client.openPosition(
+          this.config.symbol, side, size, "USDT", sl.toFixed(2), tp.toFixed(2)
+        );
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
         const pos = { id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr, manualSLTP: false };
 
-        // ── Pasang SL/TP — tunggu 2s dulu agar posisi settle di exchange ──────
-        const holdSide = signal === "LONG" ? "long" : "short";
-        let slOk = false, tpOk = false;
-        let slErr = "", tpErr = "";
-
-        this._log("info", `Menunggu 2s sebelum pasang SL/TP...`);
-        await new Promise(r => setTimeout(r, 2000));
-
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          if (!slOk) {
-            const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
-            slOk = r.success;
-            if (!slOk) slErr = r.message || "unknown";
-          }
-          if (!tpOk) {
-            const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
-            tpOk = r.success;
-            if (!tpOk) tpErr = r.message || "unknown";
-          }
-          if (slOk && tpOk) break;
-          if (attempt < 3) {
-            this._log("info", `SL/TP attempt ${attempt} gagal, retry dalam 3s...`);
-            await new Promise(r => setTimeout(r, 3000));
-          }
-        }
-
-        if (slOk && tpOk) {
-          this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
+        // Verifikasi apakah preset SL/TP berhasil di-embed
+        if (order?.presetSLTP) {
+          this._log("trade", `SL/TP di-embed dalam order ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
         } else {
-          // Log error asli dari exchange agar bisa debug
-          if (!slOk) this._log("error", `SL gagal: ${slErr}`);
-          if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
-          this._log("warn", `⚠️ SL: ${slOk ? "✓" : "GAGAL"} | TP: ${tpOk ? "✓" : "GAGAL"} — bot monitor manual`);
-          pos.manualSLTP = true;
+          // Fallback: pasang SL/TP terpisah jika preset tidak tersupport / gagal
+          this._log("info", `Preset SL/TP tidak terkonfirmasi, pasang terpisah via plan order...`);
+          await new Promise(r => setTimeout(r, 2000));
+
+          let slOk = false, tpOk = false;
+          let slErr = "", tpErr = "";
+
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            if (!slOk) {
+              const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
+              slOk = r.success;
+              if (!slOk) slErr = r.message || "unknown";
+            }
+            if (!tpOk) {
+              const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
+              tpOk = r.success;
+              if (!tpOk) tpErr = r.message || "unknown";
+            }
+            if (slOk && tpOk) break;
+            if (attempt < 3) {
+              this._log("info", `SL/TP attempt ${attempt} gagal, retry dalam 3s...`);
+              await new Promise(r => setTimeout(r, 3000));
+            }
+          }
+
+          if (slOk && tpOk) {
+            this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
+          } else {
+            if (!slOk) this._log("error", `SL gagal: ${slErr}`);
+            if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
+            this._log("warn", `⚠️ SL: ${slOk ? "✓" : "GAGAL"} | TP: ${tpOk ? "✓" : "GAGAL"} — bot monitor manual`);
+            pos.manualSLTP = true;
+          }
         }
 
         // Simpan ke DB
