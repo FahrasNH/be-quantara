@@ -298,6 +298,35 @@ function updateSessionStats(sessionId, { finalCapital, totalTrades, wins, losses
   });
 }
 
+/**
+ * Hitung ulang stats sesi dari trade records aktual di DB.
+ * Dipakai saat trade dibuka di sesi lama tapi ditutup di sesi baru (cross-session).
+ * @param {number} sessionId
+ */
+function recalcSessionStats(sessionId) {
+  if (!sessionId) return;
+  try {
+    const session = stmts.getSession.get(sessionId);
+    if (!session) return;
+    const trades = db.prepare(`
+      SELECT pnl FROM trades
+      WHERE session_id = ? AND close_time IS NOT NULL AND pnl IS NOT NULL
+    `).all(sessionId);
+    const wins       = trades.filter(t => t.pnl > 0).length;
+    const losses     = trades.filter(t => t.pnl <= 0).length;
+    const total      = trades.length;
+    const totalPnL   = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const finalCap   = (session.initial_capital || 0) + totalPnL;
+    stmts.updateSessionStats.run({
+      id:            sessionId,
+      final_capital: finalCap,
+      total_trades:  total,
+      wins,
+      losses,
+    });
+  } catch { /* jangan crash */ }
+}
+
 function getSessions(limit = 20) {
   return stmts.getSessions.all(limit).map(parseSession);
 }
@@ -530,6 +559,7 @@ module.exports = {
   getOpenTrades,
   getOpenTradesBySymbol,
   getInsights,
+  recalcSessionStats,
   // equity
   snapshotEquity,
   getEquity,

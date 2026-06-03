@@ -72,6 +72,40 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
   });
 
+  // ── POST /api/db/recalc-sessions ─────────────────────────────────────────
+  // Hitung ulang wins/losses/total_trades/final_capital dari trade records aktual.
+  // Dipakai satu kali untuk memperbaiki data historis yang salah akibat
+  // bug cross-session (trade buka di sesi A, tutup di sesi B).
+  router.post("/db/recalc-sessions", (req, res) => {
+    try {
+      const sessions = db.getSessions(500);
+      const results  = [];
+      for (const s of sessions) {
+        const trades = db._db.prepare(
+          `SELECT pnl FROM trades WHERE session_id = ? AND close_time IS NOT NULL AND pnl IS NOT NULL`
+        ).all(s.id);
+        if (trades.length === 0) continue;
+        const wins     = trades.filter(t => t.pnl > 0).length;
+        const losses   = trades.filter(t => t.pnl <= 0).length;
+        const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
+        const finalCap = (s.initial_capital || 0) + totalPnL;
+        const mismatch = s.wins !== wins || s.losses !== losses || s.total_trades !== trades.length;
+        if (mismatch) {
+          db.recalcSessionStats(s.id);
+          results.push({
+            sessionId: s.id,
+            symbol:    s.symbol,
+            before:    { wins: s.wins, losses: s.losses, total: s.total_trades },
+            after:     { wins, losses, total: trades.length, finalCap: +finalCap.toFixed(4) },
+          });
+        }
+      }
+      res.json({ fixed: results.length, sessions: results });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── GET /api/insights ─────────────────────────────────────────────────────
   // Export snapshot indikator + hasil trade untuk analitik / ML.
   //

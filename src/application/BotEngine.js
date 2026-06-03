@@ -1100,9 +1100,11 @@ class BotEngine extends EventEmitter {
 
         // Posisi yang ada di state tapi tidak lagi di exchange (SL/TP hit)
         const closedLocal = this.state.openPositions.filter(p => !liveByKey.has(p.side));
+        // Set sesi yang perlu di-recalc (cross-session restoration)
+        const sessionsToRecalc = new Set();
+
         for (const pos of closedLocal) {
           const exitPrice = price;
-          // Pakai remainingSize (partial sudah dicatat terpisah)
           const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
           const pnl       = pos.side === "LONG"
             ? (exitPrice - pos.entry) * remaining
@@ -1116,16 +1118,37 @@ class BotEngine extends EventEmitter {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
             this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
           }
-          this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
-          this._updateRiskAfterClose(pnl);
 
-          if (this.sessionId && pos.dbId) {
+          // Tutup trade record di DB
+          if (pos.dbId) {
             try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
           }
+
+          // Catat sesi mana yang perlu diupdate statsnya
+          // pos.restoredFrom = sesi asal trade ini (bisa berbeda dari sesi aktif)
+          const ownerSession = pos.restoredFrom || this.sessionId;
+          sessionsToRecalc.add(ownerSession);
+
+          if (pos.restoredFrom && pos.restoredFrom !== this.sessionId) {
+            // Trade dibuka di sesi lama — jangan masuk ke state.trades sesi ini
+            // agar _syncSessionStats tidak salah menghitung wins sesi saat ini
+            this._log("info", `Trade sesi #${pos.restoredFrom} ditutup di sesi #${this.sessionId} (cross-session) — update sesi asal`);
+          } else {
+            // Trade milik sesi saat ini — masukkan ke state.trades normal
+            this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+          }
+
+          this._updateRiskAfterClose(pnl);
         }
 
-        // Sync session stats ke DB jika ada posisi yang baru ditutup
-        if (closedLocal.length > 0) this._syncSessionStats();
+        // Update stats untuk SETIAP sesi yang terlibat
+        for (const sid of sessionsToRecalc) {
+          if (sid === this.sessionId) {
+            this._syncSessionStats(); // update via state.trades (cepat)
+          } else {
+            db.recalcSessionStats(sid); // hitung ulang dari DB (untuk sesi lama)
+          }
+        }
 
         // Update state: hanya posisi yang masih ada di exchange
         this.state.openPositions = this.state.openPositions.filter(p => liveByKey.has(p.side));
@@ -1159,20 +1182,22 @@ class BotEngine extends EventEmitter {
                   e.message?.includes("position not exist");
 
                 if (isAlreadyClosed) {
-                  // Exchange sudah menutup posisi (SL/TP exchange order kena duluan)
-                  // Hapus dari state agar tidak jadi "ghost position"
                   this._log("info", `Posisi ${pos.side} sudah ditutup oleh exchange ✓ (state sync)`);
                   const exitPrice = price;
                   const pnl = pos.side === "LONG"
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
-                  this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
-                  this._updateRiskAfterClose(pnl);
-                  if (this.sessionId && pos.dbId) {
+                  if (pos.dbId) {
                     try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
                   }
+                  const ownerSid = pos.restoredFrom || this.sessionId;
+                  if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
+                    this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+                  }
+                  this._updateRiskAfterClose(pnl);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
-                  this._syncSessionStats();
+                  if (ownerSid === this.sessionId) this._syncSessionStats();
+                  else db.recalcSessionStats(ownerSid);
                 } else {
                   this._log("error", `Manual close gagal: ${e.message}`);
                 }
