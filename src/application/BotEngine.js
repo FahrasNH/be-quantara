@@ -74,6 +74,14 @@ class BotEngine extends EventEmitter {
       cooldownAfterLoss: strat.cooldownAfterLoss || 5,   // menit
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
+      // ── SL+ (Trailing Partial Take Profit) ──────────────────────────────────
+      // +1R: partial 40%, SL → BEP (entry)
+      // +2R: partial 27.5% of original, SL → +1R
+      // +3R: biarkan sisa ke TP / trailing
+      slPlusEnabled:    process.env.SL_PLUS_ENABLED !== "false", // aktif secara default
+      slPlusPartial1Pct: parseFloat(process.env.SL_PLUS_PARTIAL1) || 0.40,  // 40% di +1R
+      slPlusPartial2Pct: parseFloat(process.env.SL_PLUS_PARTIAL2) || 0.275, // 27.5% ori di +2R
+
       // Override config per-instance (e.g. symbol berbeda per bot)
       ...configOverrides,
     };
@@ -775,7 +783,16 @@ class BotEngine extends EventEmitter {
         );
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
-        const pos = { id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr, manualSLTP: false };
+        const pos = {
+          id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr, manualSLTP: false,
+          // SL+ tracking
+          remainingSize: size,
+          R:             slDist,   // 1R = jarak SL asli dari entry
+          slCurrent:     sl,       // SL aktif saat ini (bergerak setelah milestone)
+          m1: false,               // +1R milestone: partial 40%, SL → BEP
+          m2: false,               // +2R milestone: partial 27.5%, SL → +1R
+          m3: false,               // +3R: biarkan menuju TP
+        };
 
         // Verifikasi apakah preset SL/TP berhasil di-embed
         if (order?.presetSLTP) {
@@ -849,7 +866,14 @@ class BotEngine extends EventEmitter {
       this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
       this.state.capital -= availCap * this.config.riskPerTrade;
 
-      const pos = { id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size, openTime, atr };
+      const pos = {
+        id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size, openTime, atr,
+        // SL+ tracking
+        remainingSize: size,
+        R:             slDist,
+        slCurrent:     sl,
+        m1: false, m2: false, m3: false,
+      };
 
       // Simpan ke DB (dry run)
       if (this.sessionId) {
@@ -881,6 +905,171 @@ class BotEngine extends EventEmitter {
   }
 
   // ─────────────────────────────────────────────
+  // SL+ — TRAILING PARTIAL TAKE PROFIT
+  // Dipanggil setiap tick untuk setiap posisi terbuka.
+  // ─────────────────────────────────────────────
+
+  /**
+   * Periksa milestone +1R / +2R / +3R dan eksekusi partial close + geser SL.
+   * @param {object} pos   — item dari this.state.openPositions
+   * @param {number} price — harga penutupan candle terakhir
+   */
+  async _checkSLPlusMilestones(pos, price) {
+    if (!this.config.slPlusEnabled) return;
+    if (pos.remainingSize <= 0) return;
+
+    const R    = pos.R;
+    const gain = pos.side === "LONG" ? price - pos.entry : pos.entry - price;
+    const rMult = gain / R;
+
+    // ── Milestone 1: +1R → partial 40%, SL ke BEP ───────────────────────────
+    if (!pos.m1 && rMult >= 1.0) {
+      const pct      = this.config.slPlusPartial1Pct;
+      const partial  = parseFloat((pos.size * pct).toFixed(8));
+      const newSL    = pos.entry; // Break-Even Point
+      await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "BEP");
+      pos.m1 = true;
+    }
+
+    // ── Milestone 2: +2R → partial 27.5% of ORIGINAL, SL ke +1R ────────────
+    if (pos.m1 && !pos.m2 && rMult >= 2.0) {
+      const pct         = this.config.slPlusPartial2Pct;
+      // Partial = pct of original size, tapi max 90% dari sisa
+      const fromOriginal = parseFloat((pos.size * pct).toFixed(8));
+      const partial      = Math.min(fromOriginal, parseFloat((pos.remainingSize * 0.90).toFixed(8)));
+      const newSL        = pos.side === "LONG" ? pos.entry + R : pos.entry - R; // +1R
+      await this._executePartialClose(pos, price, partial, "Partial_2R", newSL, "+1R");
+      pos.m2 = true;
+    }
+
+    // ── Milestone 3: +3R → log saja, biarkan sisa ke TP ────────────────────
+    if (pos.m1 && pos.m2 && !pos.m3 && rMult >= 3.0) {
+      pos.m3 = true;
+      const remaining = pos.remainingSize;
+      this._sep(`SL+ MILESTONE +3R`);
+      this._log("trade", `🎯 ${pos.side} +3R tercapai! Sisa ${remaining.toFixed(4)} unit menuju TP $${pos.tp?.toFixed(2) || "N/A"}`);
+      this._log("info",  `SL terkunci di +1R ($${pos.slCurrent?.toFixed(2)}) — posisi tidak bisa rugi`);
+    }
+  }
+
+  /**
+   * Eksekusi partial close + geser SL ke level baru.
+   */
+  async _executePartialClose(pos, price, partialSize, reason, newSL, newSLLabel) {
+    if (partialSize <= 0) return;
+
+    const pnl    = pos.side === "LONG"
+      ? (price - pos.entry) * partialSize
+      : (pos.entry - price) * partialSize;
+    const pnlPct = ((price - pos.entry) / pos.entry) * 100 * (pos.side === "LONG" ? 1 : -1);
+
+    this._sep(`SL+ ${reason}`);
+    this._log("trade", `PARTIAL CLOSE [${reason}] ${pos.side} — ${partialSize.toFixed(4)} unit @ $${price.toFixed(2)}`);
+    this._log("trade", `PnL partial: +$${pnl.toFixed(2)} | SL dipindah → $${newSL.toFixed(2)} (${newSLLabel})`);
+
+    if (!this.config.dryRun) {
+      // ── Partial close di exchange ──────────────────────────────────────────
+      try {
+        const closeSide = pos.side === "LONG" ? "close_long" : "close_short";
+        await this.client.closePosition(this.config.symbol, closeSide, partialSize);
+        this._log("trade", `Partial close terkirim ke exchange ✓`);
+      } catch (e) {
+        this._log("error", `Partial close gagal: ${e.message} — skip milestone`);
+        return; // jangan geser SL jika partial close gagal
+      }
+
+      // ── Update SL di exchange ──────────────────────────────────────────────
+      await this._updateSLOnExchange(pos, newSL);
+    }
+
+    // ── Update state posisi ──────────────────────────────────────────────────
+    pos.remainingSize = parseFloat((pos.remainingSize - partialSize).toFixed(8));
+    pos.slCurrent     = newSL;
+    pos.sl            = newSL; // update SL aktif (dry-run monitoring pakai pos.sl)
+
+    // ── Catat partial di state.trades ────────────────────────────────────────
+    this.state.trades.push({
+      ...pos,
+      size:      partialSize,
+      exit:      price,
+      pnl,
+      pnlPct,
+      reason,
+      closedAt:  Date.now(),
+      partial:   true,
+    });
+    this._updateRiskAfterClose(pnl);
+
+    // ── Catat ke DB (insert + langsung close) ────────────────────────────────
+    if (this.sessionId) {
+      try {
+        const partialDbId = db.insertTrade({
+          sessionId:  this.sessionId,
+          exchange:   this.config.exchange,
+          symbol:     this.config.symbol,
+          side:       pos.side,
+          entryPrice: pos.entry,
+          sl:         pos.sl,
+          tp:         pos.tp,
+          size:       partialSize,
+          openTime:   pos.openTime,
+          atr:        pos.atr,
+          dryRun:     this.config.dryRun,
+          orderId:    `${pos.id}_${reason}`,
+        });
+        db.closeTrade(partialDbId, {
+          exitPrice: price,
+          pnl,
+          reason,
+          closeTime: new Date().toISOString(),
+        });
+      } catch { /* jangan crash */ }
+    }
+
+    // ── Notifikasi Telegram ──────────────────────────────────────────────────
+    notifier.notifyClose({
+      symbol:     this.config.symbol,
+      side:       pos.side,
+      entryPrice: pos.entry,
+      exitPrice:  price,
+      pnl,
+      pnlPct,
+      reason:     `${reason} — SL pindah ke ${newSLLabel} ($${newSL.toFixed(2)})`,
+      dryRun:     this.config.dryRun,
+    });
+  }
+
+  /**
+   * Cancel SL lama di Bitget lalu pasang SL baru.
+   * TP di-repassang agar tidak hilang saat cancel.
+   */
+  async _updateSLOnExchange(pos, newSL) {
+    const holdSide  = pos.side === "LONG" ? "long" : "short";
+    const remaining = pos.remainingSize;
+
+    try {
+      // Cancel semua plan order (SL + TP) yang ada
+      await this.client.cancelAllPlanOrders(this.config.symbol);
+      await new Promise(r => setTimeout(r, 1000));
+    } catch (e) {
+      this._log("warn", `Cancel plan orders: ${e.message}`);
+    }
+
+    // Re-pasang SL baru
+    const slRes = await this.client.setTPSL(this.config.symbol, "loss_plan", newSL.toFixed(2), holdSide, remaining);
+    if (slRes.success) {
+      this._log("trade", `SL baru terpasang @ $${newSL.toFixed(2)} ✓`);
+    } else {
+      this._log("warn", `SL update gagal: ${slRes.message}`);
+    }
+
+    // Re-pasang TP asli (untuk sisa posisi)
+    if (pos.tp) {
+      await this.client.setTPSL(this.config.symbol, "profit_plan", pos.tp.toFixed(2), holdSide, remaining);
+    }
+  }
+
+  // ─────────────────────────────────────────────
   // CHECK OPEN POSITIONS — tutup trade di DB
   // ─────────────────────────────────────────────
   async _checkOpenPositions(price, atr) {
@@ -895,16 +1084,21 @@ class BotEngine extends EventEmitter {
         const closedLocal = this.state.openPositions.filter(p => !liveByKey.has(p.side));
         for (const pos of closedLocal) {
           const exitPrice = price;
+          // Pakai remainingSize (partial sudah dicatat terpisah)
+          const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
           const pnl       = pos.side === "LONG"
-            ? (exitPrice - pos.entry) * pos.size
-            : (pos.entry - exitPrice) * pos.size;
+            ? (exitPrice - pos.entry) * remaining
+            : (pos.entry - exitPrice) * remaining;
 
           this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
           this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
-          this._log("trade", `Entry: $${pos.entry} | Exit: ~$${exitPrice.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`);
-          // Tidak manual update state.capital di LIVE — akan di-refresh dari exchange (equity total) di _tick
-          this._log("trade", `PnL ditambahkan — balance akan diperbarui dari exchange`);
-          this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+          this._log("trade", `Entry: $${pos.entry} | Exit: ~$${exitPrice.toFixed(2)} | Size sisa: ${remaining.toFixed(4)}`);
+          this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} — balance diperbarui dari exchange`);
+          if (pos.m1 || pos.m2) {
+            const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
+            this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
+          }
+          this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
           this._updateRiskAfterClose(pnl);
 
           if (this.sessionId && pos.dbId) {
@@ -918,10 +1112,13 @@ class BotEngine extends EventEmitter {
         // Update state: hanya posisi yang masih ada di exchange
         this.state.openPositions = this.state.openPositions.filter(p => liveByKey.has(p.side));
 
-        // Update unrealized PnL + markPrice dari exchange
+        // Update unrealized PnL + markPrice dari exchange, lalu cek SL+ milestones
         for (const pos of this.state.openPositions) {
           const lp = liveByKey.get(pos.side);
           if (lp) { pos.unrealizedPL = lp.unrealizedPL; pos.markPrice = lp.markPrice; }
+
+          // ── SL+ milestone check ────────────────────────────────────────────
+          await this._checkSLPlusMilestones(pos, price);
 
           // Jika SL/TP gagal dipasang tadi, monitor manual sekarang
           if (pos.manualSLTP) {
@@ -973,33 +1170,41 @@ class BotEngine extends EventEmitter {
 
     const toClose = [];
     for (const pos of this.state.openPositions) {
+      // ── SL+ milestone check (dry run) ─────────────────────────────────────
+      await this._checkSLPlusMilestones(pos, price);
+
+      // Cek SL / TP dengan harga & SL terkini (pos.sl sudah diperbarui oleh milestone)
       const hitTP = pos.side === "LONG" ? price >= pos.tp : price <= pos.tp;
       const hitSL = pos.side === "LONG" ? price <= pos.sl : price >= pos.sl;
 
       if (hitTP || hitSL) {
         const exitPrice = hitTP ? pos.tp : pos.sl;
+        // Pakai remainingSize (bukan size asli) — partial sudah dicatat terpisah
+        const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
         const pnl       = pos.side === "LONG"
-          ? (exitPrice - pos.entry) * pos.size
-          : (pos.entry - exitPrice) * pos.size;
-        const pnlPct    = ((pnl / (pos.entry * pos.size)) * 100);
+          ? (exitPrice - pos.entry) * remaining
+          : (pos.entry - exitPrice) * remaining;
+        const pnlPct    = ((pnl / (pos.entry * remaining)) * 100);
 
-        this.state.capital += pnl + pos.entry * pos.size * this.config.riskPerTrade;
+        this.state.capital += pnl + pos.entry * remaining * this.config.riskPerTrade;
         const reason    = hitTP ? "TP" : "SL";
         const closeTime = Date.now();
 
         this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
         this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
-        this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`);
-        this._log("trade", `Modal sekarang: $${this.state.capital.toFixed(2)}`);
+        this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
+        this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
+        if (pos.m1 || pos.m2) {
+          const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
+          this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
+        }
 
-        // Tutup di DB
         if (this.sessionId && pos.dbId) {
           try {
             db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
           } catch { /* jangan crash */ }
         }
 
-        // Notifikasi WhatsApp — close posisi
         notifier.notifyClose({
           symbol:     this.config.symbol,
           side:       pos.side,
@@ -1011,8 +1216,8 @@ class BotEngine extends EventEmitter {
           dryRun:     this.config.dryRun,
         });
 
-        this.state.trades.push({ ...pos, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
-        this._updateRiskAfterClose(pnl);  // Update daily loss, cooldown, consecLoss
+        this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
+        this._updateRiskAfterClose(pnl);
         toClose.push(pos.id);
       }
     }
