@@ -42,7 +42,8 @@ class BotEngine extends EventEmitter {
       atrPeriod:     parseInt(process.env.ATR_PERIOD)      || strat.atrPeriod,
       atrMultiplier: parseFloat(process.env.ATR_MULTIPLIER)|| strat.atrMultiplier,
       riskReward:    parseFloat(process.env.RISK_REWARD)   || strat.riskReward,
-      riskPerTrade:  parseFloat(process.env.RISK_PER_TRADE)|| strat.riskPerTrade,
+      riskPerTrade:    parseFloat(process.env.RISK_PER_TRADE)    || strat.riskPerTrade,
+      maxRiskPerTrade: parseFloat(process.env.MAX_RISK_PER_TRADE) || 0.05,
       maxPositions:  parseInt(process.env.MAX_OPEN_POSITIONS)|| 1,
       leverage:      parseInt(process.env.LEVERAGE)        || strat.leverage,
       useBothSides:  process.env.USE_BOTH_SIDES === "true",
@@ -206,9 +207,10 @@ class BotEngine extends EventEmitter {
         rsiOversold:   this.config.rsiOversold,
         atrPeriod:     this.config.atrPeriod,
         atrMultiplier: this.config.atrMultiplier,
-        riskReward:    this.config.riskReward,
-        riskPerTrade:  this.config.riskPerTrade,
-        leverage:      this.config.leverage,
+        riskReward:      this.config.riskReward,
+        riskPerTrade:    this.config.riskPerTrade,
+        maxRiskPerTrade: this.config.maxRiskPerTrade,
+        leverage:        this.config.leverage,
         useBothSides:  this.config.useBothSides,
         interval:      this.config.interval,
         checkInterval: this.config.checkInterval,
@@ -778,24 +780,43 @@ class BotEngine extends EventEmitter {
     const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
 
-    // Cek minimum lot size Bitget per simbol (reject sebelum kirim ke exchange)
+    // ── Minimum lot size Bitget — flexible leverage guard ─────────────────────
+    // Jika size < minLot, coba pakai minLot dan hitung risk aktualnya.
+    // Kalau risk aktual masih ≤ maxRiskPerTrade → tetap buka (jangan lewatkan momentum).
+    // Kalau risk aktual > maxRiskPerTrade → skip (terlalu berisiko).
     const MIN_LOT = { BTCUSDT: 0.001, ETHUSDT: 0.01, SOLUSDT: 0.1, BNBUSDT: 0.01 };
     const sym     = (this.config.symbol || "").replace("/", "").replace(":USDT", "");
     const minLot  = MIN_LOT[sym] ?? 0.001;
-    if (size < minLot) {
-      this._log("warn",
-        `Size ${size} di bawah minimum lot ${minLot} ${sym} — modal kurang untuk trade ini, skip signal. ` +
-        `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk ${sym})`
-      );
-      return;
+
+    let finalSize    = size;
+    let actualRiskPct = this.config.riskPerTrade;
+
+    if (finalSize < minLot) {
+      const riskIfMinLot = (minLot * Math.abs(price - sl)) / availCap;
+      if (riskIfMinLot <= this.config.maxRiskPerTrade) {
+        finalSize    = minLot;
+        actualRiskPct = riskIfMinLot;
+        this._log("info",
+          `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym} → pakai min lot. ` +
+          `Risk aktual: ${(riskIfMinLot * 100).toFixed(2)}% (batas: ${(this.config.maxRiskPerTrade * 100).toFixed(0)}%)`
+        );
+      } else {
+        this._log("warn",
+          `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym}. ` +
+          `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(this.config.maxRiskPerTrade * 100).toFixed(0)}% → skip. ` +
+          `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk trade ${sym} normal)`
+        );
+        return;
+      }
     }
+    // Ganti variabel size → finalSize untuk sisa kode di bawah
 
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
 
     this._sep(`SINYAL ${signal}`);
     this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
-    this._log("trade", `Entry: $${price.toLocaleString()} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | Size: ${size}`);
+    this._log("trade", `Entry: $${price.toLocaleString()} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
     this._log("info",  `📊 Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
 
     const openTime = Date.now();
@@ -807,14 +828,14 @@ class BotEngine extends EventEmitter {
 
         // ── Buka posisi + embed preset SL/TP atomik (CCXT v4.5 Bitget V2) ──────
         const order = await this.client.openPosition(
-          this.config.symbol, side, size, "USDT", sl.toFixed(2), tp.toFixed(2)
+          this.config.symbol, side, finalSize, "USDT", sl.toFixed(2), tp.toFixed(2)
         );
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
         const pos = {
-          id: order?.orderId, side: signal, entry: price, sl, tp, size, openTime, atr, manualSLTP: false,
+          id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
           // SL+ tracking
-          remainingSize: size,
+          remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
           slCurrent:     sl,       // SL aktif saat ini (bergerak setelah milestone)
           m1: false,               // +1R milestone: partial 40%, SL → BEP
@@ -835,12 +856,12 @@ class BotEngine extends EventEmitter {
 
           for (let attempt = 1; attempt <= 3; attempt++) {
             if (!slOk) {
-              const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, size);
+              const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, finalSize);
               slOk = r.success;
               if (!slOk) slErr = r.message || "unknown";
             }
             if (!tpOk) {
-              const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, size);
+              const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, finalSize);
               tpOk = r.success;
               if (!tpOk) tpErr = r.message || "unknown";
             }
@@ -869,7 +890,7 @@ class BotEngine extends EventEmitter {
             symbol:     this.config.symbol,
             side:       signal,
             entryPrice: price,
-            sl, tp, size, openTime, atr,
+            sl, tp, size: finalSize, openTime, atr,
             dryRun:     false,
             orderId:    order?.orderId,
             indicators: indicatorSnapshot,
@@ -878,12 +899,12 @@ class BotEngine extends EventEmitter {
 
         this.state.openPositions.push(pos);
 
-        // Notifikasi WhatsApp — open posisi live
+        // Notifikasi Telegram — open posisi live
         notifier.notifyOpen({
           symbol:     this.config.symbol,
           side:       signal,
           entryPrice: price,
-          size,
+          size:       finalSize,
           sl, tp,
           leverage:   this.config.leverage,
           dryRun:     false,
@@ -893,12 +914,12 @@ class BotEngine extends EventEmitter {
       }
     } else {
       this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
-      this.state.capital -= availCap * this.config.riskPerTrade;
+      this.state.capital -= availCap * actualRiskPct;
 
       const pos = {
-        id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size, openTime, atr,
+        id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
         // SL+ tracking
-        remainingSize: size,
+        remainingSize: finalSize,
         R:             slDist,
         slCurrent:     sl,
         m1: false, m2: false, m3: false,
@@ -912,7 +933,7 @@ class BotEngine extends EventEmitter {
           symbol:     this.config.symbol,
           side:       signal,
           entryPrice: price,
-          sl, tp, size, openTime, atr,
+          sl, tp, size: finalSize, openTime, atr,
           dryRun:     true,
           orderId:    pos.id,
           indicators: indicatorSnapshot,
@@ -921,12 +942,12 @@ class BotEngine extends EventEmitter {
 
       this.state.openPositions.push(pos);
 
-      // Notifikasi WhatsApp — open posisi dry run
+      // Notifikasi Telegram — open posisi dry run
       notifier.notifyOpen({
         symbol:     this.config.symbol,
         side:       signal,
         entryPrice: price,
-        size,
+        size:       finalSize,
         sl, tp,
         leverage:   this.config.leverage,
         dryRun:     true,
