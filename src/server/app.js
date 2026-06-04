@@ -21,6 +21,7 @@ const { listStrategies }       = require("../domain/strategies");
 const createBotsRouter    = require("./routes/bots");
 const createMarketRouter  = require("./routes/market");
 const createHistoryRouter = require("./routes/history");
+const createHealthRouter  = require("./routes/health");
 const createLegacyRouter  = require("./routes/legacy");
 
 // ── Express + HTTP + WebSocket ─────────────────────────────────────────────
@@ -133,11 +134,16 @@ app.get("/health", (req, res) => {
 app.get("/api/strategies", (req, res) => res.json(listStrategies()));
 
 // Modular route groups
-const routeCtx = { bots, getBot, broadcast, sharedClient, SYMBOLS_LIST };
-app.use("/api/bots",    createBotsRouter(routeCtx));
-app.use("/api",         createMarketRouter(routeCtx));
-app.use("/api",         createHistoryRouter({ SYMBOLS_LIST }));
-app.use("/api",         createLegacyRouter(routeCtx));
+const routeCtx = { bots, getBot, broadcast, sharedClient, SYMBOLS_LIST, healthChecker: null, db };
+app.use("/api/bots",       createBotsRouter(routeCtx));
+app.use("/api",            createMarketRouter(routeCtx));
+app.use("/api",            createHistoryRouter({ SYMBOLS_LIST }));
+app.use("/api",            createLegacyRouter(routeCtx));
+
+// v1 API Routes — for PHASE 2 frontend integration
+app.use("/api/v1/bots",    createBotsRouter(routeCtx));
+app.use("/api/v1/health",  createHealthRouter(routeCtx));
+app.use("/api/v1/history", createHistoryRouter({ SYMBOLS_LIST }));
 
 // ── Server Start ────────────────────────────────────────────────────────────
 function getLocalIP() {
