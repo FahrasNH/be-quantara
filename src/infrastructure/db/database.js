@@ -96,6 +96,18 @@ db.exec(`
     updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Backtest history (menyimpan hasil backtest dari backtest.py)
+  CREATE TABLE IF NOT EXISTS backtest_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol        TEXT    NOT NULL,
+    timestamp     DATETIME NOT NULL DEFAULT (datetime('now')),
+    metrics       TEXT    NOT NULL,  -- JSON metrics
+    equity_curve  TEXT,              -- JSON array dari equity curve data
+    trades_data   TEXT,              -- JSON array dari trades detail
+    config        TEXT,              -- JSON backtest configuration
+    notes         TEXT
+  );
+
   -- Index untuk query umum
   CREATE INDEX IF NOT EXISTS idx_trades_session   ON trades(session_id);
   CREATE INDEX IF NOT EXISTS idx_trades_symbol    ON trades(symbol, open_time DESC);
@@ -104,6 +116,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_logs_session     ON logs(session_id);
   CREATE INDEX IF NOT EXISTS idx_candle_lookup    ON candle_cache(exchange, symbol, interval, timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_candle_cache_at  ON candle_cache(cached_at);
+  CREATE INDEX IF NOT EXISTS idx_backtest_symbol  ON backtest_history(symbol, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_backtest_time    ON backtest_history(timestamp DESC);
 `);
 
 // ── Migration: tambah kolom indicators jika belum ada ────────────────────────
@@ -290,6 +304,26 @@ const stmts = {
     WHERE session_id = ?
     ORDER BY timestamp DESC
     LIMIT ?
+  `),
+
+  // Backtest history
+  insertBacktestHistory: db.prepare(`
+    INSERT INTO backtest_history (symbol, metrics, equity_curve, trades_data, config, notes)
+    VALUES (@symbol, @metrics, @equity_curve, @trades_data, @config, @notes)
+  `),
+  getBacktestHistory: db.prepare(`
+    SELECT * FROM backtest_history
+    WHERE symbol = ?
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `),
+  getAllBacktestHistory: db.prepare(`
+    SELECT * FROM backtest_history
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `),
+  getBacktestHistoryById: db.prepare(`
+    SELECT * FROM backtest_history WHERE id = ?
   `),
 };
 
@@ -628,6 +662,54 @@ function setSetting(key, value) {
   _setSetting.run(key, String(value));
 }
 
+// ── Backtest History ──────────────────────────
+
+function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData, config, notes }) {
+  const result = stmts.insertBacktestHistory.run({
+    symbol:       symbol.toUpperCase(),
+    metrics:      JSON.stringify(metrics),
+    equity_curve: equityCurve ? JSON.stringify(equityCurve) : null,
+    trades_data:  tradesData ? JSON.stringify(tradesData) : null,
+    config:       config ? JSON.stringify(config) : null,
+    notes:        notes ?? null,
+  });
+  return result.lastInsertRowid;
+}
+
+function getBacktestHistory(symbol, limit = 20) {
+  const rows = stmts.getBacktestHistory.all(symbol.toUpperCase(), limit);
+  return rows.map(row => ({
+    ...row,
+    metrics:     safeParseJSON(row.metrics),
+    equity_curve: safeParseJSON(row.equity_curve),
+    trades_data:  safeParseJSON(row.trades_data),
+    config:       safeParseJSON(row.config),
+  }));
+}
+
+function getAllBacktestHistory(limit = 50) {
+  const rows = stmts.getAllBacktestHistory.all(limit);
+  return rows.map(row => ({
+    ...row,
+    metrics:     safeParseJSON(row.metrics),
+    equity_curve: safeParseJSON(row.equity_curve),
+    trades_data:  safeParseJSON(row.trades_data),
+    config:       safeParseJSON(row.config),
+  }));
+}
+
+function getBacktestHistoryById(id) {
+  const row = stmts.getBacktestHistoryById.get(id);
+  if (!row) return null;
+  return {
+    ...row,
+    metrics:     safeParseJSON(row.metrics),
+    equity_curve: safeParseJSON(row.equity_curve),
+    trades_data:  safeParseJSON(row.trades_data),
+    config:       safeParseJSON(row.config),
+  };
+}
+
 // ── Utils ─────────────────────────────────────
 
 function safeParseJSON(str) {
@@ -668,6 +750,11 @@ module.exports = {
   // user settings
   getSetting,
   setSetting,
+  // backtest history
+  insertBacktestHistory,
+  getBacktestHistory,
+  getAllBacktestHistory,
+  getBacktestHistoryById,
   // meta
   getDbPath,
   _db: db,

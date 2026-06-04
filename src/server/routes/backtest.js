@@ -6,6 +6,7 @@
 const express = require("express");
 const { asyncHandler } = require("../../infrastructure/middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
+const BacktestHistoryService = require("../services/BacktestHistoryService");
 
 module.exports = function createBacktestRouter(context) {
   const router = express.Router();
@@ -142,6 +143,110 @@ module.exports = function createBacktestRouter(context) {
       ok: true,
       timestamp: new Date().toISOString(),
       health,
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/save
+   * Save backtest result to history database
+   */
+  router.post("/save", asyncHandler(async (req, res) => {
+    const { symbol, metrics, equityCurve, tradesData, config, notes } = req.body;
+
+    if (!symbol || !metrics) {
+      return res.status(400).json({
+        ok: false,
+        error: "symbol and metrics are required",
+      });
+    }
+
+    const id = BacktestHistoryService.saveBacktest(
+      symbol,
+      metrics,
+      equityCurve,
+      tradesData,
+      config,
+      notes
+    );
+
+    res.json({
+      ok: true,
+      id,
+      message: `Backtest result saved for ${symbol}`,
+    });
+  }));
+
+  /**
+   * GET /api/v1/backtest/history
+   * Get backtest history (with optional symbol filter)
+   * Query params: symbol (optional), limit (optional, default 20)
+   */
+  router.get("/history", asyncHandler(async (req, res) => {
+    const { symbol, limit = 20 } = req.query;
+    const pageLimit = Math.min(parseInt(limit) || 20, 100);
+
+    let data;
+    if (symbol) {
+      data = BacktestHistoryService.getHistory(symbol, pageLimit);
+    } else {
+      data = BacktestHistoryService.getAllHistory(pageLimit);
+    }
+
+    res.json({
+      ok: true,
+      symbol: symbol || "all",
+      count: data.length,
+      data,
+    });
+  }));
+
+  /**
+   * GET /api/v1/backtest/history/:id
+   * Get specific backtest by ID
+   */
+  router.get("/history/:id", asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const record = BacktestHistoryService.getById(parseInt(id));
+
+    if (!record) {
+      return res.status(404).json({
+        ok: false,
+        error: `Backtest history with ID ${id} not found`,
+      });
+    }
+
+    res.json({
+      ok: true,
+      data: record,
+    });
+  }));
+
+  /**
+   * GET /api/v1/backtest/history/:symbol/statistics
+   * Get statistics for backtest history of a symbol
+   */
+  router.get("/history/:symbol/statistics", asyncHandler(async (req, res) => {
+    const { symbol } = req.params;
+    const stats = BacktestHistoryService.getStatistics(symbol);
+
+    res.json({
+      ok: true,
+      statistics: stats,
+    });
+  }));
+
+  /**
+   * GET /api/v1/backtest/history/compare/:id1/:id2
+   * Compare two backtest results
+   */
+  router.get("/history/compare/:id1/:id2", asyncHandler(async (req, res) => {
+    const { id1, id2 } = req.params;
+
+    const comparison = BacktestHistoryService.compareBacktests(parseInt(id1), parseInt(id2));
+
+    res.json({
+      ok: true,
+      comparison,
     });
   }));
 

@@ -1,0 +1,172 @@
+/**
+ * BacktestHistoryService.js
+ * Service untuk mengelola penyimpanan dan pengambilan backtest history dari database
+ */
+
+const db = require("../../infrastructure/db/database");
+
+class BacktestHistoryService {
+  /**
+   * Simpan hasil backtest ke database
+   * @param {string} symbol - Trading pair (e.g., "BTCUSDT")
+   * @param {object} metrics - Backtest metrics (win_rate, profit_factor, etc)
+   * @param {array} equityCurve - Array of equity data points
+   * @param {array} tradesData - Array of all trades
+   * @param {object} config - Optional backtest configuration
+   * @param {string} notes - Optional notes/description
+   * @returns {number} - ID of inserted record
+   */
+  static saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null) {
+    try {
+      const id = db.insertBacktestHistory({
+        symbol,
+        metrics,
+        equityCurve,
+        tradesData,
+        config,
+        notes,
+      });
+
+      console.log(`[BacktestHistory] Saved backtest for ${symbol} with ID ${id}`);
+      return id;
+    } catch (err) {
+      console.error(`[BacktestHistory] Error saving backtest: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Ambil history backtest untuk symbol tertentu
+   * @param {string} symbol - Trading pair
+   * @param {number} limit - Max records to return
+   * @returns {array} - Array of backtest history records
+   */
+  static getHistory(symbol, limit = 20) {
+    try {
+      const records = db.getBacktestHistory(symbol, limit);
+      return records;
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching history for ${symbol}: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Ambil semua history dari semua symbols
+   * @param {number} limit - Max records to return
+   * @returns {array} - Array of all backtest history records
+   */
+  static getAllHistory(limit = 50) {
+    try {
+      const records = db.getAllBacktestHistory(limit);
+      return records;
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching all history: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Ambil detail history berdasarkan ID
+   * @param {number} id - Record ID
+   * @returns {object|null} - Backtest history record atau null
+   */
+  static getById(id) {
+    try {
+      const record = db.getBacktestHistoryById(id);
+      return record;
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching history by ID ${id}: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Hitung statistik dari backtest history untuk symbol
+   * @param {string} symbol - Trading pair
+   * @returns {object} - Statistics object
+   */
+  static getStatistics(symbol) {
+    try {
+      const history = this.getHistory(symbol, 100);
+
+      if (history.length === 0) {
+        return {
+          symbol,
+          total_backtests: 0,
+          avg_win_rate: 0,
+          avg_profit_factor: 0,
+          avg_roi: 0,
+          best_roi: 0,
+          worst_roi: 0,
+        };
+      }
+
+      const metrics = history.map((h) => h.metrics);
+      const winRates = metrics.map((m) => m.win_rate_pct || 0);
+      const profitFactors = metrics.map((m) => m.profit_factor || 0);
+      const rois = metrics.map((m) => m.roi_pct || 0);
+
+      return {
+        symbol,
+        total_backtests: history.length,
+        avg_win_rate: (winRates.reduce((a, b) => a + b, 0) / winRates.length).toFixed(2),
+        avg_profit_factor: (profitFactors.reduce((a, b) => a + b, 0) / profitFactors.length).toFixed(3),
+        avg_roi: (rois.reduce((a, b) => a + b, 0) / rois.length).toFixed(2),
+        best_roi: Math.max(...rois).toFixed(2),
+        worst_roi: Math.min(...rois).toFixed(2),
+        latest_timestamp: history[0].timestamp,
+      };
+    } catch (err) {
+      console.error(`[BacktestHistory] Error calculating statistics: ${err.message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Bandingkan dua backtest runs
+   * @param {number} id1 - First backtest ID
+   * @param {number} id2 - Second backtest ID
+   * @returns {object} - Comparison object
+   */
+  static compareBacktests(id1, id2) {
+    try {
+      const bt1 = this.getById(id1);
+      const bt2 = this.getById(id2);
+
+      if (!bt1 || !bt2) {
+        throw new Error("One or both backtest records not found");
+      }
+
+      const m1 = bt1.metrics;
+      const m2 = bt2.metrics;
+
+      return {
+        backtest_1: {
+          id: bt1.id,
+          symbol: bt1.symbol,
+          timestamp: bt1.timestamp,
+          metrics: m1,
+        },
+        backtest_2: {
+          id: bt2.id,
+          symbol: bt2.symbol,
+          timestamp: bt2.timestamp,
+          metrics: m2,
+        },
+        comparison: {
+          win_rate_diff: ((m2.win_rate_pct || 0) - (m1.win_rate_pct || 0)).toFixed(2),
+          profit_factor_diff: ((m2.profit_factor || 0) - (m1.profit_factor || 0)).toFixed(3),
+          roi_diff: ((m2.roi_pct || 0) - (m1.roi_pct || 0)).toFixed(2),
+          net_pnl_diff: ((m2.net_pnl || 0) - (m1.net_pnl || 0)).toFixed(2),
+          max_drawdown_diff: ((m2.max_drawdown_pct || 0) - (m1.max_drawdown_pct || 0)).toFixed(2),
+        },
+      };
+    } catch (err) {
+      console.error(`[BacktestHistory] Error comparing backtests: ${err.message}`);
+      throw err;
+    }
+  }
+}
+
+module.exports = BacktestHistoryService;
