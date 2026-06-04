@@ -7,6 +7,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "backtest": "node scripts/backtest.js",
+    "test": "node test/indicators.test.js",
+    "test:watch": "nodemon test/indicators.test.js",
     "lint": "eslint src index.js server.js",
     "lint:fix": "eslint src index.js server.js --fix",
     "format": "prettier --write \"src/**/*.js\" index.js server.js"
