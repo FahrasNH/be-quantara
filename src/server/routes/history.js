@@ -10,7 +10,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/sessions", (req, res) => {
     try {
-      const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
+      const limit  = Math.min(parseInt(req.query.limit) || 20, 500);
       const symbol = req.query.symbol || null;
       res.json(db.getSessions(limit, symbol));
     } catch (err) {

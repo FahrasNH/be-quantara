@@ -47,8 +47,9 @@ class BotEngine extends EventEmitter {
       maxPositions:  parseInt(process.env.MAX_OPEN_POSITIONS)|| 1,
       leverage:      parseInt(process.env.LEVERAGE)        || strat.leverage,
       useBothSides:  process.env.USE_BOTH_SIDES === "true",
-      // Interval dari strategi sebagai default (bisa di-override .env)
-      interval:      process.env.CANDLE_INTERVAL           || strat.interval || "15m",
+      // Interval: strategi sebagai prioritas utama. .env hanya fallback jika strategi tidak mendefinisikan interval.
+      // Ini mencegah CANDLE_INTERVAL di .env meng-override timeframe yang seharusnya berbeda per strategi.
+      interval:      strat.interval || process.env.CANDLE_INTERVAL || "15m",
       checkInterval: strat.checkInterval || parseInt(process.env.CHECK_INTERVAL_MS) || 60000,
       dryRun:        process.env.DRY_RUN !== "false",
       // Strategy info
@@ -634,14 +635,15 @@ class BotEngine extends EventEmitter {
         } else {
           // ── STEP 2: Deteksi sinyal entry di TF utama ────────────────────────
           const signal = detectSignal(indicators, lastIdx, {
-            rsiOverbought: this.config.rsiOverbought,
-            rsiOversold:   this.config.rsiOversold,
-            rsiLongMin:    this.config.rsiLongMin,
-            rsiLongMax:    this.config.rsiLongMax,
-            rsiShortMin:   this.config.rsiShortMin,
-            rsiShortMax:   this.config.rsiShortMax,
-            useBothSides:  this.config.useBothSides,
-            signalType:    this.config.signalType,
+            rsiOverbought:    this.config.rsiOverbought,
+            rsiOversold:      this.config.rsiOversold,
+            rsiLongMin:       this.config.rsiLongMin,
+            rsiLongMax:       this.config.rsiLongMax,
+            rsiShortMin:      this.config.rsiShortMin,
+            rsiShortMax:      this.config.rsiShortMax,
+            useBothSides:     this.config.useBothSides,
+            signalType:       this.config.signalType,
+            volSmaMultiplier: this.config.volSmaMultiplier,  // A=1.0, B=1.0, C=0.8
           });
 
           // ── STEP 3: Saring sinyal berdasarkan HTF trend ─────────────────────

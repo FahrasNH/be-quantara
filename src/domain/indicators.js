@@ -264,11 +264,12 @@ function detectRsiPullbackBounce(rsi, i, direction, opts = {}) {
  */
 function detectSignalPdfScalping(indicators, i, config = {}) {
   const {
-    useBothSides  = false,
-    rsiLongMin    = 50,
-    rsiLongMax    = 70,
-    rsiShortMin   = 30,
-    rsiShortMax   = 50,
+    useBothSides     = false,
+    rsiLongMin       = 50,
+    rsiLongMax       = 70,
+    rsiShortMin      = 30,
+    rsiShortMax      = 50,
+    volSmaMultiplier = 1.0,   // dari strategies.js — Strategy A default 1.0
   } = config;
 
   const { emaFast, emaSlow, rsi, volSMA, volumes, closes } = indicators;
@@ -282,7 +283,7 @@ function detectSignalPdfScalping(indicators, i, config = {}) {
   const rsiCurr = rsi[i];
   const vol     = volumes[i];
   const volAvg  = volSMA[i];
-  const volUp   = !volAvg || vol > volAvg * 0.9;
+  const volUp   = !volAvg || vol > volAvg * volSmaMultiplier;
 
   // RSI pullback pattern:
   //   LONG  → RSI pullback ke 50-60 lalu naik lagi (dari zona bullish > 60)
@@ -335,11 +336,12 @@ function detectSignalPdfScalping(indicators, i, config = {}) {
  */
 function detectSignalPdfDayTrading(indicators, i, config = {}) {
   const {
-    useBothSides  = false,
-    rsiLongMin    = 50,
-    rsiLongMax    = 70,
-    rsiShortMin   = 30,
-    rsiShortMax   = 50,
+    useBothSides     = false,
+    rsiLongMin       = 50,
+    rsiLongMax       = 70,
+    rsiShortMin      = 30,
+    rsiShortMax      = 50,
+    volSmaMultiplier = 1.0,   // dari strategies.js — Strategy B default 1.0
   } = config;
 
   const { emaFast, emaSlow, emaTrend, rsi, volSMA, volumes, closes } = indicators;
@@ -354,7 +356,7 @@ function detectSignalPdfDayTrading(indicators, i, config = {}) {
   const rsiCurr  = rsi[i];
   const vol      = volumes[i];
   const volAvg   = volSMA[i];
-  const volUp    = !volAvg || vol > volAvg * 0.9;
+  const volUp    = !volAvg || vol > volAvg * volSmaMultiplier;
 
   // Harga di atas/bawah EMA trend (EMA50)
   const trendBullish = !ema50 || price > ema50;
@@ -423,14 +425,15 @@ function detectSignalPdfDayTrading(indicators, i, config = {}) {
  */
 function detectSignalPdfSwing(indicators, i, config = {}) {
   const {
-    useBothSides  = false,
-    rsiLongMin    = 40,
-    rsiLongMax    = 60,
-    rsiShortMin   = 40,
-    rsiShortMax   = 60,
+    useBothSides     = false,
+    rsiLongMin       = 40,
+    rsiLongMax       = 60,
+    rsiShortMin      = 40,
+    rsiShortMax      = 60,
+    volSmaMultiplier = 0.8,   // dari strategies.js — Strategy C default 0.8
   } = config;
 
-  const { emaFast, emaSlow, emaTrend, rsi, closes } = indicators;
+  const { emaFast, emaSlow, emaTrend, rsi, closes, volumes, volSMA } = indicators;
 
   if (i < 3) return null;
   if (!emaFast[i] || !emaSlow[i] || !rsi[i] || !rsi[i-1] || !rsi[i-2]) return null;
@@ -441,6 +444,11 @@ function detectSignalPdfSwing(indicators, i, config = {}) {
   const ema50     = emaSlow[i];   // EMA50
   const ema200    = emaTrend ? emaTrend[i] : null;
   const rsiCurr   = rsi[i];
+
+  // Volume filter (0.8× SMA — lebih longgar dari A/B karena swing TF panjang)
+  const vol    = volumes ? volumes[i] : null;
+  const volAvg = volSMA  ? volSMA[i]  : null;
+  const volUp  = !volAvg || !vol || vol > volAvg * volSmaMultiplier;
 
   // Trend filter EMA200
   const aboveEma200 = !ema200 || price > ema200;
@@ -472,7 +480,8 @@ function detectSignalPdfSwing(indicators, i, config = {}) {
     rsiCurr >= rsiLongMin &&  // RSI tidak oversold ekstrem
     rsiCurr <= rsiLongMax &&  // RSI tidak overbought (< 60)
     rsiPullbackLong &&        // Pola pullback RSI ke zona sehat lalu naik
-    candleBullish             // Candle konfirmasi bullish
+    candleBullish &&          // Candle konfirmasi bullish
+    volUp                     // Volume ≥ 0.8× SMA (konfirmasi momentum)
   ) {
     return "LONG";
   }
@@ -486,7 +495,8 @@ function detectSignalPdfSwing(indicators, i, config = {}) {
     rsiCurr >= rsiShortMin && // RSI tidak oversold ekstrem
     rsiCurr <= rsiShortMax && // RSI tidak overbought (pullback ke zona bearish)
     rsiPullbackShort &&       // Pola pullback RSI ke zona resistansi lalu turun
-    candleBearish             // Candle konfirmasi bearish
+    candleBearish &&          // Candle konfirmasi bearish
+    volUp                     // Volume ≥ 0.8× SMA (konfirmasi momentum)
   ) {
     return "SHORT";
   }

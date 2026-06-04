@@ -160,7 +160,9 @@ const stmts = {
     WHERE id = @id
   `),
   getSession: db.prepare(`SELECT * FROM bot_sessions WHERE id = ?`),
-  getSessions: db.prepare(`
+  // getSessions diakses via fungsi getSessions() di bawah — bukan langsung
+  // (statement ini tidak dipakai langsung, diganti dengan dynamic query)
+  _getSessionsBase: db.prepare(`
     SELECT
       s.*,
       COALESCE(t.actual_pnl,    0) AS actual_pnl,
@@ -368,8 +370,39 @@ function recalcSessionStats(sessionId) {
   } catch { /* jangan crash */ }
 }
 
-function getSessions(limit = 20) {
-  return stmts.getSessions.all(limit).map(parseSession);
+/**
+ * @param {number}      limit  — max session yang dikembalikan (default 20)
+ * @param {string|null} symbol — filter per simbol, misal "BTCUSDT" (null = semua)
+ */
+function getSessions(limit = 20, symbol = null) {
+  if (symbol) {
+    // Query dengan filter symbol
+    return db.prepare(`
+      SELECT
+        s.*,
+        COALESCE(t.actual_pnl,    0) AS actual_pnl,
+        COALESCE(t.actual_wins,   0) AS actual_wins,
+        COALESCE(t.actual_losses, 0) AS actual_losses,
+        COALESCE(t.actual_total,  0) AS actual_total
+      FROM bot_sessions s
+      LEFT JOIN (
+        SELECT
+          session_id,
+          SUM(pnl)                                        AS actual_pnl,
+          SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)      AS actual_wins,
+          SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)      AS actual_losses,
+          COUNT(*)                                        AS actual_total
+        FROM trades
+        WHERE close_time IS NOT NULL AND pnl IS NOT NULL
+        GROUP BY session_id
+      ) t ON t.session_id = s.id
+      WHERE s.symbol = ?
+      ORDER BY s.started_at DESC
+      LIMIT ?
+    `).all(symbol.toUpperCase(), limit).map(parseSession);
+  }
+  // Semua symbol
+  return stmts._getSessionsBase.all(limit).map(parseSession);
 }
 
 function getSession(id) {
