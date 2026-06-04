@@ -4,20 +4,22 @@
   "description": "Quantara — Automated Trading Bot for Bitget",
   "main": "index.js",
   "scripts": {
-    "start":    "node index.js",
-    "dev":      "nodemon index.js",
+    "start": "node index.js",
+    "dev": "nodemon index.js",
     "backtest": "node scripts/backtest.js",
-    "lint":     "eslint src index.js server.js",
+    "lint": "eslint src index.js server.js",
     "lint:fix": "eslint src index.js server.js --fix",
-    "format":   "prettier --write \"src/**/*.js\" index.js server.js"
+    "format": "prettier --write \"src/**/*.js\" index.js server.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
     "better-sqlite3": "^12.10.0",
     "ccxt": "^4.0.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "helmet": "^8.2.0",
     "ws": "^8.16.0"
   },
   "devDependencies": {

@@ -3,9 +3,11 @@
 // Mendukung hingga 3 koin secara bersamaan.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const express = require("express");
-const cors    = require("cors");
-const http    = require("http");
+const express     = require("express");
+const cors        = require("cors");
+const compression = require("compression");
+const helmet      = require("helmet");
+const http        = require("http");
 const { WebSocketServer } = require("ws");
 const os = require("os");
 
@@ -22,8 +24,23 @@ const createHistoryRouter = require("./routes/history");
 const createLegacyRouter  = require("./routes/legacy");
 
 // ── Express + HTTP + WebSocket ─────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  "http://187.77.135.156",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
+
 const app    = express();
-app.use(cors());
+app.use(helmet({ contentSecurityPolicy: false })); // CSP off — agar WS & inline style tetap jalan
+app.use(compression());
+app.use(cors({
+  origin: (origin, cb) => {
+    // Izinkan request tanpa origin (curl, server-to-server) dan origin yang terdaftar
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) cb(null, true);
+    else cb(new Error(`CORS: origin tidak diizinkan — ${origin}`));
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+}));
 app.use(express.json());
 
 const server = http.createServer(app);

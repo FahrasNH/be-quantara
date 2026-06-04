@@ -5,12 +5,21 @@
 const { Router } = require("express");
 const db = require("../../infrastructure/db/database");
 
+// parseInt yang aman — kembalikan `def` jika nilai tidak finite
+const safeInt = (val, def = 0) => {
+  const n = parseInt(val, 10);
+  return Number.isFinite(n) ? n : def;
+};
+
+// Rate-limit sederhana untuk endpoint mahal
+let lastRecalc = 0;
+
 module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   const router = Router();
 
   router.get("/sessions", (req, res) => {
     try {
-      const limit  = Math.min(parseInt(req.query.limit) || 20, 500);
+      const limit  = Math.min(safeInt(req.query.limit, 20), 500);
       const symbol = req.query.symbol || null;
       res.json(db.getSessions(limit, symbol));
     } catch (err) {
@@ -20,7 +29,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/sessions/:id", (req, res) => {
     try {
-      const session = db.getSession(parseInt(req.params.id));
+      const session = db.getSession(safeInt(req.params.id, 0));
       if (!session) return res.status(404).json({ error: "Session tidak ditemukan" });
       res.json(session);
     } catch (err) {
@@ -30,9 +39,9 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/trades", (req, res) => {
     try {
-      const sessionId = req.query.session_id ? parseInt(req.query.session_id) : null;
+      const sessionId = req.query.session_id ? safeInt(req.query.session_id, 0) : null;
       const symbol    = req.query.symbol || null;
-      const limit     = Math.min(parseInt(req.query.limit) || 100, 1000);
+      const limit     = Math.min(safeInt(req.query.limit, 100), 1000);
       res.json(db.getTrades({ sessionId, symbol, limit }));
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -41,7 +50,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/trades/stats/:sessionId", (req, res) => {
     try {
-      res.json(db.getTradeStats(parseInt(req.params.sessionId)));
+      res.json(db.getTradeStats(safeInt(req.params.sessionId, 0)));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -49,7 +58,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/equity/:sessionId", (req, res) => {
     try {
-      res.json(db.getEquity(parseInt(req.params.sessionId)));
+      res.json(db.getEquity(safeInt(req.params.sessionId, 0)));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -67,8 +76,8 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/db/logs/:sessionId", (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
-      res.json(db.getLogs(parseInt(req.params.sessionId), limit));
+      const limit = Math.min(safeInt(req.query.limit, 200), 1000);
+      res.json(db.getLogs(safeInt(req.params.sessionId, 0), limit));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -86,7 +95,14 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   // Hitung ulang wins/losses/total_trades/final_capital dari trade records aktual.
   // Dipakai satu kali untuk memperbaiki data historis yang salah akibat
   // bug cross-session (trade buka di sesi A, tutup di sesi B).
+  // Rate-limit: maks 1x per 60 detik agar tidak membebani DB.
   router.post("/db/recalc-sessions", (req, res) => {
+    const now = Date.now();
+    if (now - lastRecalc < 60_000) {
+      const wait = Math.ceil((60_000 - (now - lastRecalc)) / 1000);
+      return res.status(429).json({ error: `Tunggu ${wait} detik sebelum recalc berikutnya.` });
+    }
+    lastRecalc = now;
     try {
       const sessions = db.getSessions(500);
       const results  = [];
@@ -131,7 +147,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   router.get("/insights", (req, res) => {
     try {
       const symbol  = req.query.symbol  || null;
-      const limit   = Math.min(parseInt(req.query.limit) || 500, 5000);
+      const limit   = Math.min(safeInt(req.query.limit, 500), 5000);
       const dryRun  = req.query.dry_run === undefined ? null
         : req.query.dry_run === "true";
       const format  = req.query.format || "json";

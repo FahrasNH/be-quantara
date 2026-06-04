@@ -85,9 +85,15 @@ function calcATR(highs, lows, closes, period = 14) {
 }
 
 function calcSMA(values, period) {
+  if (values.length < period) return new Array(values.length).fill(null);
   const result = new Array(period - 1).fill(null);
-  for (let i = period - 1; i < values.length; i++) {
-    const sum = values.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0);
+  // Seed: jumlah pertama `period` nilai
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += values[i];
+  result.push(sum / period);
+  // Sliding window O(n): tambah nilai baru, kurangi nilai lama
+  for (let i = period; i < values.length; i++) {
+    sum += values[i] - values[i - period];
     result.push(sum / period);
   }
   return result;
@@ -288,12 +294,13 @@ function detectSignalPdfScalping(indicators, i, config = {}) {
   // RSI pullback pattern:
   //   LONG  → RSI pullback ke 50-60 lalu naik lagi (dari zona bullish > 60)
   //   SHORT → RSI pullback ke 40-50 lalu turun lagi (dari zona bearish < 40)
-  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG",  {
+  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG", {
     pullbackZoneLow: rsiLongMin, pullbackZoneHigh: 63, lookback: 5, minBounce: 1.5,
   });
-  const rsiPullbackShort = detectRsiPullbackBounce(rsi, i, "SHORT", {
-    lookback: 5, minBounce: 1.5,
-  });
+  // Skip kalkulasi SHORT jika useBothSides=false (hemat CPU)
+  const rsiPullbackShort = useBothSides
+    ? detectRsiPullbackBounce(rsi, i, "SHORT", { lookback: 5, minBounce: 1.5 })
+    : false;
 
   // ── LONG ──────────────────────────────────────────────────────────────────
   // EMA9>EMA21 (trend) + price>EMA9 (harga di atas trend) + RSI pullback zone
@@ -365,12 +372,13 @@ function detectSignalPdfDayTrading(indicators, i, config = {}) {
   // RSI pullback pattern (zona lebih ketat untuk day trading):
   //   LONG  → RSI pullback ke zona 50-65, lalu naik lagi (dari > 65)
   //   SHORT → RSI pullback ke zona 35-50, lalu turun lagi (dari < 35)
-  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG",  {
+  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG", {
     pullbackZoneLow: rsiLongMin, pullbackZoneHigh: 65, lookback: 6, minBounce: 2,
   });
-  const rsiPullbackShort = detectRsiPullbackBounce(rsi, i, "SHORT", {
-    lookback: 6, minBounce: 2,
-  });
+  // Skip kalkulasi SHORT jika useBothSides=false (hemat CPU)
+  const rsiPullbackShort = useBothSides
+    ? detectRsiPullbackBounce(rsi, i, "SHORT", { lookback: 6, minBounce: 2 })
+    : false;
 
   // ── LONG ──────────────────────────────────────────────────────────────────
   // EMA9>EMA21 + price di atas EMA50 + RSI pullback ke 50-65 lalu naik
@@ -461,16 +469,16 @@ function detectSignalPdfSwing(indicators, i, config = {}) {
   // RSI pullback pattern (zona swing 40–60):
   //   LONG  → RSI pullback ke zona 40-58, lalu naik kembali (momentum resume)
   //   SHORT → RSI pullback ke zona 42-60, lalu turun kembali
-  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG",  {
+  const rsiPullbackLong  = detectRsiPullbackBounce(rsi, i, "LONG", {
     pullbackZoneLow: rsiLongMin,   // 40
     pullbackZoneHigh: 58,
     lookback: 8,
     minBounce: 1.5,
   });
-  const rsiPullbackShort = detectRsiPullbackBounce(rsi, i, "SHORT", {
-    lookback: 8,
-    minBounce: 1.5,
-  });
+  // Skip kalkulasi SHORT jika useBothSides=false (hemat CPU)
+  const rsiPullbackShort = useBothSides
+    ? detectRsiPullbackBounce(rsi, i, "SHORT", { lookback: 8, minBounce: 1.5 })
+    : false;
 
   // ── LONG: Trend besar bullish + RSI pullback ke 40-58 lalu naik + candle confirm ──
   if (

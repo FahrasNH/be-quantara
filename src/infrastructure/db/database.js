@@ -99,9 +99,11 @@ db.exec(`
   -- Index untuk query umum
   CREATE INDEX IF NOT EXISTS idx_trades_session   ON trades(session_id);
   CREATE INDEX IF NOT EXISTS idx_trades_symbol    ON trades(symbol, open_time DESC);
+  CREATE INDEX IF NOT EXISTS idx_trades_close     ON trades(session_id, close_time);
   CREATE INDEX IF NOT EXISTS idx_equity_session   ON equity_snapshots(session_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_logs_session     ON logs(session_id);
   CREATE INDEX IF NOT EXISTS idx_candle_lookup    ON candle_cache(exchange, symbol, interval, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_candle_cache_at  ON candle_cache(cached_at);
 `);
 
 // ── Migration: tambah kolom indicators jika belum ada ────────────────────────
@@ -548,7 +550,9 @@ function getEquity(sessionId) {
  * Opsional filter by mode ("live" | "dry_run") agar tidak campur.
  */
 function getAllEquity(mode = "live") {
-  const modeFilter = mode ? `AND bs.mode = '${mode}'` : "";
+  // Gunakan parameterized query — hindari SQL injection dari nilai `mode`
+  const modeFilter = mode ? "AND bs.mode = ?" : "";
+  const params     = mode ? [mode] : [];
   return db.prepare(`
     SELECT es.timestamp, es.capital, es.price, es.open_positions,
            bs.symbol, bs.mode
@@ -556,7 +560,7 @@ function getAllEquity(mode = "live") {
     JOIN   bot_sessions     bs ON bs.id = es.session_id
     WHERE  1=1 ${modeFilter}
     ORDER  BY es.timestamp ASC
-  `).all();
+  `).all(...params);
 }
 
 // ── Candle cache ──────────────────────────────

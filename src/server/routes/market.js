@@ -4,6 +4,12 @@
 
 const { Router } = require("express");
 
+// parseInt yang aman — kembalikan `def` jika nilai tidak finite
+const safeInt = (val, def = 0) => {
+  const n = parseInt(val, 10);
+  return Number.isFinite(n) ? n : def;
+};
+
 const INTERVAL_MS = {
   "1m":  60_000,      "3m":  180_000,    "5m":  300_000,
   "15m": 900_000,     "30m": 1_800_000,  "1h":  3_600_000,
@@ -57,7 +63,7 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
       const sym      = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
       const bot      = getBot(sym) || [...bots.values()][0];
       const interval = req.query.interval || bot.config.interval;
-      const limit    = Math.min(parseInt(req.query.limit) || 200, 500);
+      const limit    = Math.min(safeInt(req.query.limit, 200), 500);
       res.json(await sharedClient.getCandles(sym, interval, limit));
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -69,7 +75,7 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
     try {
       const symbol    = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
       const timeframe = req.query.interval || "1d";
-      const total     = Math.min(parseInt(req.query.limit) || 500, 1000);
+      const total     = Math.min(safeInt(req.query.limit, 500), 1000);
       const PAGE      = 200;
       const msPerBar  = INTERVAL_MS[timeframe] || 86_400_000;
       const allCandles = [];

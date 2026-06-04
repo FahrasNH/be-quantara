@@ -710,8 +710,9 @@ class BotEngine extends EventEmitter {
         } catch { /* silent — pakai nilai sebelumnya */ }
       }
 
-      // Snapshot equity ke DB setiap tick
-      if (this.sessionId) {
+      // Snapshot equity ke DB setiap 5 ticks (throttle — bukan setiap tick)
+      // Strat A (30s): 576 row/hari per bot vs 2880 sebelumnya
+      if (this.sessionId && this.state.checkCount % 5 === 0) {
         try {
           db.snapshotEquity({
             sessionId:     this.sessionId,
