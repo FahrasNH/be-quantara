@@ -255,18 +255,39 @@ class BitgetCCXTClient {
     const closeSide = isLong ? "sell" : "buy";
     const trigPrice = parseFloat(triggerPrice);
 
-    // Format symbol untuk CCXT (BTC/USDT:USDT)
+    // Format symbol
     let marketSymbol = symbol;
+    let rawSymbol    = symbol; // e.g. SOLUSDT (tanpa slash)
     if (!marketSymbol.includes("/")) {
-      const base = marketSymbol.slice(0, -4);
+      const base   = marketSymbol.slice(0, -4);
       marketSymbol = `${base}/USDT:USDT`;
+    } else {
+      rawSymbol = symbol.replace("/", "").replace(":USDT", "");
     }
 
     const errors = [];
 
+    // ── Pendekatan 0: Bitget V2 direct — pos_loss / pos_profit ───────────────
+    // Ini adalah tipe yang sama dengan preset SL/TP yang di-embed saat openPosition.
+    // Memanggil endpoint ini akan REPLACE preset stop yang ada (tidak konflik).
+    try {
+      await this.exchange.privateMixPostV2MixOrderPlaceTpslOrder({
+        symbol:        rawSymbol,
+        productType:   "USDT-FUTURES",
+        marginCoin,
+        planType:      isTP ? "pos_profit" : "pos_loss",
+        triggerPrice:  String(trigPrice),
+        triggerType:   "mark_price",
+        holdSide,
+        size:          String(size),
+        clientOid:     `tpsl_${Date.now()}`,
+      });
+      return { success: true, method: "bitgetV2PosTPSL" };
+    } catch (e0) {
+      errors.push(`bitgetV2PosTPSL: ${e0.message}`);
+    }
+
     // ── Pendekatan 1: CCXT V2 — stopLossPrice / takeProfitPrice ──────────────
-    // CCXT v4.5+ Bitget secara internal memanggil privateMixPostV2MixOrderPlaceTpslOrder
-    // planType otomatis: pos_loss (SL) atau pos_profit (TP)
     try {
       const priceKey = isTP ? "takeProfitPrice" : "stopLossPrice";
       const order = await this.exchange.createOrder(
@@ -312,21 +333,23 @@ class BitgetCCXTClient {
       errors.push(`ccxtStop: ${e3.message}`);
     }
 
-    // Semua gagal — return error detail agar bisa di-log oleh bot
     const detail = errors.join(" | ");
     console.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
     return { success: false, message: detail };
   }
 
   async cancelAllPlanOrders(symbol, planType = "profit_loss", marginCoin = "USDT") {
+    let marketSymbol = symbol;
+    if (!marketSymbol.includes("/")) {
+      const base = marketSymbol.slice(0, -4);
+      marketSymbol = `${base}/USDT:USDT`;
+    }
+
     try {
-      let marketSymbol = symbol;
-      if (!marketSymbol.includes("/")) {
-        const base = marketSymbol.slice(0, -4);
-        marketSymbol = `${base}/USDT:USDT`;
-      }
       return await this.exchange.cancelAllOrders(marketSymbol);
     } catch (err) {
+      // 22001 = no order to cancel — bukan error kritis, return sukses
+      if (err.message && err.message.includes("22001")) return { success: true, skipped: true };
       throw new Error(`cancelAllPlanOrders error: ${err.message}`);
     }
   }
