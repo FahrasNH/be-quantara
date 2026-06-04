@@ -510,6 +510,22 @@ function getEquity(sessionId) {
   return stmts.getEquity.all(sessionId);
 }
 
+/**
+ * Semua equity snapshot dari SEMUA sesi, diurutkan waktu (untuk kurva akumulatif).
+ * Opsional filter by mode ("live" | "dry_run") agar tidak campur.
+ */
+function getAllEquity(mode = "live") {
+  const modeFilter = mode ? `AND bs.mode = '${mode}'` : "";
+  return db.prepare(`
+    SELECT es.timestamp, es.capital, es.price, es.open_positions,
+           bs.symbol, bs.mode
+    FROM   equity_snapshots es
+    JOIN   bot_sessions     bs ON bs.id = es.session_id
+    WHERE  1=1 ${modeFilter}
+    ORDER  BY es.timestamp ASC
+  `).all();
+}
+
 // ── Candle cache ──────────────────────────────
 
 function cacheCandles(exchange, symbol, interval, candles) {
@@ -604,6 +620,7 @@ module.exports = {
   // equity
   snapshotEquity,
   getEquity,
+  getAllEquity,
   // candles
   cacheCandles,
   getCachedCandles,

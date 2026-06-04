@@ -55,6 +55,16 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
   });
 
+  // Equity curve kumulatif semua sesi (untuk tampilan "All-Time")
+  router.get("/equity-all", (req, res) => {
+    try {
+      const mode = req.query.mode || "live"; // default live saja
+      res.json(db.getAllEquity(mode));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   router.get("/db/logs/:sessionId", (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
