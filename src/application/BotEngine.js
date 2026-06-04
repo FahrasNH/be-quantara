@@ -993,28 +993,53 @@ class BotEngine extends EventEmitter {
     if (!this.config.slPlusEnabled) return;
     if (pos.remainingSize <= 0) return;
 
-    const R    = pos.R;
-    const gain = pos.side === "LONG" ? price - pos.entry : pos.entry - price;
+    const R     = pos.R;
+    const gain  = pos.side === "LONG" ? price - pos.entry : pos.entry - price;
     const rMult = gain / R;
+
+    // Minimum lot per simbol — partial di bawah ini ditolak exchange
+    const MIN_LOT = { BTCUSDT: 0.001, ETHUSDT: 0.01, SOLUSDT: 0.1, BNBUSDT: 0.01 };
+    const sym     = (this.config.symbol || "").replace("/", "").replace(":USDT", "");
+    const minLot  = MIN_LOT[sym] ?? 0.001;
 
     // ── Milestone 1: +1R → partial 40%, SL ke BEP ───────────────────────────
     if (!pos.m1 && rMult >= 1.0) {
-      const pct      = this.config.slPlusPartial1Pct;
-      const partial  = parseFloat((pos.size * pct).toFixed(8));
-      const newSL    = pos.entry; // Break-Even Point
-      await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "BEP");
+      const pct     = this.config.slPlusPartial1Pct;
+      const partial = parseFloat((pos.size * pct).toFixed(8));
+      const newSL   = pos.entry; // Break-Even Point
       pos.m1 = true;
+
+      if (partial >= minLot) {
+        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "BEP");
+      } else {
+        // Size terlalu kecil untuk partial — geser SL ke BEP saja agar tetap terlindungi
+        this._log("info",
+          `SL+ M1: partial ${partial.toFixed(4)} < min lot ${minLot} ${sym} ` +
+          `— skip partial, SL digeser ke BEP $${newSL.toFixed(2)} ✓`
+        );
+        pos.slCurrent = newSL;
+        if (!this.config.dryRun) await this._updateSLOnExchange(pos, newSL);
+      }
     }
 
     // ── Milestone 2: +2R → partial 27.5% of ORIGINAL, SL ke +1R ────────────
     if (pos.m1 && !pos.m2 && rMult >= 2.0) {
-      const pct         = this.config.slPlusPartial2Pct;
-      // Partial = pct of original size, tapi max 90% dari sisa
+      const pct          = this.config.slPlusPartial2Pct;
       const fromOriginal = parseFloat((pos.size * pct).toFixed(8));
       const partial      = Math.min(fromOriginal, parseFloat((pos.remainingSize * 0.90).toFixed(8)));
       const newSL        = pos.side === "LONG" ? pos.entry + R : pos.entry - R; // +1R
-      await this._executePartialClose(pos, price, partial, "Partial_2R", newSL, "+1R");
       pos.m2 = true;
+
+      if (partial >= minLot) {
+        await this._executePartialClose(pos, price, partial, "Partial_2R", newSL, "+1R");
+      } else {
+        this._log("info",
+          `SL+ M2: partial ${partial.toFixed(4)} < min lot ${minLot} ${sym} ` +
+          `— skip partial, SL digeser ke +1R $${newSL.toFixed(2)} ✓`
+        );
+        pos.slCurrent = newSL;
+        if (!this.config.dryRun) await this._updateSLOnExchange(pos, newSL);
+      }
     }
 
     // ── Milestone 3: +3R → log saja, biarkan sisa ke TP ────────────────────
