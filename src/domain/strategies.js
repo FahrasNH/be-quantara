@@ -125,6 +125,11 @@ const STRATEGIES = {
     htfEmaSlow:    21,
     sidewaysThresholdPct: 0.2,
 
+    // Sideways breakout mode (aktif saat HTF = SIDEWAYS)
+    sidewaysRangeLookback:   20,    // Jumlah candle HTF untuk range konsolidasi
+    sidewaysBreakoutVolMult: 1.2,   // Volume min = 1.2× SMA saat breakout
+    sidewaysBreakoutBufMult: 0.3,   // Buffer tepi range = ATR × 0.3
+
     volSmaMultiplier: 1.0,
 
     riskPerTrade:     0.015,
@@ -183,6 +188,11 @@ const STRATEGIES = {
     htfEmaFast:    21,
     htfEmaSlow:    50,
     sidewaysThresholdPct: 0.3, // Swing lebih toleran sideways (EMA spread < 0.3%)
+
+    // Sideways retest mode (aktif saat HTF = SIDEWAYS)
+    sidewaysRangeLookback:   20,    // Candle daily untuk range konsolidasi
+    sidewaysBreakoutVolMult: 1.2,   // Volume breakout lebih ketat
+    sidewaysBreakoutBufMult: 0.3,   // Buffer = ATR × 0.3
 
     volSmaMultiplier: 0.8,     // Swing: volume sedikit lebih longgar
 

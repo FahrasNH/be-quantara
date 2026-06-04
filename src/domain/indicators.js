@@ -562,6 +562,134 @@ function detectHTFTrend(htfCandles, config = {}) {
   return "SIDEWAYS";
 }
 
+// ─────────────────────────────────────────────
+// SIDEWAYS RANGE + BREAKOUT DETECTOR
+// ─────────────────────────────────────────────
+
+/**
+ * Hitung range konsolidasi dari N candle HTF terakhir yang sudah closed.
+ *
+ * @param {Array}  htfCandles
+ * @param {number} lookback — jumlah candle untuk hitung range (default 20)
+ * @returns {{ high, low, mid, range }} | null
+ */
+function calcSidewaysRange(htfCandles, lookback = 20) {
+  if (!htfCandles || htfCandles.length < lookback + 2) return null;
+  // Gunakan candle yang sudah closed (kecualikan candle live saat ini)
+  const confirmed = htfCandles.slice(-lookback - 1, -1);
+  const high = Math.max(...confirmed.map(c => c.high));
+  const low  = Math.min(...confirmed.map(c => c.low));
+  return { high, low, mid: (high + low) / 2, range: high - low };
+}
+
+/**
+ * Deteksi breakout valid dari range sideways.
+ * Dipakai oleh Strat B (entry langsung) dan Strat C (konfirmasi sebelum retest).
+ *
+ * Kondisi LONG breakout:
+ *   candle HTF close > rangeHigh + buffer
+ *   AND EMA fast > EMA slow (HTF aligned bullish)
+ *   AND RSI > 52 (momentum bullish)
+ *   AND volume > volSMA × volMultiplier
+ *
+ * @param {Array}  htfCandles
+ * @param {Object} config
+ *   rangeLookback   — jumlah candle untuk range (default 20)
+ *   volMultiplier   — volume minimum breakout vs SMA (default 1.2)
+ *   bufferAtrMult   — buffer tepi range = ATR × nilai ini (default 0.3)
+ *   htfEmaFast/Slow — EMA HTF untuk konfirmasi arah
+ *   rsiBreakoutMin  — RSI minimum untuk LONG breakout (default 52)
+ *   rsiBreakoutMax  — RSI maximum untuk SHORT breakout (default 48)
+ *
+ * @returns {{ signal, rangeHigh, rangeLow, rangeEdge, buffer, atr }} | null
+ */
+function detectSidewaysBreakout(htfCandles, config = {}) {
+  const {
+    rangeLookback  = 20,
+    volMultiplier  = 1.2,
+    bufferAtrMult  = 0.3,
+    htfEmaFast     = 9,
+    htfEmaSlow     = 21,
+    rsiBreakoutMin = 52,
+    rsiBreakoutMax = 48,
+  } = config;
+
+  if (!htfCandles || htfCandles.length < rangeLookback + 5) return null;
+
+  const range = calcSidewaysRange(htfCandles, rangeLookback);
+  if (!range) return null;
+
+  const idx        = htfCandles.length - 2;   // candle terakhir yang sudah closed
+  const lastCandle = htfCandles[idx];
+  const closePrice = lastCandle.close;
+  const volume     = lastCandle.volume || 0;
+
+  const highs  = htfCandles.map(c => c.high);
+  const lows   = htfCandles.map(c => c.low);
+  const closes = htfCandles.map(c => c.close);
+  const vols   = htfCandles.map(c => c.volume || 0);
+
+  // ATR untuk buffer tepi range
+  const atrArr = calcATR(highs, lows, closes, 14);
+  const atrNow = atrArr[idx];
+  const buffer = atrNow ? atrNow * bufferAtrMult : range.range * 0.05;
+
+  // EMA alignment di HTF
+  const emaFArr = calcEMA(closes, htfEmaFast);
+  const emaSArr = calcEMA(closes, htfEmaSlow);
+  const ef      = emaFArr[idx];
+  const es      = emaSArr[idx];
+  if (!ef || !es) return null;
+
+  // RSI momentum
+  const rsiArr = calcRSI(closes, 14);
+  const rsiNow = rsiArr[idx];
+  if (!rsiNow) return null;
+
+  // Volume konfirmasi (lebih ketat dari entry trend biasa)
+  const volSMAArr = calcVolumeSMA(vols, 20);
+  const volAvg    = volSMAArr[idx];
+  const volOk     = !volAvg || volume > volAvg * volMultiplier;
+
+  // ── LONG breakout: close di atas rangeHigh + buffer ────────────────────────
+  if (
+    closePrice > range.high + buffer &&
+    ef > es &&
+    rsiNow > rsiBreakoutMin &&
+    volOk
+  ) {
+    return {
+      signal:    "LONG",
+      rangeHigh: range.high,
+      rangeLow:  range.low,
+      rangeEdge: range.high,  // anchor SL untuk LONG
+      buffer,
+      atr:       atrNow,
+    };
+  }
+
+  // ── SHORT breakout: close di bawah rangeLow - buffer ───────────────────────
+  if (
+    closePrice < range.low - buffer &&
+    ef < es &&
+    rsiNow < rsiBreakoutMax &&
+    volOk
+  ) {
+    return {
+      signal:    "SHORT",
+      rangeHigh: range.high,
+      rangeLow:  range.low,
+      rangeEdge: range.low,   // anchor SL untuk SHORT
+      buffer,
+      atr:       atrNow,
+    };
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────
+
 /**
  * Router utama: pilih detector berdasarkan signalType
  */
@@ -636,4 +764,6 @@ module.exports = {
   detectSignalPdfSwing,
   detectSignalLegacy,
   calcPositionSize,
+  calcSidewaysRange,
+  detectSidewaysBreakout,
 };

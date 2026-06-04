@@ -6,7 +6,7 @@
 
 const EventEmitter = require("events");
 const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exchange");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout } = require("../domain/indicators");
 const { getStrategy } = require("../domain/strategies");
 const db       = require("../infrastructure/db/database");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
@@ -70,6 +70,11 @@ class BotEngine extends EventEmitter {
       // Volume filter multiplier
       volSmaMultiplier: strat.volSmaMultiplier || 1.0,
 
+      // Sideways breakout / retest params
+      sidewaysRangeLookback:   strat.sidewaysRangeLookback   || 20,
+      sidewaysBreakoutVolMult: strat.sidewaysBreakoutVolMult || 1.2,
+      sidewaysBreakoutBufMult: strat.sidewaysBreakoutBufMult || 0.3,
+
       // Risk management harian
       maxDailyLossPct:   strat.maxDailyLossPct  || 0.04,
       maxTradesPerDay:   strat.maxTradesPerDay   || 10,
@@ -110,6 +115,9 @@ class BotEngine extends EventEmitter {
 
       // HTF trend state
       htfTrend:        "UNKNOWN", // BULLISH / BEARISH / SIDEWAYS / UNKNOWN
+
+      // Sideways breakout state (untuk Strat C retest)
+      sidewaysBreakout: null,     // { signal, rangeHigh, rangeLow, rangeEdge, buffer, atr, detectedAt }
     };
 
     this.logs      = [];   // circular buffer max 1000 (WS streaming)
@@ -521,12 +529,7 @@ class BotEngine extends EventEmitter {
       };
     }
 
-    // 5. HTF Sideways
-    if (this.state.htfTrend === "SIDEWAYS") {
-      return { ok: false, reason: `HTF ${this.config.higherTf} = SIDEWAYS — tidak ada trade` };
-    }
-
-    // 6. ATR range filter
+    // 5. ATR range filter (previously 6 — SIDEWAYS dipindah ke _tick() per-strategi)
     if (atr && price) {
       const atrPct = (atr / price) * 100;
       const minPct = this.config.atrMinMult; // % langsung — misal 0.3 = 0.3% dari harga
@@ -583,12 +586,14 @@ class BotEngine extends EventEmitter {
       });
 
       // ── HTF Trend Filter ───────────────────────────────────────────────────
+      let htfCandlesCache = null;  // disimpan untuk sideways breakout detection
       if (this.config.higherTf) {
         try {
           const htfCandles = await this.client.getCandles(
             this.config.symbol, this.config.higherTf,
             Math.max(this.config.htfEmaSlow + 10, 50)
           );
+          htfCandlesCache = htfCandles;
           this.state.htfTrend = detectHTFTrend(htfCandles, {
             htfEmaFast:           this.config.htfEmaFast,
             htfEmaSlow:           this.config.htfEmaSlow,
@@ -597,6 +602,12 @@ class BotEngine extends EventEmitter {
         } catch {
           this.state.htfTrend = "UNKNOWN"; // Tidak bisa fetch HTF → allow trade
         }
+      }
+
+      // Reset sidewaysBreakout state jika HTF sudah tidak SIDEWAYS lagi
+      if (this.state.htfTrend !== "SIDEWAYS" && this.state.sidewaysBreakout) {
+        this._log("info", `HTF ${this.config.higherTf} tidak lagi SIDEWAYS — reset sideways breakout state`);
+        this.state.sidewaysBreakout = null;
       }
 
       const lastIdx  = candles.length - 2;
@@ -633,52 +644,56 @@ class BotEngine extends EventEmitter {
             this._log("info", `🚫 Skip entry: ${gate.reason}`);
           }
         } else {
-          // ── STEP 2: Deteksi sinyal entry di TF utama ────────────────────────
-          const signal = detectSignal(indicators, lastIdx, {
-            rsiOverbought:    this.config.rsiOverbought,
-            rsiOversold:      this.config.rsiOversold,
-            rsiLongMin:       this.config.rsiLongMin,
-            rsiLongMax:       this.config.rsiLongMax,
-            rsiShortMin:      this.config.rsiShortMin,
-            rsiShortMax:      this.config.rsiShortMax,
-            useBothSides:     this.config.useBothSides,
-            signalType:       this.config.signalType,
-            volSmaMultiplier: this.config.volSmaMultiplier,  // A=1.0, B=1.0, C=0.8
-          });
+          if (this.state.htfTrend === "SIDEWAYS") {
+            // ── STEP 2a: SIDEWAYS — per-strategi (A diam, B breakout, C retest) ───
+            await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
+          } else {
+            // ── STEP 2b: TRENDING — sinyal trend-following normal ───────────────
+            const signal = detectSignal(indicators, lastIdx, {
+              rsiOverbought:    this.config.rsiOverbought,
+              rsiOversold:      this.config.rsiOversold,
+              rsiLongMin:       this.config.rsiLongMin,
+              rsiLongMax:       this.config.rsiLongMax,
+              rsiShortMin:      this.config.rsiShortMin,
+              rsiShortMax:      this.config.rsiShortMax,
+              useBothSides:     this.config.useBothSides,
+              signalType:       this.config.signalType,
+              volSmaMultiplier: this.config.volSmaMultiplier,
+            });
 
-          // ── STEP 3: Saring sinyal berdasarkan HTF trend ─────────────────────
-          let filteredSignal = signal;
-          if (signal && this.state.htfTrend !== "UNKNOWN") {
-            if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
-              filteredSignal = null;
-              this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
+            // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
+            let filteredSignal = signal;
+            if (signal && this.state.htfTrend !== "UNKNOWN") {
+              if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
+                filteredSignal = null;
+                this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
+              }
+              if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
+                filteredSignal = null;
+                this._log("info", `🟢 SHORT diblok — HTF ${this.config.higherTf} BULLISH`);
+              }
             }
-            if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
-              filteredSignal = null;
-              this._log("info", `🟢 SHORT diblok — HTF ${this.config.higherTf} BULLISH`);
-            }
-          }
 
-          if (filteredSignal && filteredSignal !== this.state.lastSignal) {
-            // ── Snapshot indikator saat entry (untuk analitik / ML) ─────────────
-            const vol    = indicators.volumes[lastIdx]  ?? 0;
-            const volSMA = indicators.volSMA[lastIdx]   ?? 1;
-            const indicatorSnapshot = {
-              rsi:          rsi     != null ? parseFloat(rsi.toFixed(2))   : null,
-              atr:          atr     != null ? parseFloat(atr.toFixed(4))   : null,
-              atrPct:       atr && price ? parseFloat(((atr / price) * 100).toFixed(3)) : null,
-              emaFast:      emaF    != null ? parseFloat(emaF.toFixed(4))  : null,
-              emaSlow:      emaS    != null ? parseFloat(emaS.toFixed(4))  : null,
-              emaTrendVal:  emaTrend != null ? parseFloat(emaTrend.toFixed(4)) : null,
-              emaTrendBias: emaTrend != null ? (price > emaTrend ? "bullish" : "bearish") : null,
-              volumeRatio:  volSMA > 0 ? parseFloat((vol / volSMA).toFixed(2)) : null,
-              htfTrend:     this.state.htfTrend ?? null,
-              strategy:     this.config.strategyKey ?? null,
-            };
-            await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot);
-            this.state.lastSignal = filteredSignal;
-          } else if (!filteredSignal) {
-            this.state.lastSignal = null;
+            if (filteredSignal && filteredSignal !== this.state.lastSignal) {
+              const vol    = indicators.volumes[lastIdx]  ?? 0;
+              const volSMA = indicators.volSMA[lastIdx]   ?? 1;
+              const indicatorSnapshot = {
+                rsi:          rsi     != null ? parseFloat(rsi.toFixed(2))   : null,
+                atr:          atr     != null ? parseFloat(atr.toFixed(4))   : null,
+                atrPct:       atr && price ? parseFloat(((atr / price) * 100).toFixed(3)) : null,
+                emaFast:      emaF    != null ? parseFloat(emaF.toFixed(4))  : null,
+                emaSlow:      emaS    != null ? parseFloat(emaS.toFixed(4))  : null,
+                emaTrendVal:  emaTrend != null ? parseFloat(emaTrend.toFixed(4)) : null,
+                emaTrendBias: emaTrend != null ? (price > emaTrend ? "bullish" : "bearish") : null,
+                volumeRatio:  volSMA > 0 ? parseFloat((vol / volSMA).toFixed(2)) : null,
+                htfTrend:     this.state.htfTrend ?? null,
+                strategy:     this.config.strategyKey ?? null,
+              };
+              await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot);
+              this.state.lastSignal = filteredSignal;
+            } else if (!filteredSignal) {
+              this.state.lastSignal = null;
+            }
           }
         }
       }
@@ -787,10 +802,16 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
   // HANDLE SIGNAL — simpan trade ke DB
   // ─────────────────────────────────────────────
-  async _handleSignal(signal, price, atr, indicatorSnapshot = null) {
+  /**
+   * @param {object} options
+   *   slDist {number} — override jarak SL (default: ATR × atrMultiplier).
+   *                     Dipakai untuk sideways breakout/retest entry dimana
+   *                     SL ditempatkan di tepi range, bukan berbasis ATR.
+   */
+  async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
-    const slDist = atr * this.config.atrMultiplier;
+    const slDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
     const tpDist = slDist * this.config.riskReward;
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
@@ -979,6 +1000,210 @@ class BotEngine extends EventEmitter {
         dryRun:     true,
       });
     }
+  }
+
+  // ─────────────────────────────────────────────
+  // SIDEWAYS MODE — BREAKOUT (Strat B) + RETEST (Strat C)
+  // ─────────────────────────────────────────────
+
+  /**
+   * Handler utama saat HTF = SIDEWAYS.
+   * Dipanggil dari _tick() menggantikan detectSignal() biasa.
+   *
+   * Strat A (PDF_SCALPING)    → diam total, 1m terlalu noise saat 15m sideways
+   * Strat B (PDF_DAYTRADING)  → breakout langsung jika candle HTF close keluar range
+   * Strat C (PDF_SWING)       → tunggu breakout valid, lalu entry setelah retest
+   */
+  async _checkSidewaysEntry(htfCandles, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi) {
+    const signalType = this.config.signalType;
+
+    // ── Strat A: diam total ────────────────────────────────────────────────────
+    if (signalType === "PDF_SCALPING") {
+      if (this.state.checkCount % 10 === 1) {
+        this._log("info", `📊 [${this.config.strategyKey}] HTF ${this.config.higherTf} SIDEWAYS — menunggu trend jelas (Strat A diam)`);
+      }
+      return;
+    }
+
+    const boConfig = {
+      rangeLookback:  this.config.sidewaysRangeLookback,
+      volMultiplier:  this.config.sidewaysBreakoutVolMult,
+      bufferAtrMult:  this.config.sidewaysBreakoutBufMult,
+      htfEmaFast:     this.config.htfEmaFast,
+      htfEmaSlow:     this.config.htfEmaSlow,
+    };
+
+    // ── Strat B: breakout langsung ─────────────────────────────────────────────
+    if (signalType === "PDF_DAYTRADING") {
+      const bo = detectSidewaysBreakout(htfCandles, boConfig);
+
+      if (!bo) {
+        if (this.state.checkCount % 10 === 1) {
+          this._log("info", `📊 [${this.config.strategyKey}] HTF ${this.config.higherTf} SIDEWAYS — menunggu breakout range`);
+        }
+        return;
+      }
+
+      // Pastikan sinyal tidak duplikat dari entry terakhir
+      if (bo.signal === this.state.lastSignal) return;
+
+      this._log("trade",
+        `🔥 BREAKOUT SIDEWAYS ${bo.signal}! ` +
+        `Range [${bo.rangeLow.toFixed(2)}–${bo.rangeHigh.toFixed(2)}] ditembus`
+      );
+
+      // SL ditempatkan di balik tepi range (bukan ATR dari entry)
+      const slDist = Math.abs(price - bo.rangeEdge) + bo.atr * 0.5;
+
+      const vol    = indicators.volumes[lastIdx] ?? 0;
+      const volSMA = indicators.volSMA[lastIdx]  ?? 1;
+      const snap   = {
+        rsi:          rsi  != null ? parseFloat(rsi.toFixed(2))   : null,
+        atr:          atr  != null ? parseFloat(atr.toFixed(4))   : null,
+        atrPct:       atr && price ? parseFloat(((atr / price) * 100).toFixed(3)) : null,
+        emaFast:      emaF != null ? parseFloat(emaF.toFixed(4))  : null,
+        emaSlow:      emaS != null ? parseFloat(emaS.toFixed(4))  : null,
+        emaTrendVal:  emaTrend != null ? parseFloat(emaTrend.toFixed(4)) : null,
+        emaTrendBias: emaTrend != null ? (price > emaTrend ? "bullish" : "bearish") : null,
+        volumeRatio:  volSMA > 0 ? parseFloat((vol / volSMA).toFixed(2)) : null,
+        htfTrend:     "SIDEWAYS",
+        strategy:     this.config.strategyKey,
+        entryMode:    "sideways_breakout",
+        rangeHigh:    +bo.rangeHigh.toFixed(4),
+        rangeLow:     +bo.rangeLow.toFixed(4),
+      };
+
+      await this._handleSignal(bo.signal, price, atr, snap, { slDist });
+      this.state.lastSignal = bo.signal;
+      return;
+    }
+
+    // ── Strat C: retest entry ──────────────────────────────────────────────────
+    if (signalType === "PDF_SWING") {
+      // Belum ada breakout tersimpan → cari dulu
+      if (!this.state.sidewaysBreakout) {
+        const bo = detectSidewaysBreakout(htfCandles, boConfig);
+        if (bo) {
+          this.state.sidewaysBreakout = { ...bo, detectedAt: Date.now() };
+          this._log("info",
+            `⏳ [${this.config.strategyKey}] Breakout ${bo.signal} terdeteksi ` +
+            `@ range edge ${bo.rangeEdge.toFixed(2)} — menunggu retest...`
+          );
+        } else if (this.state.checkCount % 10 === 1) {
+          this._log("info", `📊 [${this.config.strategyKey}] HTF ${this.config.higherTf} SIDEWAYS — menunggu breakout + retest`);
+        }
+        return;
+      }
+
+      // Ada breakout tersimpan: timeout check (10 × checkInterval)
+      const timeout = this.config.checkInterval * 10;
+      if (Date.now() - this.state.sidewaysBreakout.detectedAt > timeout) {
+        this._log("info", `⏰ [${this.config.strategyKey}] Breakout timeout — reset state sideways`);
+        this.state.sidewaysBreakout = null;
+        return;
+      }
+
+      // Cek retest atau false breakout
+      const retestResult = this._checkRetestEntry(price, atr);
+
+      if (retestResult === null) {
+        // False breakout: harga kembali ke dalam range
+        this._log("warn",
+          `❌ [${this.config.strategyKey}] Breakout ${this.state.sidewaysBreakout.signal} INVALID ` +
+          `— harga balik ke range. Reset.`
+        );
+        this.state.sidewaysBreakout = null;
+        return;
+      }
+
+      if (retestResult === false) {
+        // Belum retest, masih dalam mode tunggu
+        if (this.state.checkCount % 5 === 1) {
+          const bo = this.state.sidewaysBreakout;
+          this._log("info",
+            `⏳ [${this.config.strategyKey}] Menunggu retest ke ` +
+            `${bo.signal === "LONG" ? `area ${bo.rangeHigh.toFixed(2)}` : `area ${bo.rangeLow.toFixed(2)}`}...`
+          );
+        }
+        return;
+      }
+
+      // Retest valid → entry!
+      const bo     = this.state.sidewaysBreakout;
+      const slDist = bo.signal === "LONG"
+        ? price - (bo.rangeLow - bo.atr * 0.3)         // SL di bawah range low
+        : (bo.rangeHigh + bo.atr * 0.3) - price;       // SL di atas range high
+
+      this._log("trade",
+        `🎯 [${this.config.strategyKey}] RETEST VALID! ${bo.signal} @ $${price.toFixed(2)} ` +
+        `(range edge: $${bo.rangeEdge.toFixed(2)} | SL dist: $${slDist.toFixed(2)})`
+      );
+
+      const vol    = indicators.volumes[lastIdx] ?? 0;
+      const volSMA = indicators.volSMA[lastIdx]  ?? 1;
+      const snap   = {
+        rsi:          rsi  != null ? parseFloat(rsi.toFixed(2))   : null,
+        atr:          atr  != null ? parseFloat(atr.toFixed(4))   : null,
+        atrPct:       atr && price ? parseFloat(((atr / price) * 100).toFixed(3)) : null,
+        emaFast:      emaF != null ? parseFloat(emaF.toFixed(4))  : null,
+        emaSlow:      emaS != null ? parseFloat(emaS.toFixed(4))  : null,
+        emaTrendVal:  emaTrend != null ? parseFloat(emaTrend.toFixed(4)) : null,
+        emaTrendBias: emaTrend != null ? (price > emaTrend ? "bullish" : "bearish") : null,
+        volumeRatio:  volSMA > 0 ? parseFloat((vol / volSMA).toFixed(2)) : null,
+        htfTrend:     "SIDEWAYS",
+        strategy:     this.config.strategyKey,
+        entryMode:    "sideways_retest",
+        rangeHigh:    +bo.rangeHigh.toFixed(4),
+        rangeLow:     +bo.rangeLow.toFixed(4),
+      };
+
+      this.state.sidewaysBreakout = null;   // clear setelah entry
+      await this._handleSignal(bo.signal, price, atr, snap, { slDist });
+      this.state.lastSignal = bo.signal;
+    }
+  }
+
+  /**
+   * Cek apakah harga sudah memasuki zona retest dari breakout tersimpan.
+   *
+   * @returns {true}  — retest valid, lanjut entry
+   * @returns {false} — belum retest, masih tunggu
+   * @returns {null}  — false breakout (harga balik ke dalam range), harus reset
+   */
+  _checkRetestEntry(price, atr) {
+    const bo = this.state.sidewaysBreakout;
+    if (!bo) return null;
+
+    const { signal, rangeHigh, rangeLow, buffer, atr: boAtr } = bo;
+    const retestTolerance = (boAtr || atr) * 0.5;  // seberapa dekat ke range edge = valid retest
+
+    if (signal === "LONG") {
+      // False breakout: harga balik jauh ke dalam range (di bawah rangeLow + buffer)
+      if (price < rangeLow + buffer) return null;
+
+      // Retest zone: harga kembali mendekati rangeHigh dari atas
+      // [rangeHigh - tolerance, rangeHigh + buffer]
+      const retestLow  = rangeHigh - retestTolerance;
+      const retestHigh = rangeHigh + buffer;
+      if (price >= retestLow && price <= retestHigh) return true;
+
+      return false;  // Masih di atas range, belum pullback ke retest area
+    }
+
+    if (signal === "SHORT") {
+      // False breakout: harga balik jauh ke dalam range (di atas rangeHigh - buffer)
+      if (price > rangeHigh - buffer) return null;
+
+      // Retest zone: harga kembali mendekati rangeLow dari bawah
+      // [rangeLow - buffer, rangeLow + tolerance]
+      const retestLow  = rangeLow - buffer;
+      const retestHigh = rangeLow + retestTolerance;
+      if (price >= retestLow && price <= retestHigh) return true;
+
+      return false;  // Masih di bawah range, belum pullback ke retest area
+    }
+
+    return false;
   }
 
   // ─────────────────────────────────────────────
