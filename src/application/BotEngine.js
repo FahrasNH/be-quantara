@@ -778,6 +778,18 @@ class BotEngine extends EventEmitter {
     const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
 
+    // Cek minimum lot size Bitget per simbol (reject sebelum kirim ke exchange)
+    const MIN_LOT = { BTCUSDT: 0.001, ETHUSDT: 0.01, SOLUSDT: 0.1, BNBUSDT: 0.01 };
+    const sym     = (this.config.symbol || "").replace("/", "").replace(":USDT", "");
+    const minLot  = MIN_LOT[sym] ?? 0.001;
+    if (size < minLot) {
+      this._log("warn",
+        `Size ${size} di bawah minimum lot ${minLot} ${sym} — modal kurang untuk trade ini, skip signal. ` +
+        `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk ${sym})`
+      );
+      return;
+    }
+
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
 
