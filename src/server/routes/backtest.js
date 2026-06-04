@@ -7,6 +7,8 @@ const express = require("express");
 const { asyncHandler } = require("../../infrastructure/middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
 const BacktestHistoryService = require("../services/BacktestHistoryService");
+const ReportGeneratorService = require("../services/ReportGeneratorService");
+const OptimizationAnalysisService = require("../services/OptimizationAnalysisService");
 
 module.exports = function createBacktestRouter(context) {
   const router = express.Router();
@@ -247,6 +249,101 @@ module.exports = function createBacktestRouter(context) {
     res.json({
       ok: true,
       comparison,
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/report/generate
+   * Generate report in PDF, JSON, or HTML format
+   */
+  router.post("/report/generate", asyncHandler(async (req, res) => {
+    const { symbol, backtest_id, format = "html", include_charts = true, include_trade_details = true } =
+      req.body;
+
+    if (!symbol && !backtest_id) {
+      return res.status(400).json({
+        ok: false,
+        error: "symbol or backtest_id is required",
+      });
+    }
+
+    const options = { include_charts, include_trade_details };
+    let reportData;
+
+    switch (format) {
+      case "pdf":
+      case "html":
+        reportData = await ReportGeneratorService.generateHTMLReport(symbol, backtest_id, options);
+        res.setHeader("Content-Type", "text/html");
+        break;
+      case "json":
+        reportData = await ReportGeneratorService.generateJSONReport(symbol, backtest_id, options);
+        res.setHeader("Content-Type", "application/json");
+        break;
+      default:
+        return res.status(400).json({
+          ok: false,
+          error: "Unsupported format. Use 'pdf', 'html', or 'json'",
+        });
+    }
+
+    res.json({
+      ok: true,
+      format,
+      data: reportData,
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/report/email
+   * Email backtest report to recipient
+   */
+  router.post("/report/email", asyncHandler(async (req, res) => {
+    const { symbol, backtest_id, email, include_charts = true, include_trade_details = true } = req.body;
+
+    if (!symbol && !backtest_id) {
+      return res.status(400).json({
+        ok: false,
+        error: "symbol or backtest_id is required",
+      });
+    }
+
+    if (!email) {
+      return res.status(400).json({
+        ok: false,
+        error: "email is required",
+      });
+    }
+
+    const options = { include_charts, include_trade_details };
+    const result = await ReportGeneratorService.sendReportEmail(symbol, backtest_id, email, options);
+
+    res.json({
+      ok: true,
+      ...result,
+    });
+  }));
+
+  /**
+   * GET /api/v1/backtest/optimize
+   * Get optimization analysis for backtest
+   * Query params: symbol (optional), backtest_id (optional)
+   */
+  router.get("/optimize", asyncHandler(async (req, res) => {
+    const { symbol, backtest_id } = req.query;
+
+    if (!symbol && !backtest_id) {
+      return res.status(400).json({
+        ok: false,
+        error: "symbol or backtest_id is required",
+      });
+    }
+
+    const analysis = await OptimizationAnalysisService.analyzeBacktest(symbol, backtest_id ? parseInt(backtest_id) : null);
+
+    res.json({
+      ok: true,
+      data: analysis,
     });
   }));
 
