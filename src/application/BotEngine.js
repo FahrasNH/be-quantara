@@ -178,7 +178,15 @@ class BotEngine extends EventEmitter {
       lastTick:      this.state.lastTick,
       lastPrice:     this.state.lastPrice,
       totalPnL:      this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0),
-      unrealizedPnL: this.state.openPositions.reduce((s, p) => s + (p.unrealizedPL || 0), 0),
+      unrealizedPnL: this.state.openPositions.reduce((s, p) => {
+        if (p.unrealizedPL && p.unrealizedPL !== 0) return s + p.unrealizedPL;
+        // Fallback: hitung dari lastPrice jika unrealizedPL belum diset dari exchange
+        const px = this.state.lastPrice;
+        if (!px || !p.entry) return s;
+        const sz   = p.remainingSize || p.size || 0;
+        const upnl = p.side === "LONG" ? (px - p.entry) * sz : (p.entry - px) * sz;
+        return s + upnl;
+      }, 0),
       winRate:       this._winRate(),
 
       // Risk management state
@@ -266,7 +274,18 @@ class BotEngine extends EventEmitter {
             for (const dbTrade of orphans) {
               if (liveByKey.has(dbTrade.side)) {
                 // Masih terbuka di exchange → angkat ke state sesi ini
-                const lp = liveByKey.get(dbTrade.side);
+                const lp        = liveByKey.get(dbTrade.side);
+                const markPrice = lp.markPrice || dbTrade.entry_price;
+                const size      = dbTrade.size || 0;
+                // Hitung unrealized PnL secara manual jika exchange return 0
+                const upnlFromExchange = lp.unrealizedPL ?? 0;
+                const upnlCalc = markPrice > 0 && dbTrade.entry_price > 0
+                  ? (dbTrade.side === "LONG"
+                      ? (markPrice - dbTrade.entry_price) * size
+                      : (dbTrade.entry_price - markPrice) * size)
+                  : 0;
+                const unrealizedPL = upnlFromExchange !== 0 ? upnlFromExchange : upnlCalc;
+
                 this.state.openPositions.push({
                   id:           dbTrade.order_id || `restored_${dbTrade.id}`,
                   dbId:         dbTrade.id,        // tetap pakai id trade lama di DB
@@ -274,13 +293,18 @@ class BotEngine extends EventEmitter {
                   entry:        dbTrade.entry_price,
                   sl:           dbTrade.sl,
                   tp:           dbTrade.tp,
-                  size:         dbTrade.size,
+                  size,
                   openTime:     new Date(dbTrade.open_time).getTime(),
                   atr:          dbTrade.atr,
                   manualSLTP:   false,
-                  unrealizedPL: lp.unrealizedPL ?? 0,
-                  markPrice:    lp.markPrice    ?? dbTrade.entry_price,
-                  restoredFrom: dbTrade.session_id, // info debug
+                  unrealizedPL,
+                  markPrice,
+                  restoredFrom: dbTrade.session_id,
+                  // SL+ tracking (restored dari nilai DB)
+                  remainingSize: size,
+                  R:             dbTrade.atr ? dbTrade.atr * this.config.atrMultiplier : 0,
+                  slCurrent:     dbTrade.sl,
+                  m1: false, m2: false, m3: false,
                 });
                 this._log("trade", `✓ Posisi ${dbTrade.side} @$${dbTrade.entry_price} dipulihkan (sesi #${dbTrade.session_id})`);
               } else {
@@ -1202,7 +1226,19 @@ class BotEngine extends EventEmitter {
         // Update unrealized PnL + markPrice dari exchange, lalu cek SL+ milestones
         for (const pos of this.state.openPositions) {
           const lp = liveByKey.get(pos.side);
-          if (lp) { pos.unrealizedPL = lp.unrealizedPL; pos.markPrice = lp.markPrice; }
+          if (lp) {
+            pos.markPrice = lp.markPrice || price;
+            // Hitung PnL manual sebagai fallback jika exchange return 0
+            const upnlExchange = lp.unrealizedPL ?? 0;
+            const markPx       = pos.markPrice;
+            const sz           = pos.remainingSize || pos.size || 0;
+            const upnlCalc     = markPx > 0 && pos.entry > 0
+              ? (pos.side === "LONG"
+                  ? (markPx - pos.entry) * sz
+                  : (pos.entry - markPx) * sz)
+              : 0;
+            pos.unrealizedPL = upnlExchange !== 0 ? upnlExchange : upnlCalc;
+          }
 
           // ── SL+ milestone check ────────────────────────────────────────────
           await this._checkSLPlusMilestones(pos, price);
