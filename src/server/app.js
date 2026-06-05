@@ -29,6 +29,7 @@ const createHistoryRouter = require("./routes/history");
 const createHealthRouter = require("./routes/health");
 const createBacktestRouter = require("./routes/backtest");
 const createLegacyRouter = require("./routes/legacy");
+const createAccountRouter = require("./routes/account");
 
 // ── CORS & Security ────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -125,6 +126,9 @@ app.use("/api/v1/backtest", createBacktestRouter());
 
 // Legacy routes (protected - deprecated)
 app.use("/api/v1/legacy", createLegacyRouter({ getBot, getAllBots }));
+
+// Account routes (protected)
+app.use("/api/v1/account", createAccountRouter());
 
 // 404 handler
 app.use((req, res) => {
