@@ -1,5 +1,6 @@
 const AuthService = require('../../services/AuthService');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const { authMiddleware } = require('../../middleware/auth');
 const {
   validateLoginInput,
   validateRegisterInput,
@@ -129,6 +130,7 @@ module.exports = function createAuthRoutes() {
    */
   router.get(
     '/me',
+    authMiddleware,
     asyncHandler(async (req, res) => {
       if (!req.userId) {
         return res.status(401).json({
