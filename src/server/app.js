@@ -47,6 +47,12 @@ function isOriginAllowed(origin) {
 
 const app = express();
 
+// ── Trust proxy (CRITICAL untuk rate limiting di belakang nginx) ────────────
+// Tanpa ini, express-rate-limit memakai IP socket (= IP nginx), sehingga SEMUA
+// user berbagi satu bucket rate-limit. Set ke jumlah hop proxy (1 = satu nginx).
+// req.ip akan membaca X-Forwarded-For dari nginx → rate limit per-user yang benar.
+app.set("trust proxy", parseInt(process.env.TRUST_PROXY_HOPS) || 1);
+
 // Security
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
@@ -71,10 +77,19 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 // AUTH_RATE_LIMIT bisa di-set via .env untuk melonggarkan limit saat testing
 const AUTH_MAX = parseInt(process.env.AUTH_RATE_LIMIT) || (process.env.NODE_ENV === "production" ? 10 : 100);
 
+// API_RATE_LIMIT: limit per-IP untuk SEMUA endpoint /api/v1 (kecuali auth).
+// Dashboard real-time melakukan banyak polling sah (ticker, bot status, balance),
+// jadi 100/15min terlalu kecil → 429. Default 1000/15min memberi headroom cukup
+// untuk satu user dengan beberapa tab, sambil tetap mencegah abuse.
+// Per-IP karena trust proxy sudah aktif (lihat app.set di atas).
+const API_MAX = parseInt(process.env.API_RATE_LIMIT) || 1000;
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: { ok: false, error: "Too many requests, please try again later" },
+  max: API_MAX,
+  standardHeaders: true,  // kirim RateLimit-* headers agar FE bisa baca sisa kuota
+  legacyHeaders: false,
+  message: { ok: false, statusCode: 429, message: "Terlalu banyak permintaan. Tunggu beberapa saat lalu coba lagi." },
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
