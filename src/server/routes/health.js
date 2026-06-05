@@ -42,7 +42,7 @@ module.exports = function createHealthRouter(context) {
     let dbLatency = 0;
     try {
       const start = Date.now();
-      const count = db.getSetting("__health_check__"); // Dummy query
+      const count = await db.getSetting("__health_check__"); // Dummy query
       dbLatency = Date.now() - start;
       dbHealthy = true;
       if (healthChecker) healthChecker.setDatabaseHealth(true, dbLatency);

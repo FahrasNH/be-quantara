@@ -57,7 +57,7 @@ class ReportGeneratorService {
    */
   static async _getReportData(symbol, backtest_id = null) {
     if (backtest_id) {
-      const backtest = BacktestHistoryService.getById(backtest_id);
+      const backtest = await BacktestHistoryService.getById(backtest_id);
       if (!backtest) throw new Error(`Backtest ${backtest_id} not found`);
       return {
         symbol: backtest.symbol,

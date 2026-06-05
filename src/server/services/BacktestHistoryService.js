@@ -16,9 +16,9 @@ class BacktestHistoryService {
    * @param {string} notes - Optional notes/description
    * @returns {number} - ID of inserted record
    */
-  static saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null) {
+  static async saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null) {
     try {
-      const id = db.insertBacktestHistory({
+      const id = await db.insertBacktestHistory({
         symbol,
         metrics,
         equityCurve,
@@ -41,9 +41,9 @@ class BacktestHistoryService {
    * @param {number} limit - Max records to return
    * @returns {array} - Array of backtest history records
    */
-  static getHistory(symbol, limit = 20) {
+  static async getHistory(symbol, limit = 20) {
     try {
-      const records = db.getBacktestHistory(symbol, limit);
+      const records = await db.getBacktestHistory(symbol, limit);
       return records;
     } catch (err) {
       console.error(`[BacktestHistory] Error fetching history for ${symbol}: ${err.message}`);
@@ -56,9 +56,9 @@ class BacktestHistoryService {
    * @param {number} limit - Max records to return
    * @returns {array} - Array of all backtest history records
    */
-  static getAllHistory(limit = 50) {
+  static async getAllHistory(limit = 50) {
     try {
-      const records = db.getAllBacktestHistory(limit);
+      const records = await db.getAllBacktestHistory(limit);
       return records;
     } catch (err) {
       console.error(`[BacktestHistory] Error fetching all history: ${err.message}`);
@@ -71,9 +71,9 @@ class BacktestHistoryService {
    * @param {number} id - Record ID
    * @returns {object|null} - Backtest history record atau null
    */
-  static getById(id) {
+  static async getById(id) {
     try {
-      const record = db.getBacktestHistoryById(id);
+      const record = await db.getBacktestHistoryById(id);
       return record;
     } catch (err) {
       console.error(`[BacktestHistory] Error fetching history by ID ${id}: ${err.message}`);
@@ -86,9 +86,9 @@ class BacktestHistoryService {
    * @param {string} symbol - Trading pair
    * @returns {object} - Statistics object
    */
-  static getStatistics(symbol) {
+  static async getStatistics(symbol) {
     try {
-      const history = this.getHistory(symbol, 100);
+      const history = await this.getHistory(symbol, 100);
 
       if (history.length === 0) {
         return {
@@ -129,10 +129,10 @@ class BacktestHistoryService {
    * @param {number} id2 - Second backtest ID
    * @returns {object} - Comparison object
    */
-  static compareBacktests(id1, id2) {
+  static async compareBacktests(id1, id2) {
     try {
-      const bt1 = this.getById(id1);
-      const bt2 = this.getById(id2);
+      const bt1 = await this.getById(id1);
+      const bt2 = await this.getById(id2);
 
       if (!bt1 || !bt2) {
         throw new Error("One or both backtest records not found");

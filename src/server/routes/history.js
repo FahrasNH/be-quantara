@@ -17,19 +17,19 @@ let lastRecalc = 0;
 module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   const router = Router();
 
-  router.get("/sessions", (req, res) => {
+  router.get("/sessions", async (req, res) => {
     try {
       const limit  = Math.min(safeInt(req.query.limit, 20), 500);
       const symbol = req.query.symbol || null;
-      res.json(db.getSessions(limit, symbol));
+      res.json(await db.getSessions(limit, symbol));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.get("/sessions/:id", (req, res) => {
+  router.get("/sessions/:id", async (req, res) => {
     try {
-      const session = db.getSession(safeInt(req.params.id, 0));
+      const session = await db.getSession(safeInt(req.params.id, 0));
       if (!session) return res.status(404).json({ error: "Session tidak ditemukan" });
       res.json(session);
     } catch (err) {
@@ -37,47 +37,47 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
   });
 
-  router.get("/trades", (req, res) => {
+  router.get("/trades", async (req, res) => {
     try {
       const sessionId = req.query.session_id ? safeInt(req.query.session_id, 0) : null;
       const symbol    = req.query.symbol || null;
       const limit     = Math.min(safeInt(req.query.limit, 100), 1000);
-      res.json(db.getTrades({ sessionId, symbol, limit }));
+      res.json(await db.getTrades({ sessionId, symbol, limit }));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.get("/trades/stats/:sessionId", (req, res) => {
+  router.get("/trades/stats/:sessionId", async (req, res) => {
     try {
-      res.json(db.getTradeStats(safeInt(req.params.sessionId, 0)));
+      res.json(await db.getTradeStats(safeInt(req.params.sessionId, 0)));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.get("/equity/:sessionId", (req, res) => {
+  router.get("/equity/:sessionId", async (req, res) => {
     try {
-      res.json(db.getEquity(safeInt(req.params.sessionId, 0)));
+      res.json(await db.getEquity(safeInt(req.params.sessionId, 0)));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
   // Equity curve kumulatif semua sesi (untuk tampilan "All-Time")
-  router.get("/equity-all", (req, res) => {
+  router.get("/equity-all", async (req, res) => {
     try {
       const mode = req.query.mode || "live"; // default live saja
-      res.json(db.getAllEquity(mode));
+      res.json(await db.getAllEquity(mode));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.get("/db/logs/:sessionId", (req, res) => {
+  router.get("/db/logs/:sessionId", async (req, res) => {
     try {
       const limit = Math.min(safeInt(req.query.limit, 200), 1000);
-      res.json(db.getLogs(safeInt(req.params.sessionId, 0), limit));
+      res.json(await db.getLogs(safeInt(req.params.sessionId, 0), limit));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -96,7 +96,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   // Dipakai satu kali untuk memperbaiki data historis yang salah akibat
   // bug cross-session (trade buka di sesi A, tutup di sesi B).
   // Rate-limit: maks 1x per 60 detik agar tidak membebani DB.
-  router.post("/db/recalc-sessions", (req, res) => {
+  router.post("/db/recalc-sessions", async (req, res) => {
     const now = Date.now();
     if (now - lastRecalc < 60_000) {
       const wait = Math.ceil((60_000 - (now - lastRecalc)) / 1000);
@@ -104,12 +104,13 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
     lastRecalc = now;
     try {
-      const sessions = db.getSessions(500);
+      const sessions = await db.getSessions(500);
       const results  = [];
       for (const s of sessions) {
-        const trades = db._db.prepare(
-          `SELECT pnl FROM trades WHERE session_id = ? AND close_time IS NOT NULL AND pnl IS NOT NULL`
-        ).all(s.id);
+        const { rows: trades } = await db._pool.query(
+          `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+          [s.id]
+        );
         if (trades.length === 0) continue;
         const wins     = trades.filter(t => t.pnl > 0).length;
         const losses   = trades.filter(t => t.pnl <= 0).length;
@@ -117,7 +118,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
         const finalCap = (s.initial_capital || 0) + totalPnL;
         const mismatch = s.wins !== wins || s.losses !== losses || s.total_trades !== trades.length;
         if (mismatch) {
-          db.recalcSessionStats(s.id);
+          await db.recalcSessionStats(s.id);
           results.push({
             sessionId: s.id,
             symbol:    s.symbol,
@@ -144,7 +145,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   // Contoh response item:
   //   { rsi, atr, atrPct, volumeRatio, emaTrendBias, htfTrend, strategy,
   //     side, result, pnl, rMultiple, openTime, closeTime, ... }
-  router.get("/insights", (req, res) => {
+  router.get("/insights", async (req, res) => {
     try {
       const symbol  = req.query.symbol  || null;
       const limit   = Math.min(safeInt(req.query.limit, 500), 5000);
@@ -152,7 +153,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
         : req.query.dry_run === "true";
       const format  = req.query.format || "json";
 
-      const data = db.getInsights({ symbol, dryRun, limit });
+      const data = await db.getInsights({ symbol, dryRun, limit });
 
       if (format === "csv") {
         if (data.length === 0) return res.status(200).send("No data");

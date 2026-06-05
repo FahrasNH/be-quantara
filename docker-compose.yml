@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bot-trading-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bottrading
+      POSTGRES_PASSWORD: bottrading_dev
+      POSTGRES_DB: bot_trading
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bottrading -d bot_trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

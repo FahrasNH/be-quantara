@@ -34,9 +34,17 @@ const createAccountRouter = require("./routes/account");
 // ── CORS & Security ────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "http://187.77.135.156",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
 ];
+
+// Di development izinkan semua localhost port (Vite bisa auto-geser 5173→5174→5175 dst)
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+  if (process.env.NODE_ENV !== "production") {
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  }
+  return false;
+}
 
 const app = express();
 
@@ -45,7 +53,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       cb(null, true);
     } else {
       cb(new Error("CORS not allowed"));

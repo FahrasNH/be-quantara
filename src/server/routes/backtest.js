@@ -162,7 +162,7 @@ module.exports = function createBacktestRouter(context) {
       });
     }
 
-    const id = BacktestHistoryService.saveBacktest(
+    const id = await BacktestHistoryService.saveBacktest(
       symbol,
       metrics,
       equityCurve,
@@ -189,9 +189,9 @@ module.exports = function createBacktestRouter(context) {
 
     let data;
     if (symbol) {
-      data = BacktestHistoryService.getHistory(symbol, pageLimit);
+      data = await BacktestHistoryService.getHistory(symbol, pageLimit);
     } else {
-      data = BacktestHistoryService.getAllHistory(pageLimit);
+      data = await BacktestHistoryService.getAllHistory(pageLimit);
     }
 
     res.json({
@@ -208,7 +208,7 @@ module.exports = function createBacktestRouter(context) {
    */
   router.get("/history/:id", asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const record = BacktestHistoryService.getById(parseInt(id));
+    const record = await BacktestHistoryService.getById(parseInt(id));
 
     if (!record) {
       return res.status(404).json({
@@ -229,7 +229,7 @@ module.exports = function createBacktestRouter(context) {
    */
   router.get("/history/:symbol/statistics", asyncHandler(async (req, res) => {
     const { symbol } = req.params;
-    const stats = BacktestHistoryService.getStatistics(symbol);
+    const stats = await BacktestHistoryService.getStatistics(symbol);
 
     res.json({
       ok: true,
@@ -244,7 +244,7 @@ module.exports = function createBacktestRouter(context) {
   router.get("/history/compare/:id1/:id2", asyncHandler(async (req, res) => {
     const { id1, id2 } = req.params;
 
-    const comparison = BacktestHistoryService.compareBacktests(parseInt(id1), parseInt(id2));
+    const comparison = await BacktestHistoryService.compareBacktests(parseInt(id1), parseInt(id2));
 
     res.json({
       ok: true,

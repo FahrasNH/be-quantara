@@ -329,7 +329,7 @@ class BotEngine extends EventEmitter {
     this.state.running = true;
 
     // ── Selalu buat sesi BARU (1 token bisa punya banyak sesi) ────────────
-    this.sessionId = db.openSession({
+    this.sessionId = await db.openSession({
       exchange:       this.config.exchange,
       symbol:         this.config.symbol,
       mode:           this.config.dryRun ? "dry_run" : "live",
@@ -341,7 +341,7 @@ class BotEngine extends EventEmitter {
     // ── Restore posisi terbuka dari SEMUA sesi lama (lintas sesi) ─────────
     // Cari trades dengan close_time IS NULL untuk symbol ini di semua sesi
     try {
-      const orphans = db.getOpenTradesBySymbol(this.config.symbol);
+      const orphans = await db.getOpenTradesBySymbol(this.config.symbol);
       if (orphans.length > 0) {
         this._log("info", `${orphans.length} posisi open dari sesi lama ditemukan — sinkronisasi dengan exchange...`);
 
@@ -394,7 +394,7 @@ class BotEngine extends EventEmitter {
                   : (dbTrade.entry_price - exitPrice) * (dbTrade.size || 0);
                 this._log("warn", `Posisi ${dbTrade.side} sesi #${dbTrade.session_id} sudah ditutup di exchange saat offline — PnL ≈ $${pnl.toFixed(2)}`);
                 try {
-                  db.closeTrade(dbTrade.id, {
+                  await db.closeTrade(dbTrade.id, {
                     exitPrice,
                     pnl,
                     reason:    "Closed_Offline",
@@ -478,7 +478,7 @@ class BotEngine extends EventEmitter {
       const tradePnL   = this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0);
       const finalCapital = this.state.startCapital + tradePnL;
 
-      db.closeSession(this.sessionId, {
+      await db.closeSession(this.sessionId, {
         finalCapital,
         totalTrades,
         wins,
@@ -820,7 +820,7 @@ class BotEngine extends EventEmitter {
 
     // 1. Coba cache dulu (valid 15 menit)
     try {
-      const cached = db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 900);
+      const cached = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 900);
       if (cached && cached.length >= this.config.emaSlow + 20) {
         return cached;
       }
@@ -1002,7 +1002,7 @@ class BotEngine extends EventEmitter {
 
         // Simpan ke DB
         if (this.sessionId) {
-          pos.dbId = db.insertTrade({
+          pos.dbId = await db.insertTrade({
             sessionId:  this.sessionId,
             exchange:   this.config.exchange,
             symbol:     this.config.symbol,
@@ -1045,7 +1045,7 @@ class BotEngine extends EventEmitter {
 
       // Simpan ke DB (dry run)
       if (this.sessionId) {
-        pos.dbId = db.insertTrade({
+        pos.dbId = await db.insertTrade({
           sessionId:  this.sessionId,
           exchange:   this.config.exchange,
           symbol:     this.config.symbol,
@@ -1401,7 +1401,7 @@ class BotEngine extends EventEmitter {
     // ── Catat ke DB (insert + langsung close) ────────────────────────────────
     if (this.sessionId) {
       try {
-        const partialDbId = db.insertTrade({
+        const partialDbId = await db.insertTrade({
           sessionId:  this.sessionId,
           exchange:   this.config.exchange,
           symbol:     this.config.symbol,
@@ -1415,7 +1415,7 @@ class BotEngine extends EventEmitter {
           dryRun:     this.config.dryRun,
           orderId:    `${pos.id}_${reason}`,
         });
-        db.closeTrade(partialDbId, {
+        await db.closeTrade(partialDbId, {
           exitPrice: price,
           pnl,
           reason,
@@ -1501,7 +1501,7 @@ class BotEngine extends EventEmitter {
 
           // Tutup trade record di DB
           if (pos.dbId) {
-            try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
+            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
           }
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
@@ -1593,7 +1593,7 @@ class BotEngine extends EventEmitter {
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
                   if (pos.dbId) {
-                    try { db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
+                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
                   if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
@@ -1649,7 +1649,7 @@ class BotEngine extends EventEmitter {
 
         if (this.sessionId && pos.dbId) {
           try {
-            db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
+            await db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
           } catch { /* jangan crash */ }
         }
 

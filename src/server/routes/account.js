@@ -1,11 +1,20 @@
 const { asyncHandler } = require("../../middleware/errorHandler");
 const { PrismaClient } = require("@prisma/client");
 const BitgetClient = require("../../infrastructure/exchange/BitgetClient");
+const { encrypt, decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
 const prisma = new PrismaClient();
 
-// Cache balance per-user untuk hindari rate-limit exchange (TTL 20s)
+// Decrypt kredensial tersimpan. Toleran terhadap data lama yang masih plaintext
+// (isEncrypted=false) supaya tidak crash bila ada sisa data sebelum enkripsi.
+function safeDecrypt(value) {
+  if (!value) return null;
+  return isEncrypted(value) ? decrypt(value) : value;
+}
+
+// Cache balance per-user untuk hindari rate-limit Bitget (TTL 60s)
+// Bitget rate limit: 10 req/s per user. Cache 60s = aman ~2 concurrent user.
 const balanceCache = new Map(); // userId -> { ts, data }
-const BALANCE_TTL = 20_000;
+const BALANCE_TTL = 60_000;
 
 module.exports = function createAccountRouter() {
   const express = require("express");
@@ -91,7 +100,11 @@ module.exports = function createAccountRouter() {
       }
 
       try {
-        const client = new BitgetClient(user.apiKey, user.apiSecret, user.apiPassphrase);
+        const client = new BitgetClient(
+          safeDecrypt(user.apiKey),
+          safeDecrypt(user.apiSecret),
+          safeDecrypt(user.apiPassphrase)
+        );
         const balance = await client.getBalance("USDT");
         const data = {
           ok: true,
@@ -141,11 +154,14 @@ module.exports = function createAccountRouter() {
 
       const mask = (val) => val ? `${val.substring(0, 4)}****${val.substring(val.length - 4)}` : null;
 
+      const plainApiKey = safeDecrypt(user?.apiKey);
+      const plainApiSecret = safeDecrypt(user?.apiSecret);
+
       res.json({
         ok: true,
         exchangeType: user?.exchangeType || "bitget",
-        apiKey: user?.apiKey ? mask(user.apiKey) : null,
-        apiSecret: user?.apiSecret ? mask(user.apiSecret) : null,
+        apiKey: plainApiKey ? mask(plainApiKey) : null,
+        apiSecret: plainApiSecret ? mask(plainApiSecret) : null,
         apiPassphrase: user?.apiPassphrase ? "****" : null,
         configured: !!(user?.apiKey && user?.apiSecret),
       });
@@ -181,9 +197,9 @@ module.exports = function createAccountRouter() {
       await prisma.user.update({
         where: { id: userId },
         data: {
-          apiKey,
-          apiSecret,
-          apiPassphrase: apiPassphrase || null,
+          apiKey: encrypt(apiKey),
+          apiSecret: encrypt(apiSecret),
+          apiPassphrase: apiPassphrase ? encrypt(apiPassphrase) : null,
           exchangeType,
         },
       });

@@ -1,331 +1,153 @@
 // ─────────────────────────────────────────────
-// db.js — Quantara SQLite Database
-// Persistensi: trades, sessions, equity, logs
-// Gunakan: const db = require('./db')
+// database.js — Quantara PostgreSQL Database
+// Persistensi: trades, sessions, equity, logs (engine bot)
+// Async API (node-postgres). Panggil await db.init() sebelum server.listen.
 // ─────────────────────────────────────────────
 
-const Database = require("better-sqlite3");
-const path     = require("path");
+const { Pool, types } = require("pg");
 
-// __dirname = src/infrastructure/db/ → naik 3 level ke root project
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../../../quantara.db");
+// int8 (BIGINT, OID 20) default-nya di-parse jadi string oleh pg untuk
+// menghindari overflow. Timestamp candle (ms epoch) & COUNT(*) muat di
+// JS safe integer, jadi paksa parseInt agar konsisten dgn perilaku SQLite.
+types.setTypeParser(20, (v) => parseInt(v, 10));
 
-// Buka / buat database
-const db = new Database(DB_PATH);
-
-// Aktifkan WAL mode (lebih cepat untuk write bersamaan read)
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // ─────────────────────────────────────────────
-// INISIALISASI TABEL
+// INISIALISASI TABEL (dipanggil eksplisit via init())
 // ─────────────────────────────────────────────
-db.exec(`
+const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS bot_sessions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              SERIAL PRIMARY KEY,
     exchange        TEXT    NOT NULL,
     symbol          TEXT    NOT NULL,
-    mode            TEXT    NOT NULL DEFAULT 'dry_run',  -- 'live' | 'dry_run'
-    started_at      DATETIME NOT NULL DEFAULT (datetime('now')),
-    stopped_at      DATETIME,
-    initial_capital REAL    DEFAULT 0,
-    final_capital   REAL    DEFAULT 0,
+    mode            TEXT    NOT NULL DEFAULT 'dry_run',
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    stopped_at      TIMESTAMPTZ,
+    initial_capital DOUBLE PRECISION DEFAULT 0,
+    final_capital   DOUBLE PRECISION DEFAULT 0,
     total_trades    INTEGER DEFAULT 0,
     wins            INTEGER DEFAULT 0,
     losses          INTEGER DEFAULT 0,
-    config          TEXT                                  -- JSON params strategi
+    config          TEXT
   );
 
   CREATE TABLE IF NOT EXISTS trades (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    id           SERIAL PRIMARY KEY,
     session_id   INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
     exchange     TEXT    NOT NULL,
     symbol       TEXT    NOT NULL,
-    side         TEXT    NOT NULL,   -- 'LONG' | 'SHORT'
-    entry_price  REAL    NOT NULL,
-    exit_price   REAL,               -- NULL jika masih terbuka
-    sl           REAL,
-    tp           REAL,
-    size         REAL,
-    pnl          REAL,               -- NULL jika masih terbuka
-    pnl_pct      REAL,
-    reason       TEXT,               -- 'TP' | 'SL' | 'Reversal'
-    open_time    DATETIME NOT NULL,
-    close_time   DATETIME,           -- NULL jika masih terbuka
-    atr          REAL,
-    dry_run      INTEGER DEFAULT 1,  -- 1 = simulasi, 0 = live
-    order_id     TEXT,               -- exchange order ID (live only)
-    indicators   TEXT                -- JSON snapshot indikator saat entry (untuk analitik/ML)
+    side         TEXT    NOT NULL,
+    entry_price  DOUBLE PRECISION NOT NULL,
+    exit_price   DOUBLE PRECISION,
+    sl           DOUBLE PRECISION,
+    tp           DOUBLE PRECISION,
+    size         DOUBLE PRECISION,
+    pnl          DOUBLE PRECISION,
+    pnl_pct      DOUBLE PRECISION,
+    reason       TEXT,
+    open_time    TIMESTAMPTZ NOT NULL,
+    close_time   TIMESTAMPTZ,
+    atr          DOUBLE PRECISION,
+    dry_run      INTEGER DEFAULT 1,
+    order_id     TEXT,
+    indicators   TEXT
   );
 
   CREATE TABLE IF NOT EXISTS equity_snapshots (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    id             SERIAL PRIMARY KEY,
     session_id     INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
-    timestamp      DATETIME NOT NULL DEFAULT (datetime('now')),
-    capital        REAL     NOT NULL,
-    price          REAL,
-    open_positions INTEGER  DEFAULT 0
+    timestamp      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    capital        DOUBLE PRECISION NOT NULL,
+    price          DOUBLE PRECISION,
+    open_positions INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS candle_cache (
-    exchange  TEXT    NOT NULL,
-    symbol    TEXT    NOT NULL,
-    interval  TEXT    NOT NULL,
-    timestamp INTEGER NOT NULL,
-    open      REAL,
-    high      REAL,
-    low       REAL,
-    close     REAL,
-    volume    REAL,
-    cached_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    PRIMARY KEY (exchange, symbol, interval, timestamp)
+    exchange   TEXT   NOT NULL,
+    symbol     TEXT   NOT NULL,
+    "interval" TEXT   NOT NULL,
+    timestamp  BIGINT NOT NULL,
+    open       DOUBLE PRECISION,
+    high       DOUBLE PRECISION,
+    low        DOUBLE PRECISION,
+    close      DOUBLE PRECISION,
+    volume     DOUBLE PRECISION,
+    cached_at  BIGINT NOT NULL DEFAULT extract(epoch from now())::bigint,
+    PRIMARY KEY (exchange, symbol, "interval", timestamp)
   );
 
   CREATE TABLE IF NOT EXISTS logs (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    id         SERIAL PRIMARY KEY,
     session_id INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
-    timestamp  DATETIME NOT NULL DEFAULT (datetime('now')),
-    level      TEXT     NOT NULL,  -- 'trade' | 'error' | 'warn'
-    message    TEXT     NOT NULL
+    timestamp  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    level      TEXT NOT NULL,
+    message    TEXT NOT NULL
   );
 
-  -- Pengaturan pengguna (key-value, persist across restarts)
   CREATE TABLE IF NOT EXISTS user_settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
-    updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
 
-  -- Backtest history (menyimpan hasil backtest dari backtest.py)
   CREATE TABLE IF NOT EXISTS backtest_history (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol        TEXT    NOT NULL,
-    timestamp     DATETIME NOT NULL DEFAULT (datetime('now')),
-    metrics       TEXT    NOT NULL,  -- JSON metrics
-    equity_curve  TEXT,              -- JSON array dari equity curve data
-    trades_data   TEXT,              -- JSON array dari trades detail
-    config        TEXT,              -- JSON backtest configuration
+    id            SERIAL PRIMARY KEY,
+    symbol        TEXT NOT NULL,
+    timestamp     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    metrics       TEXT NOT NULL,
+    equity_curve  TEXT,
+    trades_data   TEXT,
+    config        TEXT,
     notes         TEXT
   );
 
-  -- Index untuk query umum
   CREATE INDEX IF NOT EXISTS idx_trades_session   ON trades(session_id);
   CREATE INDEX IF NOT EXISTS idx_trades_symbol    ON trades(symbol, open_time DESC);
   CREATE INDEX IF NOT EXISTS idx_trades_close     ON trades(session_id, close_time);
   CREATE INDEX IF NOT EXISTS idx_equity_session   ON equity_snapshots(session_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_logs_session     ON logs(session_id);
-  CREATE INDEX IF NOT EXISTS idx_candle_lookup    ON candle_cache(exchange, symbol, interval, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_candle_lookup    ON candle_cache(exchange, symbol, "interval", timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_candle_cache_at  ON candle_cache(cached_at);
   CREATE INDEX IF NOT EXISTS idx_backtest_symbol  ON backtest_history(symbol, timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_backtest_time    ON backtest_history(timestamp DESC);
-`);
+`;
 
-// ── Migration: tambah kolom indicators jika belum ada ────────────────────────
-try { db.exec(`ALTER TABLE trades ADD COLUMN indicators TEXT`); } catch { /* sudah ada */ }
+/**
+ * Buat tabel + index, lalu jalankan startup repair untuk sinkronkan stats sesi
+ * dengan trade records aktual. Harus dipanggil & di-await sebelum server.listen.
+ */
+async function init() {
+  await pool.query(SCHEMA_SQL);
 
-// ── Startup repair: recalc sesi yang statsnya tidak sinkron dengan trade records ──
-// Ini memperbaiki bug cross-session (trade buka di sesi A, tutup di sesi B)
-// tanpa perlu curl manual setiap kali.
-try {
-  const _allSessions = db.prepare(`SELECT id, initial_capital, wins, losses, total_trades FROM bot_sessions`).all();
-  const _recalcStmt  = db.prepare(`SELECT pnl FROM trades WHERE session_id = ? AND close_time IS NOT NULL AND pnl IS NOT NULL`);
-  const _updateStmt  = db.prepare(`UPDATE bot_sessions SET wins=@wins, losses=@losses, total_trades=@total, final_capital=@finalCap WHERE id=@id`);
-
-  for (const s of _allSessions) {
-    const rows      = _recalcStmt.all(s.id);
-    if (rows.length === 0) continue;
-    const wins      = rows.filter(r => r.pnl > 0).length;
-    const losses    = rows.filter(r => r.pnl <= 0).length;
-    const totalPnL  = rows.reduce((sum, r) => sum + r.pnl, 0);
-    const finalCap  = (s.initial_capital || 0) + totalPnL;
-    const mismatch  = s.wins !== wins || s.losses !== losses || s.total_trades !== rows.length;
-    if (mismatch) {
-      _updateStmt.run({ id: s.id, wins, losses, total: rows.length, finalCap });
-      console.log(`[DB repair] Sesi #${s.id}: wins ${s.wins}→${wins}, losses ${s.losses}→${losses}, total ${s.total_trades}→${rows.length}, finalCap $${finalCap.toFixed(2)}`);
+  // Startup repair: perbaiki bug cross-session (trade buka di sesi A, tutup di B)
+  try {
+    const { rows: allSessions } = await pool.query(
+      `SELECT id, initial_capital, wins, losses, total_trades FROM bot_sessions`
+    );
+    for (const s of allSessions) {
+      const { rows } = await pool.query(
+        `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+        [s.id]
+      );
+      if (rows.length === 0) continue;
+      const wins     = rows.filter((r) => r.pnl > 0).length;
+      const losses   = rows.filter((r) => r.pnl <= 0).length;
+      const totalPnL = rows.reduce((sum, r) => sum + r.pnl, 0);
+      const finalCap = (s.initial_capital || 0) + totalPnL;
+      const mismatch = s.wins !== wins || s.losses !== losses || s.total_trades !== rows.length;
+      if (mismatch) {
+        await pool.query(
+          `UPDATE bot_sessions SET wins=$2, losses=$3, total_trades=$4, final_capital=$5 WHERE id=$1`,
+          [s.id, wins, losses, rows.length, finalCap]
+        );
+        console.log(`[DB repair] Sesi #${s.id}: wins ${s.wins}→${wins}, losses ${s.losses}→${losses}, total ${s.total_trades}→${rows.length}, finalCap $${finalCap.toFixed(2)}`);
+      }
     }
+  } catch (e) {
+    console.warn(`[DB repair] Gagal: ${e.message}`);
   }
-} catch (e) {
-  console.warn(`[DB repair] Gagal: ${e.message}`);
 }
-
-// ─────────────────────────────────────────────
-// PREPARED STATEMENTS
-// ─────────────────────────────────────────────
-
-const stmts = {
-  // Sessions
-  openSession: db.prepare(`
-    INSERT INTO bot_sessions (exchange, symbol, mode, initial_capital, config)
-    VALUES (@exchange, @symbol, @mode, @initial_capital, @config)
-  `),
-  closeSession: db.prepare(`
-    UPDATE bot_sessions
-    SET stopped_at = datetime('now'),
-        final_capital = @final_capital,
-        total_trades  = @total_trades,
-        wins          = @wins,
-        losses        = @losses
-    WHERE id = @id
-  `),
-  updateSessionStats: db.prepare(`
-    UPDATE bot_sessions
-    SET final_capital = @final_capital,
-        total_trades  = @total_trades,
-        wins          = @wins,
-        losses        = @losses
-    WHERE id = @id
-  `),
-  getSession: db.prepare(`SELECT * FROM bot_sessions WHERE id = ?`),
-  // getSessions diakses via fungsi getSessions() di bawah — bukan langsung
-  // (statement ini tidak dipakai langsung, diganti dengan dynamic query)
-  _getSessionsBase: db.prepare(`
-    SELECT
-      s.*,
-      COALESCE(t.actual_pnl,    0) AS actual_pnl,
-      COALESCE(t.actual_wins,   0) AS actual_wins,
-      COALESCE(t.actual_losses, 0) AS actual_losses,
-      COALESCE(t.actual_total,  0) AS actual_total
-    FROM bot_sessions s
-    LEFT JOIN (
-      SELECT
-        session_id,
-        SUM(pnl)                                        AS actual_pnl,
-        SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)      AS actual_wins,
-        SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)      AS actual_losses,
-        COUNT(*)                                        AS actual_total
-      FROM trades
-      WHERE close_time IS NOT NULL AND pnl IS NOT NULL
-      GROUP BY session_id
-    ) t ON t.session_id = s.id
-    ORDER BY s.started_at DESC
-    LIMIT ?
-  `),
-  // Cari sesi yang masih terbuka (belum ada stopped_at) untuk resume
-  getLastOpenSession: db.prepare(`
-    SELECT * FROM bot_sessions
-    WHERE exchange = ? AND symbol = ? AND stopped_at IS NULL
-    ORDER BY started_at DESC
-    LIMIT 1
-  `),
-
-  // Trades
-  insertTrade: db.prepare(`
-    INSERT INTO trades
-      (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators)
-    VALUES
-      (@session_id, @exchange, @symbol, @side, @entry_price, @sl, @tp, @size,
-       @open_time, @atr, @dry_run, @order_id, @indicators)
-  `),
-  closeTrade: db.prepare(`
-    UPDATE trades
-    SET exit_price = @exit_price,
-        pnl        = @pnl,
-        pnl_pct    = @pnl_pct,
-        reason     = @reason,
-        close_time = @close_time
-    WHERE id = @id
-  `),
-  getTradeByOrderId: db.prepare(`
-    SELECT * FROM trades WHERE order_id = ? AND session_id = ?
-  `),
-  getOpenTrades: db.prepare(`
-    SELECT * FROM trades WHERE session_id = ? AND close_time IS NULL
-  `),
-  // Cari semua posisi terbuka untuk symbol tertentu lintas semua sesi
-  getOpenTradesBySymbol: db.prepare(`
-    SELECT t.*, s.exchange AS _exchange
-    FROM trades t
-    JOIN bot_sessions s ON s.id = t.session_id
-    WHERE t.symbol = ? AND t.close_time IS NULL
-    ORDER BY t.open_time ASC
-  `),
-  getTrades: db.prepare(`
-    SELECT * FROM trades
-    WHERE (:session_id IS NULL OR session_id = :session_id)
-      AND (:symbol IS NULL OR symbol = :symbol)
-    ORDER BY open_time DESC
-    LIMIT :limit
-  `),
-  getTradeStats: db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) as losses,
-      SUM(pnl) as total_pnl,
-      AVG(pnl) as avg_pnl,
-      MAX(pnl) as best_trade,
-      MIN(pnl) as worst_trade
-    FROM trades
-    WHERE session_id = ? AND close_time IS NOT NULL
-  `),
-
-  // Equity snapshots
-  insertEquity: db.prepare(`
-    INSERT INTO equity_snapshots (session_id, capital, price, open_positions)
-    VALUES (@session_id, @capital, @price, @open_positions)
-  `),
-  getEquity: db.prepare(`
-    SELECT timestamp, capital, price, open_positions
-    FROM equity_snapshots
-    WHERE session_id = ?
-    ORDER BY timestamp ASC
-  `),
-  getLatestEquity: db.prepare(`
-    SELECT * FROM equity_snapshots WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1
-  `),
-
-  // Candle cache
-  upsertCandles: db.prepare(`
-    INSERT OR REPLACE INTO candle_cache
-      (exchange, symbol, interval, timestamp, open, high, low, close, volume, cached_at)
-    VALUES
-      (@exchange, @symbol, @interval, @timestamp, @open, @high, @low, @close, @volume, unixepoch())
-  `),
-  getCachedCandles: db.prepare(`
-    SELECT * FROM candle_cache
-    WHERE exchange = @exchange
-      AND symbol   = @symbol
-      AND interval = @interval
-      AND cached_at > unixepoch() - @max_age_sec
-    ORDER BY timestamp ASC
-  `),
-  clearOldCache: db.prepare(`
-    DELETE FROM candle_cache
-    WHERE cached_at < unixepoch() - 86400
-  `),
-
-  // Logs
-  insertLog: db.prepare(`
-    INSERT INTO logs (session_id, level, message)
-    VALUES (@session_id, @level, @message)
-  `),
-  getLogs: db.prepare(`
-    SELECT * FROM logs
-    WHERE session_id = ?
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `),
-
-  // Backtest history
-  insertBacktestHistory: db.prepare(`
-    INSERT INTO backtest_history (symbol, metrics, equity_curve, trades_data, config, notes)
-    VALUES (@symbol, @metrics, @equity_curve, @trades_data, @config, @notes)
-  `),
-  getBacktestHistory: db.prepare(`
-    SELECT * FROM backtest_history
-    WHERE symbol = ?
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `),
-  getAllBacktestHistory: db.prepare(`
-    SELECT * FROM backtest_history
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `),
-  getBacktestHistoryById: db.prepare(`
-    SELECT * FROM backtest_history WHERE id = ?
-  `),
-};
 
 // ─────────────────────────────────────────────
 // PUBLIC API
@@ -333,117 +155,131 @@ const stmts = {
 
 // ── Sessions ──────────────────────────────────
 
-function openSession({ exchange, symbol, mode, initialCapital, config }) {
-  const result = stmts.openSession.run({
-    exchange,
-    symbol,
-    mode:            mode || (config?.dryRun ? "dry_run" : "live"),
-    initial_capital: initialCapital ?? 0,
-    config:          JSON.stringify(config ?? {}),
-  });
-  return result.lastInsertRowid;
+async function openSession({ exchange, symbol, mode, initialCapital, config }) {
+  const { rows } = await pool.query(
+    `INSERT INTO bot_sessions (exchange, symbol, mode, initial_capital, config)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [
+      exchange,
+      symbol,
+      mode || (config?.dryRun ? "dry_run" : "live"),
+      initialCapital ?? 0,
+      JSON.stringify(config ?? {}),
+    ]
+  );
+  return rows[0].id;
 }
 
 /**
  * Cari sesi terakhir yang masih terbuka (stopped_at IS NULL) untuk resume
- * @returns {object|null} session row atau null
+ * @returns {Promise<object|null>} session row atau null
  */
-function getLastOpenSession(exchange, symbol) {
-  const row = stmts.getLastOpenSession.get(exchange, symbol);
-  return row ? parseSession(row) : null;
+async function getLastOpenSession(exchange, symbol) {
+  const { rows } = await pool.query(
+    `SELECT * FROM bot_sessions
+     WHERE exchange = $1 AND symbol = $2 AND stopped_at IS NULL
+     ORDER BY started_at DESC LIMIT 1`,
+    [exchange, symbol]
+  );
+  return rows[0] ? parseSession(rows[0]) : null;
 }
 
-function closeSession(sessionId, { finalCapital, totalTrades, wins, losses }) {
-  stmts.closeSession.run({
-    id:            sessionId,
-    final_capital: finalCapital ?? 0,
-    total_trades:  totalTrades  ?? 0,
-    wins:          wins         ?? 0,
-    losses:        losses       ?? 0,
-  });
+async function closeSession(sessionId, { finalCapital, totalTrades, wins, losses }) {
+  await pool.query(
+    `UPDATE bot_sessions
+     SET stopped_at = now(), final_capital = $2, total_trades = $3, wins = $4, losses = $5
+     WHERE id = $1`,
+    [sessionId, finalCapital ?? 0, totalTrades ?? 0, wins ?? 0, losses ?? 0]
+  );
 }
 
 /**
- * Update stats sesi tanpa menutupnya (stopped_at tetap NULL)
- * Digunakan saat bot stop tapi masih ada posisi terbuka → sesi bisa di-resume
+ * Update stats sesi tanpa menutupnya (stopped_at tetap NULL).
+ * Fire-and-forget: dipanggil dari konteks sync, jadi tangani error internal.
  */
-function updateSessionStats(sessionId, { finalCapital, totalTrades, wins, losses }) {
-  stmts.updateSessionStats.run({
-    id:            sessionId,
-    final_capital: finalCapital ?? 0,
-    total_trades:  totalTrades  ?? 0,
-    wins:          wins         ?? 0,
-    losses:        losses       ?? 0,
-  });
+async function updateSessionStats(sessionId, { finalCapital, totalTrades, wins, losses }) {
+  try {
+    await pool.query(
+      `UPDATE bot_sessions
+       SET final_capital = $2, total_trades = $3, wins = $4, losses = $5
+       WHERE id = $1`,
+      [sessionId, finalCapital ?? 0, totalTrades ?? 0, wins ?? 0, losses ?? 0]
+    );
+  } catch (e) {
+    console.warn(`[DB] updateSessionStats gagal: ${e.message}`);
+  }
 }
 
 /**
  * Hitung ulang stats sesi dari trade records aktual di DB.
- * Dipakai saat trade dibuka di sesi lama tapi ditutup di sesi baru (cross-session).
- * @param {number} sessionId
+ * Fire-and-forget best-effort — tidak boleh crash caller.
  */
-function recalcSessionStats(sessionId) {
+async function recalcSessionStats(sessionId) {
   if (!sessionId) return;
   try {
-    const session = stmts.getSession.get(sessionId);
+    const { rows: sRows } = await pool.query(`SELECT * FROM bot_sessions WHERE id = $1`, [sessionId]);
+    const session = sRows[0];
     if (!session) return;
-    const trades = db.prepare(`
-      SELECT pnl FROM trades
-      WHERE session_id = ? AND close_time IS NOT NULL AND pnl IS NOT NULL
-    `).all(sessionId);
-    const wins       = trades.filter(t => t.pnl > 0).length;
-    const losses     = trades.filter(t => t.pnl <= 0).length;
-    const total      = trades.length;
-    const totalPnL   = trades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const finalCap   = (session.initial_capital || 0) + totalPnL;
-    stmts.updateSessionStats.run({
-      id:            sessionId,
-      final_capital: finalCap,
-      total_trades:  total,
-      wins,
-      losses,
-    });
-  } catch { /* jangan crash */ }
+    const { rows: trades } = await pool.query(
+      `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+      [sessionId]
+    );
+    const wins     = trades.filter((t) => t.pnl > 0).length;
+    const losses   = trades.filter((t) => t.pnl <= 0).length;
+    const total    = trades.length;
+    const totalPnL = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const finalCap = (session.initial_capital || 0) + totalPnL;
+    await pool.query(
+      `UPDATE bot_sessions SET final_capital = $2, total_trades = $3, wins = $4, losses = $5 WHERE id = $1`,
+      [sessionId, finalCap, total, wins, losses]
+    );
+  } catch (e) {
+    console.warn(`[DB] recalcSessionStats gagal: ${e.message}`);
+  }
 }
+
+const SESSIONS_BASE = `
+  SELECT
+    s.*,
+    COALESCE(t.actual_pnl,    0) AS actual_pnl,
+    COALESCE(t.actual_wins,   0) AS actual_wins,
+    COALESCE(t.actual_losses, 0) AS actual_losses,
+    COALESCE(t.actual_total,  0) AS actual_total
+  FROM bot_sessions s
+  LEFT JOIN (
+    SELECT
+      session_id,
+      SUM(pnl)                                   AS actual_pnl,
+      SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)  AS actual_wins,
+      SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)  AS actual_losses,
+      COUNT(*)                                   AS actual_total
+    FROM trades
+    WHERE close_time IS NOT NULL AND pnl IS NOT NULL
+    GROUP BY session_id
+  ) t ON t.session_id = s.id`;
 
 /**
  * @param {number}      limit  — max session yang dikembalikan (default 20)
- * @param {string|null} symbol — filter per simbol, misal "BTCUSDT" (null = semua)
+ * @param {string|null} symbol — filter per simbol (null = semua)
  */
-function getSessions(limit = 20, symbol = null) {
+async function getSessions(limit = 20, symbol = null) {
   if (symbol) {
-    // Query dengan filter symbol
-    return db.prepare(`
-      SELECT
-        s.*,
-        COALESCE(t.actual_pnl,    0) AS actual_pnl,
-        COALESCE(t.actual_wins,   0) AS actual_wins,
-        COALESCE(t.actual_losses, 0) AS actual_losses,
-        COALESCE(t.actual_total,  0) AS actual_total
-      FROM bot_sessions s
-      LEFT JOIN (
-        SELECT
-          session_id,
-          SUM(pnl)                                        AS actual_pnl,
-          SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)      AS actual_wins,
-          SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)      AS actual_losses,
-          COUNT(*)                                        AS actual_total
-        FROM trades
-        WHERE close_time IS NOT NULL AND pnl IS NOT NULL
-        GROUP BY session_id
-      ) t ON t.session_id = s.id
-      WHERE s.symbol = ?
-      ORDER BY s.started_at DESC
-      LIMIT ?
-    `).all(symbol.toUpperCase(), limit).map(parseSession);
+    const { rows } = await pool.query(
+      `${SESSIONS_BASE} WHERE s.symbol = $1 ORDER BY s.started_at DESC LIMIT $2`,
+      [symbol.toUpperCase(), limit]
+    );
+    return rows.map(parseSession);
   }
-  // Semua symbol
-  return stmts._getSessionsBase.all(limit).map(parseSession);
+  const { rows } = await pool.query(
+    `${SESSIONS_BASE} ORDER BY s.started_at DESC LIMIT $1`,
+    [limit]
+  );
+  return rows.map(parseSession);
 }
 
-function getSession(id) {
-  const row = stmts.getSession.get(id);
-  return row ? parseSession(row) : null;
+async function getSession(id) {
+  const { rows } = await pool.query(`SELECT * FROM bot_sessions WHERE id = $1`, [id]);
+  return rows[0] ? parseSession(rows[0]) : null;
 }
 
 function parseSession(row) {
@@ -452,106 +288,133 @@ function parseSession(row) {
 
 // ── Trades ────────────────────────────────────
 
-function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators }) {
-  const result = stmts.insertTrade.run({
-    session_id:  sessionId,
-    exchange,
-    symbol,
-    side,
-    entry_price: entryPrice,
-    sl:          sl   ?? null,
-    tp:          tp   ?? null,
-    size:        size ?? null,
-    open_time:   openTime ? new Date(openTime).toISOString() : new Date().toISOString(),
-    atr:         atr  ?? null,
-    dry_run:     dryRun ? 1 : 0,
-    order_id:    orderId ?? null,
-    indicators:  indicators ? JSON.stringify(indicators) : null,
-  });
-  return result.lastInsertRowid;
+async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators }) {
+  const { rows } = await pool.query(
+    `INSERT INTO trades
+       (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     RETURNING id`,
+    [
+      sessionId,
+      exchange,
+      symbol,
+      side,
+      entryPrice,
+      sl ?? null,
+      tp ?? null,
+      size ?? null,
+      openTime ? new Date(openTime).toISOString() : new Date().toISOString(),
+      atr ?? null,
+      dryRun ? 1 : 0,
+      orderId ?? null,
+      indicators ? JSON.stringify(indicators) : null,
+    ]
+  );
+  return rows[0].id;
 }
 
-function closeTrade(tradeId, { exitPrice, pnl, reason, closeTime }) {
-  const pnlPct = null; // calculé en dehors si besoin
-  stmts.closeTrade.run({
-    id:          tradeId,
-    exit_price:  exitPrice,
-    pnl,
-    pnl_pct:     pnlPct,
-    reason,
-    close_time:  closeTime ? new Date(closeTime).toISOString() : new Date().toISOString(),
-  });
+async function closeTrade(tradeId, { exitPrice, pnl, reason, closeTime }) {
+  await pool.query(
+    `UPDATE trades
+     SET exit_price = $2, pnl = $3, pnl_pct = $4, reason = $5, close_time = $6
+     WHERE id = $1`,
+    [
+      tradeId,
+      exitPrice,
+      pnl,
+      null,
+      reason,
+      closeTime ? new Date(closeTime).toISOString() : new Date().toISOString(),
+    ]
+  );
 }
 
-function getTrades({ sessionId = null, symbol = null, limit = 100 } = {}) {
-  return stmts.getTrades.all({
-    session_id: sessionId,
-    symbol:     symbol,
-    limit:      Math.min(limit, 1000),
-  });
+async function getTrades({ sessionId = null, symbol = null, limit = 100 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT * FROM trades
+     WHERE ($1::int IS NULL OR session_id = $1)
+       AND ($2::text IS NULL OR symbol = $2)
+     ORDER BY open_time DESC
+     LIMIT $3`,
+    [sessionId, symbol, Math.min(limit, 1000)]
+  );
+  return rows;
 }
 
-function getTradeStats(sessionId) {
-  return stmts.getTradeStats.get(sessionId);
+async function getTradeStats(sessionId) {
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*) AS total,
+       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
+       SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses,
+       SUM(pnl) AS total_pnl,
+       AVG(pnl) AS avg_pnl,
+       MAX(pnl) AS best_trade,
+       MIN(pnl) AS worst_trade
+     FROM trades
+     WHERE session_id = $1 AND close_time IS NOT NULL`,
+    [sessionId]
+  );
+  return rows[0];
 }
 
-function getOpenTrades(sessionId) {
-  return stmts.getOpenTrades.all(sessionId);
+async function getOpenTrades(sessionId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM trades WHERE session_id = $1 AND close_time IS NULL`,
+    [sessionId]
+  );
+  return rows;
 }
 
 /**
  * Export data trade lengkap dengan snapshot indikator — untuk analitik / ML.
  * Hanya trade yang sudah tertutup (punya exit_price dan pnl).
- *
- * @param {{ symbol?: string, dryRun?: boolean, limit?: number }} opts
- * @returns {Array<{rsi, atr, atrPct, volumeRatio, emaTrend, htfTrend, side, strategy, result, pnl, pnlPct, openTime, closeTime}>}
  */
-function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
+async function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
   let where = `close_time IS NOT NULL AND indicators IS NOT NULL`;
   const params = [];
-  if (symbol) { where += ` AND symbol = ?`; params.push(symbol); }
-  if (dryRun !== null) { where += ` AND dry_run = ?`; params.push(dryRun ? 1 : 0); }
+  let i = 1;
+  if (symbol) { where += ` AND symbol = $${i++}`; params.push(symbol); }
+  if (dryRun !== null) { where += ` AND dry_run = $${i++}`; params.push(dryRun ? 1 : 0); }
   params.push(Math.min(limit, 5000));
 
-  const rows = db.prepare(`
-    SELECT t.*, s.mode, s.exchange AS _exchange
-    FROM trades t
-    LEFT JOIN bot_sessions s ON s.id = t.session_id
-    WHERE ${where}
-    ORDER BY t.open_time DESC
-    LIMIT ?
-  `).all(...params);
+  const { rows } = await pool.query(
+    `SELECT t.*, s.mode, s.exchange AS _exchange
+     FROM trades t
+     LEFT JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}
+     ORDER BY t.open_time DESC
+     LIMIT $${i}`,
+    params
+  );
 
-  return rows.map(row => {
+  return rows.map((row) => {
     const ind = safeParseJSON(row.indicators);
     return {
-      // Snapshot indikator saat entry
-      rsi:         ind.rsi         ?? null,
-      atr:         ind.atr         ?? null,
-      atrPct:      ind.atrPct      ?? null,
-      volumeRatio: ind.volumeRatio ?? null,
-      emaFast:     ind.emaFast     ?? null,
-      emaSlow:     ind.emaSlow     ?? null,
-      emaTrendBias: ind.emaTrendBias ?? null, // "bullish" | "bearish" | null
-      htfTrend:    ind.htfTrend    ?? null,
-      strategy:    ind.strategy    ?? null,
-      // Trade info
-      side:        row.side,
-      symbol:      row.symbol,
-      entryPrice:  row.entry_price,
-      exitPrice:   row.exit_price,
-      sl:          row.sl,
-      tp:          row.tp,
-      size:        row.size,
-      pnl:         row.pnl,
-      pnlPct:      row.pnl_pct,
-      reason:      row.reason,
-      dryRun:      row.dry_run === 1,
-      openTime:    row.open_time,
-      closeTime:   row.close_time,
-      // Label untuk ML
-      result:      row.pnl > 0 ? "win" : "loss",
-      rMultiple:   row.sl && row.entry_price ? parseFloat(((row.exit_price - row.entry_price) / Math.abs(row.entry_price - row.sl)).toFixed(2)) : null,
+      rsi:          ind.rsi          ?? null,
+      atr:          ind.atr          ?? null,
+      atrPct:       ind.atrPct       ?? null,
+      volumeRatio:  ind.volumeRatio  ?? null,
+      emaFast:      ind.emaFast      ?? null,
+      emaSlow:      ind.emaSlow      ?? null,
+      emaTrendBias: ind.emaTrendBias ?? null,
+      htfTrend:     ind.htfTrend     ?? null,
+      strategy:     ind.strategy     ?? null,
+      side:         row.side,
+      symbol:       row.symbol,
+      entryPrice:   row.entry_price,
+      exitPrice:    row.exit_price,
+      sl:           row.sl,
+      tp:           row.tp,
+      size:         row.size,
+      pnl:          row.pnl,
+      pnlPct:       row.pnl_pct,
+      reason:       row.reason,
+      dryRun:       row.dry_run === 1,
+      openTime:     row.open_time,
+      closeTime:    row.close_time,
+      result:       row.pnl > 0 ? "win" : "loss",
+      rMultiple:    row.sl && row.entry_price ? parseFloat(((row.exit_price - row.entry_price) / Math.abs(row.entry_price - row.sl)).toFixed(2)) : null,
     };
   });
 }
@@ -560,66 +423,101 @@ function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
  * Ambil semua posisi terbuka (close_time IS NULL) untuk symbol tertentu,
  * lintas SEMUA sesi — digunakan saat bot restart untuk restore posisi lama.
  */
-function getOpenTradesBySymbol(symbol) {
-  return stmts.getOpenTradesBySymbol.all(symbol);
+async function getOpenTradesBySymbol(symbol) {
+  const { rows } = await pool.query(
+    `SELECT t.*, s.exchange AS _exchange
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE t.symbol = $1 AND t.close_time IS NULL
+     ORDER BY t.open_time ASC`,
+    [symbol]
+  );
+  return rows;
 }
 
 // ── Equity ────────────────────────────────────
 
-function snapshotEquity({ sessionId, capital, price, openPositions }) {
-  stmts.insertEquity.run({
-    session_id:     sessionId,
-    capital,
-    price:          price         ?? null,
-    open_positions: openPositions ?? 0,
-  });
+/** Fire-and-forget best-effort — tidak boleh crash caller. */
+async function snapshotEquity({ sessionId, capital, price, openPositions }) {
+  try {
+    await pool.query(
+      `INSERT INTO equity_snapshots (session_id, capital, price, open_positions)
+       VALUES ($1, $2, $3, $4)`,
+      [sessionId, capital, price ?? null, openPositions ?? 0]
+    );
+  } catch (e) {
+    console.warn(`[DB] snapshotEquity gagal: ${e.message}`);
+  }
 }
 
-function getEquity(sessionId) {
-  return stmts.getEquity.all(sessionId);
+async function getEquity(sessionId) {
+  const { rows } = await pool.query(
+    `SELECT timestamp, capital, price, open_positions
+     FROM equity_snapshots
+     WHERE session_id = $1
+     ORDER BY timestamp ASC`,
+    [sessionId]
+  );
+  return rows;
 }
 
 /**
- * Semua equity snapshot dari SEMUA sesi, diurutkan waktu (untuk kurva akumulatif).
- * Opsional filter by mode ("live" | "dry_run") agar tidak campur.
+ * Semua equity snapshot dari SEMUA sesi, diurutkan waktu (kurva akumulatif).
+ * Opsional filter by mode ("live" | "dry_run").
  */
-function getAllEquity(mode = "live") {
-  // Gunakan parameterized query — hindari SQL injection dari nilai `mode`
-  const modeFilter = mode ? "AND bs.mode = ?" : "";
+async function getAllEquity(mode = "live") {
+  const modeFilter = mode ? "AND bs.mode = $1" : "";
   const params     = mode ? [mode] : [];
-  return db.prepare(`
-    SELECT es.timestamp, es.capital, es.price, es.open_positions,
-           bs.symbol, bs.mode
-    FROM   equity_snapshots es
-    JOIN   bot_sessions     bs ON bs.id = es.session_id
-    WHERE  1=1 ${modeFilter}
-    ORDER  BY es.timestamp ASC
-  `).all(...params);
+  const { rows } = await pool.query(
+    `SELECT es.timestamp, es.capital, es.price, es.open_positions, bs.symbol, bs.mode
+     FROM equity_snapshots es
+     JOIN bot_sessions bs ON bs.id = es.session_id
+     WHERE 1=1 ${modeFilter}
+     ORDER BY es.timestamp ASC`,
+    params
+  );
+  return rows;
 }
 
 // ── Candle cache ──────────────────────────────
 
-function cacheCandles(exchange, symbol, interval, candles) {
-  const insert = db.transaction((rows) => {
-    for (const c of rows) {
-      stmts.upsertCandles.run({
-        exchange, symbol, interval,
-        timestamp: c.timestamp,
-        open:      c.open,
-        high:      c.high,
-        low:       c.low,
-        close:     c.close,
-        volume:    c.volume ?? 0,
-      });
+/** Fire-and-forget best-effort — upsert dalam transaksi. */
+async function cacheCandles(exchange, symbol, interval, candles) {
+  if (!candles || candles.length === 0) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const c of candles) {
+      await client.query(
+        `INSERT INTO candle_cache
+           (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
+         ON CONFLICT (exchange, symbol, "interval", timestamp)
+         DO UPDATE SET
+           open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+           close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
+        [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
+      );
     }
-  });
-  insert(candles);
+    await client.query("COMMIT");
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch { /* noop */ }
+    console.warn(`[DB] cacheCandles gagal: ${e.message}`);
+  } finally {
+    client.release();
+  }
 }
 
-function getCachedCandles(exchange, symbol, interval, maxAgeSeconds = 900) {
-  const rows = stmts.getCachedCandles.all({ exchange, symbol, interval, max_age_sec: maxAgeSeconds });
+async function getCachedCandles(exchange, symbol, interval, maxAgeSeconds = 900) {
+  const { rows } = await pool.query(
+    `SELECT * FROM candle_cache
+     WHERE exchange = $1 AND symbol = $2 AND "interval" = $3
+       AND cached_at > extract(epoch from now())::bigint - $4
+     ORDER BY timestamp ASC`,
+    [exchange, symbol, interval, maxAgeSeconds]
+  );
   if (rows.length === 0) return null;
-  return rows.map(r => ({
+  return rows.map((r) => ({
     timestamp: r.timestamp,
     date:      new Date(r.timestamp).toISOString(),
     open:      r.open,
@@ -630,80 +528,93 @@ function getCachedCandles(exchange, symbol, interval, maxAgeSeconds = 900) {
   }));
 }
 
-function clearOldCache() {
-  stmts.clearOldCache.run();
+async function clearOldCache() {
+  await pool.query(
+    `DELETE FROM candle_cache WHERE cached_at < extract(epoch from now())::bigint - 86400`
+  );
 }
 
 // ── Logs ──────────────────────────────────────
 
-function insertLog({ sessionId, level, message }) {
-  stmts.insertLog.run({ session_id: sessionId ?? null, level, message });
+/** Fire-and-forget best-effort — tidak boleh crash caller. */
+async function insertLog({ sessionId, level, message }) {
+  try {
+    await pool.query(
+      `INSERT INTO logs (session_id, level, message) VALUES ($1, $2, $3)`,
+      [sessionId ?? null, level, message]
+    );
+  } catch (e) {
+    console.warn(`[DB] insertLog gagal: ${e.message}`);
+  }
 }
 
-function getLogs(sessionId, limit = 200) {
-  return stmts.getLogs.all(sessionId, limit);
+async function getLogs(sessionId, limit = 200) {
+  const { rows } = await pool.query(
+    `SELECT * FROM logs WHERE session_id = $1 ORDER BY timestamp DESC LIMIT $2`,
+    [sessionId, limit]
+  );
+  return rows;
 }
 
 // ── User Settings ─────────────────────────────
 
-const _getSetting = db.prepare(`SELECT value FROM user_settings WHERE key = ?`);
-const _setSetting = db.prepare(`
-  INSERT INTO user_settings (key, value, updated_at)
-  VALUES (?, ?, datetime('now'))
-  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-`);
-
-function getSetting(key, defaultValue = null) {
-  const row = _getSetting.get(key);
-  return row ? row.value : defaultValue;
+async function getSetting(key, defaultValue = null) {
+  const { rows } = await pool.query(`SELECT value FROM user_settings WHERE key = $1`, [key]);
+  return rows[0] ? rows[0].value : defaultValue;
 }
 
-function setSetting(key, value) {
-  _setSetting.run(key, String(value));
+async function setSetting(key, value) {
+  await pool.query(
+    `INSERT INTO user_settings (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [key, String(value)]
+  );
 }
 
 // ── Backtest History ──────────────────────────
 
-function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData, config, notes }) {
-  const result = stmts.insertBacktestHistory.run({
-    symbol:       symbol.toUpperCase(),
-    metrics:      JSON.stringify(metrics),
-    equity_curve: equityCurve ? JSON.stringify(equityCurve) : null,
-    trades_data:  tradesData ? JSON.stringify(tradesData) : null,
-    config:       config ? JSON.stringify(config) : null,
-    notes:        notes ?? null,
-  });
-  return result.lastInsertRowid;
+async function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData, config, notes }) {
+  const { rows } = await pool.query(
+    `INSERT INTO backtest_history (symbol, metrics, equity_curve, trades_data, config, notes)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [
+      symbol.toUpperCase(),
+      JSON.stringify(metrics),
+      equityCurve ? JSON.stringify(equityCurve) : null,
+      tradesData ? JSON.stringify(tradesData) : null,
+      config ? JSON.stringify(config) : null,
+      notes ?? null,
+    ]
+  );
+  return rows[0].id;
 }
 
-function getBacktestHistory(symbol, limit = 20) {
-  const rows = stmts.getBacktestHistory.all(symbol.toUpperCase(), limit);
-  return rows.map(row => ({
-    ...row,
-    metrics:     safeParseJSON(row.metrics),
-    equity_curve: safeParseJSON(row.equity_curve),
-    trades_data:  safeParseJSON(row.trades_data),
-    config:       safeParseJSON(row.config),
-  }));
+async function getBacktestHistory(symbol, limit = 20) {
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2`,
+    [symbol.toUpperCase(), limit]
+  );
+  return rows.map(mapBacktestRow);
 }
 
-function getAllBacktestHistory(limit = 50) {
-  const rows = stmts.getAllBacktestHistory.all(limit);
-  return rows.map(row => ({
-    ...row,
-    metrics:     safeParseJSON(row.metrics),
-    equity_curve: safeParseJSON(row.equity_curve),
-    trades_data:  safeParseJSON(row.trades_data),
-    config:       safeParseJSON(row.config),
-  }));
+async function getAllBacktestHistory(limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history ORDER BY timestamp DESC LIMIT $1`,
+    [limit]
+  );
+  return rows.map(mapBacktestRow);
 }
 
-function getBacktestHistoryById(id) {
-  const row = stmts.getBacktestHistoryById.get(id);
-  if (!row) return null;
+async function getBacktestHistoryById(id) {
+  const { rows } = await pool.query(`SELECT * FROM backtest_history WHERE id = $1`, [id]);
+  return rows[0] ? mapBacktestRow(rows[0]) : null;
+}
+
+function mapBacktestRow(row) {
   return {
     ...row,
-    metrics:     safeParseJSON(row.metrics),
+    metrics:      safeParseJSON(row.metrics),
     equity_curve: safeParseJSON(row.equity_curve),
     trades_data:  safeParseJSON(row.trades_data),
     config:       safeParseJSON(row.config),
@@ -716,10 +627,17 @@ function safeParseJSON(str) {
   try { return JSON.parse(str); } catch { return {}; }
 }
 
-function getDbPath() { return DB_PATH; }
+function getDbPath() { return process.env.DATABASE_URL || "postgres"; }
+
+async function close() {
+  await pool.end();
+}
 
 // Export
 module.exports = {
+  // lifecycle
+  init,
+  close,
   // sessions
   getLastOpenSession,
   openSession,
@@ -757,5 +675,5 @@ module.exports = {
   getBacktestHistoryById,
   // meta
   getDbPath,
-  _db: db,
+  _pool: pool,
 };

@@ -64,7 +64,7 @@ module.exports = function createBotsRouter({ bots, getBot, broadcast, SYMBOLS_LI
     if (wasRunning) await oldBot.stop();
     oldBot.removeAllListeners();
 
-    db.setSetting(`strategy_${sym}`, strategy);
+    await db.setSetting(`strategy_${sym}`, strategy);
 
     const capital = parseFloat(process.env[`CAPITAL_${sym}`]) || parseFloat(process.env.CAPITAL) || 500;
     const newBot  = new BotEngine({ symbol: sym, capital, strategy });

@@ -130,8 +130,8 @@ module.exports = function createBotsRouter(helpers) {
         dryRun: bot.dryRun,
       });
 
-      if (!instance.isRunning()) {
-        instance.start();
+      if (!instance.getState().running) {
+        await instance.start();
       }
 
       // Log action
@@ -178,8 +178,8 @@ module.exports = function createBotsRouter(helpers) {
 
       // Stop instance if running
       const instance = getBot(symbol);
-      if (instance && instance.isRunning()) {
-        instance.stop();
+      if (instance && instance.getState().running) {
+        await instance.stop();
       }
 
       // Update DB

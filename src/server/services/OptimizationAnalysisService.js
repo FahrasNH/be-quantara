@@ -268,7 +268,7 @@ class OptimizationAnalysisService {
    */
   static async _getBacktestData(symbol, backtest_id = null) {
     if (backtest_id) {
-      const backtest = BacktestHistoryService.getById(backtest_id);
+      const backtest = await BacktestHistoryService.getById(backtest_id);
       if (!backtest) throw new Error(`Backtest ${backtest_id} not found`);
       return backtest;
     } else {
