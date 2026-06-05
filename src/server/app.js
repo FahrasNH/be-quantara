@@ -68,8 +68,15 @@ const limiter = rateLimit({
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5, // stricter limit for auth
-  skip: (req) => req.method !== "POST",
+  max: 5, // stricter limit for auth (login/register)
+  skip: (req) => {
+    // Skip refresh - has its own refreshLimiter (20/15min)
+    if (req.method === "POST" && req.path === "/refresh") {
+      return true;
+    }
+    // Only limit POST requests
+    return req.method !== "POST";
+  },
 });
 
 app.use("/api/v1/auth/", authLimiter);
@@ -201,12 +208,20 @@ BotEngine.prototype.emit = function (event, ...args) {
 // ── Server Start ───────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
-  console.log(`\n🚀 Quantara Bot Server running on ${PORT}`);
-  console.log(`📊 Dashboard: http://localhost:5173`);
-  console.log(`🔐 Auth enabled`);
-  console.log(`📡 WebSocket: ws://localhost:${PORT}/ws\n`);
-});
+// Pastikan tabel engine (Postgres) siap sebelum menerima request.
+db.init()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`\n🚀 Quantara Bot Server running on ${PORT}`);
+      console.log(`📊 Dashboard: http://localhost:5173`);
+      console.log(`🔐 Auth enabled`);
+      console.log(`📡 WebSocket: ws://localhost:${PORT}/ws\n`);
+    });
+  })
+  .catch((err) => {
+    console.error("[STARTUP] Gagal inisialisasi database:", err.message);
+    process.exit(1);
+  });
 
 // Graceful shutdown
 process.on("SIGTERM", async () => {
