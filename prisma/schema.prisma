@@ -13,9 +13,11 @@ model User {
   username  String   @unique
   password  String
   
-  balance   Float    @default(0)
-  apiKey    String?
-  apiSecret String?
+  balance      Float    @default(0)
+  apiKey       String?
+  apiSecret    String?
+  apiPassphrase String?
+  exchangeType  String?  @default("bitget")
   
   bots      Bot[]
   strategies UserStrategy[]

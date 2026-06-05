@@ -37,7 +37,7 @@ module.exports = function createAccountRouter() {
 
   /**
    * GET /api/v1/account/keys
-   * Get API keys
+   * Get API keys (masked for security)
    */
   router.get(
     "/keys",
@@ -49,13 +49,19 @@ module.exports = function createAccountRouter() {
         select: {
           apiKey: true,
           apiSecret: true,
+          apiPassphrase: true,
+          exchangeType: true,
         },
       });
 
+      const mask = (val) => val ? `${val.substring(0, 4)}****${val.substring(val.length - 4)}` : null;
+
       res.json({
         ok: true,
-        apiKey: user?.apiKey || null,
-        apiSecret: user?.apiSecret || null,
+        exchangeType: user?.exchangeType || "bitget",
+        apiKey: user?.apiKey ? mask(user.apiKey) : null,
+        apiSecret: user?.apiSecret ? mask(user.apiSecret) : null,
+        apiPassphrase: user?.apiPassphrase ? "****" : null,
         configured: !!(user?.apiKey && user?.apiSecret),
       });
     })
@@ -63,42 +69,71 @@ module.exports = function createAccountRouter() {
 
   /**
    * POST /api/v1/account/keys
-   * Update API keys
+   * Update API keys — supports Bitget (3 fields) and Binance (2 fields)
    */
   router.post(
     "/keys",
     asyncHandler(async (req, res) => {
       const userId = req.userId;
-      const { apiKey, apiSecret } = req.body;
+      const { apiKey, apiSecret, apiPassphrase, exchangeType = "bitget" } = req.body;
 
       if (!apiKey || !apiSecret) {
         return res.status(400).json({
           ok: false,
           statusCode: 400,
-          message: "apiKey and apiSecret required",
+          message: "apiKey and apiSecret are required",
         });
       }
 
-      // TODO: Encrypt API keys before storing (use libsodium or similar)
-      // For now, storing as-is (not secure for production)
+      if (exchangeType === "bitget" && !apiPassphrase) {
+        return res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: "Passphrase is required for Bitget",
+        });
+      }
 
-      const user = await prisma.user.update({
+      await prisma.user.update({
         where: { id: userId },
         data: {
           apiKey,
           apiSecret,
-        },
-        select: {
-          id: true,
-          email: true,
-          username: true,
+          apiPassphrase: apiPassphrase || null,
+          exchangeType,
         },
       });
 
       res.json({
         ok: true,
-        message: "API keys updated",
-        user,
+        message: `${exchangeType.charAt(0).toUpperCase() + exchangeType.slice(1)} API keys saved`,
+        exchangeType,
+        configured: true,
+      });
+    })
+  );
+
+  /**
+   * DELETE /api/v1/account/keys
+   * Remove API keys / disconnect exchange
+   */
+  router.delete(
+    "/keys",
+    asyncHandler(async (req, res) => {
+      const userId = req.userId;
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          apiKey: null,
+          apiSecret: null,
+          apiPassphrase: null,
+          exchangeType: null,
+        },
+      });
+
+      res.json({
+        ok: true,
+        message: "Exchange disconnected",
       });
     })
   );
