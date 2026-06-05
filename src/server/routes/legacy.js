@@ -11,7 +11,7 @@ module.exports = function createLegacyRouter({ bots, getBot, SYMBOLS_LIST }) {
   // Legacy start/stop (pakai query ?symbol= atau symbol pertama)
   router.post("/bot/start", async (req, res) => {
     const sym = req.query.symbol?.toUpperCase() || SYMBOLS_LIST[0];
-    const bot = getBot(sym);
+    const bot = getBot(req.userId, sym);
     if (!bot) return res.status(404).json({ error: "Symbol tidak tersedia" });
     try {
       await bot.start();
@@ -23,7 +23,7 @@ module.exports = function createLegacyRouter({ bots, getBot, SYMBOLS_LIST }) {
 
   router.post("/bot/stop", async (req, res) => {
     const sym = req.query.symbol?.toUpperCase() || SYMBOLS_LIST[0];
-    const bot = getBot(sym);
+    const bot = getBot(req.userId, sym);
     if (!bot) return res.status(404).json({ error: "Symbol tidak tersedia" });
     try {
       await bot.stop();

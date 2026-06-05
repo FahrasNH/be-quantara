@@ -59,7 +59,7 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   router.get("/candles", async (req, res) => {
     try {
       const sym      = (req.query.symbol || SYMBOLS_LIST[0] || "BTCUSDT").toUpperCase();
-      const bot      = getBot(sym);
+      const bot      = getBot(req.userId, sym);
       const interval = req.query.interval || bot?.config?.interval || "15m";
       const limit    = Math.min(safeInt(req.query.limit, 200), 500);
       res.json(await sharedClient.getCandles(sym, interval, limit));

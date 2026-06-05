@@ -97,27 +97,37 @@ app.use("/api/v1/", limiter);
 const sharedClient = createExchangeClient();
 
 // ── Bot Management (In-Memory) ─────────────────────────────────────────────
+// Namespace by userId untuk mencegah cross-user leak.
+// Key: `${userId}:${symbol}` → BotEngine instance
 const botsMap = {};
 
-function getBot(symbol) {
-  return botsMap[symbol] || null;
+function makeKey(userId, symbol) {
+  return `${userId}:${symbol}`;
 }
 
-function getAllBots() {
-  return Object.values(botsMap);
+function getBot(userId, symbol) {
+  return botsMap[makeKey(userId, symbol)] || null;
 }
 
-function createBotInstance(symbol, configOverrides = {}) {
-  const existing = botsMap[symbol];
+function getAllBots(userId) {
+  const prefix = `${userId}:`;
+  return Object.entries(botsMap)
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, instance]) => instance);
+}
+
+function createBotInstance(userId, symbol, configOverrides = {}) {
+  const key = makeKey(userId, symbol);
+  const existing = botsMap[key];
   if (existing) {
     // Jika bot sedang running, kembalikan instance yang ada (tidak bisa recreate saat live)
     if (existing.getState().running) return existing;
 
     // Jika bot berhenti, recreate dengan kredensial terbaru (user bisa ganti API key)
-    delete botsMap[symbol];
+    delete botsMap[key];
   }
   const bot = new BotEngine({ symbol, ...configOverrides });
-  botsMap[symbol] = bot;
+  botsMap[key] = bot;
   return bot;
 }
 

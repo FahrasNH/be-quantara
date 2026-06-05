@@ -75,7 +75,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      const instance = getBot(symbol);
+      const instance = getBot(userId, symbol);
       const state = instance ? instance.getState() : {};
 
       res.json({
@@ -151,7 +151,7 @@ module.exports = function createBotsRouter(helpers) {
 
       // Create or get bot instance — sertakan kredensial user agar BotEngine
       // bisa fetch balance & OHLCV nyata dari exchange
-      const instance = createBotInstance(symbol, {
+      const instance = createBotInstance(userId, symbol, {
         capital:    bot.capital,
         strategyKey: bot.strategyKey,
         dryRun:     bot.dryRun,
@@ -207,7 +207,7 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       // Stop instance if running
-      const instance = getBot(symbol);
+      const instance = getBot(userId, symbol);
       if (instance && instance.getState().running) {
         await instance.stop();
       }
@@ -278,7 +278,7 @@ module.exports = function createBotsRouter(helpers) {
       });
 
       // Update instance if running
-      const instance = getBot(symbol);
+      const instance = getBot(userId, symbol);
       if (instance) {
         instance.config.strategyKey = strategyKey;
       }
@@ -325,7 +325,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      const instance = getBot(symbol);
+      const instance = getBot(userId, symbol);
 
       if (bot.dryRun || !instance) {
         return res.json({
@@ -379,7 +379,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      const instance = getBot(symbol);
+      const instance = getBot(userId, symbol);
       if (!instance) {
         return res.json({
           ok: true,
