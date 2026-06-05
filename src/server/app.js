@@ -69,14 +69,18 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 // Rate limiting
+// AUTH_RATE_LIMIT bisa di-set via .env untuk melonggarkan limit saat testing
+const AUTH_MAX = parseInt(process.env.AUTH_RATE_LIMIT) || (process.env.NODE_ENV === "production" ? 10 : 100);
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: { ok: false, error: "Too many requests, please try again later" },
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5, // stricter limit for auth (login/register)
+  max: AUTH_MAX,
+  message: { ok: false, statusCode: 429, message: "Terlalu banyak permintaan. Tunggu beberapa saat lalu coba lagi." },
   skip: (req) => {
     // Skip refresh - has its own refreshLimiter (20/15min)
     if (req.method === "POST" && req.path === "/refresh") {
