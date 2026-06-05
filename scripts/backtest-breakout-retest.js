@@ -173,6 +173,8 @@ async function runBacktest() {
       direction: signal,
       entry:     trade.entry.toFixed(2),
       exit:      trade.exit.toFixed(2),
+      sl:        riskCfg.stopLoss.toFixed(2),
+      tp:        riskCfg.takeProfit.toFixed(2),
       pnl:       realPnl.toFixed(2),
       pnlPct:    pnlPct.toFixed(3),
       reason:    trade.reason,
@@ -180,6 +182,12 @@ async function runBacktest() {
     });
     activeUntil = trade.exitBar;
   }
+
+  // Log first 10 trades for inspection
+  console.log(`\n📋 First 10 trades (detailed):`);
+  trades.slice(0, 10).forEach((t, i) => {
+    console.log(`  ${i+1}. ${t.direction} @ ${t.entry} | SL=${t.sl} TP=${t.tp} | Exit=${t.exit} (${t.reason}) | PnL=$${t.pnl}`);
+  });
 
   if (trades.length === 0) {
     console.log("⚠️  No trades generated. Check the breakout/retest detection logic.\n");
