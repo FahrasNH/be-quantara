@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -131,13 +131,14 @@ model AuditLog {
 model Session {
   id        String   @id @default(cuid())
   userId    String
-  
-  refreshToken String @unique
+
+  refreshToken String? @unique
+  refreshTokenHash String?
   userAgent String?
   ipAddress String?
-  
+
   expiresAt DateTime
   createdAt DateTime @default(now())
-  
+
   @@index([userId])
 }

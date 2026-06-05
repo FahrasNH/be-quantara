@@ -5,10 +5,26 @@ const {
   validateLoginInput,
   validateRegisterInput,
 } = require('../../middleware/validation');
+const rateLimit = require('express-rate-limit');
 
 module.exports = function createAuthRoutes() {
   const express = require('express');
   const router = express.Router();
+
+  // Rate limiter for token refresh (20 req/15min per IP)
+  const refreshLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    keyGenerator: (req) => req.ip,
+    handler: (req, res) => {
+      res.status(429).json({
+        ok: false,
+        statusCode: 429,
+        message: 'Too many refresh requests, please try again later',
+        retryAfter: Math.ceil(req.rateLimit.resetTime / 1000),
+      });
+    },
+  });
 
   /**
    * POST /api/v1/auth/register
@@ -94,6 +110,7 @@ module.exports = function createAuthRoutes() {
    */
   router.post(
     '/refresh',
+    refreshLimiter,
     asyncHandler(async (req, res) => {
       const { refreshToken } = req.body;
 
@@ -153,6 +170,40 @@ module.exports = function createAuthRoutes() {
       res.json({
         ok: true,
         user,
+      });
+    })
+  );
+
+  /**
+   * POST /api/v1/auth/logout
+   * Logout user - invalidate refresh token
+   */
+  router.post(
+    '/logout',
+    authMiddleware,
+    asyncHandler(async (req, res) => {
+      if (!req.userId) {
+        return res.status(401).json({
+          ok: false,
+          statusCode: 401,
+          message: 'Unauthorized',
+        });
+      }
+
+      await AuthService.logout(req.userId);
+
+      await AuthService.logAction(
+        req.userId,
+        'LOGOUT',
+        'session',
+        req.userId,
+        req.ip,
+        req.headers['user-agent']
+      );
+
+      res.json({
+        ok: true,
+        message: 'Logged out successfully',
       });
     })
   );

@@ -81,11 +81,14 @@ class AuthService {
     // Generate tokens
     const tokens = this.generateTokens(user.id);
 
-    // Save refresh token
+    // Hash refresh token before storage
+    const refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 12);
+
+    // Save refresh token hash
     await prisma.session.create({
       data: {
         userId: user.id,
-        refreshToken: tokens.refreshToken,
+        refreshTokenHash,
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       },
     });
@@ -119,19 +122,39 @@ class AuthService {
   static async refreshAccessToken(refreshToken) {
     try {
       const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+      const userId = decoded.userId;
 
-      // Verify session exists
-      const session = await prisma.session.findUnique({
-        where: { refreshToken },
+      // Find session for this user
+      const session = await prisma.session.findFirst({
+        where: { userId },
       });
 
-      if (!session || session.expiresAt < new Date()) {
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      if (session.expiresAt < new Date()) {
         throw new Error('Refresh token expired');
+      }
+
+      // Verify token: check hashed token first (new way), fall back to plaintext (old way)
+      let tokenValid = false;
+
+      if (session.refreshTokenHash) {
+        // New way: verify with bcrypt
+        tokenValid = await bcrypt.compare(refreshToken, session.refreshTokenHash);
+      } else if (session.refreshToken) {
+        // Backward compatibility: old plaintext tokens (during migration)
+        tokenValid = refreshToken === session.refreshToken;
+      }
+
+      if (!tokenValid) {
+        throw new Error('Invalid refresh token');
       }
 
       // Generate new access token
       const newAccessToken = jwt.sign(
-        { userId: decoded.userId },
+        { userId },
         process.env.JWT_SECRET,
         { expiresIn: '15m' }
       );
@@ -174,6 +197,16 @@ class AuthService {
         balance: true,
         createdAt: true,
       },
+    });
+  }
+
+  /**
+   * Logout user - delete refresh token
+   */
+  static async logout(userId) {
+    // Delete all sessions for the user (logout all devices)
+    await prisma.session.deleteMany({
+      where: { userId },
     });
   }
 
