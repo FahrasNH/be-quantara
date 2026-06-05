@@ -10,8 +10,8 @@ function errorHandler(err, req, res, next) {
     return res.status(409).json({
       ok: false,
       statusCode: 409,
-      message: 'Unique constraint violation',
-      error: 'Resource already exists',
+      message: 'Resource already exists',
+      errors: ['Unique constraint violation'],
     });
   }
 
@@ -20,7 +20,7 @@ function errorHandler(err, req, res, next) {
       ok: false,
       statusCode: 404,
       message: 'Resource not found',
-      error: err.message,
+      errors: [err.message],
     });
   }
 
@@ -30,6 +30,7 @@ function errorHandler(err, req, res, next) {
       ok: false,
       statusCode: err.statusCode,
       message: err.message,
+      errors: [err.message],
     });
   }
 
@@ -37,9 +38,12 @@ function errorHandler(err, req, res, next) {
   res.status(500).json({
     ok: false,
     statusCode: 500,
-    message: process.env.NODE_ENV === 'production' 
-      ? 'Internal server error' 
+    message: process.env.NODE_ENV === 'production'
+      ? 'Internal server error'
       : err.message,
+    errors: process.env.NODE_ENV === 'production'
+      ? []
+      : [err.message],
   });
 }
 

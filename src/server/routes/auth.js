@@ -19,22 +19,32 @@ module.exports = function createAuthRoutes() {
     asyncHandler(async (req, res) => {
       const { email, username, password } = req.body;
 
-      const user = await AuthService.register(email, username, password);
+      try {
+        const user = await AuthService.register(email, username, password);
 
-      await AuthService.logAction(
-        user.id,
-        'REGISTER',
-        'user',
-        user.id,
-        req.ip,
-        req.headers['user-agent']
-      );
+        await AuthService.logAction(
+          user.id,
+          'REGISTER',
+          'user',
+          user.id,
+          req.ip,
+          req.headers['user-agent']
+        );
 
-      res.status(201).json({
-        ok: true,
-        message: 'User registered successfully',
-        user,
-      });
+        res.status(201).json({
+          ok: true,
+          message: 'User registered successfully',
+          user,
+        });
+      } catch (err) {
+        // Return validation errors with proper format
+        res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: err.message,
+          errors: [err.message],
+        });
+      }
     })
   );
 
@@ -48,22 +58,32 @@ module.exports = function createAuthRoutes() {
     asyncHandler(async (req, res) => {
       const { email, password } = req.body;
 
-      const result = await AuthService.login(email, password);
+      try {
+        const result = await AuthService.login(email, password);
 
-      await AuthService.logAction(
-        result.user.id,
-        'LOGIN',
-        'user',
-        result.user.id,
-        req.ip,
-        req.headers['user-agent']
-      );
+        await AuthService.logAction(
+          result.user.id,
+          'LOGIN',
+          'user',
+          result.user.id,
+          req.ip,
+          req.headers['user-agent']
+        );
 
-      res.json({
-        ok: true,
-        message: 'Logged in successfully',
-        ...result,
-      });
+        res.json({
+          ok: true,
+          message: 'Logged in successfully',
+          ...result,
+        });
+      } catch (err) {
+        // Return auth errors with proper format
+        res.status(401).json({
+          ok: false,
+          statusCode: 401,
+          message: err.message,
+          errors: [err.message],
+        });
+      }
     })
   );
 
@@ -81,15 +101,25 @@ module.exports = function createAuthRoutes() {
           ok: false,
           statusCode: 400,
           message: 'Refresh token required',
+          errors: ['Refresh token is required'],
         });
       }
 
-      const accessToken = await AuthService.refreshAccessToken(refreshToken);
+      try {
+        const accessToken = await AuthService.refreshAccessToken(refreshToken);
 
-      res.json({
-        ok: true,
-        accessToken,
-      });
+        res.json({
+          ok: true,
+          accessToken,
+        });
+      } catch (err) {
+        res.status(401).json({
+          ok: false,
+          statusCode: 401,
+          message: err.message,
+          errors: [err.message],
+        });
+      }
     })
   );
 
