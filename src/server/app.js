@@ -122,7 +122,7 @@ app.use("/api/v1/market", createMarketRouter({ createExchangeClient }));
 app.use("/api/v1/history", createHistoryRouter({ getBot, getAllBots }));
 
 // Backtest routes (protected)
-app.use("/api/v1/backtest", createBacktestRouter());
+app.use("/api/v1/backtest", createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));
 
 // Legacy routes (protected - deprecated)
 app.use("/api/v1/legacy", createLegacyRouter({ getBot, getAllBots }));
