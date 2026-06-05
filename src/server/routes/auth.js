@@ -15,13 +15,13 @@ module.exports = function createAuthRoutes() {
   const refreshLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
-    keyGenerator: (req) => req.ip,
+    standardHeaders: true,
+    legacyHeaders: false,
     handler: (req, res) => {
       res.status(429).json({
         ok: false,
         statusCode: 429,
         message: 'Too many refresh requests, please try again later',
-        retryAfter: Math.ceil(req.rateLimit.resetTime / 1000),
       });
     },
   });
