@@ -1,206 +1,204 @@
-// ─── src/server/app.js ───────────────────────────────────────────────────────
-// Quantara API Server — Multi-Bot (HTTP + WebSocket)
-// Mendukung hingga 3 koin secara bersamaan.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── src/server/app.js (Refactored with Auth & Validation) ─────────────────
+// Quantara API Server — Multi-Bot with Auth Layer
 
-const express     = require("express");
-const cors        = require("cors");
+const express = require("express");
+const cors = require("cors");
 const compression = require("compression");
-const helmet      = require("helmet");
-const http        = require("http");
+const helmet = require("helmet");
+const http = require("http");
 const { WebSocketServer } = require("ws");
 const os = require("os");
+const rateLimit = require("express-rate-limit");
 
-const cfg        = require("../config/env");
-const BotEngine  = require("../application/BotEngine");
-const db         = require("../infrastructure/db/database");
+const cfg = require("../config/env");
+const BotEngine = require("../application/BotEngine");
+const db = require("../infrastructure/db/database");
 const { createExchangeClient } = require("../infrastructure/exchange");
-const { listStrategies }       = require("../domain/strategies");
+const { listStrategies } = require("../domain/strategies");
 
-// Route factories
-const createBotsRouter    = require("./routes/bots-afs");
-const createMarketRouter  = require("./routes/market");
+// Middleware
+const { authMiddleware, optionalAuthMiddleware } = require("../middleware/auth");
+const { errorHandler, asyncHandler } = require("../middleware/errorHandler");
+const { validateSymbolParam } = require("../middleware/validation");
+
+// Routes
+const createAuthRouter = require("./routes/auth");
+const createBotsRouter = require("./routes/bots-afs");
+const createMarketRouter = require("./routes/market");
 const createHistoryRouter = require("./routes/history");
-const createHealthRouter  = require("./routes/health");
+const createHealthRouter = require("./routes/health");
 const createBacktestRouter = require("./routes/backtest");
-const createLegacyRouter  = require("./routes/legacy");
+const createLegacyRouter = require("./routes/legacy");
 
-// ── Express + HTTP + WebSocket ─────────────────────────────────────────────
+// ── CORS & Security ────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "http://187.77.135.156",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ];
 
-const app    = express();
-app.use(helmet({ contentSecurityPolicy: false })); // CSP off — agar WS & inline style tetap jalan
+const app = express();
+
+// Security
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors({
   origin: (origin, cb) => {
-    // Izinkan request tanpa origin (curl, server-to-server) dan origin yang terdaftar
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) cb(null, true);
-    else cb(new Error(`CORS: origin tidak diizinkan — ${origin}`));
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error("CORS not allowed"));
+    }
   },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
-app.use(express.json());
 
-const server = http.createServer(app);
-const wss    = new WebSocketServer({ server });
+// Body parsing
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
-// ── Bot Registry ──────────────────────────────────────────────────────────
-const SYMBOLS_LIST = cfg.symbolsList;
-
-// Shared exchange client untuk public market data
-const sharedClient = createExchangeClient();
-
-// Map: symbol → BotEngine
-const bots = new Map();
-
-for (const sym of SYMBOLS_LIST) {
-  const capital       = cfg.capitalFor(sym);
-  const savedStrategy = db.getSetting(`strategy_${sym}`) || cfg.STRATEGY;
-  const bot           = new BotEngine({ symbol: sym, capital, strategy: savedStrategy });
-  bots.set(sym, bot);
-}
-
-// Helper: ambil bot berdasarkan symbol (case-insensitive)
-function getBot(sym) {
-  return bots.get(sym?.toUpperCase()) ?? null;
-}
-
-// ── WebSocket broadcast ────────────────────────────────────────────────────
-function broadcast(data) {
-  const msg = JSON.stringify(data);
-  wss.clients.forEach(ws => {
-    if (ws.readyState === ws.OPEN) ws.send(msg);
-  });
-}
-
-// Forward event tiap bot ke WS
-for (const [sym, bot] of bots) {
-  bot.on("log",    entry => broadcast({ type: "log",    symbol: sym, data: entry }));
-  bot.on("status", state => broadcast({ type: "status", symbol: sym, data: state }));
-}
-
-// ── WebSocket heartbeat — cegah Nginx/proxy timeout ──────────────────────
-// Ping setiap 25 detik; jika client tidak jawab → putus & hapus
-const WS_PING_INTERVAL = 25_000;
-const wsPingTimer = setInterval(() => {
-  wss.clients.forEach(ws => {
-    if (!ws.isAlive) {
-      ws.terminate();
-      return;
-    }
-    ws.isAlive = false;
-    ws.ping();   // browser WebSocket otomatis kirim pong
-  });
-}, WS_PING_INTERVAL);
-
-wss.on("close", () => clearInterval(wsPingTimer));
-
-// Kirim status semua bot + recent logs saat WS connect
-wss.on("connection", ws => {
-  ws.isAlive = true;
-  ws.on("pong", () => { ws.isAlive = true; }); // tandai client masih hidup
-
-  console.log("[WS] Client terhubung");
-  for (const [sym, bot] of bots) {
-    bot.getLogs(50).forEach(entry =>
-      ws.send(JSON.stringify({ type: "log", symbol: sym, data: entry }))
-    );
-    ws.send(JSON.stringify({ type: "status", symbol: sym, data: bot.getState() }));
-  }
-  ws.on("close", () => console.log("[WS] Client terputus"));
-  ws.on("error", err => console.error("[WS] WS error:", err.message));
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { ok: false, error: "Too many requests, please try again later" },
+});
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5, // stricter limit for auth
+  skip: (req) => req.method !== "POST",
 });
 
-// ── Routes ─────────────────────────────────────────────────────────────────
+app.use("/api/v1/auth/", authLimiter);
+app.use("/api/v1/", limiter);
 
-// Health check
+// ── Bot Management (In-Memory) ─────────────────────────────────────────────
+const botsMap = {};
+
+function getBot(symbol) {
+  return botsMap[symbol] || null;
+}
+
+function getAllBots() {
+  return Object.values(botsMap);
+}
+
+function createBotInstance(symbol, configOverrides = {}) {
+  if (botsMap[symbol]) {
+    return botsMap[symbol];
+  }
+  const bot = new BotEngine({ symbol, ...configOverrides });
+  botsMap[symbol] = bot;
+  return bot;
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────
+
+// Health check (public)
 app.get("/health", (req, res) => {
-  const runningBots = [...bots.entries()]
-    .filter(([, b]) => b.getState().running)
-    .map(([sym]) => sym);
   res.json({
-    ok:          true,
-    timestamp:   new Date().toISOString(),
-    version:     "2.0.0",
-    symbols:     SYMBOLS_LIST,
-    runningBots,
+    ok: true,
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
   });
 });
 
-// Strategies list
-app.get("/api/strategies", (req, res) => res.json(listStrategies()));
+// Auth routes (public)
+app.use("/api/v1/auth", createAuthRouter());
 
-// Modular route groups
-const routeCtx = { bots, getBot, broadcast, sharedClient, SYMBOLS_LIST, healthChecker: null, db };
-app.use("/api/bots",       createBotsRouter(routeCtx));
-app.use("/api",            createMarketRouter(routeCtx));
-app.use("/api",            createHistoryRouter({ SYMBOLS_LIST }));
-app.use("/api",            createLegacyRouter(routeCtx));
+// Protected routes below this line
+app.use("/api/v1/", authMiddleware);
 
-// v1 API Routes — for PHASE 2 frontend integration
-app.use("/api/v1/bots",     createBotsRouter(routeCtx));
-app.use("/api/v1/health",   createHealthRouter(routeCtx));
-app.use("/api/v1/history",  createHistoryRouter({ SYMBOLS_LIST }));
-app.use("/api/v1/backtest", createBacktestRouter(routeCtx));
+// Bots routes (protected, user-isolated)
+app.use("/api/v1/bots", createBotsRouter({ getBot, getAllBots, createBotInstance }));
 
-// ── Server Start ────────────────────────────────────────────────────────────
-function getLocalIP() {
-  try {
-    const ifaces = os.networkInterfaces();
-    for (const name of Object.keys(ifaces)) {
-      for (const iface of ifaces[name]) {
-        if (iface.family === "IPv4" && !iface.internal) return iface.address;
+// Market routes (protected)
+app.use("/api/v1/market", createMarketRouter({ createExchangeClient }));
+
+// History routes (protected)
+app.use("/api/v1/history", createHistoryRouter({ getBot, getAllBots }));
+
+// Backtest routes (protected)
+app.use("/api/v1/backtest", createBacktestRouter());
+
+// Legacy routes (protected - deprecated)
+app.use("/api/v1/legacy", createLegacyRouter({ getBot, getAllBots }));
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    ok: false,
+    statusCode: 404,
+    message: "Endpoint not found",
+  });
+});
+
+// Error handling (last middleware)
+app.use(errorHandler);
+
+// ── HTTP Server Setup ──────────────────────────────────────────────────────
+const server = http.createServer(app);
+
+// ── WebSocket Setup ───────────────────────────────────────────────────────
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+wss.on("connection", (ws, req) => {
+  const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  console.log(`[WS] Client connected: ${clientIp}`);
+
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      // Handle WebSocket messages (bot logs, real-time data, etc.)
+      if (msg.type === "subscribe" && msg.botSymbol) {
+        ws.botSymbol = msg.botSymbol;
       }
+    } catch (err) {
+      console.error("[WS] Message parse error:", err.message);
     }
-  } catch { /* sandbox / docker environment */ }
-  return "127.0.0.1";
-}
-
-server.listen(cfg.PORT, cfg.HOST, () => {
-  const displayIP = cfg.HOST === "0.0.0.0" ? getLocalIP() : cfg.HOST;
-
-  console.log("\n╔══════════════════════════════════════════════╗");
-  console.log("║    Quantara API Server — Multi-Bot Ready     ║");
-  console.log("╚══════════════════════════════════════════════╝");
-  console.log(`  HTTP  : http://${displayIP}:${cfg.PORT}`);
-  console.log(`  WS    : ws://${displayIP}:${cfg.PORT}`);
-  console.log(`  Mode  : ${cfg.DRY_RUN ? "DRY RUN" : "LIVE TRADING"}`);
-  console.log(`  Symbols: ${SYMBOLS_LIST.join(", ")}`);
-  SYMBOLS_LIST.forEach(sym => {
-    console.log(`    • ${sym} — Capital: $${cfg.capitalFor(sym)}`);
   });
-  console.log();
+
+  ws.on("close", () => {
+    console.log(`[WS] Client disconnected: ${clientIp}`);
+  });
+
+  ws.on("error", (err) => {
+    console.error("[WS] Error:", err.message);
+  });
 });
 
-// ── Graceful Shutdown ────────────────────────────────────────────────────────
-async function shutdown(sig) {
-  console.log(`\n[${sig}] Server shutting down...`);
-  for (const [sym, bot] of bots) {
-    if (bot.getState().running) {
-      console.log(`  Stopping ${sym}...`);
-      await bot.stop();
-    }
+// Broadcast bot logs to WebSocket clients
+const originalEmit = BotEngine.prototype.emit;
+BotEngine.prototype.emit = function (event, ...args) {
+  if (event === "log") {
+    wss.clients.forEach((client) => {
+      if (client.readyState === 1 && (!client.botSymbol || client.botSymbol === this.config.symbol)) {
+        client.send(JSON.stringify({ type: "log", symbol: this.config.symbol, data: args[0] }));
+      }
+    });
   }
-  server.close(() => {
-    console.log("Server closed.");
+  return originalEmit.call(this, event, ...args);
+};
+
+// ── Server Start ───────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+
+server.listen(PORT, () => {
+  console.log(`\n🚀 Quantara Bot Server running on ${PORT}`);
+  console.log(`📊 Dashboard: http://localhost:5173`);
+  console.log(`🔐 Auth enabled`);
+  console.log(`📡 WebSocket: ws://localhost:${PORT}/ws\n`);
+});
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  console.log("[SHUTDOWN] SIGTERM received, shutting down gracefully...");
+  server.close(async () => {
+    await db.close();
     process.exit(0);
   });
-}
-
-process.on("SIGINT",  () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("uncaughtException", err => {
-  console.error("[FATAL] uncaughtException:", err.message, err.stack);
-  // Jangan exit — biarkan PM2 yang restart jika perlu
 });
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[FATAL] unhandledRejection:", reason instanceof Error ? reason.stack : reason);
-  // Jangan crash — log saja, PM2 akan restart jika process mati
-});
-
-module.exports = { app, server, bots, getBot };
+module.exports = { app, server, wss };
