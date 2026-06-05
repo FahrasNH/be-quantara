@@ -359,12 +359,14 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const closeCurr = closes[closes.length - 1];
 
     // LONG: price above slow EMA + fast above slow (uptrend structure) + RSI in healthy zone
-    if (closeCurr > emaSlow && emaFast > emaSlow && rsi > 40 && rsi < 70) {
+    // 35–75: wider than original 40–70 to catch more mid-trend entries, still avoids extremes
+    if (closeCurr > emaSlow && emaFast > emaSlow && rsi > 35 && rsi < 75) {
       return "LONG";
     }
 
     // SHORT: price below slow EMA + fast below slow (downtrend) + RSI in healthy zone
-    if (closeCurr < emaSlow && emaFast < emaSlow && rsi < 60 && rsi > 30) {
+    // 25–65: symmetric adjustment (was 30–60)
+    if (closeCurr < emaSlow && emaFast < emaSlow && rsi < 65 && rsi > 25) {
       return "SHORT";
     }
 
