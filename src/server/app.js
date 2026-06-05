@@ -101,13 +101,19 @@ function createBotInstance(symbol, configOverrides = {}) {
 // ── Routes ────────────────────────────────────────────────────────────────
 
 // Health check (public)
-app.get("/health", (req, res) => {
+const healthHandler = (req, res) => {
   res.json({
     ok: true,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
-});
+};
+
+// Root health (direct backend access)
+app.get("/health", healthHandler);
+
+// Versioned health (public — reachable through nginx /api/ proxy)
+app.get("/api/v1/health", healthHandler);
 
 // Auth routes (public — NO authentication required)
 app.use("/api/v1/auth", createAuthRouter());
