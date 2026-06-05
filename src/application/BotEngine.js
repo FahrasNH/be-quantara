@@ -11,6 +11,7 @@ const cfg = require("../config/env");
 const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout } = require("../domain/indicators");
 const { getStrategy } = require("../domain/strategies");
 const db       = require("../infrastructure/db/database");
+const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
 
 class BotEngine extends EventEmitter {
@@ -242,7 +243,12 @@ class BotEngine extends EventEmitter {
     if (this.logs.length > 1000) this.logs.shift();
     this.emit("log", entry);
 
-    // Persist ke DB hanya level penting
+    // Persist ke Prisma BotLog (semua level) bila botId tersedia
+    if (this.config.botId) {
+      persistBotLog({ botId: this.config.botId, level, message: msg }).catch(() => {});
+    }
+
+    // Legacy session logs (trade/error/warn) — backward compat
     if (this.sessionId && (level === "trade" || level === "error" || level === "warn")) {
       try {
         db.insertLog({ sessionId: this.sessionId, level, message: msg });

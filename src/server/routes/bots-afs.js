@@ -10,6 +10,7 @@ module.exports = function createBotsRouter(helpers) {
   const prisma = new PrismaClient();
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
+  const { getUserBotLogs } = require("../../infrastructure/db/botLogRepository");
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
@@ -47,6 +48,20 @@ module.exports = function createBotsRouter(helpers) {
         count: bots.length,
         bots,
       });
+    })
+  );
+
+  /**
+   * GET /api/v1/bots/logs
+   * Semua log bot user (gabungan, kronologis) — untuk hydrate FE setelah refresh
+   */
+  router.get(
+    "/logs",
+    asyncHandler(async (req, res) => {
+      const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
+      const logs  = await getUserBotLogs(req.userId, limit);
+
+      res.json({ ok: true, count: logs.length, logs });
     })
   );
 
@@ -152,12 +167,13 @@ module.exports = function createBotsRouter(helpers) {
       // Create or get bot instance — sertakan kredensial user agar BotEngine
       // bisa fetch balance & OHLCV nyata dari exchange
       const instance = createBotInstance(userId, symbol, {
-        capital:    bot.capital,
+        capital:     bot.capital,
         strategyKey: bot.strategyKey,
-        dryRun:     bot.dryRun,
-        apiKey:     decryptedApiKey,
-        apiSecret:  decryptedApiSecret,
-        passphrase: decryptedPassphrase,
+        dryRun:      bot.dryRun,
+        botId:       bot.id,
+        apiKey:      decryptedApiKey,
+        apiSecret:   decryptedApiSecret,
+        passphrase:  decryptedPassphrase,
       });
 
       if (!instance.getState().running) {
@@ -436,11 +452,18 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       // Get logs from DB (pagination coming in PHASE 2)
-      const logs = await prisma.botLog.findMany({
-        where: { botId: bot.id },
+      const rows = await prisma.botLog.findMany({
+        where:   { botId: bot.id },
         orderBy: { createdAt: "desc" },
-        take: limit,
+        take:    limit,
       });
+
+      const logs = rows.reverse().map(row => ({
+        time:   row.createdAt,
+        level:  row.level,
+        msg:    row.message,
+        symbol,
+      }));
 
       res.json({
         ok: true,

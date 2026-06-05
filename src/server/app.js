@@ -136,7 +136,10 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
   const existing = botsMap[key];
   if (existing) {
     // Jika bot sedang running, kembalikan instance yang ada (tidak bisa recreate saat live)
-    if (existing.getState().running) return existing;
+    if (existing.getState().running) {
+      if (configOverrides.botId) existing.config.botId = configOverrides.botId;
+      return existing;
+    }
 
     // Jika bot berhenti, recreate dengan kredensial terbaru (user bisa ganti API key)
     delete botsMap[key];
@@ -211,6 +214,20 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws, req) => {
   const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
   console.log(`[WS] Client connected: ${clientIp}`);
+
+  // Replay buffer in-memory (100 entri terakhir per bot) ke klien baru
+  const WS_REPLAY_PER_BOT = 100;
+  Object.values(botsMap).forEach((instance) => {
+    const symbol = instance.config?.symbol;
+    if (!symbol) return;
+    instance.getLogs(WS_REPLAY_PER_BOT).forEach((entry) => {
+      if (ws.readyState === 1) {
+        try {
+          ws.send(JSON.stringify({ type: "log", symbol, data: entry }));
+        } catch { /* client mungkin sudah disconnect */ }
+      }
+    });
+  });
 
   ws.on("message", (raw) => {
     try {
