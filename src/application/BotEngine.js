@@ -813,7 +813,7 @@ class BotEngine extends EventEmitter {
   async _fetchCandles() {
     // OHLCV adalah endpoint publik — tidak perlu API key.
     // dryRun hanya mencegah order placement, bukan pengambilan harga nyata.
-    // Kita selalu coba fetch data real dulu; fallback ke simulasi hanya jika gagal.
+    // Selalu coba fetch data real; simulasi hanya jika exchange benar-benar tidak bisa dijangkau.
 
     // 1. Coba cache dulu (valid 15 menit)
     try {
@@ -835,21 +835,34 @@ class BotEngine extends EventEmitter {
 
       return candles;
     } catch (err) {
-      this._log("warn", `Gagal ambil candles dari API, pakai simulasi: ${err.message}`);
-      return this._generateDryRunCandles();
+      this._log("warn", `Gagal ambil candles dari exchange: ${err.message}`);
     }
+
+    // 3. Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
+    //    sehingga ATR / SL / TP simulasi tetap proporsional dengan harga nyata.
+    let seedPrice = null;
+    try {
+      const ticker = await this.client.getTicker(this.config.symbol);
+      if (ticker?.last && ticker.last > 0) {
+        seedPrice = ticker.last;
+        this._log("info", `Simulasi candle — seed price dari ticker: $${seedPrice.toLocaleString()}`);
+      }
+    } catch { /* ticker juga gagal — gunakan harga hardcode sebagai last resort */ }
+
+    return this._generateDryRunCandles(seedPrice);
   }
 
-  _generateDryRunCandles(n = 200) {
-    // Harga awal simulasi per simbol — agar indikator (ATR, SL, TP) masuk akal
-    const SEED_PRICES = {
+  // seedPrice: harga real dari ticker (null = tidak tersedia, pakai hardcode per simbol)
+  _generateDryRunCandles(seedPrice = null, n = 200) {
+    // Harga hardcode hanya sebagai LAST RESORT jika ticker dan OHLCV keduanya gagal
+    const FALLBACK_PRICES = {
       BTCUSDT: 65000,
       ETHUSDT: 3500,
       SOLUSDT: 160,
       BNBUSDT: 650,
     };
     const sym   = (this.config.symbol || "BTCUSDT").replace("/", "").replace(":USDT", "");
-    let price   = SEED_PRICES[sym] ?? 100;
+    let price   = seedPrice ?? FALLBACK_PRICES[sym] ?? 100;
 
     const candles = [];
     const now = Date.now();
