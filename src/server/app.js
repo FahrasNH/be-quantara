@@ -75,6 +75,9 @@ const authLimiter = rateLimit({
 app.use("/api/v1/auth/", authLimiter);
 app.use("/api/v1/", limiter);
 
+// ── Shared Exchange Client (singleton untuk market data) ───────────────────
+const sharedClient = createExchangeClient();
+
 // ── Bot Management (In-Memory) ─────────────────────────────────────────────
 const botsMap = {};
 
@@ -114,7 +117,12 @@ app.use("/api/v1/auth", createAuthRouter());
 app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance }));
 
 // Market routes (protected)
-app.use("/api/v1/market", authMiddleware, createMarketRouter({ createExchangeClient }));
+app.use("/api/v1/market", authMiddleware, createMarketRouter({
+  sharedClient,
+  bots: { values: () => Object.values(botsMap), entries: () => Object.entries(botsMap) },
+  getBot,
+  SYMBOLS_LIST: cfg.symbolsList,
+}));
 
 // History routes (protected)
 app.use("/api/v1/history", authMiddleware, createHistoryRouter({ getBot, getAllBots }));

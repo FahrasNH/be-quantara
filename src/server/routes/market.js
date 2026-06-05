@@ -39,8 +39,7 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   // Balance dari exchange
   router.get("/balance", async (req, res) => {
     try {
-      const anyBot = [...bots.values()][0];
-      res.json(await anyBot.client.getBalance("USDT"));
+      res.json(await sharedClient.getBalance("USDT"));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -49,9 +48,8 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   // Posisi terbuka
   router.get("/positions", async (req, res) => {
     try {
-      const sym = req.query.symbol?.toUpperCase() || SYMBOLS_LIST[0];
-      const bot = getBot(sym) || [...bots.values()][0];
-      res.json(await bot.client.getPositions(bot.config.symbol));
+      const sym = req.query.symbol?.toUpperCase() || SYMBOLS_LIST[0] || "BTCUSDT";
+      res.json(await sharedClient.getPositions(sym));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -60,9 +58,9 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   // Candles terkini
   router.get("/candles", async (req, res) => {
     try {
-      const sym      = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
-      const bot      = getBot(sym) || [...bots.values()][0];
-      const interval = req.query.interval || bot.config.interval;
+      const sym      = (req.query.symbol || SYMBOLS_LIST[0] || "BTCUSDT").toUpperCase();
+      const bot      = getBot(sym);
+      const interval = req.query.interval || bot?.config?.interval || "15m";
       const limit    = Math.min(safeInt(req.query.limit, 200), 500);
       res.json(await sharedClient.getCandles(sym, interval, limit));
     } catch (err) {
