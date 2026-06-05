@@ -18,7 +18,7 @@ const { createExchangeClient } = require("../infrastructure/exchange");
 const { listStrategies }       = require("../domain/strategies");
 
 // Route factories
-const createBotsRouter    = require("./routes/bots");
+const createBotsRouter    = require("./routes/bots-afs");
 const createMarketRouter  = require("./routes/market");
 const createHistoryRouter = require("./routes/history");
 const createHealthRouter  = require("./routes/health");
