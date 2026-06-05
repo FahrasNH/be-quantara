@@ -33,79 +33,89 @@ class BotEngine extends EventEmitter {
     // Hapus dari configOverrides agar tidak bocor ke this.config (keamanan)
     const { apiKey: _k, apiSecret: _s, passphrase: _p, ...safeOverrides } = configOverrides;
 
+    // ── Sumber kebenaran config (prioritas: DB > strategy default) ────────────
+    // process.env TIDAK digunakan untuk config bot — semua dari strategy atau DB.
+    // Satu-satunya env yang masih relevan adalah server-level config (PORT, DATABASE_URL, dll).
     this.config = {
+      // ── Exchange (server config, tidak berubah per user) ──────────────────
       exchange:      ei.id,
       exchangeLabel: ei.label,
-      symbol:        process.env.SYMBOL || "BTCUSDT",
-      marginCoin:    process.env.MARGIN_COIN      || "USDT",
-      capital:       parseFloat(process.env.CAPITAL)       || 500,
-      // Gunakan nilai dari strategi sebagai default, bisa di-override oleh .env
-      emaFast:       parseInt(process.env.EMA_FAST)        || strat.emaFast,
-      emaSlow:       parseInt(process.env.EMA_SLOW)        || strat.emaSlow,
-      emaTrend:      strat.emaTrend || 0,
-      rsiPeriod:     parseInt(process.env.RSI_PERIOD)      || strat.rsiPeriod,
-      rsiOverbought: parseInt(process.env.RSI_OVERBOUGHT)  || strat.rsiOverbought,
-      rsiOversold:   parseInt(process.env.RSI_OVERSOLD)    || strat.rsiOversold,
-      // RSI zona entry (dari PDF per strategi)
-      rsiLongMin:    strat.rsiLongMin  || 50,
-      rsiLongMax:    strat.rsiLongMax  || 70,
-      rsiShortMin:   strat.rsiShortMin || 30,
-      rsiShortMax:   strat.rsiShortMax || 50,
-      atrPeriod:     parseInt(process.env.ATR_PERIOD)      || strat.atrPeriod,
-      atrMultiplier: parseFloat(process.env.ATR_MULTIPLIER)|| strat.atrMultiplier,
-      riskReward:    parseFloat(process.env.RISK_REWARD)   || strat.riskReward,
-      riskPerTrade:    parseFloat(process.env.RISK_PER_TRADE)    || strat.riskPerTrade,
-      maxRiskPerTrade: parseFloat(process.env.MAX_RISK_PER_TRADE) || 0.05,
-      maxPositions:  parseInt(process.env.MAX_OPEN_POSITIONS)|| 1,
-      leverage:      parseInt(process.env.LEVERAGE)        || strat.leverage,
-      useBothSides:  process.env.USE_BOTH_SIDES === "true",
-      // Interval: strategi sebagai prioritas utama. .env hanya fallback jika strategi tidak mendefinisikan interval.
-      // Ini mencegah CANDLE_INTERVAL di .env meng-override timeframe yang seharusnya berbeda per strategi.
-      interval:      strat.interval || process.env.CANDLE_INTERVAL || "15m",
-      checkInterval: strat.checkInterval || parseInt(process.env.CHECK_INTERVAL_MS) || 60000,
-      dryRun:        process.env.DRY_RUN !== "false",
-      // Strategy info
+      marginCoin:    "USDT",
+
+      // ── Identitas bot (dari DB via configOverrides) ───────────────────────
+      // Default aman jika tidak ada override
+      symbol:  "BTCUSDT",
+      capital: 500,
+      dryRun:  true,  // default dry-run; DB override via configOverrides.dryRun
+
+      // ── Indikator teknikal (dari strategy definition) ─────────────────────
+      emaFast:       strat.emaFast,
+      emaSlow:       strat.emaSlow,
+      emaTrend:      strat.emaTrend      || 0,
+      rsiPeriod:     strat.rsiPeriod,
+      rsiOverbought: strat.rsiOverbought,
+      rsiOversold:   strat.rsiOversold,
+
+      // RSI zona entry — batas masuk per strategi (dari PDF)
+      rsiLongMin:    strat.rsiLongMin    || 50,
+      rsiLongMax:    strat.rsiLongMax    || 70,
+      rsiShortMin:   strat.rsiShortMin   || 30,
+      rsiShortMax:   strat.rsiShortMax   || 50,
+
+      atrPeriod:     strat.atrPeriod,
+      atrMultiplier: strat.atrMultiplier,
+      riskReward:    strat.riskReward,
+      riskPerTrade:  strat.riskPerTrade,
+      maxRiskPerTrade: 0.05,
+
+      // ── Eksekusi & posisi ─────────────────────────────────────────────────
+      maxPositions: 1,
+      leverage:     strat.leverage,
+      useBothSides: false,
+
+      // Interval diambil dari strategi; fallback "15m" jika strategi tidak mendefinisikan
+      interval:      strat.interval      || "15m",
+      checkInterval: strat.checkInterval || 60_000,
+
+      // ── Strategy info ─────────────────────────────────────────────────────
       strategyKey:   strat.name,
       strategyLabel: strat.label,
       signalType:    strat.signalType,
 
-      // HTF trend filter
-      higherTf:             strat.higherTf      || null,
-      htfEmaFast:           strat.htfEmaFast    || 9,
-      htfEmaSlow:           strat.htfEmaSlow    || 21,
-      sidewaysThresholdPct: strat.sidewaysThresholdPct || 0.2,
+      // ── HTF trend filter ──────────────────────────────────────────────────
+      higherTf:             strat.higherTf             || null,
+      htfEmaFast:           strat.htfEmaFast            || 9,
+      htfEmaSlow:           strat.htfEmaSlow            || 21,
+      sidewaysThresholdPct: strat.sidewaysThresholdPct  || 0.2,
 
-      // ATR filter — pastikan pasar tidak terlalu sepi/liar
-      atrMinMult:    strat.atrMinMult || 0.1,
-      atrMaxMult:    strat.atrMaxMult || 5.0,
+      // ── ATR filter ────────────────────────────────────────────────────────
+      atrMinMult: strat.atrMinMult || 0.1,
+      atrMaxMult: strat.atrMaxMult || 5.0,
 
-      // Volume filter multiplier
+      // ── Volume filter ─────────────────────────────────────────────────────
       volSmaMultiplier: strat.volSmaMultiplier || 1.0,
 
-      // Sideways breakout / retest params
+      // ── Sideways breakout/retest ──────────────────────────────────────────
       sidewaysRangeLookback:   strat.sidewaysRangeLookback   || 20,
       sidewaysBreakoutVolMult: strat.sidewaysBreakoutVolMult || 1.2,
       sidewaysBreakoutBufMult: strat.sidewaysBreakoutBufMult || 0.3,
 
-      // Risk management harian
+      // ── Risk management harian ────────────────────────────────────────────
       maxDailyLossPct:   strat.maxDailyLossPct  || 0.04,
       maxTradesPerDay:   strat.maxTradesPerDay   || 10,
-      cooldownAfterLoss: strat.cooldownAfterLoss || 5,   // menit
+      cooldownAfterLoss: strat.cooldownAfterLoss || 5,
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
-      // ── SL+ (Trailing Partial Take Profit) ──────────────────────────────────
-      // +1R: partial 40%, SL → BEP (entry)
-      // +2R: partial 27.5% of original, SL → +1R
-      // +3R: biarkan sisa ke TP / trailing
-      slPlusEnabled:    process.env.SL_PLUS_ENABLED !== "false", // aktif secara default
-      slPlusPartial1Pct: parseFloat(process.env.SL_PLUS_PARTIAL1) || 0.40,  // 40% di +1R
-      slPlusPartial2Pct: parseFloat(process.env.SL_PLUS_PARTIAL2) || 0.275, // 27.5% ori di +2R
+      // ── SL+ (Trailing Partial Take Profit) ───────────────────────────────
+      slPlusEnabled:     true,   // aktif secara default
+      slPlusPartial1Pct: 0.40,   // +1R → 40% partial, SL ke BEP
+      slPlusPartial2Pct: 0.275,  // +2R → 27.5% partial, SL ke +1R
 
-      // Override config per-instance (e.g. symbol berbeda per bot)
-      // Pakai safeOverrides — apiKey/apiSecret/passphrase sudah dihapus untuk keamanan
+      // ── DB overrides (SELALU override semua default di atas) ─────────────
+      // apiKey/apiSecret/passphrase sudah dihapus dari safeOverrides (keamanan)
       ...safeOverrides,
 
-      // Tandai apakah bot ini punya kredensial exchange yang valid
+      // ── Credential flag (set setelah spread agar tidak ter-override) ──────
       _hasCredentials: !!(
         resolvedApiKey && resolvedApiSecret &&
         resolvedApiKey !== "your_api_key_here" &&
