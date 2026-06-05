@@ -22,7 +22,8 @@ class BotEngine extends EventEmitter {
   constructor(configOverrides = {}) {
     super();
     const ei   = getExchangeInfo();
-    const strat = getStrategy(configOverrides.strategy || process.env.STRATEGY);
+    // Strategi dari DB (configOverrides.strategyKey/strategy); getStrategy fallback ke "B"
+    const strat = getStrategy(configOverrides.strategyKey || configOverrides.strategy);
 
     // ── Resolve API credentials: DB key (dari Settings) > env var ──────────────
     // configOverrides.apiKey diisi oleh route start-bot setelah decrypt dari DB.

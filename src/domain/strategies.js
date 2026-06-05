@@ -215,10 +215,11 @@ const STRATEGIES = {
 };
 
 function getStrategy(overrideKey = null) {
-  const key = (overrideKey || process.env.STRATEGY || "B").toUpperCase();
+  // Sumber strategy: parameter (dari DB), default "B". Tidak lagi baca process.env.
+  const key = (overrideKey || "B").toUpperCase();
   const strat = STRATEGIES[key];
   if (!strat) {
-    console.warn(`[WARN] Strategi "${key}" tidak ditemukan, pakai B`);
+    // ADAPTIVE_FUSION & key tak dikenal → pakai B sebagai basis parameter teknikal
     return STRATEGIES["B"];
   }
   return strat;
