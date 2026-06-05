@@ -701,6 +701,24 @@ function detectSidewaysBreakout(htfCandles, config = {}) {
 /**
  * Router utama: pilih detector berdasarkan signalType
  */
+// Singleton agar BotEngine bisa mengambil metadata setelah signal
+let _adaptiveFusionInstance = null;
+function getAdaptiveFusionInstance() {
+  if (!_adaptiveFusionInstance) {
+    const AdaptiveFusionStrategy = require("./strategy/implementations/AdaptiveFusionStrategy");
+    _adaptiveFusionInstance = new AdaptiveFusionStrategy();
+  }
+  return _adaptiveFusionInstance;
+}
+
+/**
+ * Expose metadata sinyal ADAPTIVE_FUSION terakhir (component, scores, dll)
+ * agar BotEngine bisa pilih SL/TP yang tepat per komponen.
+ */
+function getAdaptiveFusionMeta() {
+  return _adaptiveFusionInstance ? _adaptiveFusionInstance.getLastSignalMeta() : null;
+}
+
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
   const signalType = config.signalType || "PDF_DAYTRADING";
 
@@ -709,7 +727,13 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
     case "PDF_DAYTRADING":  return detectSignalPdfDayTrading(indicators, i, config);
     case "PDF_SWING":       return detectSignalPdfSwing(indicators, i, config);
 
-    // Legacy support (backward compat jika ada data lama)
+    // ADAPTIVE_FUSION — multi-component voting dengan ranking filter
+    case "ADAPTIVE_FUSION": {
+      const afs = getAdaptiveFusionInstance();
+      return afs.detectSignal(indicators, i, config);
+    }
+
+    // Legacy support
     case "RSI_REVERSAL":    return detectSignalLegacy(indicators, i, { ...config, mode: "rsi_reversal" });
     case "EMA_MOMENTUM":    return detectSignalLegacy(indicators, i, config);
     case "MULTI_TF":        return detectSignalLegacy(indicators, i, config);
@@ -771,6 +795,7 @@ module.exports = {
   detectSignalPdfDayTrading,
   detectSignalPdfSwing,
   detectSignalLegacy,
+  getAdaptiveFusionMeta,
   calcPositionSize,
   calcSidewaysRange,
   detectSidewaysBreakout,

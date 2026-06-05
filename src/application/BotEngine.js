@@ -8,7 +8,7 @@ const EventEmitter = require("events");
 const { getExchangeInfo } = require("../infrastructure/exchange");
 const BitgetClient = require("../infrastructure/exchange/BitgetClient");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta } = require("../domain/indicators");
 const { getStrategy } = require("../domain/strategies");
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
@@ -797,7 +797,28 @@ class BotEngine extends EventEmitter {
                 htfTrend:     this.state.htfTrend ?? null,
                 strategy:     this.config.strategyKey ?? null,
               };
-              await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot);
+
+              // P1: For ADAPTIVE_FUSION, use component-aware SL/TP
+              let signalOptions = {};
+              if (this.config.signalType === "ADAPTIVE_FUSION") {
+                const meta = getAdaptiveFusionMeta();
+                if (meta) {
+                  const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
+                  const afsInstance = new AdaptiveFusionStrategy();
+                  const riskCfg = afsInstance.calculateRiskConfig(price, atr, filteredSignal, meta.component);
+                  signalOptions.slDist = riskCfg.slDistance;
+                  signalOptions.tpDist = riskCfg.tpDistance;
+                  indicatorSnapshot.afComponent  = meta.component;
+                  indicatorSnapshot.afVotes      = meta.votes;
+                  indicatorSnapshot.afMarketCond = meta.marketCond;
+                  this._log("info",
+                    `[AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
+                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+                  );
+                }
+              }
+
+              await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
               this.state.lastSignal = filteredSignal;
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
@@ -940,7 +961,8 @@ class BotEngine extends EventEmitter {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
     const slDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
-    const tpDist = slDist * this.config.riskReward;
+    // tpDist can be overridden independently (used by ADAPTIVE_FUSION per-component RR)
+    const tpDist = options.tpDist != null ? options.tpDist : slDist * this.config.riskReward;
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 

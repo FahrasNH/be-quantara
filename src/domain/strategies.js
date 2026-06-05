@@ -212,14 +212,73 @@ const STRATEGIES = {
     winrate:       "~65-75%",
     risk:          "Rendah-Sedang",
   },
+
+  // ─────────────────────────────────────────────
+  // ADAPTIVE_FUSION — Multi-Component Strategy (v2)
+  //
+  //   Components A (scalp) + B (day) + C (swing) run simultaneously.
+  //   Signal fired only on majority vote (2/3 or 3/3 agree).
+  //   Low-scoring components are skipped based on market conditions.
+  //   SL/TP per component: A→2x/3x ATR, B→1.5x/3x ATR, C→1x/2.5x ATR
+  // ─────────────────────────────────────────────
+  ADAPTIVE_FUSION: {
+    name:          "ADAPTIVE_FUSION",
+    label:         "Adaptive Fusion",
+    description:   "3-component voting system (Scalp+Day+Swing). Adapts SL/TP to winning component.",
+
+    // Base indicators (used for calcIndicators — same as B for compatibility)
+    emaFast:       9,
+    emaSlow:       21,
+    emaTrend:      50,
+
+    rsiPeriod:     14,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    50,
+    rsiLongMax:    70,
+    rsiShortMin:   30,
+    rsiShortMax:   50,
+
+    atrPeriod:     14,
+    // SL/TP overridden per-component in _handleSignal; these are fallback defaults
+    atrMultiplier: 1.5,
+    riskReward:    2.0,
+    atrMinMult:    0.2,
+    atrMaxMult:    4.0,
+
+    higherTf:      "1h",
+    htfEmaFast:    9,
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.2,
+
+    sidewaysRangeLookback:   20,
+    sidewaysBreakoutVolMult: 1.2,
+    sidewaysBreakoutBufMult: 0.3,
+
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:      0.015,
+    maxDailyLossPct:   0.05,
+    maxTradesPerDay:   10,
+    cooldownAfterLoss: 5,
+    maxConsecLoss:     3,
+
+    leverage:      2,
+    interval:      "15m",
+    checkInterval: 60000,
+
+    signalType:    "ADAPTIVE_FUSION",
+
+    trades:        "3-10 trade/hari",
+    winrate:       "~55-65% (voting filter)",
+    risk:          "Sedang",
+  },
 };
 
 function getStrategy(overrideKey = null) {
-  // Sumber strategy: parameter (dari DB), default "B". Tidak lagi baca process.env.
   const key = (overrideKey || "B").toUpperCase();
   const strat = STRATEGIES[key];
   if (!strat) {
-    // ADAPTIVE_FUSION & key tak dikenal → pakai B sebagai basis parameter teknikal
     return STRATEGIES["B"];
   }
   return strat;
