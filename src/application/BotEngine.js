@@ -811,12 +811,9 @@ class BotEngine extends EventEmitter {
   // FETCH CANDLES — dengan cache DB
   // ─────────────────────────────────────────────
   async _fetchCandles() {
-    const apiKey = process.env.BITGET_API_KEY || "";
-    const noKey  = !apiKey || apiKey === "your_api_key_here" || apiKey === "your_bitget_api_key";
-
-    if (this.config.dryRun && noKey) {
-      return this._generateDryRunCandles();
-    }
+    // OHLCV adalah endpoint publik — tidak perlu API key.
+    // dryRun hanya mencegah order placement, bukan pengambilan harga nyata.
+    // Kita selalu coba fetch data real dulu; fallback ke simulasi hanya jika gagal.
 
     // 1. Coba cache dulu (valid 15 menit)
     try {
@@ -826,7 +823,7 @@ class BotEngine extends EventEmitter {
       }
     } catch { /* cache error tidak masalah */ }
 
-    // 2. Fetch dari exchange API
+    // 2. Fetch dari exchange API (public endpoint — tidak butuh API key)
     try {
       const timeframe = this.config.interval.toLowerCase();
       const candles   = await this.client.getCandles(this.config.symbol, timeframe, 200);
@@ -844,7 +841,16 @@ class BotEngine extends EventEmitter {
   }
 
   _generateDryRunCandles(n = 200) {
-    let price = 65000;
+    // Harga awal simulasi per simbol — agar indikator (ATR, SL, TP) masuk akal
+    const SEED_PRICES = {
+      BTCUSDT: 65000,
+      ETHUSDT: 3500,
+      SOLUSDT: 160,
+      BNBUSDT: 650,
+    };
+    const sym   = (this.config.symbol || "BTCUSDT").replace("/", "").replace(":USDT", "");
+    let price   = SEED_PRICES[sym] ?? 100;
+
     const candles = [];
     const now = Date.now();
     const intervalMs = this.config.interval === "1H" ? 3600000
