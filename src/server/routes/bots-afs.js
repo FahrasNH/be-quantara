@@ -9,6 +9,13 @@ module.exports = function createBotsRouter(helpers) {
   const { PrismaClient } = require("@prisma/client");
   const prisma = new PrismaClient();
   const AuthService = require("../../services/AuthService");
+  const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
+
+  // Decrypt value dari DB (toleran terhadap plaintext lama)
+  function safeDecrypt(value) {
+    if (!value) return null;
+    return isEncrypted(value) ? decrypt(value) : value;
+  }
 
   /**
    * GET /api/v1/bots
@@ -123,11 +130,33 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // Create or get bot instance
+      // Ambil API key user dari DB dan decrypt sebelum dikirim ke BotEngine
+      const userRecord = await prisma.user.findUnique({
+        where:  { id: userId },
+        select: { apiKey: true, apiSecret: true, apiPassphrase: true, exchangeType: true },
+      });
+
+      const decryptedApiKey     = safeDecrypt(userRecord?.apiKey);
+      const decryptedApiSecret  = safeDecrypt(userRecord?.apiSecret);
+      const decryptedPassphrase = safeDecrypt(userRecord?.apiPassphrase);
+
+      if (!decryptedApiKey || !decryptedApiSecret) {
+        return res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: "API Key exchange belum dikonfigurasi. Tambahkan di Settings → API Keys.",
+        });
+      }
+
+      // Create or get bot instance — sertakan kredensial user agar BotEngine
+      // bisa fetch balance & OHLCV nyata dari exchange
       const instance = createBotInstance(symbol, {
-        capital: bot.capital,
+        capital:    bot.capital,
         strategyKey: bot.strategyKey,
-        dryRun: bot.dryRun,
+        dryRun:     bot.dryRun,
+        apiKey:     decryptedApiKey,
+        apiSecret:  decryptedApiSecret,
+        passphrase: decryptedPassphrase,
       });
 
       if (!instance.getState().running) {

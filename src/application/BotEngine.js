@@ -5,7 +5,9 @@
 // ─────────────────────────────────────────────
 
 const EventEmitter = require("events");
-const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exchange");
+const { getExchangeInfo } = require("../infrastructure/exchange");
+const BitgetClient = require("../infrastructure/exchange/BitgetClient");
+const cfg = require("../config/env");
 const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout } = require("../domain/indicators");
 const { getStrategy } = require("../domain/strategies");
 const db       = require("../infrastructure/db/database");
@@ -14,12 +16,22 @@ const notifier = require("../infrastructure/notifications/TelegramNotifier");
 class BotEngine extends EventEmitter {
   /**
    * @param {object} configOverrides  — override nilai default dari .env
-   *   Contoh: new BotEngine({ symbol: "ETHUSDT", capital: 200 })
+   *   Contoh: new BotEngine({ symbol: "ETHUSDT", capital: 200, apiKey: "...", apiSecret: "..." })
+   *   apiKey / apiSecret / passphrase dari DB (Settings page) lebih diprioritaskan daripada .env
    */
   constructor(configOverrides = {}) {
     super();
     const ei   = getExchangeInfo();
     const strat = getStrategy(configOverrides.strategy || process.env.STRATEGY);
+
+    // ── Resolve API credentials: DB key (dari Settings) > env var ──────────────
+    // configOverrides.apiKey diisi oleh route start-bot setelah decrypt dari DB.
+    const resolvedApiKey     = configOverrides.apiKey     || cfg.BITGET_API_KEY     || "";
+    const resolvedApiSecret  = configOverrides.apiSecret  || cfg.BITGET_SECRET_KEY  || "";
+    const resolvedPassphrase = configOverrides.passphrase || cfg.BITGET_PASSPHRASE  || "";
+
+    // Hapus dari configOverrides agar tidak bocor ke this.config (keamanan)
+    const { apiKey: _k, apiSecret: _s, passphrase: _p, ...safeOverrides } = configOverrides;
 
     this.config = {
       exchange:      ei.id,
@@ -90,7 +102,15 @@ class BotEngine extends EventEmitter {
       slPlusPartial2Pct: parseFloat(process.env.SL_PLUS_PARTIAL2) || 0.275, // 27.5% ori di +2R
 
       // Override config per-instance (e.g. symbol berbeda per bot)
-      ...configOverrides,
+      // Pakai safeOverrides — apiKey/apiSecret/passphrase sudah dihapus untuk keamanan
+      ...safeOverrides,
+
+      // Tandai apakah bot ini punya kredensial exchange yang valid
+      _hasCredentials: !!(
+        resolvedApiKey && resolvedApiSecret &&
+        resolvedApiKey !== "your_api_key_here" &&
+        resolvedApiKey !== "your_bitget_api_key"
+      ),
     };
 
     this.state = {
@@ -122,7 +142,8 @@ class BotEngine extends EventEmitter {
 
     this.logs      = [];   // circular buffer max 1000 (WS streaming)
     this.sessionId = null; // DB session ID saat ini
-    this.client    = createExchangeClient();
+    // Buat exchange client dengan key yang sudah di-resolve (DB > env)
+    this.client    = new BitgetClient(resolvedApiKey, resolvedApiSecret, resolvedPassphrase);
     this._interval = null;
     this._reportInterval = null;
   }
@@ -512,13 +533,13 @@ class BotEngine extends EventEmitter {
     this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
     this._sep();
 
-    const apiKey = process.env.BITGET_API_KEY || "";
-    const noKey  = !apiKey || apiKey === "your_api_key_here" || apiKey === "your_bitget_api_key";
+    // Gunakan kredensial yang sudah di-resolve (DB key dari Settings > env var)
+    const noKey = !this.config._hasCredentials;
 
     if (noKey) {
-      if (!this.config.dryRun) throw new Error("BITGET_API_KEY belum diisi di .env — set DRY_RUN=true untuk simulasi");
-      this._log("warn", "API Key kosong — DRY RUN tanpa koneksi exchange");
-      this.state.capital = this.state.startCapital = 500;
+      if (!this.config.dryRun) throw new Error("API Key exchange belum dikonfigurasi. Tambahkan di menu Settings → API Keys.");
+      this._log("warn", "API Key tidak ditemukan — DRY RUN tanpa koneksi exchange (simulasi)");
+      this.state.capital = this.state.startCapital = this.config.capital || 500;
     } else {
       try {
         const bal = await this.client.getBalance(this.config.marginCoin);

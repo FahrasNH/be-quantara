@@ -109,8 +109,13 @@ function getAllBots() {
 }
 
 function createBotInstance(symbol, configOverrides = {}) {
-  if (botsMap[symbol]) {
-    return botsMap[symbol];
+  const existing = botsMap[symbol];
+  if (existing) {
+    // Jika bot sedang running, kembalikan instance yang ada (tidak bisa recreate saat live)
+    if (existing.getState().running) return existing;
+
+    // Jika bot berhenti, recreate dengan kredensial terbaru (user bisa ganti API key)
+    delete botsMap[symbol];
   }
   const bot = new BotEngine({ symbol, ...configOverrides });
   botsMap[symbol] = bot;
