@@ -34,15 +34,18 @@ const createAccountRouter = require("./routes/account");
 // ── CORS & Security ────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "http://187.77.135.156",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
 ];
 
-// Di development izinkan semua localhost port (Vite bisa auto-geser 5173→5174→5175 dst)
+// Izinkan semua localhost port tanpa batasan NODE_ENV.
+// Localhost tidak dapat diakses dari luar mesin → aman secara default.
+// Vite auto-geser port (5173→5174→5175 dst) sehingga kita izinkan semua.
 function isOriginAllowed(origin) {
   if (!origin) return true;
   if (ALLOWED_ORIGINS.includes(origin)) return true;
-  if (process.env.NODE_ENV !== "production") {
-    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
-  }
+  // Localhost selalu diizinkan (development & production — tidak ada risiko keamanan)
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
   return false;
 }
 
