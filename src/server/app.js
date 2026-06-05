@@ -106,29 +106,27 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Auth routes (public)
+// Auth routes (public — NO authentication required)
 app.use("/api/v1/auth", createAuthRouter());
 
-// Protected routes below this line
-app.use("/api/v1/", authMiddleware);
-
+// ✅ FIX: Apply auth middleware ONLY to protected routes
 // Bots routes (protected, user-isolated)
-app.use("/api/v1/bots", createBotsRouter({ getBot, getAllBots, createBotInstance }));
+app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance }));
 
 // Market routes (protected)
-app.use("/api/v1/market", createMarketRouter({ createExchangeClient }));
+app.use("/api/v1/market", authMiddleware, createMarketRouter({ createExchangeClient }));
 
 // History routes (protected)
-app.use("/api/v1/history", createHistoryRouter({ getBot, getAllBots }));
+app.use("/api/v1/history", authMiddleware, createHistoryRouter({ getBot, getAllBots }));
 
 // Backtest routes (protected)
-app.use("/api/v1/backtest", createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));
+app.use("/api/v1/backtest", authMiddleware, createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));
 
 // Legacy routes (protected - deprecated)
-app.use("/api/v1/legacy", createLegacyRouter({ getBot, getAllBots }));
+app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, getAllBots }));
 
 // Account routes (protected)
-app.use("/api/v1/account", createAccountRouter());
+app.use("/api/v1/account", authMiddleware, createAccountRouter());
 
 // 404 handler
 app.use((req, res) => {
