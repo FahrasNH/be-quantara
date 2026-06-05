@@ -127,6 +127,76 @@ class BotEngine extends EventEmitter {
     this._reportInterval = null;
   }
 
+  /**
+   * Get real-time strategy rankings for Adaptive Fusion Strategy
+   * Returns array of ranked components with scores and activation status
+   */
+  getStrategyRankings() {
+    try {
+      const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
+      const afs = new AdaptiveFusionStrategy();
+      
+      const volatility = this.state?.volatility || 1.0;
+      const trendStrength = this.state?.trendStrength || 0.1;
+      
+      const rankings = afs.rankByMarketConditions({
+        volatility,
+        trend_strength: trendStrength,
+      });
+      
+      const balance = this.config.capital || 0;
+      return rankings.map(r => ({
+        ...r,
+        canActivate: balance >= (r.key === 'A' ? 500 : r.key === 'B' ? 50 : 0),
+      }));
+    } catch (err) {
+      this._log("error", `Failed to get strategy rankings: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get position conflict information
+   * Checks if new positions can be opened based on current positions
+   */
+  getPositionConflicts() {
+    try {
+      const openPositions = this.state?.openPositions || [];
+      const symbolPositions = openPositions.filter(p => p.symbol === this.config.symbol).length;
+      const maxPerSymbol = 1;
+      const maxTotal = this.config.maxPositions || 5;
+      const totalOpen = openPositions.length;
+      
+      const allowed = totalOpen < maxTotal && symbolPositions < maxPerSymbol;
+      let reason = "Position can be opened";
+      
+      if (totalOpen >= maxTotal) {
+        reason = `Maximum total positions reached (${totalOpen}/${maxTotal})`;
+      } else if (symbolPositions >= maxPerSymbol) {
+        reason = `Already have ${symbolPositions} position for ${this.config.symbol}`;
+      }
+      
+      return {
+        allowed,
+        reason,
+        totalOpen,
+        maxTotal,
+        symbolPositions,
+        maxPerSymbol,
+      };
+    } catch (err) {
+      this._log("error", `Failed to get position conflicts: ${err.message}`);
+      return {
+        allowed: false,
+        reason: "Error checking positions",
+        totalOpen: 0,
+        maxTotal: 0,
+        symbolPositions: 0,
+        maxPerSymbol: 0,
+      };
+    }
+  }
+
   // ─────────────────────────────────────────────
   // INTERNAL LOGGER — console + WS event + DB
   // ─────────────────────────────────────────────
