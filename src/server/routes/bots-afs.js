@@ -118,14 +118,15 @@ module.exports = function createBotsRouter(helpers) {
           },
         });
       } else {
-        // Update existing
+        // Update existing — simpan dryRun terbaru jika dikirim dari FE
         bot = await prisma.bot.update({
           where: { userId_symbol: { userId, symbol } },
           data: {
-            capital: capital || bot.capital,
+            capital:     capital     || bot.capital,
             strategyKey: strategyKey || bot.strategyKey,
-            running: true,
-            startedAt: new Date(),
+            dryRun:      dryRun !== undefined ? dryRun !== false : bot.dryRun,
+            running:     true,
+            startedAt:   new Date(),
           },
         });
       }
