@@ -7,36 +7,32 @@ const compression = require("compression");
 const helmet = require("helmet");
 const http = require("http");
 const { WebSocketServer } = require("ws");
-const os = require("os");
 const rateLimit = require("express-rate-limit");
 
 const cfg = require("../config/env");
 const BotEngine = require("../application/BotEngine");
 const db = require("../infrastructure/db/database");
 const { createExchangeClient } = require("../infrastructure/exchange");
-const { listStrategies } = require("../domain/strategies");
 
 // Middleware
-const { authMiddleware, optionalAuthMiddleware } = require("../middleware/auth");
-const { errorHandler, asyncHandler } = require("../middleware/errorHandler");
-const { validateSymbolParam } = require("../middleware/validation");
+const { authMiddleware } = require("../middleware/auth");
+const { errorHandler } = require("../middleware/errorHandler");
 
 // Routes
 const createAuthRouter = require("./routes/auth");
 const createBotsRouter = require("./routes/bots-afs");
 const createMarketRouter = require("./routes/market");
 const createHistoryRouter = require("./routes/history");
-const createHealthRouter = require("./routes/health");
 const createBacktestRouter = require("./routes/backtest");
 const createLegacyRouter = require("./routes/legacy");
 const createAccountRouter = require("./routes/account");
 
+// ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
+cfg.validate();
+
 // ── CORS & Security ────────────────────────────────────────────────────────
-const ALLOWED_ORIGINS = [
-  "http://187.77.135.156",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-];
+// Domain produksi dibaca dari env (cfg.corsOrigins). Localhost ditangani terpisah.
+const ALLOWED_ORIGINS = cfg.corsOrigins;
 
 // Izinkan semua localhost port tanpa batasan NODE_ENV.
 // Localhost tidak dapat diakses dari luar mesin → aman secara default.

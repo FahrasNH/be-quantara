@@ -31,7 +31,26 @@ const cfg = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || "",
   TELEGRAM_CHAT_ID:   process.env.TELEGRAM_CHAT_ID   || "",
 
+  // ── Secrets (dipakai AuthService & crypto) ──────────────────────────────────
+  JWT_SECRET:         process.env.JWT_SECRET         || "",
+  JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || "",
+  ENCRYPTION_KEY:     process.env.ENCRYPTION_KEY     || "",
+  DATABASE_URL:       process.env.DATABASE_URL       || "",
+
+  // ── CORS ────────────────────────────────────────────────────────────────────
+  // Domain frontend yang diizinkan. Set lewat .env (comma-separated) di production
+  // agar ganti domain tidak perlu edit kode. Localhost selalu diizinkan terpisah.
+  CORS_ORIGINS_RAW: process.env.CORS_ORIGINS || "http://187.77.135.156",
+
   // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  // Daftar origin CORS yang diizinkan (selain localhost)
+  get corsOrigins() {
+    return this.CORS_ORIGINS_RAW
+      .split(",")
+      .map(s => s.trim())
+      .filter(Boolean);
+  },
 
   // Daftar simbol untuk market data (max 4)
   get symbolsList() {
@@ -46,6 +65,49 @@ const cfg = {
   get hasApiKey() {
     const k = this.BITGET_API_KEY;
     return !!(k && k !== "your_api_key_here" && k !== "your_bitget_api_key");
+  },
+
+  get isProduction() {
+    return this.NODE_ENV === "production";
+  },
+
+  /**
+   * Validasi env wajib sebelum server start. Di production, fail-fast jika ada
+   * secret yang kosong atau masih memakai nilai placeholder default.
+   * Panggil sekali di entry point (app.js) sebelum db.init().
+   */
+  validate() {
+    const errors = [];
+    const PLACEHOLDERS = [
+      "your-secret-key-change-in-production",
+      "your-refresh-secret-key-change-in-production",
+    ];
+
+    if (!this.DATABASE_URL) errors.push("DATABASE_URL belum diset.");
+    if (!this.JWT_SECRET) errors.push("JWT_SECRET belum diset.");
+    if (!this.JWT_REFRESH_SECRET) errors.push("JWT_REFRESH_SECRET belum diset.");
+    if (!this.ENCRYPTION_KEY) errors.push("ENCRYPTION_KEY belum diset.");
+    else if (this.ENCRYPTION_KEY.length !== 64) {
+      errors.push("ENCRYPTION_KEY harus 64 hex char (32 byte). Generate: openssl rand -hex 32");
+    }
+
+    if (this.isProduction) {
+      if (PLACEHOLDERS.includes(this.JWT_SECRET)) {
+        errors.push("JWT_SECRET masih memakai nilai placeholder — WAJIB diganti di production.");
+      }
+      if (PLACEHOLDERS.includes(this.JWT_REFRESH_SECRET)) {
+        errors.push("JWT_REFRESH_SECRET masih memakai nilai placeholder — WAJIB diganti di production.");
+      }
+      if (this.JWT_SECRET && this.JWT_SECRET === this.JWT_REFRESH_SECRET) {
+        errors.push("JWT_SECRET dan JWT_REFRESH_SECRET tidak boleh sama.");
+      }
+    }
+
+    if (errors.length) {
+      throw new Error(
+        "Konfigurasi environment tidak valid:\n  - " + errors.join("\n  - ")
+      );
+    }
   },
 };
 
