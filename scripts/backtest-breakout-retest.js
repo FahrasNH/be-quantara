@@ -183,11 +183,45 @@ async function runBacktest() {
     activeUntil = trade.exitBar;
   }
 
-  // Log first 10 trades for inspection
-  console.log(`\n📋 First 10 trades (detailed):`);
+  // ── DEBUG: Log first 10 trades + validate SL/TP ordering ──────────────────
+  // Expected:  LONG  → SL < entry < TP   (stop below, target above)
+  //            SHORT → SL > entry > TP   (stop above, target below)
+  console.log(`\n📋 DEBUG — First 10 trades (SL/TP ordering check):`);
+  let orderingBad = 0;
   trades.slice(0, 10).forEach((t, i) => {
-    console.log(`  ${i+1}. ${t.direction} @ ${t.entry} | SL=${t.sl} TP=${t.tp} | Exit=${t.exit} (${t.reason}) | PnL=$${t.pnl}`);
+    const entry = parseFloat(t.entry);
+    const sl    = parseFloat(t.sl);
+    const tp    = parseFloat(t.tp);
+
+    let ok;
+    if (t.direction === "LONG")  ok = sl < entry && entry < tp;   // SL < entry < TP
+    else                         ok = sl > entry && entry > tp;   // SL > entry > TP
+
+    if (!ok) orderingBad++;
+    const flag    = ok ? "✅ OK" : "❌ REVERSED";
+    const pattern = t.direction === "LONG" ? "SL<entry<TP" : "SL>entry>TP";
+
+    console.log(
+      `  #${String(i + 1).padStart(2)}. ${t.direction.padEnd(5)} ` +
+      `entry=${t.entry}  SL=${t.sl}  TP=${t.tp}  ` +
+      `[${pattern}] ${flag}  → exit=${t.exit} (${t.reason}) PnL=$${t.pnl}`
+    );
   });
+  console.log(
+    `\n  SL/TP ordering: ${orderingBad === 0
+      ? "✅ ALL CORRECT — logic is NOT reversed"
+      : `❌ ${orderingBad}/10 REVERSED — SL/TP logic bug`}`
+  );
+
+  // Direction balance (a 100% one-sided book often points at the detector/mock,
+  // not the SL/TP math)
+  const longN  = trades.filter(t => t.direction === "LONG").length;
+  const shortN = trades.filter(t => t.direction === "SHORT").length;
+  console.log(`  Direction mix : ${longN} LONG / ${shortN} SHORT`);
+
+  // Exit-reason mix (all-SL or all-Timeout points at simulator/RR, not direction)
+  const byReason = trades.reduce((m, t) => ((m[t.reason] = (m[t.reason] || 0) + 1), m), {});
+  console.log(`  Exit reasons  : ${Object.entries(byReason).map(([k, v]) => `${k}=${v}`).join("  ")}`);
 
   if (trades.length === 0) {
     console.log("⚠️  No trades generated. Check the breakout/retest detection logic.\n");
