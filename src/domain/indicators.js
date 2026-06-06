@@ -115,6 +115,37 @@ function calcBollingerBands(closes, period = 20, stdDev = 2) {
   return { middle: sma, upper, lower };
 }
 
+/**
+ * Calculate MACD (Moving Average Convergence Divergence)
+ * Returns { macd, signal, histogram }
+ */
+function calcMACD(closes, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+  const emaFast = calcEMA(closes, fastPeriod);
+  const emaSlow = calcEMA(closes, slowPeriod);
+  const macd = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    if (emaFast[i] === null || emaSlow[i] === null) {
+      macd.push(null);
+    } else {
+      macd.push(emaFast[i] - emaSlow[i]);
+    }
+  }
+
+  const signal = calcEMA(macd, signalPeriod);
+  const histogram = [];
+
+  for (let i = 0; i < macd.length; i++) {
+    if (macd[i] === null || signal[i] === null) {
+      histogram.push(null);
+    } else {
+      histogram.push(macd[i] - signal[i]);
+    }
+  }
+
+  return { macd, signal, histogram };
+}
+
 function calcVolumeSMA(volumes, period = 20) {
   return calcSMA(volumes, period);
 }
@@ -786,6 +817,7 @@ module.exports = {
   calcATR,
   calcSMA,
   calcBollingerBands,
+  calcMACD,
   calcVolumeSMA,
   calcIndicators,
   detectSignal,

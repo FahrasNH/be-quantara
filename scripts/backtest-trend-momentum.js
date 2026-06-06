@@ -1,0 +1,242 @@
+#!/usr/bin/env node
+/**
+ * Backtest TREND_MOMENTUM Strategy (MINT tier)
+ *
+ * Usage:
+ *   node scripts/backtest-trend-momentum.js
+ *   node scripts/backtest-trend-momentum.js --days 365 --capital 10000000
+ *
+ * Target: 54-58% win rate, 100-180% annual return, <15% max drawdown
+ */
+
+require("dotenv").config();
+
+const TrendMomentumStrategy = require("../src/domain/strategy/implementations/TrendMomentumStrategy");
+const { calcIndicators } = require("../src/domain/indicators");
+
+// ── CLI args ──────────────────────────────────────────────────────────────
+const args = process.argv.slice(2);
+const get  = (flag, def) => {
+  const i = args.indexOf(flag);
+  return i !== -1 && args[i + 1] ? args[i + 1] : def;
+};
+
+const SYMBOL        = get("--symbol",  "BTCUSDT");
+const DAYS          = parseInt(get("--days",   "60"), 10);
+const START_BALANCE = parseFloat(get("--capital", "10000000"));
+
+// ── Mock candle generator with trend patterns ────────────────────────────
+function generateMockCandles(symbol, days, intervalMin = 5) {
+  const candles = [];
+  const bars    = (days * 24 * 60) / intervalMin;
+  const seed    = symbol === "BTCUSDT" ? 42000 : symbol === "ETHUSDT" ? 2500 : 150;
+  let price     = seed;
+  let time      = Date.now() - bars * intervalMin * 60 * 1000;
+
+  // Generate with trend phases (30 bars trend, 20 bars consolidation)
+  for (let i = 0; i < bars; i++) {
+    const phase = Math.floor((i % 50) / 50);  // 0-0.5: trend up, 0.5-1: consolidate
+
+    let changeRange;
+    if (phase < 0.6) {
+      // Trend: directional movement
+      changeRange = (Math.random() - 0.45) * price * 0.001;  // Upward bias
+    } else {
+      // Consolidation: choppy
+      changeRange = (Math.random() - 0.5) * price * 0.0005;
+    }
+
+    const open   = price;
+    const close  = Math.max(price + changeRange, 1);
+    const high   = Math.max(open, close) * (1 + Math.random() * 0.003);
+    const low    = Math.min(open, close) * (1 - Math.random() * 0.003);
+
+    // Higher volume on trend bars
+    const volume = phase < 0.6
+      ? (1000 + Math.random() * 3000) * 1.2
+      : (800 + Math.random() * 2000);
+
+    candles.push({ time, open, high, low, close, volume });
+    price  = close;
+    time  += intervalMin * 60 * 1000;
+  }
+  return candles;
+}
+
+// ── Trade simulation ──────────────────────────────────────────────────────
+function simulateTrade(candles, entryIdx, direction, riskCfg) {
+  const entry  = candles[entryIdx].close;
+  const sl     = riskCfg.stopLoss;
+  const tp     = riskCfg.takeProfit;
+
+  for (let i = entryIdx + 1; i < candles.length; i++) {
+    const { high, low, close } = candles[i];
+
+    if (direction === "LONG") {
+      if (low  <= sl) return { entry, exit: sl, pnl: sl - entry,  exitBar: i, reason: "SL" };
+      if (high >= tp) return { entry, exit: tp, pnl: tp - entry,  exitBar: i, reason: "TP" };
+    } else {
+      if (high >= sl) return { entry, exit: sl, pnl: entry - sl,  exitBar: i, reason: "SL" };
+      if (low  <= tp) return { entry, exit: tp, pnl: entry - tp,  exitBar: i, reason: "TP" };
+    }
+  }
+  // Timed out — close at last bar
+  const exit = candles[candles.length - 1].close;
+  const pnl  = direction === "LONG" ? exit - entry : entry - exit;
+  return { entry, exit, pnl, exitBar: candles.length - 1, reason: "Timeout" };
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────────
+function profitFactor(trades) {
+  const gross_win  = trades.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+  const gross_loss = Math.abs(trades.filter(t => t.pnl < 0).reduce((s, t) => s + t.pnl, 0));
+  return gross_loss === 0 ? Infinity : gross_win / gross_loss;
+}
+
+function sharpeRatio(trades, riskFreeDaily = 0) {
+  if (trades.length < 2) return 0;
+  const returns = trades.map(t => t.pnl);
+  const avg     = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const std     = Math.sqrt(returns.reduce((s, r) => s + (r - avg) ** 2, 0) / returns.length);
+  return std === 0 ? 0 : ((avg - riskFreeDaily) / std) * Math.sqrt(252);
+}
+
+function maxDrawdown(trades, startBalance) {
+  let peak = startBalance;
+  let bal  = startBalance;
+  let mdd  = 0;
+  for (const t of trades) {
+    bal  += t.pnl;
+    peak  = Math.max(peak, bal);
+    mdd   = Math.max(mdd, (peak - bal) / peak);
+  }
+  return mdd * 100;
+}
+
+// ── Main backtest ─────────────────────────────────────────────────────────
+async function runBacktest() {
+  console.log(`\n${"═".repeat(70)}`);
+  console.log(`  TREND_MOMENTUM Strategy Backtest (MINT tier)`);
+  console.log(`  Symbol: ${SYMBOL} | Days: ${DAYS} | Start Balance: $${START_BALANCE}`);
+  console.log(`  Expected: Win Rate 54-58%, RR 1:1.92, Annual Return 100-180%`);
+  console.log(`${"═".repeat(70)}\n`);
+
+  // Load candles
+  const candles = generateMockCandles(SYMBOL, DAYS);
+  console.log(`📊 Candles loaded: ${candles.length} bars (5m, ${DAYS} days)`);
+
+  // Calculate indicators
+  const indicators = calcIndicators(candles, {
+    emaFast: 9,
+    emaSlow: 21,
+    emaTrend: 50,
+    atrPeriod: 14,
+    rsiPeriod: 14,
+  });
+  console.log(`📈 Indicators computed\n`);
+
+  const strategy = new TrendMomentumStrategy();
+  const trades   = [];
+  let balance    = START_BALANCE;
+  let activeUntil = -1;
+
+  for (let i = 50; i < candles.length; i++) {
+    if (i <= activeUntil) continue;
+
+    const signal = strategy.detectSignal(indicators, i, { balance });
+
+    if (!signal) continue;
+
+    const atr = indicators.atr[i];
+    const riskCfg = strategy.calculateRiskConfig(candles[i].close, atr, signal);
+
+    const trade    = simulateTrade(candles, i, signal, riskCfg);
+    const pnlPct   = (trade.pnl / candles[i].close) * 100;
+
+    // Size: 2% risk per trade (MINT tier)
+    const riskAmt  = balance * 0.02;
+    const slDist   = Math.abs(riskCfg.stopLoss - candles[i].close);
+    const qty      = slDist > 0 ? riskAmt / slDist : 0;
+    const realPnl  = trade.pnl * qty;
+
+    balance += realPnl;
+    trades.push({
+      bar:       i,
+      direction: signal,
+      entry:     trade.entry.toFixed(2),
+      exit:      trade.exit.toFixed(2),
+      sl:        riskCfg.stopLoss.toFixed(2),
+      tp:        riskCfg.takeProfit.toFixed(2),
+      pnl:       realPnl.toFixed(2),
+      pnlPct:    pnlPct.toFixed(3),
+      reason:    trade.reason,
+      rr:        riskCfg.riskReward,
+    });
+    activeUntil = trade.exitBar;
+  }
+
+  if (trades.length === 0) {
+    console.log("⚠️  No trades generated. Check the strategy conditions.\n");
+    return;
+  }
+
+  // Log first 5 trades
+  console.log(`\n📋 First 5 trades (detailed):`);
+  trades.slice(0, 5).forEach((t, i) => {
+    console.log(`  ${i+1}. ${t.direction} @ ${t.entry} | SL=${t.sl} TP=${t.tp} | Exit=${t.exit} (${t.reason}) | PnL=$${t.pnl}`);
+  });
+
+  // ── Results ──────────────────────────────────────────────────────────────
+  const wins     = trades.filter(t => parseFloat(t.pnl) > 0);
+  const losses   = trades.filter(t => parseFloat(t.pnl) < 0);
+  const winRate  = (wins.length / trades.length * 100).toFixed(1);
+  const pf       = profitFactor(trades.map(t => ({ pnl: parseFloat(t.pnl) }))).toFixed(2);
+  const sr       = sharpeRatio(trades.map(t => ({ pnl: parseFloat(t.pnl) }))).toFixed(2);
+  const mdd      = maxDrawdown(trades.map(t => ({ pnl: parseFloat(t.pnl) })), START_BALANCE).toFixed(2);
+  const avgWin   = wins.length
+    ? (wins.reduce((s, t) => s + parseFloat(t.pnl), 0) / wins.length).toFixed(2)
+    : "0.00";
+  const avgLoss  = losses.length
+    ? (losses.reduce((s, t) => s + parseFloat(t.pnl), 0) / losses.length).toFixed(2)
+    : "0.00";
+  const totalPnl = (balance - START_BALANCE).toFixed(2);
+  const roi      = ((balance - START_BALANCE) / START_BALANCE * 100).toFixed(2);
+  const avgRR    = trades.length
+    ? (trades.reduce((s, t) => s + t.rr, 0) / trades.length).toFixed(2)
+    : "0.00";
+
+  console.log(`\n📋 RESULTS`);
+  console.log(`─${"─".repeat(68)}`);
+  console.log(`  Total Trades   : ${trades.length}`);
+  console.log(`  Win Rate       : ${winRate}%  (${wins.length}W / ${losses.length}L)  ${parseFloat(winRate) >= 54 ? "✅" : "⚠️"}`);
+  console.log(`  Avg Win        : $${avgWin}`);
+  console.log(`  Avg Loss       : $${avgLoss}`);
+  console.log(`  Avg RR         : 1:${avgRR}  ${parseFloat(avgRR) >= 1.9 ? "✅" : "⚠️"}`);
+  console.log(`  Profit Factor  : ${pf}  ${pf >= 1.5 ? "✅" : pf >= 1.0 ? "⚠️" : "❌"}`);
+  console.log(`  Sharpe Ratio   : ${sr}  ${sr >= 1.0 ? "✅" : sr >= 0.5 ? "⚠️" : "❌"}`);
+  console.log(`  Max Drawdown   : ${mdd}%  ${mdd <= 15 ? "✅" : mdd <= 25 ? "⚠️" : "❌"}`);
+  console.log(`  Total PnL      : $${totalPnl}  (${roi}%)`);
+  console.log(`  Final Balance  : $${balance.toFixed(2)}`);
+  console.log(`─${"─".repeat(68)}`);
+
+  // Acceptance check (MINT tier criteria)
+  const passWR  = parseFloat(winRate) >= 54;
+  const passRR  = parseFloat(avgRR) >= 1.8;
+  const passPF  = parseFloat(pf) >= 1.5;
+  const passMDD = parseFloat(mdd) <= 15;
+  const pass    = passWR && passRR && passPF && passMDD;
+
+  console.log(`\nMINT Tier Acceptance Criteria:`);
+  console.log(`  ✅ Win Rate 54%+     : ${passWR ? "PASS" : "FAIL"} (${winRate}%)`);
+  console.log(`  ✅ RR 1:1.8+         : ${passRR ? "PASS" : "FAIL"} (1:${avgRR})`);
+  console.log(`  ✅ Profit Factor 1.5 : ${passPF ? "PASS" : "FAIL"} (${pf})`);
+  console.log(`  ✅ Max Drawdown <15% : ${passMDD ? "PASS" : "FAIL"} (${mdd}%)`);
+
+  console.log(`\n${pass ? "✅ PASS — Strategy ready for paper trading" : "⚠️  REVIEW — Optimize strategy before live"}`);
+  console.log(`${"═".repeat(70)}\n`);
+}
+
+runBacktest().catch(err => {
+  console.error("Backtest error:", err.message);
+  process.exit(1);
+});
