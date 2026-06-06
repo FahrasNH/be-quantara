@@ -163,6 +163,10 @@ function calcIndicators(candles, config = {}) {
     atrPeriod  = 14,
     withBB     = false,
     withVolume = true,     // Volume aktif by default
+    withMACD   = true,     // MACD aktif by default (dipakai TREND_MOMENTUM)
+    macdFast   = 12,
+    macdSlow   = 26,
+    macdSignal = 9,
   } = config;
 
   const closes  = candles.map(c => c.close);
@@ -186,6 +190,14 @@ function calcIndicators(candles, config = {}) {
   }
 
   if (withBB) result.bb = calcBollingerBands(closes);
+
+  // MACD (12/26/9) — momentum indicator (FIX #3: tersedia untuk semua strategi)
+  if (withMACD) {
+    const macdCalc = calcMACD(closes, macdFast, macdSlow, macdSignal);
+    result.macd          = macdCalc.macd;
+    result.macdSignal    = macdCalc.signal;
+    result.macdHistogram = macdCalc.histogram;
+  }
 
   return result;
 }

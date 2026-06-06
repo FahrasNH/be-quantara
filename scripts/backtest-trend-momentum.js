@@ -25,7 +25,10 @@ const SYMBOL        = get("--symbol",  "BTCUSDT");
 const DAYS          = parseInt(get("--days",   "60"), 10);
 const START_BALANCE = parseFloat(get("--capital", "10000000"));
 
-// ── Mock candle generator with trend patterns ────────────────────────────
+// ── Mock candle generator with REALISTIC alternating regimes ──────────────
+// Cycles through bull-trend → chop → bear-trend → chop so the strategy faces
+// both winning and losing setups (avoids the monotonic-uptrend artifact that
+// inflates win rate). Trends also fail sometimes (whipsaws) for realism.
 function generateMockCandles(symbol, days, intervalMin = 5) {
   const candles = [];
   const bars    = (days * 24 * 60) / intervalMin;
@@ -33,28 +36,37 @@ function generateMockCandles(symbol, days, intervalMin = 5) {
   let price     = seed;
   let time      = Date.now() - bars * intervalMin * 60 * 1000;
 
-  // Generate with trend phases (30 bars trend, 20 bars consolidation)
-  for (let i = 0; i < bars; i++) {
-    const phase = Math.floor((i % 50) / 50);  // 0-0.5: trend up, 0.5-1: consolidate
+  // Regime cycle: each regime lasts ~120 bars (10h on 5m)
+  const REGIME_LEN = 120;
+  const REGIMES = ["BULL", "CHOP", "BEAR", "CHOP"];
 
-    let changeRange;
-    if (phase < 0.6) {
-      // Trend: directional movement
-      changeRange = (Math.random() - 0.45) * price * 0.001;  // Upward bias
+  for (let i = 0; i < bars; i++) {
+    const regime = REGIMES[Math.floor(i / REGIME_LEN) % REGIMES.length];
+
+    let drift;        // directional bias
+    let noise = (Math.random() - 0.5) * price * 0.0012;  // base noise
+
+    if (regime === "BULL") {
+      drift = price * 0.0004;                              // upward bias
+      // Occasional pullback/whipsaw (20% of bars push against trend)
+      if (Math.random() < 0.2) drift = -price * 0.0006;
+    } else if (regime === "BEAR") {
+      drift = -price * 0.0004;                             // downward bias
+      if (Math.random() < 0.2) drift = price * 0.0006;     // bear rally trap
     } else {
-      // Consolidation: choppy
-      changeRange = (Math.random() - 0.5) * price * 0.0005;
+      drift = 0;                                           // chop: no bias
+      noise = (Math.random() - 0.5) * price * 0.0008;      // tighter range
     }
 
+    const change = drift + noise;
     const open   = price;
-    const close  = Math.max(price + changeRange, 1);
-    const high   = Math.max(open, close) * (1 + Math.random() * 0.003);
-    const low    = Math.min(open, close) * (1 - Math.random() * 0.003);
+    const close  = Math.max(price + change, 1);
+    const high   = Math.max(open, close) * (1 + Math.random() * 0.0025);
+    const low    = Math.min(open, close) * (1 - Math.random() * 0.0025);
 
-    // Higher volume on trend bars
-    const volume = phase < 0.6
-      ? (1000 + Math.random() * 3000) * 1.2
-      : (800 + Math.random() * 2000);
+    const volume = regime === "CHOP"
+      ? (800 + Math.random() * 2000)
+      : (1000 + Math.random() * 3000) * 1.2;
 
     candles.push({ time, open, high, low, close, volume });
     price  = close;
@@ -153,10 +165,11 @@ async function runBacktest() {
     const trade    = simulateTrade(candles, i, signal, riskCfg);
     const pnlPct   = (trade.pnl / candles[i].close) * 100;
 
-    // Size: 2% risk per trade (MINT tier)
-    const riskAmt  = balance * 0.02;
-    const slDist   = Math.abs(riskCfg.stopLoss - candles[i].close);
-    const qty      = slDist > 0 ? riskAmt / slDist : 0;
+    // Size via strategy.calculatePositionSize() — caps notional at balance×leverage
+    // (FIX #7: consistent, leverage-aware sizing — no runaway compounding)
+    const qty      = strategy.calculatePositionSize(
+      balance, candles[i].close, riskCfg.stopLoss, 0.02, strategy.config.leverage
+    );
     const realPnl  = trade.pnl * qty;
 
     balance += realPnl;

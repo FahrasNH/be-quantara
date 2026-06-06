@@ -452,11 +452,164 @@ describe("TrendMomentumStrategy", () => {
   });
 
   // ──────────────────────────────────────────────────────────
+  // PULLBACK ZONE (FIX #6) — (4 tests)
+  // ──────────────────────────────────────────────────────────
+
+  describe("isInPullbackZone", () => {
+    test("LONG valid: last 2 closes held above EMA9", () => {
+      const closes = [42000, 42450, 42460];
+      expect(strategy.isInPullbackZone(closes, 42420, "LONG")).toBe(true);
+    });
+
+    test("LONG invalid: previous close broke below EMA9", () => {
+      const closes = [42000, 42400, 42460];  // prev 42400 < EMA9 42420
+      expect(strategy.isInPullbackZone(closes, 42420, "LONG")).toBe(false);
+    });
+
+    test("SHORT valid: last 2 closes held below EMA9", () => {
+      const closes = [41500, 41350, 41340];
+      expect(strategy.isInPullbackZone(closes, 41380, "SHORT")).toBe(true);
+    });
+
+    test("Insufficient history returns true (non-blocking)", () => {
+      expect(strategy.isInPullbackZone([42000], 42420, "LONG")).toBe(true);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // POSITION SIZING (FIX #7) — (4 tests)
+  // ──────────────────────────────────────────────────────────
+
+  describe("calculatePositionSize", () => {
+    test("Sizes by risk and SL distance with leverage", () => {
+      // balance 10M, entry 42000, SL 41900 (dist 100), risk 2%, lev 1.5
+      // baseQty = (10M*0.02)/100 = 2000; leveraged = 3000
+      const qty = strategy.calculatePositionSize(10000000, 42000, 41900, 0.02, 1.5);
+      // notional 3000*42000 = 126M > maxNotional 15M → capped to 15M/42000
+      expect(qty).toBeCloseTo(15000000 / 42000, 2);
+    });
+
+    test("Uncapped small position respects raw risk sizing", () => {
+      // big balance so notional stays under cap
+      const qty = strategy.calculatePositionSize(10000000000, 42000, 41000, 0.001, 1);
+      // riskAmount = 10B*0.001 = 10M; slDist = 1000; baseQty = 10000; lev 1 → 10000
+      expect(qty).toBe(10000);
+    });
+
+    test("Zero SL distance returns 0", () => {
+      expect(strategy.calculatePositionSize(10000000, 42000, 42000, 0.02, 1.5)).toBe(0);
+    });
+
+    test("Invalid balance returns 0", () => {
+      expect(strategy.calculatePositionSize(0, 42000, 41900)).toBe(0);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // EXIT MANAGEMENT (FIX #8) — (6 tests)
+  // ──────────────────────────────────────────────────────────
+
+  describe("checkExit", () => {
+    const longTrade = { direction: "LONG", entryPrice: 42000, stopLoss: 41880, takeProfit: 42230 };
+    const shortTrade = { direction: "SHORT", entryPrice: 42000, stopLoss: 42120, takeProfit: 41770 };
+
+    test("LONG exits on stop loss", () => {
+      const r = strategy.checkExit(longTrade, { high: 41950, low: 41870, close: 41900 }, 5);
+      expect(r.exit).toBe(true);
+      expect(r.reason).toBe("SL");
+    });
+
+    test("LONG exits on take profit", () => {
+      const r = strategy.checkExit(longTrade, { high: 42250, low: 42100, close: 42240 }, 5);
+      expect(r.exit).toBe(true);
+      expect(r.reason).toBe("TP");
+    });
+
+    test("SHORT exits on stop loss", () => {
+      const r = strategy.checkExit(shortTrade, { high: 42130, low: 42000, close: 42100 }, 5);
+      expect(r.exit).toBe(true);
+      expect(r.reason).toBe("SL");
+    });
+
+    test("SHORT exits on take profit", () => {
+      const r = strategy.checkExit(shortTrade, { high: 41900, low: 41760, close: 41780 }, 5);
+      expect(r.exit).toBe(true);
+      expect(r.reason).toBe("TP");
+    });
+
+    test("Timeout exit after maxBarsHeld", () => {
+      const r = strategy.checkExit(longTrade, { high: 42000, low: 41950, close: 41980 }, 100);
+      expect(r.exit).toBe(true);
+      expect(r.reason).toBe("TIMEOUT");
+    });
+
+    test("No exit when price inside range", () => {
+      const r = strategy.checkExit(longTrade, { high: 42100, low: 41950, close: 42050 }, 10);
+      expect(r.exit).toBe(false);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // BREAKEVEN STOP (FIX #8) — (2 tests)
+  // ──────────────────────────────────────────────────────────
+
+  describe("applyBreakevenStop", () => {
+    test("LONG SL moves to entry after 20% of TP", () => {
+      const trade = { direction: "LONG", entryPrice: 42000, stopLoss: 41880, takeProfit: 42230 };
+      // tpDist 230, activation 46 → price 42050 >= 42046
+      strategy.applyBreakevenStop(trade, 42050);
+      expect(trade.stopLoss).toBe(42000);
+      expect(trade.breakEvenActive).toBe(true);
+    });
+
+    test("LONG SL unchanged before activation threshold", () => {
+      const trade = { direction: "LONG", entryPrice: 42000, stopLoss: 41880, takeProfit: 42230 };
+      strategy.applyBreakevenStop(trade, 42010);  // below 42046
+      expect(trade.stopLoss).toBe(41880);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // STATE MANAGEMENT (FIX #9) — (2 tests)
+  // ──────────────────────────────────────────────────────────
+
+  describe("trend state", () => {
+    test("Fresh state initialized", () => {
+      expect(strategy._trendState.htfTrendConfirmed).toBe(false);
+      expect(strategy._trendState.htfTrendDirection).toBeNull();
+    });
+
+    test("resetTrendState clears tracked values", () => {
+      strategy._trendState.htfTrendDirection = "LONG";
+      strategy._trendState.barsInCurrentTrend = 5;
+      strategy.resetTrendState();
+      expect(strategy._trendState.htfTrendDirection).toBeNull();
+      expect(strategy._trendState.barsInCurrentTrend).toBe(0);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // CONFIG ADDITIONS (FIX #4, #8) — (2 tests)
+  // ──────────────────────────────────────────────────────────
+
+  describe("New config parameters", () => {
+    test("Volume config present", () => {
+      expect(strategy.config.volSMAPeriod).toBe(20);
+      expect(strategy.config.minVolRatio).toBe(1.0);
+    });
+
+    test("Exit management config present", () => {
+      expect(strategy.config.maxBarsHeld).toBe(100);
+      expect(strategy.config.breakEvenActivationPct).toBe(0.2);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────
   // SUMMARY
   // ──────────────────────────────────────────────────────────
 
   describe("Test Summary", () => {
-    test("All 30+ tests should pass", () => {
+    test("All tests should pass", () => {
       expect(strategy).toBeDefined();
       expect(strategy.config.name || "TREND_MOMENTUM").toBe("TREND_MOMENTUM");
     });
