@@ -84,22 +84,31 @@ class BitgetCCXTClient {
 
   async getBalance(marginCoin = "USDT") {
     try {
+      // type:"swap" → futures USDT-M wallet (umcbl), bukan spot
       const balance = await this.exchange.fetchBalance({ type: "swap" });
 
-      const coin = balance[marginCoin];
+      // CCXT Bitget kadang mengembalikan key "USDT" atau "total"/"free"/"used" di root.
+      // Coba berbagai path agar robust.
+      const coin = balance[marginCoin]
+        || balance?.info?.data?.find?.(d => d.marginCoin === marginCoin)
+        || null;
+
       if (!coin) {
-        return {
-          available: 0,
-          equity: 0,
-          unrealizedPL: 0,
-        };
+        // Fallback: baca dari balance.total / balance.free langsung
+        const free  = balance?.free?.[marginCoin]  ?? 0;
+        const used  = balance?.used?.[marginCoin]  ?? 0;
+        const total = balance?.total?.[marginCoin] ?? 0;
+        if (total > 0 || free > 0) {
+          return { available: free, equity: total || free + used, unrealizedPL: 0 };
+        }
+        return { available: 0, equity: 0, unrealizedPL: 0 };
       }
 
-      return {
-        available: coin.free || 0,
-        equity: (coin.free || 0) + (coin.used || 0),
-        unrealizedPL: 0, // CCXT tidak provide unrealizedPL langsung
-      };
+      const available = coin.free   ?? coin.available ?? 0;
+      const equity    = coin.total  ?? (available + (coin.used ?? 0));
+      const upnl      = coin.unrealizedPnl ?? 0;
+
+      return { available, equity, unrealizedPL: upnl };
     } catch (err) {
       throw new Error(`getBalance error: ${err.message}`);
     }

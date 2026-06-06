@@ -283,9 +283,34 @@ BotEngine.prototype.emit = function (event, ...args) {
 // ── Server Start ───────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
+// ── Startup Recovery: reset stale running state ────────────────────────────
+// Saat server restart, semua BotEngine in-memory hilang. Bot yang masih
+// `running=true` di Prisma adalah "stale" — FE akan tampilkan sebagai running
+// padahal tidak ada proses aktif. Reset ke false agar user tahu harus start ulang.
+// Ini juga mencegah bot "tiba-tiba dry-run" karena state lama yang salah.
+async function resetStaleRunningBots() {
+  try {
+    const { PrismaClient } = require("@prisma/client");
+    const prisma = new PrismaClient();
+    const updated = await prisma.bot.updateMany({
+      where: { running: true },
+      data:  { running: false, stoppedAt: new Date() },
+    });
+    if (updated.count > 0) {
+      console.log(`[Startup] Reset ${updated.count} stale running bot(s) → stopped`);
+    }
+    await prisma.$disconnect();
+  } catch (err) {
+    console.warn("[Startup] resetStaleRunningBots error (non-fatal):", err.message);
+  }
+}
+
 // Pastikan tabel engine (Postgres) siap sebelum menerima request.
 db.init()
-  .then(() => {
+  .then(async () => {
+    // Reset bot state stale dari restart sebelumnya
+    await resetStaleRunningBots();
+
     server.listen(PORT, () => {
       console.log(`\n🚀 Quantara Bot Server running on ${PORT}`);
       console.log(`📊 Dashboard: http://localhost:5173`);

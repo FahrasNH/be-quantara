@@ -184,9 +184,30 @@ async function init() {
 // ── Sessions ──────────────────────────────────
 
 async function openSession({ exchange, symbol, mode, initialCapital, config, userId }) {
+  const resolvedMode = mode || (config?.dryRun ? "dry_run" : "live");
+  const initCap      = initialCapital ?? 0;
+
+  // Reuse sesi aktif (stopped_at IS NULL) untuk user+symbol+mode yang sama.
+  // Ini mencegah sesi duplikat setiap kali bot di-start ulang.
+  if (userId) {
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM bot_sessions
+       WHERE user_id = $1 AND symbol = $2 AND mode = $3 AND stopped_at IS NULL
+       ORDER BY started_at DESC LIMIT 1`,
+      [userId, symbol, resolvedMode]
+    );
+    if (existing.length > 0) {
+      // Update config terbaru agar tidak stale, tapi jangan ubah initial_capital
+      await pool.query(
+        `UPDATE bot_sessions SET config = $2 WHERE id = $1`,
+        [existing[0].id, JSON.stringify(config ?? {})]
+      );
+      return existing[0].id;
+    }
+  }
+
+  // Tidak ada sesi aktif → buat baru
   // final_capital diseed = initial_capital agar tidak tampil "Modal Akhir $0"
-  // saat sesi belum punya trade yang tutup.
-  const initCap = initialCapital ?? 0;
   const { rows } = await pool.query(
     `INSERT INTO bot_sessions (user_id, exchange, symbol, mode, initial_capital, final_capital, config)
      VALUES ($1, $2, $3, $4, $5, $5, $6) RETURNING id`,
@@ -194,7 +215,7 @@ async function openSession({ exchange, symbol, mode, initialCapital, config, use
       userId ?? null,
       exchange,
       symbol,
-      mode || (config?.dryRun ? "dry_run" : "live"),
+      resolvedMode,
       initCap,
       JSON.stringify(config ?? {}),
     ]
