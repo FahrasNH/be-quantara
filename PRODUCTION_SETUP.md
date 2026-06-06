@@ -7,26 +7,27 @@ Production berjalan di VPS `187.77.135.156` port **80** (nginx) + backend PM2 **
 | Production | `http://187.77.135.156` | `be-quantara` | `/var/www/quantara` |
 | Staging | `http://187.77.135.156:8080` | `quantara-staging` | `/var/www/quantara-staging` |
 
-## Deploy cepat (dari mesin lokal)
-
-### Full deploy (FE + BE)
+## Deploy production (FE + BE sekaligus)
 
 ```bash
 cd fe-bot-trading
+git pull origin main
 chmod +x deploy-production.sh
 ./deploy-production.sh
 ```
 
-### Hanya frontend
+### Opsi partial
 
 ```bash
-./deploy-production.sh --fe-only
+./deploy-production.sh --fe-only   # hanya frontend
+./deploy-production.sh --be-only   # hanya backend
 ```
 
-### Hanya backend
+### Deploy BE saja (dari repo backend)
 
 ```bash
 cd be-bot-trading
+git pull origin main
 chmod +x scripts/deploy-production.sh
 ./scripts/deploy-production.sh
 ```
