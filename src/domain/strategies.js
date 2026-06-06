@@ -273,6 +273,121 @@ const STRATEGIES = {
     winrate:       "~55-65% (voting filter)",
     risk:          "Sedang",
   },
+
+  // ─────────────────────────────────────────────
+  // TREND_MOMENTUM — Multi-TF Momentum (MINT Tier)
+  //
+  //   HTF: 1H (EMA trend)
+  //   MTF: 15m (MACD + RSI momentum)
+  //   Entry: 5m (EMA + RSI + volume confirmation)
+  //   SL: 1.2x ATR | TP: 2.3x ATR (RR 1:1.92)
+  //   Risk: 2% per trade
+  //   Target: 54-58% WR, 100-180% annual
+  // ─────────────────────────────────────────────
+  TREND_MOMENTUM: {
+    name:          "TREND_MOMENTUM",
+    label:         "Trend Momentum",
+    description:   "Multi-TF MACD + RSI momentum. 3-layer confirmation (HTF/MTF/Entry).",
+
+    emaFast:       9,
+    emaSlow:       21,
+    emaTrend:      50,
+
+    rsiPeriod:     14,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    35,
+    rsiLongMax:    75,
+    rsiShortMin:   25,
+    rsiShortMax:   65,
+
+    atrPeriod:     14,
+    atrMultiplier: 1.2,        // SL = 1.2x ATR
+    riskReward:    1.92,       // TP = 2.3x ATR
+    atrMinMult:    0.5,
+    atrMaxMult:    8.0,
+
+    // HTF trend filter
+    higherTf:      "1h",
+    htfEmaFast:    9,
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.25,
+
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:     0.02,
+    maxDailyLossPct:  0.06,
+    maxTradesPerDay:  10,
+    cooldownAfterLoss: 5,
+    maxConsecLoss:    3,
+
+    leverage:      2,
+    interval:      "5m",
+    checkInterval: 60000,
+
+    signalType:    "TREND_MOMENTUM",
+
+    trades:        "8-15 trade/hari",
+    winrate:       "~54-58%",
+    risk:          "Sedang",
+  },
+
+  // ─────────────────────────────────────────────
+  // MEAN_REVERSION — BB Extremes (VAULT Tier)
+  //
+  //   BB: 20 period, 2σ deviation
+  //   RSI: 14 period (oversold <25, overbought >75)
+  //   Entry: Price touch band + RSI confirmation + 2-bar validate
+  //   SL: 1.0x ATR | TP: 3.0x ATR (RR 1:3.0)
+  //   Risk: 1% per trade (ultra-conservative)
+  //   Target: 55-60% WR, 100-150% annual
+  // ─────────────────────────────────────────────
+  MEAN_REVERSION: {
+    name:          "MEAN_REVERSION",
+    label:         "Mean Reversion",
+    description:   "Bollinger Bands extremes + RSI. Ultra-selective, ultra-conservative (VAULT).",
+
+    emaFast:       9,
+    emaSlow:       21,
+    emaTrend:      50,
+
+    rsiPeriod:     14,
+    rsiOverbought: 75,
+    rsiOversold:   25,
+    rsiLongMin:    15,
+    rsiLongMax:    25,
+    rsiShortMin:   75,
+    rsiShortMax:   85,
+
+    atrPeriod:     14,
+    atrMultiplier: 1.0,        // SL = 1.0x ATR (very tight)
+    riskReward:    3.0,        // TP = 3.0x ATR (reach mean)
+    atrMinMult:    0.5,
+    atrMaxMult:    6.0,
+
+    higherTf:      "15m",
+    htfEmaFast:    9,
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.3,
+
+    volSmaMultiplier: 0.8,
+
+    riskPerTrade:     0.01,    // 1% ultra-conservative
+    maxDailyLossPct:  0.03,
+    maxTradesPerDay:  3,
+    cooldownAfterLoss: 15,
+    maxConsecLoss:    2,
+
+    leverage:      1.0,        // No leverage
+    interval:      "15m",
+    checkInterval: 60000,
+
+    signalType:    "MEAN_REVERSION",
+
+    trades:        "5-15 trade/minggu",
+    winrate:       "~55-60%",
+    risk:          "Rendah",
+  },
 };
 
 function getStrategy(overrideKey = null) {

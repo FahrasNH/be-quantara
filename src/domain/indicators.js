@@ -734,6 +734,8 @@ function detectSidewaysBreakout(htfCandles, config = {}) {
  */
 // Singleton agar BotEngine bisa mengambil metadata setelah signal
 let _adaptiveFusionInstance = null;
+let _trendMomentumInstance = null;
+let _meanReversionInstance = null;
 function getAdaptiveFusionInstance() {
   if (!_adaptiveFusionInstance) {
     const AdaptiveFusionStrategy = require("./strategy/implementations/AdaptiveFusionStrategy");
@@ -750,6 +752,28 @@ function getAdaptiveFusionMeta() {
   return _adaptiveFusionInstance ? _adaptiveFusionInstance.getLastSignalMeta() : null;
 }
 
+/**
+ * Singleton getter untuk TREND_MOMENTUM strategy
+ */
+function getTrendMomentumInstance() {
+  if (!_trendMomentumInstance) {
+    const TrendMomentumStrategy = require("./strategy/implementations/TrendMomentumStrategy");
+    _trendMomentumInstance = new TrendMomentumStrategy();
+  }
+  return _trendMomentumInstance;
+}
+
+/**
+ * Singleton getter untuk MEAN_REVERSION strategy
+ */
+function getMeanReversionInstance() {
+  if (!_meanReversionInstance) {
+    const MeanReversionStrategy = require("./strategy/implementations/MeanReversionStrategy");
+    _meanReversionInstance = new MeanReversionStrategy();
+  }
+  return _meanReversionInstance;
+}
+
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
   const signalType = config.signalType || "PDF_DAYTRADING";
 
@@ -762,6 +786,18 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
     case "ADAPTIVE_FUSION": {
       const afs = getAdaptiveFusionInstance();
       return afs.detectSignal(indicators, i, config);
+    }
+
+    // TREND_MOMENTUM — Multi-TF MACD + RSI momentum (MINT tier)
+    case "TREND_MOMENTUM": {
+      const tm = getTrendMomentumInstance();
+      return tm.detectSignal(indicators, i, config);
+    }
+
+    // MEAN_REVERSION — Bollinger Bands extremes (VAULT tier)
+    case "MEAN_REVERSION": {
+      const mr = getMeanReversionInstance();
+      return mr.detectSignal(indicators, i, config);
     }
 
     // Legacy support
@@ -828,6 +864,8 @@ module.exports = {
   detectSignalPdfSwing,
   detectSignalLegacy,
   getAdaptiveFusionMeta,
+  getTrendMomentumInstance,
+  getMeanReversionInstance,
   calcPositionSize,
   calcSidewaysRange,
   detectSidewaysBreakout,
