@@ -42,7 +42,9 @@ const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS trades (
     id           SERIAL PRIMARY KEY,
-    session_id   INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
+    -- SET NULL (bukan CASCADE) agar trade tidak ikut terhapus jika session dihapus.
+    -- Trade adalah data finansial permanen — session hanya metadata grouping.
+    session_id   INTEGER REFERENCES bot_sessions(id) ON DELETE SET NULL,
     exchange     TEXT    NOT NULL,
     symbol       TEXT    NOT NULL,
     side         TEXT    NOT NULL,
@@ -61,6 +63,13 @@ const SCHEMA_SQL = `
     order_id     TEXT,
     indicators   TEXT
   );
+
+  -- Ubah ON DELETE CASCADE → SET NULL untuk table trades yang sudah exist
+  DO $$ BEGIN
+    ALTER TABLE trades DROP CONSTRAINT IF EXISTS trades_session_id_fkey;
+    ALTER TABLE trades ADD CONSTRAINT trades_session_id_fkey
+      FOREIGN KEY (session_id) REFERENCES bot_sessions(id) ON DELETE SET NULL;
+  EXCEPTION WHEN others THEN NULL; END $$;
 
   CREATE TABLE IF NOT EXISTS equity_snapshots (
     id             SERIAL PRIMARY KEY,
@@ -286,14 +295,15 @@ const SESSIONS_BASE = `
  * @param {string|null} symbol — filter per simbol (null = semua)
  */
 async function getSessions(limit = 20, symbol = null, userId = null) {
-  // userId filter: kalau userId di-pass, return hanya sesi milik user tsb.
-  // Kalau null (backward-compat), return semua — diperlukan untuk repair/admin.
+  // Isolasi per user: return sesi milik userId ATAU sesi lama yang user_id-nya NULL
+  // (data sebelum kolom user_id ditambahkan tetap visible — tidak hilang).
   const conditions = [];
   const params     = [];
 
   if (userId) {
     params.push(userId);
-    conditions.push(`s.user_id = $${params.length}`);
+    // user_id = milikku ATAU user_id IS NULL (sesi lama sebelum isolasi)
+    conditions.push(`(s.user_id = $${params.length} OR s.user_id IS NULL)`);
   }
   if (symbol) {
     params.push(symbol.toUpperCase());
@@ -363,13 +373,13 @@ async function closeTrade(tradeId, { exitPrice, pnl, reason, closeTime }) {
 }
 
 async function getTrades({ sessionId = null, symbol = null, limit = 100, userId = null } = {}) {
-  // Join ke bot_sessions untuk filter by user_id jika disediakan.
-  // Kalau userId null (backward-compat / admin), return semua.
+  // Isolasi per user: return trade dari sesi milik userId ATAU sesi lama (user_id NULL).
+  // LEFT JOIN agar trade yang session_id-nya NULL (orphan dari SET NULL) tetap ikut.
   if (userId) {
     const { rows } = await pool.query(
       `SELECT t.* FROM trades t
-       JOIN bot_sessions s ON s.id = t.session_id
-       WHERE s.user_id = $1
+       LEFT JOIN bot_sessions s ON s.id = t.session_id
+       WHERE (s.user_id = $1 OR s.user_id IS NULL OR t.session_id IS NULL)
          AND ($2::int  IS NULL OR t.session_id = $2)
          AND ($3::text IS NULL OR t.symbol     = $3)
        ORDER BY t.open_time DESC
