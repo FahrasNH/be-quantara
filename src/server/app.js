@@ -283,34 +283,68 @@ BotEngine.prototype.emit = function (event, ...args) {
 // ── Server Start ───────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
-// ── Startup Recovery: reset stale running state ────────────────────────────
-// Saat server restart, semua BotEngine in-memory hilang. Bot yang masih
-// `running=true` di Prisma adalah "stale" — FE akan tampilkan sebagai running
-// padahal tidak ada proses aktif. Reset ke false agar user tahu harus start ulang.
-// Ini juga mencegah bot "tiba-tiba dry-run" karena state lama yang salah.
-async function resetStaleRunningBots() {
+// ── Startup Recovery: AUTO-RESUME running bots ─────────────────────────────
+// Saat server restart (crash / deploy / OOM), semua BotEngine in-memory hilang.
+// Sebelumnya bot yang sedang LIVE tidak pernah dipulihkan → user mengira masih
+// jalan padahal mati, lalu start ulang dengan toggle FE yang default dry-run
+// → bot "tiba-tiba pindah ke Dry Run".
+//
+// Fix: baca semua Bot yang running=true dari DB, lalu recreate + start ulang
+// BotEngine-nya dengan dryRun & kredensial yang TERSIMPAN — jadi bot LIVE tetap
+// LIVE tanpa intervensi user. start() akan me-reuse sesi terbuka (lihat
+// openSession) sehingga tidak membuat sesi duplikat.
+async function resumeRunningBots() {
   try {
     const { PrismaClient } = require("@prisma/client");
     const prisma = new PrismaClient();
-    const updated = await prisma.bot.updateMany({
-      where: { running: true },
-      data:  { running: false, stoppedAt: new Date() },
+    const { decrypt, isEncrypted } = require("../infrastructure/security/crypto");
+    const dec = (v) => (!v ? null : isEncrypted(v) ? decrypt(v) : v);
+
+    const bots = await prisma.bot.findMany({
+      where:   { running: true },
+      include: { user: { select: { apiKey: true, apiSecret: true, apiPassphrase: true } } },
     });
-    if (updated.count > 0) {
-      console.log(`[Startup] Reset ${updated.count} stale running bot(s) → stopped`);
+
+    let resumed = 0, stopped = 0;
+    for (const bot of bots) {
+      const apiKey     = dec(bot.user?.apiKey);
+      const apiSecret  = dec(bot.user?.apiSecret);
+      const passphrase = dec(bot.user?.apiPassphrase);
+
+      // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
+      if (!bot.dryRun && (!apiKey || !apiSecret)) {
+        await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
+        stopped++;
+        console.warn(`[Startup] Bot LIVE ${bot.symbol} tidak punya API key → stopped`);
+        continue;
+      }
+
+      try {
+        const instance = createBotInstance(bot.userId, bot.symbol, {
+          capital:     bot.capital,
+          strategyKey: bot.strategyKey,
+          dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
+          botId:       bot.id,
+          userId:      bot.userId,
+          apiKey, apiSecret, passphrase,
+        });
+        if (!instance.getState().running) await instance.start();
+        resumed++;
+        console.log(`[Startup] Resume bot ${bot.symbol} (${bot.dryRun ? "dry-run" : "LIVE"})`);
+      } catch (e) {
+        console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
+      }
     }
+    if (resumed || stopped) console.log(`[Startup] Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan`);
     await prisma.$disconnect();
   } catch (err) {
-    console.warn("[Startup] resetStaleRunningBots error (non-fatal):", err.message);
+    console.warn("[Startup] resumeRunningBots error (non-fatal):", err.message);
   }
 }
 
 // Pastikan tabel engine (Postgres) siap sebelum menerima request.
 db.init()
-  .then(async () => {
-    // Reset bot state stale dari restart sebelumnya
-    await resetStaleRunningBots();
-
+  .then(() => {
     server.listen(PORT, () => {
       console.log(`\n🚀 Quantara Bot Server running on ${PORT}`);
       console.log(`📊 Dashboard: http://localhost:5173`);
@@ -319,6 +353,8 @@ db.init()
     });
     // Backup otomatis tiap 24 jam — berjalan di dalam proses Node.js, tanpa cron
     backup.start();
+    // Pulihkan bot yang sedang berjalan (async, tidak memblok startup)
+    resumeRunningBots();
   })
   .catch((err) => {
     console.error("[STARTUP] Gagal inisialisasi database:", err.message);
