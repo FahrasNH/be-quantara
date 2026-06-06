@@ -21,6 +21,7 @@ global.expect = expect;
 require("./TrendMomentumStrategy.test.js");
 require("./MeanReversionStrategy.test.js");
 require("./BreakoutRetestStrategy.test.js");
+require("./Simulator.test.js");
 
 // Execute everything and set process exit code on failure
 run("Strategy Test Suites");
