@@ -1564,15 +1564,55 @@ class BotEngine extends EventEmitter {
         const sessionsToRecalc = new Set();
 
         for (const pos of closedLocal) {
-          const exitPrice = price;
           const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
-          const pnl       = pos.side === "LONG"
+
+          // ── BUGFIX: Dapatkan harga fill AKTUAL dari exchange ─────────────────
+          // Sebelumnya: exitPrice = price (tick price saat deteksi) → SALAH
+          // karena bot cek setiap 60s, jadi harga sudah bergerak dari SL/TP.
+          // Sekarang: coba ambil fill price dari exchange, fallback ke estimasi SL/TP.
+          let exitPrice   = null;
+          let exitReason  = "Exchange (TP/SL)";
+          let priceSource = "tick";
+
+          // 1. Coba ambil actual fill price dari exchange
+          if (this.client.getRecentFillPrice) {
+            exitPrice = await this.client.getRecentFillPrice(
+              this.config.symbol,
+              pos.side,
+              typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0)
+            );
+            if (exitPrice) priceSource = "exchange_fill";
+          }
+
+          // 2. Jika fill price tidak bisa diambil, estimasi dari SL/TP
+          // Logic: kalau exit price lebih dekat ke SL → SL hit; lebih dekat ke TP → TP hit.
+          if (!exitPrice) {
+            const sl = pos.sl || 0;
+            const tp = pos.tp || 0;
+            if (sl && tp) {
+              const dSL = Math.abs(price - sl);
+              const dTP = Math.abs(price - tp);
+              if (dSL < dTP) {
+                exitPrice  = sl;
+                exitReason = "SL (estimated)";
+              } else {
+                exitPrice  = tp;
+                exitReason = "TP (estimated)";
+              }
+              priceSource = "sl_tp_estimate";
+            } else {
+              exitPrice   = price; // last resort fallback
+              priceSource = "tick_fallback";
+            }
+          }
+
+          const pnl = pos.side === "LONG"
             ? (exitPrice - pos.entry) * remaining
             : (pos.entry - exitPrice) * remaining;
 
           this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
           this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
-          this._log("trade", `Entry: $${pos.entry} | Exit: ~$${exitPrice.toFixed(2)} | Size sisa: ${remaining.toFixed(4)}`);
+          this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} [${priceSource}] | Size sisa: ${remaining.toFixed(4)}`);
           this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} — balance diperbarui dari exchange`);
           if (pos.m1 || pos.m2) {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
@@ -1581,7 +1621,7 @@ class BotEngine extends EventEmitter {
 
           // Tutup trade record di DB
           if (pos.dbId) {
-            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
+            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: exitReason, closeTime: new Date().toISOString() }); } catch {}
           }
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
@@ -1593,7 +1633,7 @@ class BotEngine extends EventEmitter {
             exitPrice,
             pnl,
             pnlPct,
-            reason:     "Exchange (TP/SL)",
+            reason:     exitReason,
             dryRun:     this.config.dryRun,
           });
 
@@ -1668,12 +1708,23 @@ class BotEngine extends EventEmitter {
 
                 if (isAlreadyClosed) {
                   this._log("info", `Posisi ${pos.side} sudah ditutup oleh exchange ✓ (state sync)`);
-                  const exitPrice = price;
+                  // Coba ambil fill price aktual; fallback ke SL/TP estimate
+                  let exitPrice = null;
+                  if (this.client.getRecentFillPrice) {
+                    exitPrice = await this.client.getRecentFillPrice(
+                      this.config.symbol, pos.side,
+                      typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0)
+                    );
+                  }
+                  if (!exitPrice) {
+                    // manualSLTP sudah tahu sisi mana yang hit
+                    exitPrice = hitTP ? (pos.tp || price) : (pos.sl || price);
+                  }
                   const pnl = pos.side === "LONG"
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
                   if (pos.dbId) {
-                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: "Exchange", closeTime: new Date().toISOString() }); } catch {}
+                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: hitTP ? "TP" : "SL", closeTime: new Date().toISOString() }); } catch {}
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
                   if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {

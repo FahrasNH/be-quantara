@@ -153,6 +153,60 @@ class BitgetCCXTClient {
     }
   }
 
+  /**
+   * Ambil harga fill aktual dari exchange untuk posisi yang baru ditutup.
+   * Digunakan setelah deteksi posisi hilang dari getPositions() agar exit price
+   * yang dicatat = harga SL/TP nyata, bukan tick price saat deteksi.
+   *
+   * @param {string} symbol  — e.g. "SOLUSDT"
+   * @param {string} side    — "LONG" | "SHORT" (posisi yang ditutup)
+   * @param {number} openedAt — timestamp ms saat posisi dibuka (untuk filter)
+   * @returns {number|null}  — fill price, atau null jika tidak bisa diambil
+   */
+  async getRecentFillPrice(symbol, side, openedAt = 0) {
+    try {
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
+      // fetchMyTrades mengembalikan actual fills (bukan order), lebih akurat
+      let fills = [];
+      try {
+        fills = await this.exchange.fetchMyTrades(marketSymbol, openedAt || undefined, 10);
+      } catch {
+        // Beberapa exchange config tidak support fetchMyTrades — fallback ke closed orders
+        const orders = await this.exchange.fetchClosedOrders(marketSymbol, openedAt || undefined, 10);
+        fills = orders
+          .filter(o => o.filled > 0 && o.average)
+          .map(o => ({ price: o.average, timestamp: o.timestamp, side: o.side }));
+      }
+
+      if (!Array.isArray(fills) || fills.length === 0) return null;
+
+      // Closing trade adalah order di sisi berlawanan dari posisi
+      // LONG ditutup via SELL order; SHORT ditutup via BUY order
+      const closingSide = side === "LONG" ? "sell" : "buy";
+
+      // Cari fill terbaru setelah posisi dibuka yang arahnya menutup posisi ini
+      const relevant = fills
+        .filter(f => {
+          const fSide = (f.side || "").toLowerCase();
+          const fTs   = f.timestamp || 0;
+          return fSide === closingSide && fTs >= (openedAt || 0);
+        })
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+      if (relevant.length === 0) return null;
+
+      const fillPrice = parseFloat(relevant[0].price || relevant[0].cost / relevant[0].amount || 0);
+      return fillPrice > 0 ? fillPrice : null;
+    } catch {
+      return null; // non-fatal — caller akan fallback ke SL/TP estimate
+    }
+  }
+
   // ─────────────────────────────────────────────
   // TRADING
   // ─────────────────────────────────────────────
