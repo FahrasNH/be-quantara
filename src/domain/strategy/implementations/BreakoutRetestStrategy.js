@@ -36,9 +36,14 @@ class BreakoutRetestStrategy extends StrategyBase {
       retestWindow: 5,         // Retest must occur within N bars of breakout, else level is stale
 
       // Risk management (FOUNDRY tier)
+      // SL calibration: raised from 0.5 → 1.5×ATR after diagnostic proved 0.5×ATR
+      // sits inside normal bar noise (avg SL 268 < avg H-L range 535 on 15m BTC).
+      // At 0.5×ATR, ~50% of bars breach SL on the next wick → 0% win rate.
+      // At 1.5×ATR the stop clears typical bar noise and gives a real invalidation
+      // level for the retest. tpMultiplier scaled from 4→6 to keep RR 1:4 (6/1.5=4).
       riskPerTrade: 0.03,      // 3% per trade (aggressive for small capital)
-      slMultiplier: 0.5,       // SL = 0.5x ATR below/above level
-      tpMultiplier: 4.0,       // TP = 4x ATR from entry (1:4 RR)
+      slMultiplier: 1.5,       // SL = 1.5x ATR below/above level (above noise floor)
+      tpMultiplier: 6.0,       // TP = 6x ATR from entry → RR = 6/1.5 = 1:4.0
 
       // Position management
       maxTradesPerDay: 7,

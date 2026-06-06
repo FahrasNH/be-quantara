@@ -132,10 +132,11 @@ model Session {
   id        String   @id @default(cuid())
   userId    String
 
-  refreshToken String? @unique
+  // Only the bcrypt hash is stored — never the raw token.
+  // refreshToken plaintext field removed (P1.3 security hardening).
   refreshTokenHash String?
-  userAgent String?
-  ipAddress String?
+  userAgent        String?
+  ipAddress        String?
 
   expiresAt DateTime
   createdAt DateTime @default(now())

@@ -137,17 +137,12 @@ class AuthService {
         throw new Error('Refresh token expired');
       }
 
-      // Verify token: check hashed token first (new way), fall back to plaintext (old way)
-      let tokenValid = false;
-
-      if (session.refreshTokenHash) {
-        // New way: verify with bcrypt
-        tokenValid = await bcrypt.compare(refreshToken, session.refreshTokenHash);
-      } else if (session.refreshToken) {
-        // Backward compatibility: old plaintext tokens (during migration)
-        tokenValid = refreshToken === session.refreshToken;
+      // Verify token against bcrypt hash — plaintext storage removed (P1.3 hardening).
+      if (!session.refreshTokenHash) {
+        throw new Error('Invalid refresh token');
       }
 
+      const tokenValid = await bcrypt.compare(refreshToken, session.refreshTokenHash);
       if (!tokenValid) {
         throw new Error('Invalid refresh token');
       }
