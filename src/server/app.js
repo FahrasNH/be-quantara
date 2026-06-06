@@ -11,7 +11,8 @@ const rateLimit = require("express-rate-limit");
 
 const cfg = require("../config/env");
 const BotEngine = require("../application/BotEngine");
-const db = require("../infrastructure/db/database");
+const db     = require("../infrastructure/db/database");
+const backup = require("../infrastructure/backup/BackupScheduler");
 const { createExchangeClient } = require("../infrastructure/exchange");
 
 // Middleware
@@ -291,6 +292,8 @@ db.init()
       console.log(`🔐 Auth enabled`);
       console.log(`📡 WebSocket: ws://localhost:${PORT}/ws\n`);
     });
+    // Backup otomatis tiap 24 jam — berjalan di dalam proses Node.js, tanpa cron
+    backup.start();
   })
   .catch((err) => {
     console.error("[STARTUP] Gagal inisialisasi database:", err.message);
@@ -300,6 +303,7 @@ db.init()
 // Graceful shutdown
 process.on("SIGTERM", async () => {
   console.log("[SHUTDOWN] SIGTERM received, shutting down gracefully...");
+  backup.stop();
   server.close(async () => {
     await db.close();
     process.exit(0);
