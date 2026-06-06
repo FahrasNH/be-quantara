@@ -479,16 +479,17 @@ module.exports = function createBotsRouter(helpers) {
    * List available strategies
    */
   router.get("/strategies/available", (req, res) => {
+    const { listStrategies } = require("../../domain/strategies");
+    const strategies = listStrategies();
+
     res.json({
       ok: true,
-      strategies: [
-        {
-          value: "ADAPTIVE_FUSION",
-          label: "Adaptive Fusion Strategy",
-          description: "Market-aware system combining 3 sub-strategies",
-        },
-        // Future strategies to add here
-      ],
+      strategies: strategies.map(s => ({
+        value: s.key,
+        label: s.label,
+        description: s.description,
+        signalType: s.signalType,
+      })),
     });
   });
 
@@ -498,21 +499,11 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get("/strategies/info/:key", (req, res) => {
     const { key } = req.params;
+    const { STRATEGIES } = require("../../domain/strategies");
 
-    const strategies = {
-      ADAPTIVE_FUSION: {
-        name: "ADAPTIVE_FUSION",
-        label: "Adaptive Fusion Strategy",
-        description: "Market-aware system combining Scalping (A), Day Trading (B), and Swing Trading (C)",
-        components: [
-          { key: "A", name: "Aggressive Scalping", minBalance: 500 },
-          { key: "B", name: "Day Trading", minBalance: 50 },
-          { key: "C", name: "Swing Trading", minBalance: 0 },
-        ],
-      },
-    };
+    const strategyConfig = STRATEGIES[key];
 
-    if (!strategies[key]) {
+    if (!strategyConfig) {
       return res.status(404).json({
         ok: false,
         statusCode: 404,
@@ -520,9 +511,33 @@ module.exports = function createBotsRouter(helpers) {
       });
     }
 
+    const riskConfig = {
+      riskPerTrade: strategyConfig.riskPerTrade || 0.01,
+      maxDailyLossPct: strategyConfig.maxDailyLossPct || 0.05,
+      maxTradesPerDay: strategyConfig.maxTradesPerDay || 10,
+    };
+
+    const response = {
+      name: strategyConfig.name,
+      label: strategyConfig.label,
+      description: strategyConfig.description,
+      interval: strategyConfig.interval,
+      leverage: strategyConfig.leverage || 1,
+      riskConfig,
+    };
+
+    // Add component info for ADAPTIVE_FUSION
+    if (key === "ADAPTIVE_FUSION") {
+      response.components = [
+        { key: "A", name: "Aggressive Scalping", minBalance: 500 },
+        { key: "B", name: "Day Trading", minBalance: 50 },
+        { key: "C", name: "Swing Trading", minBalance: 0 },
+      ];
+    }
+
     res.json({
       ok: true,
-      strategy: strategies[key],
+      strategy: response,
     });
   });
 
