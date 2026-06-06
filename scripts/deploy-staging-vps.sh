@@ -7,13 +7,13 @@
 #
 # Env:
 #   PM2_APP     — nama proses PM2 (default: quantara-staging)
-#   GIT_BRANCH  — branch yang di-pull (default: main)
+#   GIT_BRANCH  — branch yang di-pull (default: staging)
 
 set -euo pipefail
 
 BE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PM2_APP="${PM2_APP:-quantara-staging}"
-GIT_BRANCH="${GIT_BRANCH:-main}"
+GIT_BRANCH="${GIT_BRANCH:-staging}"
 
 cd "${BE_DIR}"
 
