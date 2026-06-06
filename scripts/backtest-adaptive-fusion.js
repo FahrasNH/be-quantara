@@ -29,7 +29,13 @@ const DAYS          = parseInt(get("--days",   "30"), 10);
 const START_BALANCE = parseFloat(get("--capital", "1000"));
 const SOURCE        = get("--source",  "mock");   // "mock" | "db"
 
-// ── Mock candle generator ─────────────────────────────────────────────────
+// ── Mock candle generator — REGIME-CYCLING ────────────────────────────────
+// Cycles through distinct market regimes so all 3 components get conditions to
+// fire AND to score highest in turn (the whole point of ADAPTIVE_FUSION):
+//   STRONG_UP / STRONG_DOWN → high trend_strength → Component C (swing) wins
+//   VOLATILE_CHOP           → high volatility + volume spikes + RSI extremes
+//                             → Component A (scalp) wins
+//   NORMAL                  → moderate trend → Component B (day) wins
 function generateMockCandles(symbol, days, intervalMin = 15) {
   const candles = [];
   const bars    = (days * 24 * 60) / intervalMin;
@@ -37,19 +43,65 @@ function generateMockCandles(symbol, days, intervalMin = 15) {
   let price     = seed;
   let time      = Date.now() - bars * intervalMin * 60 * 1000;
 
+  const REGIME_LEN = 96;  // ~24h per regime on 15m
+  const REGIMES = ["STRONG_UP", "NORMAL", "VOLATILE_CHOP", "STRONG_DOWN", "NORMAL", "VOLATILE_CHOP"];
+
   for (let i = 0; i < bars; i++) {
-    const change = (Math.random() - 0.495) * price * 0.004; // slight upward drift
+    const regime = REGIMES[Math.floor(i / REGIME_LEN) % REGIMES.length];
+
+    let drift, noiseAmp, volBase, volSpike = 1;
+
+    switch (regime) {
+      case "STRONG_UP":
+        drift = price * 0.0012;                        // sustained uptrend → C wins
+        noiseAmp = 0.0015;
+        volBase = 1500;
+        break;
+      case "STRONG_DOWN":
+        drift = -price * 0.0012;                       // sustained downtrend → C wins
+        noiseAmp = 0.0015;
+        volBase = 1500;
+        break;
+      case "VOLATILE_CHOP":
+        drift = (Math.random() - 0.5) * price * 0.002; // whippy, no direction
+        noiseAmp = 0.006;                              // high volatility (ATR%↑)
+        volBase = 1500;
+        volSpike = Math.random() < 0.3 ? 2.2 + Math.random() : 1;  // periodic spikes for A
+        break;
+      default: // NORMAL
+        drift = (Math.random() - 0.45) * price * 0.0006;
+        noiseAmp = 0.0025;
+        volBase = 1500;
+    }
+
+    const noise  = (Math.random() - 0.5) * price * noiseAmp * 2;
     const open   = price;
-    const close  = Math.max(price + change, 1);
-    const high   = Math.max(open, close) * (1 + Math.random() * 0.003);
-    const low    = Math.min(open, close) * (1 - Math.random() * 0.003);
-    const volume = 500 + Math.random() * 2000;
+    const close  = Math.max(price + drift + noise, 1);
+    const high   = Math.max(open, close) * (1 + Math.random() * noiseAmp);
+    const low    = Math.min(open, close) * (1 - Math.random() * noiseAmp);
+    const volume = (volBase + Math.random() * 1000) * volSpike;
 
     candles.push({ time, open, high, low, close, volume });
     price  = close;
     time  += intervalMin * 60 * 1000;
   }
   return candles;
+}
+
+// Per-bar market conditions derived from indicators (NOT hardcoded).
+// volatility   = ATR as % of price
+// trendStrength= |EMA50 slope over 20 bars| as %, scaled (1.5%/20bars = full)
+function marketConditionsAt(indicators, i, price) {
+  const atr  = indicators.atr?.[i] || 0;
+  const volatility = price > 0 ? (atr / price) * 100 : 0;
+
+  const ema50 = indicators.emaTrend || [];
+  let trendStrength = 0;
+  if (ema50[i] != null && ema50[i - 20] != null && price > 0) {
+    const slopePct = Math.abs(ema50[i] - ema50[i - 20]) / price * 100;
+    trendStrength = Math.min(slopePct / 1.5, 1);
+  }
+  return { volatility, trend_strength: trendStrength };
 }
 
 // ── Trade simulation ──────────────────────────────────────────────────────
@@ -125,10 +177,12 @@ async function runBacktest() {
   for (let i = 30; i < candles.length; i++) {
     if (i <= activeUntil) continue;  // inside an open trade — skip
 
+    // Real per-bar market conditions (drives adaptive component selection)
+    const mc = marketConditionsAt(indicators, i, candles[i].close);
     const signal = strategy.detectSignal(indicators, i, {
       balance,
-      volatility:     1.5,  // assume normal market
-      trend_strength: 0.4,
+      volatility:     mc.volatility,
+      trend_strength: mc.trend_strength,
     });
 
     if (!signal) continue;
