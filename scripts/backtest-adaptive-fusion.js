@@ -44,7 +44,7 @@ function generateMockCandles(symbol, days, intervalMin = 15) {
   let time      = Date.now() - bars * intervalMin * 60 * 1000;
 
   const REGIME_LEN = 96;  // ~24h per regime on 15m
-  const REGIMES = ["STRONG_UP", "NORMAL", "VOLATILE_CHOP", "STRONG_DOWN", "NORMAL", "VOLATILE_CHOP"];
+  const REGIMES = ["STRONG_UP", "NORMAL", "VOLATILE_TREND", "STRONG_DOWN", "NORMAL", "VOLATILE_CHOP"];
 
   for (let i = 0; i < bars; i++) {
     const regime = REGIMES[Math.floor(i / REGIME_LEN) % REGIMES.length];
@@ -67,6 +67,15 @@ function generateMockCandles(symbol, days, intervalMin = 15) {
         noiseAmp = 0.006;                              // high volatility (ATR%↑)
         volBase = 1500;
         volSpike = Math.random() < 0.3 ? 2.2 + Math.random() : 1;  // periodic spikes for A
+        break;
+      case "VOLATILE_TREND":
+        // High volatility AND an uptrend with momentum bursts — Component A's
+        // ideal habitat: A scores highest (high vol) AND can co-vote with C
+        // (uptrend structure) on volume-spike momentum bars.
+        drift = price * 0.0014;                        // volatile uptrend
+        noiseAmp = 0.0055;                             // high volatility
+        volBase = 1500;
+        volSpike = Math.random() < 0.4 ? 1.8 + Math.random() : 1;  // frequent spikes
         break;
       default: // NORMAL
         drift = (Math.random() - 0.45) * price * 0.0006;

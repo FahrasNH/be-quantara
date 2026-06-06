@@ -234,7 +234,8 @@ class AdaptiveFusionStrategy extends StrategyBase {
     ) {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
-      signals.A = this._detectSignalA(rsi, emaFast, emaSlow, closes, vol, vSMA);
+      // Pass full RSI array + index so A can compute RSI velocity (momentum)
+      signals.A = this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA);
     }
 
     // Component B — only run if balance sufficient AND score meets threshold
@@ -292,32 +293,48 @@ class AdaptiveFusionStrategy extends StrategyBase {
     return this._lastSignalMeta;
   }
 
-  // ── P3: Component A — Scalping ────────────────────────────────────────────
-  // Requires: RSI oversold/overbought + EMA alignment + volume spike + close confirm
+  // ── Component A — Momentum Scalping ───────────────────────────────────────
+  // REDESIGN: A now reads RSI *velocity* (momentum acceleration), not absolute
+  // extremes. The old absolute bands (rsi<30 / rsi>70) were mutually exclusive
+  // with B (rsi>50/<50) and C (rsi 35-75) — so A could never join a 2-vote
+  // majority and was effectively dead code. RSI-momentum bands (rising & >40 /
+  // falling & <60) overlap with B and C, letting A confirm trend entries.
+  // Keeps scalp character via EMA alignment + close confirmation + volume.
+  //
+  // @param {number[]} rsiSeries - full RSI array
+  // @param {number}   lastIdx   - current bar index (for slope)
+  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0) {
+    if (emaFast == null || emaSlow == null) return null;
 
-  _detectSignalA(rsi, emaFast, emaSlow, closes, volume = 0, volSMA = 0) {
-    if (rsi == null || emaFast == null || emaSlow == null) return null;
+    const rsiCurr  = rsiSeries?.[lastIdx];
+    const rsiPrev2 = rsiSeries?.[lastIdx - 2];
+    if (rsiCurr == null || rsiPrev2 == null) return null;
 
     const closeCurr  = closes[closes.length - 1];
     const volRatio   = volSMA > 0 ? volume / volSMA : 0;
-    const volSpike   = volRatio >= 1.5;   // require 1.5× volume spike
+    const volOk      = volRatio >= 1.5;   // scalp fires only on a genuine volume spike
 
-    // LONG: RSI oversold + close above fast EMA + fast above slow (uptrend) + volume spike
+    // RSI velocity over 2 bars: positive = accelerating up, negative = down
+    const rsiSlope = (rsiCurr - rsiPrev2) / 2;
+
+    // LONG: RSI accelerating up + above neutral + bullish EMA structure + close>fast
     if (
-      rsi < 30 &&
+      rsiSlope > 0.5 &&
+      rsiCurr > 40 &&
       closeCurr > emaFast &&
       emaFast > emaSlow &&
-      volSpike
+      volOk
     ) {
       return "LONG";
     }
 
-    // SHORT: RSI overbought + close below fast EMA + fast below slow (downtrend) + volume spike
+    // SHORT: RSI accelerating down + below neutral + bearish EMA structure + close<fast
     if (
-      rsi > 70 &&
+      rsiSlope < -0.5 &&
+      rsiCurr < 60 &&
       closeCurr < emaFast &&
       emaFast < emaSlow &&
-      volSpike
+      volOk
     ) {
       return "SHORT";
     }
