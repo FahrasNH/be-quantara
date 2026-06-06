@@ -130,7 +130,18 @@ async function init() {
         `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
         [s.id]
       );
-      if (rows.length === 0) continue;
+      if (rows.length === 0) {
+        // Belum ada trade yang close (mis. hanya posisi terbuka). Pastikan
+        // final_capital = initial_capital agar tidak tampil "Modal Akhir $0".
+        const init = s.initial_capital || 0;
+        if ((s.final_capital || 0) !== init) {
+          await pool.query(
+            `UPDATE bot_sessions SET final_capital = $2 WHERE id = $1`,
+            [s.id, init]
+          );
+        }
+        continue;
+      }
       const wins     = rows.filter((r) => r.pnl > 0).length;
       const losses   = rows.filter((r) => r.pnl <= 0).length;
       const totalPnL = rows.reduce((sum, r) => sum + r.pnl, 0);
@@ -156,14 +167,18 @@ async function init() {
 // ── Sessions ──────────────────────────────────
 
 async function openSession({ exchange, symbol, mode, initialCapital, config }) {
+  // final_capital diseed = initial_capital. Tanpa ini, kolom default 0 dan baru
+  // terisi saat ada trade CLOSE — sehingga sesi yang masih punya posisi terbuka
+  // saja menampilkan "Modal Akhir $0" yang keliru.
+  const initCap = initialCapital ?? 0;
   const { rows } = await pool.query(
-    `INSERT INTO bot_sessions (exchange, symbol, mode, initial_capital, config)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    `INSERT INTO bot_sessions (exchange, symbol, mode, initial_capital, final_capital, config)
+     VALUES ($1, $2, $3, $4, $4, $5) RETURNING id`,
     [
       exchange,
       symbol,
       mode || (config?.dryRun ? "dry_run" : "live"),
-      initialCapital ?? 0,
+      initCap,
       JSON.stringify(config ?? {}),
     ]
   );
