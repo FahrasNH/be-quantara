@@ -1566,13 +1566,26 @@ class BotEngine extends EventEmitter {
         for (const pos of closedLocal) {
           const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
 
-          // ── BUGFIX: Dapatkan harga fill AKTUAL dari exchange ─────────────────
-          // Sebelumnya: exitPrice = price (tick price saat deteksi) → SALAH
-          // karena bot cek setiap 60s, jadi harga sudah bergerak dari SL/TP.
-          // Sekarang: coba ambil fill price dari exchange, fallback ke estimasi SL/TP.
+          // ── Dapatkan exit price AKTUAL + resolve reason ke "TP" / "SL" ─────────
+          // Penting: frontend hanya kenal reason "TP", "SL", "Exchange".
+          // Backend harus resolve ke salah satu dari 3 string ini.
           let exitPrice   = null;
-          let exitReason  = "Exchange (TP/SL)";
+          let exitReason  = "Exchange";   // default: tidak tahu SL atau TP
           let priceSource = "tick";
+
+          const posSL = pos.sl || 0;
+          const posTP = pos.tp || 0;
+
+          // Util: tentukan reason berdasarkan harga vs SL/TP posisi
+          const resolveReason = (px) => {
+            if (!posSL || !posTP) return "Exchange";
+            // Toleransi 0.5% dari entry untuk menganggap "hit"
+            const tol = pos.entry * 0.005;
+            if (Math.abs(px - posTP) <= tol) return "TP";
+            if (Math.abs(px - posSL) <= tol) return "SL";
+            // Fallback: paling dekat ke mana?
+            return Math.abs(px - posSL) < Math.abs(px - posTP) ? "SL" : "TP";
+          };
 
           // 1. Coba ambil actual fill price dari exchange
           if (this.client.getRecentFillPrice) {
@@ -1581,27 +1594,28 @@ class BotEngine extends EventEmitter {
               pos.side,
               typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0)
             );
-            if (exitPrice) priceSource = "exchange_fill";
+            if (exitPrice) {
+              priceSource = "exchange_fill";
+              exitReason  = resolveReason(exitPrice);
+            }
           }
 
-          // 2. Jika fill price tidak bisa diambil, estimasi dari SL/TP
-          // Logic: kalau exit price lebih dekat ke SL → SL hit; lebih dekat ke TP → TP hit.
+          // 2. Fill price tidak tersedia → estimasi dari SL/TP berdasarkan harga tick
           if (!exitPrice) {
-            const sl = pos.sl || 0;
-            const tp = pos.tp || 0;
-            if (sl && tp) {
-              const dSL = Math.abs(price - sl);
-              const dTP = Math.abs(price - tp);
+            if (posSL && posTP) {
+              const dSL = Math.abs(price - posSL);
+              const dTP = Math.abs(price - posTP);
               if (dSL < dTP) {
-                exitPrice  = sl;
-                exitReason = "SL (estimated)";
+                exitPrice  = posSL;
+                exitReason = "SL";
               } else {
-                exitPrice  = tp;
-                exitReason = "TP (estimated)";
+                exitPrice  = posTP;
+                exitReason = "TP";
               }
               priceSource = "sl_tp_estimate";
             } else {
-              exitPrice   = price; // last resort fallback
+              exitPrice   = price;
+              exitReason  = "Exchange";
               priceSource = "tick_fallback";
             }
           }
