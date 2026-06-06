@@ -19,6 +19,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS bot_sessions (
     id              SERIAL PRIMARY KEY,
+    user_id         TEXT,
     exchange        TEXT    NOT NULL,
     symbol          TEXT    NOT NULL,
     mode            TEXT    NOT NULL DEFAULT 'dry_run',
@@ -31,6 +32,13 @@ const SCHEMA_SQL = `
     losses          INTEGER DEFAULT 0,
     config          TEXT
   );
+
+  -- Tambah user_id jika belum ada (idempotent untuk DB yang sudah exist)
+  DO $$ BEGIN
+    ALTER TABLE bot_sessions ADD COLUMN user_id TEXT;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+  CREATE INDEX IF NOT EXISTS idx_bot_sessions_user_id ON bot_sessions(user_id);
 
   CREATE TABLE IF NOT EXISTS trades (
     id           SERIAL PRIMARY KEY,
@@ -166,15 +174,15 @@ async function init() {
 
 // ── Sessions ──────────────────────────────────
 
-async function openSession({ exchange, symbol, mode, initialCapital, config }) {
-  // final_capital diseed = initial_capital. Tanpa ini, kolom default 0 dan baru
-  // terisi saat ada trade CLOSE — sehingga sesi yang masih punya posisi terbuka
-  // saja menampilkan "Modal Akhir $0" yang keliru.
+async function openSession({ exchange, symbol, mode, initialCapital, config, userId }) {
+  // final_capital diseed = initial_capital agar tidak tampil "Modal Akhir $0"
+  // saat sesi belum punya trade yang tutup.
   const initCap = initialCapital ?? 0;
   const { rows } = await pool.query(
-    `INSERT INTO bot_sessions (exchange, symbol, mode, initial_capital, final_capital, config)
-     VALUES ($1, $2, $3, $4, $4, $5) RETURNING id`,
+    `INSERT INTO bot_sessions (user_id, exchange, symbol, mode, initial_capital, final_capital, config)
+     VALUES ($1, $2, $3, $4, $5, $5, $6) RETURNING id`,
     [
+      userId ?? null,
       exchange,
       symbol,
       mode || (config?.dryRun ? "dry_run" : "live"),
@@ -277,17 +285,27 @@ const SESSIONS_BASE = `
  * @param {number}      limit  — max session yang dikembalikan (default 20)
  * @param {string|null} symbol — filter per simbol (null = semua)
  */
-async function getSessions(limit = 20, symbol = null) {
-  if (symbol) {
-    const { rows } = await pool.query(
-      `${SESSIONS_BASE} WHERE s.symbol = $1 ORDER BY s.started_at DESC LIMIT $2`,
-      [symbol.toUpperCase(), limit]
-    );
-    return rows.map(parseSession);
+async function getSessions(limit = 20, symbol = null, userId = null) {
+  // userId filter: kalau userId di-pass, return hanya sesi milik user tsb.
+  // Kalau null (backward-compat), return semua — diperlukan untuk repair/admin.
+  const conditions = [];
+  const params     = [];
+
+  if (userId) {
+    params.push(userId);
+    conditions.push(`s.user_id = $${params.length}`);
   }
+  if (symbol) {
+    params.push(symbol.toUpperCase());
+    conditions.push(`s.symbol = $${params.length}`);
+  }
+
+  const WHERE = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  params.push(limit);
+
   const { rows } = await pool.query(
-    `${SESSIONS_BASE} ORDER BY s.started_at DESC LIMIT $1`,
-    [limit]
+    `${SESSIONS_BASE} ${WHERE} ORDER BY s.started_at DESC LIMIT $${params.length}`,
+    params
   );
   return rows.map(parseSession);
 }
@@ -344,11 +362,26 @@ async function closeTrade(tradeId, { exitPrice, pnl, reason, closeTime }) {
   );
 }
 
-async function getTrades({ sessionId = null, symbol = null, limit = 100 } = {}) {
+async function getTrades({ sessionId = null, symbol = null, limit = 100, userId = null } = {}) {
+  // Join ke bot_sessions untuk filter by user_id jika disediakan.
+  // Kalau userId null (backward-compat / admin), return semua.
+  if (userId) {
+    const { rows } = await pool.query(
+      `SELECT t.* FROM trades t
+       JOIN bot_sessions s ON s.id = t.session_id
+       WHERE s.user_id = $1
+         AND ($2::int  IS NULL OR t.session_id = $2)
+         AND ($3::text IS NULL OR t.symbol     = $3)
+       ORDER BY t.open_time DESC
+       LIMIT $4`,
+      [userId, sessionId, symbol, Math.min(limit, 1000)]
+    );
+    return rows;
+  }
   const { rows } = await pool.query(
     `SELECT * FROM trades
-     WHERE ($1::int IS NULL OR session_id = $1)
-       AND ($2::text IS NULL OR symbol = $2)
+     WHERE ($1::int  IS NULL OR session_id = $1)
+       AND ($2::text IS NULL OR symbol     = $2)
      ORDER BY open_time DESC
      LIMIT $3`,
     [sessionId, symbol, Math.min(limit, 1000)]

@@ -197,6 +197,7 @@ module.exports = function createBotsRouter(helpers) {
         strategyKey: bot.strategyKey,
         dryRun:      bot.dryRun,
         botId:       bot.id,
+        userId,                // diteruskan ke openSession → user_id di bot_sessions
         apiKey:      decryptedApiKey,
         apiSecret:   decryptedApiSecret,
         passphrase:  decryptedPassphrase,

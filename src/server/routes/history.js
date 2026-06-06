@@ -21,7 +21,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     try {
       const limit  = Math.min(safeInt(req.query.limit, 20), 500);
       const symbol = req.query.symbol || null;
-      res.json(await db.getSessions(limit, symbol));
+      res.json(await db.getSessions(limit, symbol, req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -42,7 +42,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
       const sessionId = req.query.session_id ? safeInt(req.query.session_id, 0) : null;
       const symbol    = req.query.symbol || null;
       const limit     = Math.min(safeInt(req.query.limit, 100), 1000);
-      res.json(await db.getTrades({ sessionId, symbol, limit }));
+      res.json(await db.getTrades({ sessionId, symbol, limit, userId: req.userId ?? null }));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

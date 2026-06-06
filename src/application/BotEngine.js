@@ -373,6 +373,7 @@ class BotEngine extends EventEmitter {
       mode:           this.config.dryRun ? "dry_run" : "live",
       initialCapital: this.state.startCapital,
       config:         this.config,
+      userId:         this.config.userId ?? null,  // isolasi data per user
     });
     this._log("info", `Session DB #${this.sessionId} dibuat`);
 
