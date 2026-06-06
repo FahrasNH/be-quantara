@@ -215,11 +215,18 @@ wss.on("connection", (ws, req) => {
   const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
   console.log(`[WS] Client connected: ${clientIp}`);
 
-  // Replay buffer in-memory (100 entri terakhir per bot) ke klien baru
+  // Replay buffer in-memory (100 entri terakhir per bot) + snapshot status live
   const WS_REPLAY_PER_BOT = 100;
   Object.values(botsMap).forEach((instance) => {
     const symbol = instance.config?.symbol;
     if (!symbol) return;
+
+    if (ws.readyState === 1) {
+      try {
+        ws.send(JSON.stringify({ type: "status", symbol, data: instance.getState() }));
+      } catch { /* client mungkin sudah disconnect */ }
+    }
+
     instance.getLogs(WS_REPLAY_PER_BOT).forEach((entry) => {
       if (ws.readyState === 1) {
         try {
@@ -250,13 +257,22 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// Broadcast bot logs to WebSocket clients
+// Broadcast bot logs + status ke WebSocket clients
 const originalEmit = BotEngine.prototype.emit;
 BotEngine.prototype.emit = function (event, ...args) {
-  if (event === "log") {
+  const symbol = this.config?.symbol;
+  if (!symbol) return originalEmit.call(this, event, ...args);
+
+  if (event === "log" || event === "status") {
+    const payload = event === "log"
+      ? { type: "log", symbol, data: args[0] }
+      : { type: "status", symbol, data: args[0] };
+
     wss.clients.forEach((client) => {
-      if (client.readyState === 1 && (!client.botSymbol || client.botSymbol === this.config.symbol)) {
-        client.send(JSON.stringify({ type: "log", symbol: this.config.symbol, data: args[0] }));
+      if (client.readyState === 1 && (!client.botSymbol || client.botSymbol === symbol)) {
+        try {
+          client.send(JSON.stringify(payload));
+        } catch { /* client mungkin sudah disconnect */ }
       }
     });
   }

@@ -18,6 +18,32 @@ module.exports = function createBotsRouter(helpers) {
     return isEncrypted(value) ? decrypt(value) : value;
   }
 
+  /** Gabungkan record DB dengan state live BotEngine (jika instance ada). */
+  function mergeBotWithLiveState(userId, botRecord) {
+    const instance = getBot(userId, botRecord.symbol);
+    if (instance) {
+      const live = instance.getState();
+      return {
+        ...botRecord,
+        ...live,
+        id:          botRecord.id,
+        botId:       botRecord.symbol,
+        running:     live.running,
+        strategyKey: botRecord.strategyKey,
+      };
+    }
+    return {
+      ...botRecord,
+      botId:          botRecord.symbol,
+      startCapital:   botRecord.capital,
+      openPositions:  [],
+      openTradeCount: 0,
+      closedTrades:   botRecord.totalTrades ?? 0,
+      totalPnL:       0,
+      unrealizedPnL:  0,
+    };
+  }
+
   /**
    * GET /api/v1/bots
    * List all bots for current user
@@ -46,7 +72,7 @@ module.exports = function createBotsRouter(helpers) {
       res.json({
         ok: true,
         count: bots.length,
-        bots,
+        bots: bots.map(b => mergeBotWithLiveState(userId, b)),
       });
     })
   );
@@ -91,14 +117,14 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       const instance = getBot(userId, symbol);
-      const state = instance ? instance.getState() : {};
+      const merged   = mergeBotWithLiveState(userId, bot);
 
       res.json({
         ok: true,
         symbol,
+        ...merged,
         config: bot,
-        state,
-        running: bot.running,
+        state:  instance ? instance.getState() : {},
       });
     })
   );
