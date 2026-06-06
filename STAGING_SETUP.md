@@ -51,3 +51,7 @@ curl http://187.77.135.156:8080/api/v1/health
 ## Vercel (fase berikutnya)
 
 Butuh HTTPS di backend sebelum FE staging bisa di-host di Vercel. Lihat `vercel.json.example` di repo fe-quantara.
+
+## Production
+
+Lihat [PRODUCTION_SETUP.md](PRODUCTION_SETUP.md) untuk deploy production (`./deploy-production.sh`).
