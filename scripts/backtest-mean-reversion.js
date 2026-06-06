@@ -25,32 +25,43 @@ const SYMBOL        = get("--symbol",  "BTCUSDT");
 const DAYS          = parseInt(get("--days",   "90"), 10);
 const START_BALANCE = parseFloat(get("--capital", "30000000"));
 
-// ── Mock candle generator with choppy/reversion patterns ─────────────────
+// ── Mock candle generator: genuine MEAN-REVERTING (Ornstein-Uhlenbeck) ─────
+// Price is pulled strongly toward a slowly-drifting anchor, so deviations to
+// the Bollinger extremes actually revert toward the mean (the conditions the
+// VAULT strategy is designed to trade). The anchor itself drifts gently so the
+// market isn't perfectly stationary — realistic but reversion-dominant.
 function generateMockCandles(symbol, days, intervalMin = 15) {
   const candles = [];
   const bars    = (days * 24 * 60) / intervalMin;
   const seed    = symbol === "BTCUSDT" ? 42000 : symbol === "ETHUSDT" ? 2500 : 150;
   let price     = seed;
+  let anchor    = seed;          // the "mean" price reverts toward
   let time      = Date.now() - bars * intervalMin * 60 * 1000;
-  let mean      = seed;
 
-  // Generate with mean-reversion behavior (oscillate around mean)
+  // Representative choppy-but-reverting regime. NOTE: results are highly
+  // regime-dependent — stronger pull (lower SIGMA / higher THETA) lifts win
+  // rate sharply, noisier regimes whipsaw the tight 1×ATR stop. Real-market
+  // validation is required before live; this is a logic sanity check only.
+  const THETA = 0.03;            // reversion speed (moderate-strong pull)
+  const SIGMA = 0.006;           // per-bar shock size (~0.6%)
+
   for (let i = 0; i < bars; i++) {
-    // Update mean slowly
-    mean = mean * 0.99 + price * 0.01;
+    // Anchor drifts slowly via a slow sine + tiny random walk (regime shifts)
+    anchor = anchor * 0.9995 + seed * 0.0005
+           + Math.sin(i / 500) * seed * 0.0002;
 
-    // Oscillate around mean (deviation creates extremes for mean reversion)
-    const deviation = (Math.random() - 0.5) * price * 0.005;
-    const reversion = (mean - price) * 0.001;  // Pull back toward mean
-    const change = deviation + reversion;
+    // OU step: pull toward anchor + random shock
+    const reversion = (anchor - price) * THETA;
+    const shock     = (Math.random() - 0.5) * price * SIGMA * 2;
+    const change    = reversion + shock;
 
     const open   = price;
     const close  = Math.max(price + change, 1);
-    const high   = Math.max(open, close) * (1 + Math.random() * 0.002);
-    const low    = Math.min(open, close) * (1 - Math.random() * 0.002);
+    const high   = Math.max(open, close) * (1 + Math.random() * 0.0015);
+    const low    = Math.min(open, close) * (1 - Math.random() * 0.0015);
 
-    // Variable volume (normal, not panic/euphoria)
-    const volume = 1000 + Math.random() * 2000;
+    // Volume stays in the "normal" band (strategy rejects panic/euphoria spikes)
+    const volume = 1200 + Math.random() * 1600;
 
     candles.push({ time, open, high, low, close, volume });
     price  = close;

@@ -254,15 +254,24 @@ class MeanReversionStrategy extends StrategyBase {
    * Main signal detection (mean reversion)
    */
   detectSignal(indicators, lastIdx, config = {}) {
+    // Need ≥50 bars for a stable 20-period BB + RSI warmup.
+    // 50 bars = ~12.5h on 15m TF — a safe minimum before trading (FIX #2).
     if (lastIdx < 50) return null;
 
+    // Slice to current bar to avoid lookahead. Guard against datasets that
+    // don't actually reach lastIdx (e.g. live feed lag) (FIX #3).
     const closes = (indicators.closes || []).slice(0, lastIdx + 1);
+    if (closes.length <= lastIdx) return null;  // not enough data up to lastIdx
+
     const rsiValues = indicators.rsi || [];
     const volumes = (indicators.volumes || []).slice(0, lastIdx + 1);
     const atr = indicators.atr?.[lastIdx];
-    const volSMA = indicators.volSMA?.[lastIdx] || 0;
+    const volSMA = indicators.volSMA?.[lastIdx];
 
+    // Indicator availability guards — fail closed rather than silently (FIX #6)
     if (!atr) return null;
+    if (!rsiValues.length || rsiValues[lastIdx] == null) return null;  // RSI required
+    if (!volSMA || volSMA <= 0) return null;  // can't validate volume without SMA
 
     // Calculate current BB levels
     const bbLevels = this.calculateBollingerBands(
@@ -303,22 +312,19 @@ class MeanReversionStrategy extends StrategyBase {
 
     let stopLoss, takeProfit;
 
+    // TP = max(ATR target, BB middle) so we always keep at least the 3×ATR
+    // reward; if the mean (BB middle) is further, aim for the full reversion.
+    // Never let BB middle SHRINK the TP below the ATR floor (FIX #4).
     if (signal === "LONG") {
       stopLoss = entryPrice - slDist;
-      // TP is minimum 3x ATR, but prefer BB middle if it's further
-      takeProfit = entryPrice + tpDist;
-
-      if (bbLevels?.middle && bbLevels.middle > takeProfit) {
-        takeProfit = bbLevels.middle;  // Revert to mean
-      }
+      const atrTP = entryPrice + tpDist;
+      // For LONG, further = higher → take the max
+      takeProfit = bbLevels?.middle ? Math.max(atrTP, bbLevels.middle) : atrTP;
     } else {  // SHORT
       stopLoss = entryPrice + slDist;
-      // TP is minimum 3x ATR, but prefer BB middle if it's further down
-      takeProfit = entryPrice - tpDist;
-
-      if (bbLevels?.middle && bbLevels.middle < takeProfit) {
-        takeProfit = bbLevels.middle;  // Revert to mean
-      }
+      const atrTP = entryPrice - tpDist;
+      // For SHORT, further = lower → take the min
+      takeProfit = bbLevels?.middle ? Math.min(atrTP, bbLevels.middle) : atrTP;
     }
 
     return {
