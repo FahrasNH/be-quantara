@@ -305,6 +305,9 @@ async function resumeRunningBots() {
       include: { user: { select: { apiKey: true, apiSecret: true, apiPassphrase: true } } },
     });
 
+    // Log tanpa syarat → penanda pasti bahwa kode auto-resume sudah ter-deploy.
+    console.log(`[Startup] 🔁 Auto-resume: ${bots.length} bot dengan running=true ditemukan`);
+
     let resumed = 0, stopped = 0;
     for (const bot of bots) {
       const apiKey     = dec(bot.user?.apiKey);
@@ -335,7 +338,7 @@ async function resumeRunningBots() {
         console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
       }
     }
-    if (resumed || stopped) console.log(`[Startup] Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan`);
+    console.log(`[Startup] ✅ Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan`);
     await prisma.$disconnect();
   } catch (err) {
     console.warn("[Startup] resumeRunningBots error (non-fatal):", err.message);
