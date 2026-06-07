@@ -25,6 +25,21 @@ const get  = (flag, def) => {
 const SYMBOL        = get("--symbol",  "BTCUSDT");
 const DAYS          = parseInt(get("--days",   "90"), 10);
 const START_BALANCE = parseFloat(get("--capital", "30000000"));
+const SEED          = parseInt(get("--seed", "12345"), 10);
+
+// PRNG deterministik (mulberry32) — backtest jadi REPRODUCIBLE. Sebelumnya
+// rand() membuat tiap run memakai data sintetis berbeda sehingga
+// metrik (WR/PF/PnL) berayun & tak bisa dibandingkan antar-run/tuning.
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = makeRng(SEED);
 
 // ── Mock candle generator: genuine MEAN-REVERTING (Ornstein-Uhlenbeck) ─────
 // Price is pulled strongly toward a slowly-drifting anchor, so deviations to
@@ -53,16 +68,16 @@ function generateMockCandles(symbol, days, intervalMin = 15) {
 
     // OU step: pull toward anchor + random shock
     const reversion = (anchor - price) * THETA;
-    const shock     = (Math.random() - 0.5) * price * SIGMA * 2;
+    const shock     = (rand() - 0.5) * price * SIGMA * 2;
     const change    = reversion + shock;
 
     const open   = price;
     const close  = Math.max(price + change, 1);
-    const high   = Math.max(open, close) * (1 + Math.random() * 0.0015);
-    const low    = Math.min(open, close) * (1 - Math.random() * 0.0015);
+    const high   = Math.max(open, close) * (1 + rand() * 0.0015);
+    const low    = Math.min(open, close) * (1 - rand() * 0.0015);
 
     // Volume stays in the "normal" band (strategy rejects panic/euphoria spikes)
-    const volume = 1200 + Math.random() * 1600;
+    const volume = 1200 + rand() * 1600;
 
     candles.push({ time, open, high, low, close, volume });
     price  = close;

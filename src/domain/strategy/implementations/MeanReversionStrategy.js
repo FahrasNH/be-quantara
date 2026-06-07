@@ -37,10 +37,11 @@ class MeanReversionStrategy extends StrategyBase {
       bbPeriod: 20,
       bbStdDev: 2.0,
 
-      // RSI (extreme confirmation)
+      // RSI (extreme confirmation) — level textbook mean-reversion 30/70.
+      // Lebih banyak peluang sah dibanding 25/75 yang terlalu langka (TUNING #1).
       rsiPeriod: 14,
-      rsiOverbought: 75,      // > 75 = extreme HIGH (SHORT setup)
-      rsiOversold: 25,        // < 25 = extreme LOW (LONG setup)
+      rsiOverbought: 70,      // > 70 = overbought (SHORT setup)
+      rsiOversold: 30,        // < 30 = oversold (LONG setup)
 
       // Volume confirmation
       volSMAPeriod: 20,
@@ -157,17 +158,16 @@ class MeanReversionStrategy extends StrategyBase {
     const closePrev = lastIdx > 0 ? closes[lastIdx - 1] : null;
     const rsiCurr = rsiValues?.[lastIdx];
 
-    // 1. PRICE EXTREME: touched lower band and bouncing
+    // 1. PRICE EXTREME: harus DEKAT band bawah (sinyal reversion kuat).
+    // Zona masuk = [lower, lower + 0.5×bandwidth] saja — separuh bawah.
+    // Entry yang jauh dari band (mendekati middle) reversion-edge-nya lemah →
+    // tolak agar win-rate tidak terdilusi (TUNING #2).
     if (closeCurr < bbLevels.lower) {
       return { valid: false, reason: `Price ${closeCurr.toFixed(2)} still below BB lower ${bbLevels.lower.toFixed(2)}` };
     }
-
-    // Not too far above lower band (should be within bounce zone: lower to lower + 0.5×bandwidth)
     const bounceZoneTop = bbLevels.lower + bbLevels.bandwidth * 0.5;
-    if (closeCurr > bounceZoneTop && closeCurr < bbLevels.middle) {
-      // Still in bounce zone, acceptable
-    } else if (closeCurr >= bbLevels.middle) {
-      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} already at/above middle, mean reversal done` };
+    if (closeCurr > bounceZoneTop) {
+      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} terlalu jauh dari band bawah (zona masuk ≤ ${bounceZoneTop.toFixed(2)})` };
     }
 
     // 2. RSI CONFIRMATION: oversold but recovering
@@ -214,17 +214,15 @@ class MeanReversionStrategy extends StrategyBase {
     const closePrev = lastIdx > 0 ? closes[lastIdx - 1] : null;
     const rsiCurr = rsiValues?.[lastIdx];
 
-    // 1. PRICE EXTREME: touched upper band and rejecting
+    // 1. PRICE EXTREME: harus DEKAT band atas (sinyal rejection kuat).
+    // Zona masuk = [upper - 0.5×bandwidth, upper] saja — separuh atas.
+    // Simetris dgn LONG: tolak entry yang jauh dari band (edge lemah) (TUNING #2).
     if (closeCurr > bbLevels.upper) {
       return { valid: false, reason: `Price ${closeCurr.toFixed(2)} still above BB upper ${bbLevels.upper.toFixed(2)}` };
     }
-
-    // Not too far below upper band (should be within rejection zone: upper - 0.5×bandwidth to upper)
     const rejectionZoneBot = bbLevels.upper - bbLevels.bandwidth * 0.5;
-    if (closeCurr < rejectionZoneBot && closeCurr > bbLevels.middle) {
-      // Still in rejection zone, acceptable
-    } else if (closeCurr <= bbLevels.middle) {
-      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} already at/below middle, mean reversal done` };
+    if (closeCurr < rejectionZoneBot) {
+      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} terlalu jauh dari band atas (zona masuk ≥ ${rejectionZoneBot.toFixed(2)})` };
     }
 
     // 2. RSI CONFIRMATION: overbought but rejecting
