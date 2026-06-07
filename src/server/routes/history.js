@@ -14,14 +14,33 @@ const safeInt = (val, def = 0) => {
 // Rate-limit sederhana untuk endpoint mahal
 let lastRecalc = 0;
 
-module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
+module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
   const router = Router();
 
   router.get("/sessions", async (req, res) => {
     try {
-      const limit  = Math.min(safeInt(req.query.limit, 20), 500);
-      const symbol = req.query.symbol || null;
-      res.json(await db.getSessions(limit, symbol, req.userId ?? null));
+      const limit    = Math.min(safeInt(req.query.limit, 20), 500);
+      const symbol   = req.query.symbol || null;
+      const sessions = await db.getSessions(limit, symbol, req.userId ?? null);
+
+      // Enrich dengan status live: sesi hanya benar-benar "aktif" bila bot-nya
+      // masih running di memory (sessionId cocok). Tanpa ini, crash/restart VPS
+      // membuat stopped_at tetap NULL → semua sesi lama tampak "AKTIF" di UI.
+      const liveBots = getAllBots ? getAllBots(req.userId) : [];
+      const liveSessionIds = new Set(
+        liveBots
+          .filter(b => b.getState?.().running && b.sessionId)
+          .map(b => b.sessionId)
+      );
+
+      const enriched = sessions.map(s => ({
+        ...s,
+        // Override: sesi terbuka (stopped_at NULL) tapi botnya tidak running → tandai closed
+        stopped_at: s.stopped_at ?? (liveSessionIds.has(s.id) ? null : new Date().toISOString()),
+        is_live_running: liveSessionIds.has(s.id),
+      }));
+
+      res.json(enriched);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
