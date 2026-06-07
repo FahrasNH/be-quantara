@@ -65,6 +65,42 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
   t("equity unknown → budget di-skip (allow)", v.ok);
 }
 
+// ── Daily loss AGREGAT lintas-bot (#5 residual) ─────────────────────────────
+{
+  const c = new AC({ userId: "u5", maxAccountDailyLossPct: 0.06 }); // batas akun 6%
+  // equity 1000 = equity KINI (sudah berkurang). Baseline awal-hari = 1000 + realized.
+  c.setAccountEquity(1000);
+
+  // Bot pertama rugi (di bawah batas per-bot 4%) — agregat masih aman.
+  c.reportRisk("u5:BTCUSDT", { realizedLoss: 30, floatingLoss: 0 }); // 30/1030 ≈ 2.9%
+  t("agregat ~2.9% → akun masih boleh trading", c.canTradeAccount().ok);
+
+  // Bot kedua menambah loss → agregat menembus batas akun (cegah 3×4%=12%).
+  c.reportRisk("u5:ETHUSDT", { realizedLoss: 40, floatingLoss: 0 }); // total 70/1070 ≈ 6.5%
+  t("agregat ~6.5% → akun DIBLOK (cegah akumulasi lintas-bot)", !c.canTradeAccount().ok);
+}
+
+{
+  const c = new AC({ userId: "u6", maxAccountDailyLossPct: 0.06 });
+  c.setAccountEquity(1000);
+  c.reportRisk("u6:BTCUSDT", { realizedLoss: 20, floatingLoss: 50 }); // 2% + 5% floating = 7%
+  t("floating loss ikut dihitung di gate akun → DIBLOK", !c.canTradeAccount().ok);
+}
+
+{
+  const c = new AC({ userId: "u7" }); // maxAccountDailyLossPct = 0 → nonaktif
+  c.setAccountEquity(1000);
+  c.reportRisk("u7:BTCUSDT", { realizedLoss: 999, floatingLoss: 0 });
+  t("gate akun nonaktif (pct=0) → selalu allow", c.canTradeAccount().ok);
+}
+
+{
+  const c = new AC({ userId: "u8", maxAccountDailyLossPct: 0.06 });
+  // equity belum diketahui → jangan blokir (hindari false-positive saat start)
+  c.reportRisk("u8:BTCUSDT", { realizedLoss: 999, floatingLoss: 0 });
+  t("equity unknown → gate akun di-skip (allow)", c.canTradeAccount().ok);
+}
+
 console.log(`\n  TESTS: ${pass} passed, ${fail} failed (${pass + fail} total)`);
 console.log(fail === 0 ? "  ✅ ALL TESTS PASSED\n" : "  ❌ SOME TESTS FAILED\n");
 process.exit(fail === 0 ? 0 : 1);

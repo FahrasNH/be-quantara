@@ -700,6 +700,13 @@ class BotEngine extends EventEmitter {
       };
     }
 
+    // 4b. Daily loss AGREGAT akun lintas-bot (#5) — cegah Σ kerugian beberapa bot
+    //     menembus batas akun walau tiap bot masih dalam batasnya sendiri.
+    if (!this.config.dryRun && this.config.coordinator) {
+      const acc = this.config.coordinator.canTradeAccount();
+      if (!acc.ok) return { ok: false, reason: acc.reason };
+    }
+
     // 5. ATR range filter (previously 6 — SIDEWAYS dipindah ke _tick() per-strategi)
     if (atr && price) {
       const atrPct = (atr / price) * 100;
@@ -827,6 +834,17 @@ class BotEngine extends EventEmitter {
       this.state.lastPrice = monitorPrice;
 
       await this._checkOpenPositions(monitorPrice, atr);
+
+      // Lapor risk ke koordinator akun tiap tick (#5) — termasuk saat memegang
+      // posisi — agar gate daily-loss agregat lintas-bot selalu pakai data segar.
+      if (!this.config.dryRun && this.config.coordinator) {
+        const floatingLoss = this.state.openPositions.reduce((s, p) => {
+          const u = p.unrealizedPL || 0;
+          return u < 0 ? s + Math.abs(u) : s;
+        }, 0);
+        const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+        this.config.coordinator.reportRisk(botKey, { realizedLoss: this.state.dailyLoss, floatingLoss });
+      }
 
       if (this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
