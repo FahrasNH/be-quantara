@@ -494,6 +494,18 @@ class BotEngine extends EventEmitter {
         if (this.state.openPositions.length > 0)
           this._log("info", `${this.state.openPositions.length} posisi aktif dipulihkan ✓`);
       }
+
+      // Re-reserve margin di koordinator untuk posisi yang dipulihkan (#5) — agar
+      // setelah restart/redeploy, margin posisi terbuka tetap diperhitungkan dan
+      // tidak terjadi over-commit oleh bot lain.
+      if (!this.config.dryRun && this.config.coordinator && this.state.openPositions.length > 0) {
+        const p   = this.state.openPositions[0];
+        const lev = this.config.leverage || 1;
+        const sz  = p.remainingSize || p.size || 0;
+        const margin = (p.entry * sz) / lev;
+        const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+        this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin });
+      }
     } catch (err) {
       this._log("warn", `Gagal restore posisi lama: ${err.message}`);
     }
@@ -514,6 +526,11 @@ class BotEngine extends EventEmitter {
     this._interval       = null;
     this._reportInterval = null;
     this.state.running   = false;
+
+    // Lepas reservasi margin HANYA jika bot sudah flat (#5). Jika masih ada
+    // posisi terbuka (akan dipulihkan di start berikutnya), reservasi DIPERTAHANKAN
+    // agar margin yang masih terkunci di exchange tetap diperhitungkan bot lain.
+    this._releaseMarginIfFlat();
 
     // Tutup sesi di DB
     // Posisi yang masih open (close_time IS NULL) tetap tersimpan di tabel trades
@@ -1047,6 +1064,10 @@ class BotEngine extends EventEmitter {
       try {
         const bal = await this.client.getBalance(this.config.marginCoin);
         availCap  = bal.available;
+        // Bagikan equity akun ke koordinator margin lintas-bot (#5)
+        if (this.config.coordinator) {
+          this.config.coordinator.setAccountEquity(bal.equity > 0 ? bal.equity : bal.available);
+        }
       } catch (e) {
         this._log("error", `Balance gagal dibaca — skip entry demi keamanan (${e.message})`);
         return;
@@ -1094,6 +1115,22 @@ class BotEngine extends EventEmitter {
     }
     // Ganti variabel size → finalSize untuk sisa kode di bawah
 
+    // ── Koordinasi margin lintas-bot (#5) ─────────────────────────────────────
+    // Margin awal = notional / leverage. Cek anggaran akun BERSAMA sebelum buka,
+    // supaya beberapa bot di akun yang sama tidak over-commit → likuidasi.
+    const lev            = this.config.leverage || 1;
+    const requiredMargin = (price * finalSize) / lev;
+    const botKey         = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+    if (!this.config.dryRun && this.config.coordinator) {
+      const verdict = this.config.coordinator.canOpen({
+        botKey, symbol: this.config.symbol, requiredMargin,
+      });
+      if (!verdict.ok) {
+        this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
+        return;
+      }
+    }
+
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
 
@@ -1115,8 +1152,14 @@ class BotEngine extends EventEmitter {
         );
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
+        // Reservasi margin di koordinator akun bersama (#5)
+        if (this.config.coordinator) {
+          this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin: requiredMargin });
+        }
+
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
+          marginReserved: requiredMargin,
           // SL+ tracking
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
@@ -1168,6 +1211,8 @@ class BotEngine extends EventEmitter {
               const closeSide = signal === "LONG" ? "close_long" : "close_short";
               await this.client.closePosition(this.config.symbol, closeSide, finalSize);
               this._log("warn", `Posisi ${signal} ditutup darurat ✓ — tidak ada order tanpa SL`);
+              // Posisi sudah ditutup → lepas reservasi margin di koordinator (#5)
+              if (this.config.coordinator) this.config.coordinator.release(botKey);
               notifier.notifyClose?.({
                 symbol: this.config.symbol, side: signal, entryPrice: price,
                 exitPrice: price, pnl: 0, pnlPct: 0, reason: "SL_FAILED_EMERGENCY_CLOSE",
@@ -1799,6 +1844,7 @@ class BotEngine extends EventEmitter {
 
         // Update state: hanya posisi yang masih ada di exchange
         this.state.openPositions = this.state.openPositions.filter(p => liveByKey.has(p.side));
+        this._releaseMarginIfFlat(); // lepas margin di koordinator bila sudah flat (#5)
 
         // Update unrealized PnL + markPrice dari exchange, lalu cek SL+ milestones
         for (const pos of this.state.openPositions) {
@@ -1867,6 +1913,7 @@ class BotEngine extends EventEmitter {
                   }
                   this._updateRiskAfterClose(pnl);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
+                  this._releaseMarginIfFlat(); // lepas margin di koordinator (#5)
                   if (ownerSid === this.sessionId) this._syncSessionStats();
                   else db.recalcSessionStats(ownerSid);
                 } else {
@@ -1980,6 +2027,18 @@ class BotEngine extends EventEmitter {
     } catch {
       return estimate;
     }
+  }
+
+  /**
+   * Lepas reservasi margin di koordinator akun bila bot ini sudah FLAT
+   * (tidak ada posisi terbuka). Aman dipanggil berkali-kali (idempotent).
+   * Tiap bot = 1 simbol = maksimal 1 posisi, jadi flat ⇒ margin bisa dilepas. (#5)
+   */
+  _releaseMarginIfFlat() {
+    if (!this.config.coordinator) return;
+    if (this.state.openPositions.length > 0) return;
+    const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+    this.config.coordinator.release(botKey);
   }
 
   // ─────────────────────────────────────────────

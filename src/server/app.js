@@ -11,6 +11,7 @@ const rateLimit = require("express-rate-limit");
 
 const cfg = require("../config/env");
 const BotEngine = require("../application/BotEngine");
+const AccountCoordinator = require("../domain/AccountCoordinator");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
 const { createExchangeClient } = require("../infrastructure/exchange");
@@ -117,6 +118,22 @@ const sharedClient = createExchangeClient();
 // Key: `${userId}:${symbol}` → BotEngine instance
 const botsMap = {};
 
+// Koordinator margin per user (#5): semua bot milik user yang sama berbagi SATU
+// akun exchange, jadi mereka berbagi satu AccountCoordinator agar total margin
+// lintas-bot tidak melebihi anggaran (anti over-commit / likuidasi).
+const coordinatorsMap = {}; // userId -> AccountCoordinator
+
+function getCoordinator(userId) {
+  if (!coordinatorsMap[userId]) {
+    coordinatorsMap[userId] = new AccountCoordinator({
+      userId,
+      maxAccountUtilization:  cfg.maxAccountUtilization  ?? 0.8,
+      maxConcurrentPositions: cfg.maxConcurrentPositions ?? 0,
+    });
+  }
+  return coordinatorsMap[userId];
+}
+
 function makeKey(userId, symbol) {
   return `${userId}:${symbol}`;
 }
@@ -145,7 +162,12 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     // Jika bot berhenti, recreate dengan kredensial terbaru (user bisa ganti API key)
     delete botsMap[key];
   }
-  const bot = new BotEngine({ symbol, ...configOverrides });
+  const bot = new BotEngine({
+    symbol,
+    botKey:      key,
+    coordinator: getCoordinator(userId), // koordinasi margin lintas-bot (#5)
+    ...configOverrides,
+  });
   botsMap[key] = bot;
   return bot;
 }
