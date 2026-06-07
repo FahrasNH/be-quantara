@@ -207,6 +207,52 @@ class BitgetCCXTClient {
     }
   }
 
+  /**
+   * Ambil total fee aktual (trading fee, dalam USDT) dari fills suatu posisi.
+   * Menjumlahkan fee.cost dari fetchMyTrades sejak posisi dibuka — mencakup
+   * fill entry maupun exit yang terjadi pada window tersebut.
+   *
+   * @param {string} symbol   — e.g. "SOLUSDT"
+   * @param {number} openedAt — timestamp ms saat posisi dibuka
+   * @returns {number|null}   — total fee absolut (≥0), atau null jika tak tersedia.
+   *                            Caller wajib fallback ke estimasi notional × feeRate.
+   */
+  async getRecentFillFee(symbol, openedAt = 0) {
+    try {
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
+      let fills = [];
+      try {
+        fills = await this.exchange.fetchMyTrades(marketSymbol, openedAt || undefined, 50);
+      } catch {
+        return null; // exchange tidak support → caller fallback ke estimasi
+      }
+      if (!Array.isArray(fills) || fills.length === 0) return null;
+
+      const relevant = fills.filter(f => (f.timestamp || 0) >= (openedAt || 0));
+      if (relevant.length === 0) return null;
+
+      // CCXT menormalkan fee ke { cost, currency }. Bisa juga di array `fees`.
+      let total = 0;
+      let found = false;
+      for (const f of relevant) {
+        const single = f.fee && Number.isFinite(f.fee.cost) ? Math.abs(f.fee.cost) : 0;
+        const multi  = Array.isArray(f.fees)
+          ? f.fees.reduce((s, x) => s + (Number.isFinite(x?.cost) ? Math.abs(x.cost) : 0), 0)
+          : 0;
+        const fee = single || multi;
+        if (fee > 0) { total += fee; found = true; }
+      }
+      return found ? total : null;
+    } catch {
+      return null; // non-fatal — caller fallback ke estimasi
+    }
+  }
+
   // ─────────────────────────────────────────────
   // TRADING
   // ─────────────────────────────────────────────

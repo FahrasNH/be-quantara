@@ -108,14 +108,15 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
       const results  = [];
       for (const s of sessions) {
         const { rows: trades } = await db._pool.query(
-          `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+          `SELECT pnl, fee, funding FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
           [s.id]
         );
         if (trades.length === 0) continue;
         const wins     = trades.filter(t => t.pnl > 0).length;
         const losses   = trades.filter(t => t.pnl <= 0).length;
-        const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
-        const finalCap = (s.initial_capital || 0) + totalPnL;
+        // final_capital pakai NET (pnl - fee - funding) agar cocok balance riil
+        const totalNet = trades.reduce((sum, t) => sum + (t.pnl - (t.fee || 0) - (t.funding || 0)), 0);
+        const finalCap = (s.initial_capital || 0) + totalNet;
         const mismatch = s.wins !== wins || s.losses !== losses || s.total_trades !== trades.length;
         if (mismatch) {
           await db.recalcSessionStats(s.id);

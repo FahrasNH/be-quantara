@@ -70,6 +70,10 @@ class BotEngine extends EventEmitter {
       riskPerTrade:  strat.riskPerTrade,
       maxRiskPerTrade: 0.05,
 
+      // Fee trading per sisi (taker). Bitget USDT-M futures default ~0.06%.
+      // Dipakai untuk estimasi fee dry-run/backtest & fallback live.
+      feeRate:       strat.feeRate ?? 0.0006,
+
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
       leverage:     strat.leverage,
@@ -294,7 +298,12 @@ class BotEngine extends EventEmitter {
       errors:        this.state.errors,
       lastTick:      this.state.lastTick,
       lastPrice:     this.state.lastPrice,
+      // totalPnL = GROSS (selisih harga). totalFees & netPnL dipisah agar
+      // dashboard bisa menampilkan keduanya — gross tak akan cocok dengan
+      // perubahan balance riil karena fee. Net = gross - fee - funding.
       totalPnL:      this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0),
+      totalFees:     this.state.trades.reduce((s, t) => s + (t.fee || 0) + (t.funding || 0), 0),
+      netPnL:        this.state.trades.reduce((s, t) => s + (t.pnl || 0) - (t.fee || 0) - (t.funding || 0), 0),
       unrealizedPnL: this.state.openPositions.reduce((s, p) => {
         if (p.unrealizedPL && p.unrealizedPL !== 0) return s + p.unrealizedPL;
         // Fallback: hitung dari lastPrice jika unrealizedPL belum diset dari exchange
@@ -431,11 +440,14 @@ class BotEngine extends EventEmitter {
                 const pnl       = dbTrade.side === "LONG"
                   ? (exitPrice - dbTrade.entry_price) * (dbTrade.size || 0)
                   : (dbTrade.entry_price - exitPrice) * (dbTrade.size || 0);
-                this._log("warn", `Posisi ${dbTrade.side} sesi #${dbTrade.session_id} sudah ditutup di exchange saat offline — PnL ≈ $${pnl.toFixed(2)}`);
+                // Close terdeteksi offline → fill aktual tak bisa dipetakan; estimasi fee
+                const fee = this._estimateFee(dbTrade.entry_price, exitPrice, dbTrade.size || 0);
+                this._log("warn", `Posisi ${dbTrade.side} sesi #${dbTrade.session_id} sudah ditutup di exchange saat offline — PnL ≈ $${pnl.toFixed(2)} (fee est -$${fee.toFixed(4)})`);
                 try {
                   await db.closeTrade(dbTrade.id, {
                     exitPrice,
                     pnl,
+                    fee,
                     reason:    "Closed_Offline",
                     closeTime: new Date().toISOString(),
                   });
@@ -1440,10 +1452,11 @@ class BotEngine extends EventEmitter {
       ? (price - pos.entry) * partialSize
       : (pos.entry - price) * partialSize;
     const pnlPct = ((price - pos.entry) / pos.entry) * 100 * (pos.side === "LONG" ? 1 : -1);
+    const fee    = await this._resolveFee(pos, price, partialSize);
 
     this._sep(`SL+ ${reason}`);
     this._log("trade", `PARTIAL CLOSE [${reason}] ${pos.side} — ${partialSize.toFixed(4)} unit @ $${price.toFixed(2)}`);
-    this._log("trade", `PnL partial: +$${pnl.toFixed(2)} | SL dipindah → $${newSL.toFixed(2)} (${newSLLabel})`);
+    this._log("trade", `PnL partial gross: +$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: +$${(pnl - fee).toFixed(2)} | SL → $${newSL.toFixed(2)} (${newSLLabel})`);
 
     if (!this.config.dryRun) {
       // ── Partial close di exchange ──────────────────────────────────────────
@@ -1472,6 +1485,7 @@ class BotEngine extends EventEmitter {
       exit:      price,
       pnl,
       pnlPct,
+      fee,
       reason,
       closedAt:  Date.now(),
       partial:   true,
@@ -1498,6 +1512,8 @@ class BotEngine extends EventEmitter {
         await db.closeTrade(partialDbId, {
           exitPrice: price,
           pnl,
+          pnlPct,
+          fee,
           reason,
           closeTime: new Date().toISOString(),
         });
@@ -1623,11 +1639,12 @@ class BotEngine extends EventEmitter {
           const pnl = pos.side === "LONG"
             ? (exitPrice - pos.entry) * remaining
             : (pos.entry - exitPrice) * remaining;
+          const fee = await this._resolveFee(pos, exitPrice, remaining);
 
           this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
           this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
           this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} [${priceSource}] | Size sisa: ${remaining.toFixed(4)}`);
-          this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} — balance diperbarui dari exchange`);
+          this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} — balance dari exchange`);
           if (pos.m1 || pos.m2) {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
             this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
@@ -1635,7 +1652,7 @@ class BotEngine extends EventEmitter {
 
           // Tutup trade record di DB
           if (pos.dbId) {
-            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: exitReason, closeTime: new Date().toISOString() }); } catch {}
+            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() }); } catch {}
           }
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
@@ -1662,7 +1679,7 @@ class BotEngine extends EventEmitter {
             this._log("info", `Trade sesi #${pos.restoredFrom} ditutup di sesi #${this.sessionId} (cross-session) — update sesi asal`);
           } else {
             // Trade milik sesi saat ini — masukkan ke state.trades normal
-            this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+            this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
           }
 
           this._updateRiskAfterClose(pnl);
@@ -1737,12 +1754,13 @@ class BotEngine extends EventEmitter {
                   const pnl = pos.side === "LONG"
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
+                  const fee = await this._resolveFee(pos, exitPrice, pos.size);
                   if (pos.dbId) {
-                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: hitTP ? "TP" : "SL", closeTime: new Date().toISOString() }); } catch {}
+                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitTP ? "TP" : "SL", closeTime: new Date().toISOString() }); } catch {}
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
                   if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
-                    this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+                    this.state.trades.push({ ...pos, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
                   }
                   this._updateRiskAfterClose(pnl);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
@@ -1778,15 +1796,17 @@ class BotEngine extends EventEmitter {
           ? (exitPrice - pos.entry) * remaining
           : (pos.entry - exitPrice) * remaining;
         const pnlPct    = ((pnl / (pos.entry * remaining)) * 100);
+        const fee       = await this._resolveFee(pos, exitPrice, remaining);
 
-        this.state.capital += pnl + pos.entry * remaining * this.config.riskPerTrade;
+        // Modal pakai NET: kembalikan margin + pnl, lalu potong fee
+        this.state.capital += pnl + pos.entry * remaining * this.config.riskPerTrade - fee;
         const reason    = hitTP ? "TP" : "SL";
         const closeTime = Date.now();
 
         this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
         this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
         this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
-        this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
+        this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
         if (pos.m1 || pos.m2) {
           const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
           this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
@@ -1794,7 +1814,7 @@ class BotEngine extends EventEmitter {
 
         if (this.sessionId && pos.dbId) {
           try {
-            await db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
+            await db.closeTrade(pos.dbId, { exitPrice, pnl, pnlPct, fee, reason, closeTime: new Date(closeTime).toISOString() });
           } catch { /* jangan crash */ }
         }
 
@@ -1809,7 +1829,7 @@ class BotEngine extends EventEmitter {
           dryRun:     this.config.dryRun,
         });
 
-        this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
+        this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee, reason, closedAt: closeTime });
         this._updateRiskAfterClose(pnl);
         toClose.push(pos.id);
       }
@@ -1818,6 +1838,40 @@ class BotEngine extends EventEmitter {
 
     // Sync session stats ke DB setelah posisi ditutup (dry run)
     if (toClose.length > 0) this._syncSessionStats();
+  }
+
+  // ─────────────────────────────────────────────
+  // FEE — estimasi & resolusi biaya trading
+  // ─────────────────────────────────────────────
+  /**
+   * Estimasi fee trading round-trip (entry + exit) dari notional.
+   * Fee Bitget dihitung atas notional penuh (harga × size), bukan margin.
+   * Inilah penyebab gap "Net PnL gross" vs balance riil: fee tak pernah dikurangi.
+   */
+  _estimateFee(entryPrice, exitPrice, size) {
+    const rate = this.config.feeRate ?? 0.0006;
+    const notional = (Math.abs(entryPrice) + Math.abs(exitPrice)) * Math.abs(size);
+    return notional * rate;
+  }
+
+  /**
+   * Tentukan fee untuk satu close.
+   * - LIVE: coba fee aktual dari exchange (fetchMyTrades); fallback estimasi.
+   * - DRY-RUN/backtest: selalu estimasi notional × feeRate.
+   * @returns {Promise<number>} fee absolut (≥0)
+   */
+  async _resolveFee(pos, exitPrice, size) {
+    const estimate = this._estimateFee(pos.entry, exitPrice, size);
+    if (this.config.dryRun || !this.client?.getRecentFillFee) return estimate;
+    try {
+      const openedAt = typeof pos.openTime === "number"
+        ? pos.openTime
+        : Date.parse(pos.openTime || 0);
+      const actual = await this.client.getRecentFillFee(this.config.symbol, openedAt || 0);
+      return Number.isFinite(actual) && actual > 0 ? actual : estimate;
+    } catch {
+      return estimate;
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -1831,8 +1885,9 @@ class BotEngine extends EventEmitter {
       const losses    = closed.filter(t => t.pnl <= 0).length;
       // total_trades = closed saja, open positions belum dihitung agar win rate tidak anomali
       const total     = closed.length;
-      const tradePnL  = this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0);
-      const finalCap  = this.state.startCapital + tradePnL;
+      // final_capital pakai NET (pnl - fee - funding) agar cocok balance riil
+      const tradeNet  = this.state.trades.reduce((s, t) => s + ((t.pnl || 0) - (t.fee || 0) - (t.funding || 0)), 0);
+      const finalCap  = this.state.startCapital + tradeNet;
       db.updateSessionStats(this.sessionId, { finalCapital: finalCap, totalTrades: total, wins, losses });
     } catch { /* jangan crash */ }
   }

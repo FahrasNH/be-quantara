@@ -71,6 +71,16 @@ const SCHEMA_SQL = `
       FOREIGN KEY (session_id) REFERENCES bot_sessions(id) ON DELETE SET NULL;
   EXCEPTION WHEN others THEN NULL; END $$;
 
+  -- Biaya trading (idempotent). Kolom pnl tetap GROSS (selisih harga x size).
+  -- Net PnL riil = pnl - fee - funding. Default 0 agar baris lama (fee tak
+  -- diketahui) net = gross -- hanya trade baru yang akurat. Lihat closeTrade().
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN fee DOUBLE PRECISION DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN funding DOUBLE PRECISION DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
   CREATE TABLE IF NOT EXISTS equity_snapshots (
     id             SERIAL PRIMARY KEY,
     session_id     INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
@@ -253,14 +263,15 @@ async function recalcSessionStats(sessionId) {
     const session = sRows[0];
     if (!session) return;
     const { rows: trades } = await pool.query(
-      `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+      `SELECT pnl, fee, funding FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
       [sessionId]
     );
     const wins     = trades.filter((t) => t.pnl > 0).length;
     const losses   = trades.filter((t) => t.pnl <= 0).length;
     const total    = trades.length;
-    const totalPnL = trades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const finalCap = (session.initial_capital || 0) + totalPnL;
+    // final_capital pakai NET (pnl - fee - funding) agar cocok dengan balance riil
+    const totalNet = trades.reduce((s, t) => s + ((t.pnl || 0) - (t.fee || 0) - (t.funding || 0)), 0);
+    const finalCap = (session.initial_capital || 0) + totalNet;
     await pool.query(
       `UPDATE bot_sessions SET final_capital = $2, total_trades = $3, wins = $4, losses = $5 WHERE id = $1`,
       [sessionId, finalCap, total, wins, losses]
@@ -274,6 +285,8 @@ const SESSIONS_BASE = `
   SELECT
     s.*,
     COALESCE(t.actual_pnl,    0) AS actual_pnl,
+    COALESCE(t.actual_fee,    0) AS actual_fee,
+    COALESCE(t.actual_net,    0) AS actual_net,
     COALESCE(t.actual_wins,   0) AS actual_wins,
     COALESCE(t.actual_losses, 0) AS actual_losses,
     COALESCE(t.actual_total,  0) AS actual_total
@@ -282,6 +295,8 @@ const SESSIONS_BASE = `
     SELECT
       session_id,
       SUM(pnl)                                   AS actual_pnl,
+      SUM(COALESCE(fee,0) + COALESCE(funding,0)) AS actual_fee,
+      SUM(pnl - COALESCE(fee,0) - COALESCE(funding,0)) AS actual_net,
       SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)  AS actual_wins,
       SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)  AS actual_losses,
       COUNT(*)                                   AS actual_total
@@ -356,16 +371,18 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
   return rows[0].id;
 }
 
-async function closeTrade(tradeId, { exitPrice, pnl, reason, closeTime }) {
+async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime }) {
   await pool.query(
     `UPDATE trades
-     SET exit_price = $2, pnl = $3, pnl_pct = $4, reason = $5, close_time = $6
+     SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8
      WHERE id = $1`,
     [
       tradeId,
       exitPrice,
       pnl,
-      null,
+      pnlPct ?? null,
+      fee ?? 0,
+      funding ?? 0,
       reason,
       closeTime ? new Date(closeTime).toISOString() : new Date().toISOString(),
     ]
@@ -406,6 +423,8 @@ async function getTradeStats(sessionId) {
        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
        SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses,
        SUM(pnl) AS total_pnl,
+       SUM(COALESCE(fee,0) + COALESCE(funding,0)) AS total_fee,
+       SUM(pnl - COALESCE(fee,0) - COALESCE(funding,0)) AS net_pnl,
        AVG(pnl) AS avg_pnl,
        MAX(pnl) AS best_trade,
        MIN(pnl) AS worst_trade
@@ -466,6 +485,9 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
       tp:           row.tp,
       size:         row.size,
       pnl:          row.pnl,
+      fee:          row.fee ?? 0,
+      funding:      row.funding ?? 0,
+      pnlNet:       (row.pnl ?? 0) - (row.fee ?? 0) - (row.funding ?? 0),
       pnlPct:       row.pnl_pct,
       reason:       row.reason,
       dryRun:       row.dry_run === 1,
