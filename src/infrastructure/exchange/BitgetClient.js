@@ -88,21 +88,51 @@ class BitgetCCXTClient {
 
       const coin = balance[marginCoin];
       if (!coin) {
-        return {
-          available: 0,
-          equity: 0,
-          unrealizedPL: 0,
-        };
+        return { available: 0, equity: 0, unrealizedPL: 0 };
       }
 
-      return {
-        available: coin.free || 0,
-        equity: (coin.free || 0) + (coin.used || 0),
-        unrealizedPL: 0, // CCXT tidak provide unrealizedPL langsung
-      };
+      // Unrealized PnL nyata (#8). CCXT menormalkan sebagian, tapi Bitget menaruh
+      // angka pasti di `balance.info`. Coba beberapa sumber secara defensif.
+      const unrealizedPL = this._extractUnrealizedPL(balance, marginCoin);
+
+      // Equity = saldo + margin terkunci + floating PnL. `coin.total` (free+used)
+      // dari CCXT umumnya SUDAH termasuk unrealized untuk swap; jika tidak, kita
+      // jadikan equity = total bila tersedia, else (free+used)+unrealized.
+      const free  = coin.free  || 0;
+      const used  = coin.used  || 0;
+      const total = Number.isFinite(coin.total) ? coin.total : free + used;
+      const equity = total > 0 ? total : free + used + unrealizedPL;
+
+      return { available: free, equity, unrealizedPL };
     } catch (err) {
       throw new Error(`getBalance error: ${err.message}`);
     }
+  }
+
+  /**
+   * Ekstrak unrealized PnL (USDT) dari respons fetchBalance Bitget secara defensif.
+   * Bitget V2 mengembalikan array akun di `info.data[]` dengan field
+   * `unrealizedPL`/`crossedUnrealizedPL`/`isolatedUnrealizedPL`.
+   * @returns {number} 0 bila tak ditemukan.
+   */
+  _extractUnrealizedPL(balance, marginCoin = "USDT") {
+    try {
+      const coin = balance[marginCoin] || {};
+      // 1) CCXT kadang sudah menyediakan langsung
+      const direct = coin.unrealizedPnl ?? coin.unrealizedPL;
+      if (Number.isFinite(Number(direct))) return Number(direct);
+
+      // 2) Raw Bitget payload
+      const data = balance?.info?.data;
+      const rows = Array.isArray(data) ? data : (data ? [data] : []);
+      const row  = rows.find(r => (r.marginCoin || r.coin) === marginCoin) || rows[0];
+      if (row) {
+        const u = row.unrealizedPL ?? row.crossedUnrealizedPL ?? row.isolatedUnrealizedPL
+               ?? ((Number(row.crossedUnrealizedPL) || 0) + (Number(row.isolatedUnrealizedPL) || 0));
+        if (Number.isFinite(Number(u))) return Number(u);
+      }
+    } catch { /* abaikan — fallback 0 */ }
+    return 0;
   }
 
   async getPositions(symbol, productType = "umcbl") {
@@ -273,14 +303,32 @@ class BitgetCCXTClient {
   }
 
   async setMarginMode(symbol, mode = "crossed", marginCoin = "USDT") {
+    // Benar-benar set margin mode di exchange (#10) — sebelumnya no-op yang
+    // mengembalikan success palsu, sehingga akun isolated bisa likuidasi beda
+    // dari asumsi. CCXT memakai "cross"/"isolated".
+    let marketSymbol = symbol;
+    if (!marketSymbol.includes("/")) {
+      const base = marketSymbol.slice(0, -4);
+      marketSymbol = `${base}/USDT:USDT`;
+    }
+    const ccxtMode = mode === "crossed" ? "cross" : mode; // normalisasi istilah
+
     try {
-      // CCXT Bitget mungkin tidak support setMarginType langsung
-      // Fallback: assume margin mode already set via Bitget dashboard
-      console.warn(`[WARN] setMarginMode fallback - margin mode harus di-set di Bitget dashboard`);
-      return { success: true, mode: mode };
+      await this.exchange.setMarginMode(ccxtMode, marketSymbol, { marginCoin });
+      return { success: true, mode: ccxtMode };
     } catch (err) {
-      console.warn(`setMarginMode warning: ${err.message}`);
-      return { success: true, mode: mode };
+      const msg = (err.message || "").toLowerCase();
+      // Bitget menolak ubah mode bila SUDAH mode itu, atau ada posisi/order terbuka.
+      // Kasus "tidak berubah" aman; kasus posisi terbuka → mode existing dipakai.
+      const benign =
+        msg.includes("no need") || msg.includes("not change") ||
+        msg.includes("same") || msg.includes("already") ||
+        msg.includes("position") || msg.includes("40797") || msg.includes("45117");
+      if (benign) {
+        return { success: true, mode: ccxtMode, note: "unchanged_or_has_position" };
+      }
+      console.warn(`setMarginMode gagal: ${err.message}`);
+      return { success: false, mode: ccxtMode, error: err.message };
     }
   }
 

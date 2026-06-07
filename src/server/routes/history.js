@@ -29,7 +29,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/sessions/:id", async (req, res) => {
     try {
-      const session = await db.getSession(safeInt(req.params.id, 0));
+      const session = await db.getSession(safeInt(req.params.id, 0), req.userId ?? null);
       if (!session) return res.status(404).json({ error: "Session tidak ditemukan" });
       res.json(session);
     } catch (err) {
@@ -50,7 +50,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/trades/stats/:sessionId", async (req, res) => {
     try {
-      res.json(await db.getTradeStats(safeInt(req.params.sessionId, 0)));
+      res.json(await db.getTradeStats(safeInt(req.params.sessionId, 0), req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -58,7 +58,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/equity/:sessionId", async (req, res) => {
     try {
-      res.json(await db.getEquity(safeInt(req.params.sessionId, 0)));
+      res.json(await db.getEquity(safeInt(req.params.sessionId, 0), req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -68,7 +68,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   router.get("/equity-all", async (req, res) => {
     try {
       const mode = req.query.mode || "live"; // default live saja
-      res.json(await db.getAllEquity(mode));
+      res.json(await db.getAllEquity(mode, req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -77,7 +77,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   router.get("/db/logs/:sessionId", async (req, res) => {
     try {
       const limit = Math.min(safeInt(req.query.limit, 200), 1000);
-      res.json(await db.getLogs(safeInt(req.params.sessionId, 0), limit));
+      res.json(await db.getLogs(safeInt(req.params.sessionId, 0), limit, req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -104,7 +104,8 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
     lastRecalc = now;
     try {
-      const sessions = await db.getSessions(500);
+      // Scope per user (#13): hanya recalc sesi milik pemanggil, bukan seluruh DB.
+      const sessions = await db.getSessions(500, null, req.userId ?? null);
       const results  = [];
       for (const s of sessions) {
         const { rows: trades } = await db._pool.query(
@@ -154,7 +155,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
         : req.query.dry_run === "true";
       const format  = req.query.format || "json";
 
-      const data = await db.getInsights({ symbol, dryRun, limit });
+      const data = await db.getInsights({ symbol, dryRun, limit, userId: req.userId ?? null });
 
       if (format === "csv") {
         if (data.length === 0) return res.status(200).send("No data");

@@ -183,7 +183,7 @@ app.use("/api/v1/market", authMiddleware, createMarketRouter({
 }));
 
 // History routes (protected)
-app.use("/api/v1/history", authMiddleware, createHistoryRouter({ getBot, getAllBots }));
+app.use("/api/v1/history", authMiddleware, createHistoryRouter({ SYMBOLS_LIST: cfg.symbolsList }));
 
 // Backtest routes (protected)
 app.use("/api/v1/backtest", authMiddleware, createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));

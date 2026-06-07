@@ -596,6 +596,34 @@ class BotEngine extends EventEmitter {
         this._log("warn", "Fallback ke DRY RUN dengan modal $500");
       }
     }
+
+    // ── Pulihkan circuit-breaker risiko dari DB (#3) ──────────────────────────
+    // Tanpa ini, stop→start / redeploy mereset daily-loss & loss-streak ke 0,
+    // sehingga batas kerugian harian bisa ditembus. Hitung ulang dari trade
+    // yang sudah closed HARI INI (UTC) untuk user+symbol+mode ini.
+    try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const risk = await db.getTodayRiskStats({
+        userId:  this.config.userId ?? null,
+        symbol:  this.config.symbol,
+        dryRun:  this.config.dryRun,
+      });
+      this.state.dailyLoss         = risk.dailyLoss;
+      this.state.dailyTradeCount   = risk.dailyTradeCount;
+      this.state.consecLoss        = risk.consecLoss;
+      this.state.lastDayReset      = todayStr;
+      // dailyStartCapital ≈ modal saat ini + loss hari ini (perkiraan modal awal hari).
+      this.state.dailyStartCapital = this.state.capital + risk.dailyLoss;
+      if (risk.dailyTradeCount > 0) {
+        this._log("info",
+          `🛡️ Risk dipulihkan dari DB — trade hari ini: ${risk.dailyTradeCount}, ` +
+          `daily loss: $${risk.dailyLoss.toFixed(2)}, loss beruntun: ${risk.consecLoss}`
+        );
+      }
+    } catch (e) {
+      this._log("warn", `Gagal memulihkan risk state dari DB: ${e.message} — mulai dari 0`);
+    }
+
     this._sep("BOT BERJALAN");
   }
 
@@ -639,14 +667,19 @@ class BotEngine extends EventEmitter {
       return { ok: false, reason: `Maks ${this.config.maxTradesPerDay} trade/hari sudah tercapai` };
     }
 
-    // 4. Daily loss limit
-    const dailyLossPct = this.state.capital > 0
-      ? this.state.dailyLoss / (this.state.dailyStartCapital || this.state.capital)
-      : 0;
+    // 4. Daily loss limit — sertakan FLOATING loss posisi terbuka (#8), bukan
+    //    hanya realized, agar drawdown mengambang besar tetap men-trigger stop.
+    const floatingLoss = this.state.openPositions.reduce((s, p) => {
+      const u = p.unrealizedPL || 0;
+      return u < 0 ? s + Math.abs(u) : s;
+    }, 0);
+    const effectiveDailyLoss = this.state.dailyLoss + floatingLoss;
+    const dailyBase    = this.state.dailyStartCapital || this.state.capital;
+    const dailyLossPct = dailyBase > 0 ? effectiveDailyLoss / dailyBase : 0;
     if (dailyLossPct >= this.config.maxDailyLossPct) {
       return {
         ok: false,
-        reason: `Daily loss ${(dailyLossPct * 100).toFixed(2)}% sudah melewati batas ${(this.config.maxDailyLossPct * 100)}%`,
+        reason: `Daily loss ${(dailyLossPct * 100).toFixed(2)}% (incl floating) melewati batas ${(this.config.maxDailyLossPct * 100)}%`,
       };
     }
 
@@ -685,6 +718,15 @@ class BotEngine extends EventEmitter {
   // MAIN TICK
   // ─────────────────────────────────────────────
   async _tick() {
+    // Guard re-entrancy (#6): _tick async & bisa lebih lama dari checkInterval
+    // (ada sleep retry SL 3s + backoff 120s). Tanpa guard, setInterval memicu
+    // tick paralel → entry ganda & race pada openPositions.
+    if (this._ticking) {
+      this._log("info", "Tick sebelumnya masih berjalan — lewati tick ini");
+      return;
+    }
+    this._ticking = true;
+
     this.state.checkCount++;
     this.state.lastTick = new Date().toISOString();
 
@@ -755,7 +797,19 @@ class BotEngine extends EventEmitter {
         );
       }
 
-      await this._checkOpenPositions(price, atr);
+      // Harga real-time untuk monitoring SL/TP (#7). `price` di atas = close candle
+      // ke-2 terakhir (benar untuk deteksi sinyal, tapi BASI untuk cek SL/TP — pada
+      // 15m bisa tertinggal s/d 15 menit). Gunakan ticker.last bila tersedia.
+      let monitorPrice = price;
+      if (this.state.openPositions.length > 0 && this.client?.getTicker) {
+        try {
+          const ticker = await this.client.getTicker(this.config.symbol);
+          if (ticker?.last > 0) monitorPrice = ticker.last;
+        } catch { /* fallback ke close candle */ }
+      }
+      this.state.lastPrice = monitorPrice;
+
+      await this._checkOpenPositions(monitorPrice, atr);
 
       if (this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
@@ -876,6 +930,9 @@ class BotEngine extends EventEmitter {
         this.state.errors = 0; // reset agar bot tidak mati permanen
         await new Promise(r => setTimeout(r, 120_000)); // tunggu 2 menit
       }
+    } finally {
+      // Selalu lepas guard re-entrancy, termasuk setelah backoff 120s di atas.
+      this._ticking = false;
     }
   }
 
@@ -979,13 +1036,26 @@ class BotEngine extends EventEmitter {
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
-    let availCap = this.config.dryRun ? this.state.capital : 500;
-    try {
-      if (!this.config.dryRun) {
+    // Tentukan modal acuan untuk sizing.
+    // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
+    // Jangan pernah pakai angka hardcoded di live: akun kecil bisa 10x oversize
+    // → likuidasi langsung. (SEV1 #2)
+    let availCap;
+    if (this.config.dryRun) {
+      availCap = this.state.capital;
+    } else {
+      try {
         const bal = await this.client.getBalance(this.config.marginCoin);
         availCap  = bal.available;
+      } catch (e) {
+        this._log("error", `Balance gagal dibaca — skip entry demi keamanan (${e.message})`);
+        return;
       }
-    } catch { /* pakai default */ }
+      if (!Number.isFinite(availCap) || availCap <= 0) {
+        this._log("warn", `Balance tidak valid (${availCap}) — skip entry`);
+        return;
+      }
+    }
 
     const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
@@ -1003,17 +1073,20 @@ class BotEngine extends EventEmitter {
 
     if (finalSize < minLot) {
       const riskIfMinLot = (minLot * Math.abs(price - sl)) / availCap;
-      if (riskIfMinLot <= this.config.maxRiskPerTrade) {
+      // Batas penerimaan min-lot dibuat lebih ketat (#11): maksimal 2x risk normal,
+      // dan tidak boleh melewati maxRiskPerTrade. Sebelumnya boleh sampai 5% (5x niat).
+      const minLotRiskCap = Math.min(this.config.maxRiskPerTrade, this.config.riskPerTrade * 2);
+      if (riskIfMinLot <= minLotRiskCap) {
         finalSize    = minLot;
         actualRiskPct = riskIfMinLot;
         this._log("info",
           `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym} → pakai min lot. ` +
-          `Risk aktual: ${(riskIfMinLot * 100).toFixed(2)}% (batas: ${(this.config.maxRiskPerTrade * 100).toFixed(0)}%)`
+          `Risk aktual: ${(riskIfMinLot * 100).toFixed(2)}% (batas: ${(minLotRiskCap * 100).toFixed(2)}%)`
         );
       } else {
         this._log("warn",
           `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym}. ` +
-          `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(this.config.maxRiskPerTrade * 100).toFixed(0)}% → skip. ` +
+          `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(minLotRiskCap * 100).toFixed(2)}% → skip. ` +
           `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk trade ${sym} normal)`
         );
         return;
@@ -1084,10 +1157,35 @@ class BotEngine extends EventEmitter {
 
           if (slOk && tpOk) {
             this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
-          } else {
+          } else if (!slOk) {
+            // SL TIDAK terkonfirmasi = posisi telanjang (kerugian tak terbatas).
+            // Perlakukan sebagai kondisi fatal: TUTUP posisi segera, jangan andalkan
+            // monitor manual (bergantung tick ≤60s + harga basi). (SEV1 #4)
             if (!slOk) this._log("error", `SL gagal: ${slErr}`);
             if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
-            this._log("warn", `⚠️ SL: ${slOk ? "✓" : "GAGAL"} | TP: ${tpOk ? "✓" : "GAGAL"} — bot monitor manual`);
+            this._log("error", `🚨 SL tidak terkonfirmasi — TUTUP posisi darurat (anti naked position)`);
+            try {
+              const closeSide = signal === "LONG" ? "close_long" : "close_short";
+              await this.client.closePosition(this.config.symbol, closeSide, finalSize);
+              this._log("warn", `Posisi ${signal} ditutup darurat ✓ — tidak ada order tanpa SL`);
+              notifier.notifyClose?.({
+                symbol: this.config.symbol, side: signal, entryPrice: price,
+                exitPrice: price, pnl: 0, pnlPct: 0, reason: "SL_FAILED_EMERGENCY_CLOSE",
+                dryRun: false,
+              });
+            } catch (closeErr) {
+              // Gagal tutup pun → JANGAN catat sebagai posisi sehat. Tandai manual +
+              // alert keras agar operator turun tangan.
+              this._log("error", `‼️ GAGAL tutup darurat: ${closeErr.message} — INTERVENSI MANUAL DIPERLUKAN di exchange!`);
+              pos.manualSLTP = true;
+              pos.slFailed   = true;
+            }
+            // Jika berhasil ditutup, hentikan pemrosesan posisi ini (jangan simpan/track)
+            if (!pos.slFailed) return;
+          } else {
+            // TP gagal tapi SL OK — tidak fatal (downside terlindungi). Monitor manual TP.
+            this._log("error", `TP gagal: ${tpErr}`);
+            this._log("warn", `⚠️ TP GAGAL (SL ✓) — bot monitor TP manual`);
             pos.manualSLTP = true;
           }
         }
@@ -1124,10 +1222,15 @@ class BotEngine extends EventEmitter {
       }
     } else {
       this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
-      this.state.capital -= availCap * actualRiskPct;
+      // Margin yang "dikunci" disimpan persis di posisi (#9) agar saat close
+      // dikembalikan dalam jumlah yang sama — sebelumnya open & close memakai
+      // rumus berbeda → equity simulasi drift.
+      const marginReserved = availCap * actualRiskPct;
+      this.state.capital -= marginReserved;
 
       const pos = {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
+        marginReserved,        // margin terkunci, dikembalikan tepat saat close
         // SL+ tracking
         remainingSize: finalSize,
         R:             slDist,
@@ -1798,8 +1901,13 @@ class BotEngine extends EventEmitter {
         const pnlPct    = ((pnl / (pos.entry * remaining)) * 100);
         const fee       = await this._resolveFee(pos, exitPrice, remaining);
 
-        // Modal pakai NET: kembalikan margin + pnl, lalu potong fee
-        this.state.capital += pnl + pos.entry * remaining * this.config.riskPerTrade - fee;
+        // Modal pakai NET (#9): kembalikan margin yang DIKUNCI saat open (persis,
+        // bukan rumus berbeda), tambah pnl gross, potong fee. Fallback ke rumus
+        // lama untuk posisi yang dipulihkan tanpa marginReserved.
+        const marginBack = pos.marginReserved != null
+          ? pos.marginReserved
+          : pos.entry * remaining * this.config.riskPerTrade;
+        this.state.capital += pnl - fee + marginBack;
         const reason    = hitTP ? "TP" : "SL";
         const closeTime = Date.now();
 
