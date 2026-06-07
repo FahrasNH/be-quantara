@@ -93,25 +93,60 @@ class BitgetCCXTClient {
         || balance?.info?.data?.find?.(d => d.marginCoin === marginCoin)
         || null;
 
+      // Unrealized PnL nyata (#8) — defensif dari berbagai sumber termasuk
+      // raw Bitget `info.data[]` (CCXT sering tidak mengisi coin.unrealizedPnl).
+      const unrealizedPL = this._extractUnrealizedPL(balance, marginCoin);
+
       if (!coin) {
-        // Fallback: baca dari balance.total / balance.free langsung
+        // Fallback (dari HEAD): objek coin tak ketemu → baca peta root-level
+        // balance.free/used/total[marginCoin] langsung agar tetap robust.
         const free  = balance?.free?.[marginCoin]  ?? 0;
         const used  = balance?.used?.[marginCoin]  ?? 0;
         const total = balance?.total?.[marginCoin] ?? 0;
         if (total > 0 || free > 0) {
-          return { available: free, equity: total || free + used, unrealizedPL: 0 };
+          return { available: free, equity: total || (free + used + unrealizedPL), unrealizedPL };
         }
         return { available: 0, equity: 0, unrealizedPL: 0 };
       }
 
-      const available = coin.free   ?? coin.available ?? 0;
-      const equity    = coin.total  ?? (available + (coin.used ?? 0));
-      const upnl      = coin.unrealizedPnl ?? 0;
+      // Equity = saldo + margin terkunci + floating PnL. `coin.total` (free+used)
+      // dari CCXT umumnya SUDAH termasuk unrealized untuk swap; jika tidak, kita
+      // jadikan equity = total bila tersedia, else (free+used)+unrealized.
+      const free  = coin.free ?? coin.available ?? 0;
+      const used  = coin.used ?? 0;
+      const total = Number.isFinite(coin.total) ? coin.total : free + used;
+      const equity = total > 0 ? total : free + used + unrealizedPL;
 
-      return { available, equity, unrealizedPL: upnl };
+      return { available: free, equity, unrealizedPL };
     } catch (err) {
       throw new Error(`getBalance error: ${err.message}`);
     }
+  }
+
+  /**
+   * Ekstrak unrealized PnL (USDT) dari respons fetchBalance Bitget secara defensif.
+   * Bitget V2 mengembalikan array akun di `info.data[]` dengan field
+   * `unrealizedPL`/`crossedUnrealizedPL`/`isolatedUnrealizedPL`.
+   * @returns {number} 0 bila tak ditemukan.
+   */
+  _extractUnrealizedPL(balance, marginCoin = "USDT") {
+    try {
+      const coin = balance[marginCoin] || {};
+      // 1) CCXT kadang sudah menyediakan langsung
+      const direct = coin.unrealizedPnl ?? coin.unrealizedPL;
+      if (Number.isFinite(Number(direct))) return Number(direct);
+
+      // 2) Raw Bitget payload
+      const data = balance?.info?.data;
+      const rows = Array.isArray(data) ? data : (data ? [data] : []);
+      const row  = rows.find(r => (r.marginCoin || r.coin) === marginCoin) || rows[0];
+      if (row) {
+        const u = row.unrealizedPL ?? row.crossedUnrealizedPL ?? row.isolatedUnrealizedPL
+               ?? ((Number(row.crossedUnrealizedPL) || 0) + (Number(row.isolatedUnrealizedPL) || 0));
+        if (Number.isFinite(Number(u))) return Number(u);
+      }
+    } catch { /* abaikan — fallback 0 */ }
+    return 0;
   }
 
   async getPositions(symbol, productType = "umcbl") {
@@ -216,6 +251,52 @@ class BitgetCCXTClient {
     }
   }
 
+  /**
+   * Ambil total fee aktual (trading fee, dalam USDT) dari fills suatu posisi.
+   * Menjumlahkan fee.cost dari fetchMyTrades sejak posisi dibuka — mencakup
+   * fill entry maupun exit yang terjadi pada window tersebut.
+   *
+   * @param {string} symbol   — e.g. "SOLUSDT"
+   * @param {number} openedAt — timestamp ms saat posisi dibuka
+   * @returns {number|null}   — total fee absolut (≥0), atau null jika tak tersedia.
+   *                            Caller wajib fallback ke estimasi notional × feeRate.
+   */
+  async getRecentFillFee(symbol, openedAt = 0) {
+    try {
+      let marketSymbol = symbol;
+      if (!marketSymbol.includes("/")) {
+        const base = marketSymbol.slice(0, -4);
+        marketSymbol = `${base}/USDT:USDT`;
+      }
+
+      let fills = [];
+      try {
+        fills = await this.exchange.fetchMyTrades(marketSymbol, openedAt || undefined, 50);
+      } catch {
+        return null; // exchange tidak support → caller fallback ke estimasi
+      }
+      if (!Array.isArray(fills) || fills.length === 0) return null;
+
+      const relevant = fills.filter(f => (f.timestamp || 0) >= (openedAt || 0));
+      if (relevant.length === 0) return null;
+
+      // CCXT menormalkan fee ke { cost, currency }. Bisa juga di array `fees`.
+      let total = 0;
+      let found = false;
+      for (const f of relevant) {
+        const single = f.fee && Number.isFinite(f.fee.cost) ? Math.abs(f.fee.cost) : 0;
+        const multi  = Array.isArray(f.fees)
+          ? f.fees.reduce((s, x) => s + (Number.isFinite(x?.cost) ? Math.abs(x.cost) : 0), 0)
+          : 0;
+        const fee = single || multi;
+        if (fee > 0) { total += fee; found = true; }
+      }
+      return found ? total : null;
+    } catch {
+      return null; // non-fatal — caller fallback ke estimasi
+    }
+  }
+
   // ─────────────────────────────────────────────
   // TRADING
   // ─────────────────────────────────────────────
@@ -236,14 +317,32 @@ class BitgetCCXTClient {
   }
 
   async setMarginMode(symbol, mode = "crossed", marginCoin = "USDT") {
+    // Benar-benar set margin mode di exchange (#10) — sebelumnya no-op yang
+    // mengembalikan success palsu, sehingga akun isolated bisa likuidasi beda
+    // dari asumsi. CCXT memakai "cross"/"isolated".
+    let marketSymbol = symbol;
+    if (!marketSymbol.includes("/")) {
+      const base = marketSymbol.slice(0, -4);
+      marketSymbol = `${base}/USDT:USDT`;
+    }
+    const ccxtMode = mode === "crossed" ? "cross" : mode; // normalisasi istilah
+
     try {
-      // CCXT Bitget mungkin tidak support setMarginType langsung
-      // Fallback: assume margin mode already set via Bitget dashboard
-      console.warn(`[WARN] setMarginMode fallback - margin mode harus di-set di Bitget dashboard`);
-      return { success: true, mode: mode };
+      await this.exchange.setMarginMode(ccxtMode, marketSymbol, { marginCoin });
+      return { success: true, mode: ccxtMode };
     } catch (err) {
-      console.warn(`setMarginMode warning: ${err.message}`);
-      return { success: true, mode: mode };
+      const msg = (err.message || "").toLowerCase();
+      // Bitget menolak ubah mode bila SUDAH mode itu, atau ada posisi/order terbuka.
+      // Kasus "tidak berubah" aman; kasus posisi terbuka → mode existing dipakai.
+      const benign =
+        msg.includes("no need") || msg.includes("not change") ||
+        msg.includes("same") || msg.includes("already") ||
+        msg.includes("position") || msg.includes("40797") || msg.includes("45117");
+      if (benign) {
+        return { success: true, mode: ccxtMode, note: "unchanged_or_has_position" };
+      }
+      console.warn(`setMarginMode gagal: ${err.message}`);
+      return { success: false, mode: ccxtMode, error: err.message };
     }
   }
 

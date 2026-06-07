@@ -14,14 +14,33 @@ const safeInt = (val, def = 0) => {
 // Rate-limit sederhana untuk endpoint mahal
 let lastRecalc = 0;
 
-module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
+module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
   const router = Router();
 
   router.get("/sessions", async (req, res) => {
     try {
-      const limit  = Math.min(safeInt(req.query.limit, 20), 500);
-      const symbol = req.query.symbol || null;
-      res.json(await db.getSessions(limit, symbol, req.userId ?? null));
+      const limit    = Math.min(safeInt(req.query.limit, 20), 500);
+      const symbol   = req.query.symbol || null;
+      const sessions = await db.getSessions(limit, symbol, req.userId ?? null);
+
+      // Enrich dengan status live: sesi hanya benar-benar "aktif" bila bot-nya
+      // masih running di memory (sessionId cocok). Tanpa ini, crash/restart VPS
+      // membuat stopped_at tetap NULL → semua sesi lama tampak "AKTIF" di UI.
+      const liveBots = getAllBots ? getAllBots(req.userId) : [];
+      const liveSessionIds = new Set(
+        liveBots
+          .filter(b => b.getState?.().running && b.sessionId)
+          .map(b => b.sessionId)
+      );
+
+      const enriched = sessions.map(s => ({
+        ...s,
+        // Override: sesi terbuka (stopped_at NULL) tapi botnya tidak running → tandai closed
+        stopped_at: s.stopped_at ?? (liveSessionIds.has(s.id) ? null : new Date().toISOString()),
+        is_live_running: liveSessionIds.has(s.id),
+      }));
+
+      res.json(enriched);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -29,7 +48,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/sessions/:id", async (req, res) => {
     try {
-      const session = await db.getSession(safeInt(req.params.id, 0));
+      const session = await db.getSession(safeInt(req.params.id, 0), req.userId ?? null);
       if (!session) return res.status(404).json({ error: "Session tidak ditemukan" });
       res.json(session);
     } catch (err) {
@@ -50,7 +69,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/trades/stats/:sessionId", async (req, res) => {
     try {
-      res.json(await db.getTradeStats(safeInt(req.params.sessionId, 0)));
+      res.json(await db.getTradeStats(safeInt(req.params.sessionId, 0), req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -58,7 +77,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
 
   router.get("/equity/:sessionId", async (req, res) => {
     try {
-      res.json(await db.getEquity(safeInt(req.params.sessionId, 0)));
+      res.json(await db.getEquity(safeInt(req.params.sessionId, 0), req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -68,7 +87,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   router.get("/equity-all", async (req, res) => {
     try {
       const mode = req.query.mode || "live"; // default live saja
-      res.json(await db.getAllEquity(mode));
+      res.json(await db.getAllEquity(mode, req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -77,7 +96,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
   router.get("/db/logs/:sessionId", async (req, res) => {
     try {
       const limit = Math.min(safeInt(req.query.limit, 200), 1000);
-      res.json(await db.getLogs(safeInt(req.params.sessionId, 0), limit));
+      res.json(await db.getLogs(safeInt(req.params.sessionId, 0), limit, req.userId ?? null));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -104,18 +123,20 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
     }
     lastRecalc = now;
     try {
-      const sessions = await db.getSessions(500);
+      // Scope per user (#13): hanya recalc sesi milik pemanggil, bukan seluruh DB.
+      const sessions = await db.getSessions(500, null, req.userId ?? null);
       const results  = [];
       for (const s of sessions) {
         const { rows: trades } = await db._pool.query(
-          `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+          `SELECT pnl, fee, funding FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
           [s.id]
         );
         if (trades.length === 0) continue;
         const wins     = trades.filter(t => t.pnl > 0).length;
         const losses   = trades.filter(t => t.pnl <= 0).length;
-        const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
-        const finalCap = (s.initial_capital || 0) + totalPnL;
+        // final_capital pakai NET (pnl - fee - funding) agar cocok balance riil
+        const totalNet = trades.reduce((sum, t) => sum + (t.pnl - (t.fee || 0) - (t.funding || 0)), 0);
+        const finalCap = (s.initial_capital || 0) + totalNet;
         const mismatch = s.wins !== wins || s.losses !== losses || s.total_trades !== trades.length;
         if (mismatch) {
           await db.recalcSessionStats(s.id);
@@ -153,7 +174,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST }) {
         : req.query.dry_run === "true";
       const format  = req.query.format || "json";
 
-      const data = await db.getInsights({ symbol, dryRun, limit });
+      const data = await db.getInsights({ symbol, dryRun, limit, userId: req.userId ?? null });
 
       if (format === "csv") {
         if (data.length === 0) return res.status(200).send("No data");

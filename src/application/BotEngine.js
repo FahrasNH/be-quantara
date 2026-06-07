@@ -70,6 +70,10 @@ class BotEngine extends EventEmitter {
       riskPerTrade:  strat.riskPerTrade,
       maxRiskPerTrade: 0.05,
 
+      // Fee trading per sisi (taker). Bitget USDT-M futures default ~0.06%.
+      // Dipakai untuk estimasi fee dry-run/backtest & fallback live.
+      feeRate:       strat.feeRate ?? 0.0006,
+
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
       leverage:     strat.leverage,
@@ -294,7 +298,12 @@ class BotEngine extends EventEmitter {
       errors:        this.state.errors,
       lastTick:      this.state.lastTick,
       lastPrice:     this.state.lastPrice,
+      // totalPnL = GROSS (selisih harga). totalFees & netPnL dipisah agar
+      // dashboard bisa menampilkan keduanya — gross tak akan cocok dengan
+      // perubahan balance riil karena fee. Net = gross - fee - funding.
       totalPnL:      this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0),
+      totalFees:     this.state.trades.reduce((s, t) => s + (t.fee || 0) + (t.funding || 0), 0),
+      netPnL:        this.state.trades.reduce((s, t) => s + (t.pnl || 0) - (t.fee || 0) - (t.funding || 0), 0),
       unrealizedPnL: this.state.openPositions.reduce((s, p) => {
         if (p.unrealizedPL && p.unrealizedPL !== 0) return s + p.unrealizedPL;
         // Fallback: hitung dari lastPrice jika unrealizedPL belum diset dari exchange
@@ -431,11 +440,14 @@ class BotEngine extends EventEmitter {
                 const pnl       = dbTrade.side === "LONG"
                   ? (exitPrice - dbTrade.entry_price) * (dbTrade.size || 0)
                   : (dbTrade.entry_price - exitPrice) * (dbTrade.size || 0);
-                this._log("warn", `Posisi ${dbTrade.side} sesi #${dbTrade.session_id} sudah ditutup di exchange saat offline — PnL ≈ $${pnl.toFixed(2)}`);
+                // Close terdeteksi offline → fill aktual tak bisa dipetakan; estimasi fee
+                const fee = this._estimateFee(dbTrade.entry_price, exitPrice, dbTrade.size || 0);
+                this._log("warn", `Posisi ${dbTrade.side} sesi #${dbTrade.session_id} sudah ditutup di exchange saat offline — PnL ≈ $${pnl.toFixed(2)} (fee est -$${fee.toFixed(4)})`);
                 try {
                   await db.closeTrade(dbTrade.id, {
                     exitPrice,
                     pnl,
+                    fee,
                     reason:    "Closed_Offline",
                     closeTime: new Date().toISOString(),
                   });
@@ -482,6 +494,18 @@ class BotEngine extends EventEmitter {
         if (this.state.openPositions.length > 0)
           this._log("info", `${this.state.openPositions.length} posisi aktif dipulihkan ✓`);
       }
+
+      // Re-reserve margin di koordinator untuk posisi yang dipulihkan (#5) — agar
+      // setelah restart/redeploy, margin posisi terbuka tetap diperhitungkan dan
+      // tidak terjadi over-commit oleh bot lain.
+      if (!this.config.dryRun && this.config.coordinator && this.state.openPositions.length > 0) {
+        const p   = this.state.openPositions[0];
+        const lev = this.config.leverage || 1;
+        const sz  = p.remainingSize || p.size || 0;
+        const margin = (p.entry * sz) / lev;
+        const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+        this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin });
+      }
     } catch (err) {
       this._log("warn", `Gagal restore posisi lama: ${err.message}`);
     }
@@ -502,6 +526,11 @@ class BotEngine extends EventEmitter {
     this._interval       = null;
     this._reportInterval = null;
     this.state.running   = false;
+
+    // Lepas reservasi margin HANYA jika bot sudah flat (#5). Jika masih ada
+    // posisi terbuka (akan dipulihkan di start berikutnya), reservasi DIPERTAHANKAN
+    // agar margin yang masih terkunci di exchange tetap diperhitungkan bot lain.
+    this._releaseMarginIfFlat();
 
     // Tutup sesi di DB
     // Posisi yang masih open (close_time IS NULL) tetap tersimpan di tabel trades
@@ -584,6 +613,34 @@ class BotEngine extends EventEmitter {
         this._log("warn", "Fallback ke DRY RUN dengan modal $500");
       }
     }
+
+    // ── Pulihkan circuit-breaker risiko dari DB (#3) ──────────────────────────
+    // Tanpa ini, stop→start / redeploy mereset daily-loss & loss-streak ke 0,
+    // sehingga batas kerugian harian bisa ditembus. Hitung ulang dari trade
+    // yang sudah closed HARI INI (UTC) untuk user+symbol+mode ini.
+    try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const risk = await db.getTodayRiskStats({
+        userId:  this.config.userId ?? null,
+        symbol:  this.config.symbol,
+        dryRun:  this.config.dryRun,
+      });
+      this.state.dailyLoss         = risk.dailyLoss;
+      this.state.dailyTradeCount   = risk.dailyTradeCount;
+      this.state.consecLoss        = risk.consecLoss;
+      this.state.lastDayReset      = todayStr;
+      // dailyStartCapital ≈ modal saat ini + loss hari ini (perkiraan modal awal hari).
+      this.state.dailyStartCapital = this.state.capital + risk.dailyLoss;
+      if (risk.dailyTradeCount > 0) {
+        this._log("info",
+          `🛡️ Risk dipulihkan dari DB — trade hari ini: ${risk.dailyTradeCount}, ` +
+          `daily loss: $${risk.dailyLoss.toFixed(2)}, loss beruntun: ${risk.consecLoss}`
+        );
+      }
+    } catch (e) {
+      this._log("warn", `Gagal memulihkan risk state dari DB: ${e.message} — mulai dari 0`);
+    }
+
     this._sep("BOT BERJALAN");
   }
 
@@ -627,15 +684,27 @@ class BotEngine extends EventEmitter {
       return { ok: false, reason: `Maks ${this.config.maxTradesPerDay} trade/hari sudah tercapai` };
     }
 
-    // 4. Daily loss limit
-    const dailyLossPct = this.state.capital > 0
-      ? this.state.dailyLoss / (this.state.dailyStartCapital || this.state.capital)
-      : 0;
+    // 4. Daily loss limit — sertakan FLOATING loss posisi terbuka (#8), bukan
+    //    hanya realized, agar drawdown mengambang besar tetap men-trigger stop.
+    const floatingLoss = this.state.openPositions.reduce((s, p) => {
+      const u = p.unrealizedPL || 0;
+      return u < 0 ? s + Math.abs(u) : s;
+    }, 0);
+    const effectiveDailyLoss = this.state.dailyLoss + floatingLoss;
+    const dailyBase    = this.state.dailyStartCapital || this.state.capital;
+    const dailyLossPct = dailyBase > 0 ? effectiveDailyLoss / dailyBase : 0;
     if (dailyLossPct >= this.config.maxDailyLossPct) {
       return {
         ok: false,
-        reason: `Daily loss ${(dailyLossPct * 100).toFixed(2)}% sudah melewati batas ${(this.config.maxDailyLossPct * 100)}%`,
+        reason: `Daily loss ${(dailyLossPct * 100).toFixed(2)}% (incl floating) melewati batas ${(this.config.maxDailyLossPct * 100)}%`,
       };
+    }
+
+    // 4b. Daily loss AGREGAT akun lintas-bot (#5) — cegah Σ kerugian beberapa bot
+    //     menembus batas akun walau tiap bot masih dalam batasnya sendiri.
+    if (!this.config.dryRun && this.config.coordinator) {
+      const acc = this.config.coordinator.canTradeAccount();
+      if (!acc.ok) return { ok: false, reason: acc.reason };
     }
 
     // 5. ATR range filter (previously 6 — SIDEWAYS dipindah ke _tick() per-strategi)
@@ -673,6 +742,15 @@ class BotEngine extends EventEmitter {
   // MAIN TICK
   // ─────────────────────────────────────────────
   async _tick() {
+    // Guard re-entrancy (#6): _tick async & bisa lebih lama dari checkInterval
+    // (ada sleep retry SL 3s + backoff 120s). Tanpa guard, setInterval memicu
+    // tick paralel → entry ganda & race pada openPositions.
+    if (this._ticking) {
+      this._log("info", "Tick sebelumnya masih berjalan — lewati tick ini");
+      return;
+    }
+    this._ticking = true;
+
     this.state.checkCount++;
     this.state.lastTick = new Date().toISOString();
 
@@ -743,7 +821,30 @@ class BotEngine extends EventEmitter {
         );
       }
 
-      await this._checkOpenPositions(price, atr);
+      // Harga real-time untuk monitoring SL/TP (#7). `price` di atas = close candle
+      // ke-2 terakhir (benar untuk deteksi sinyal, tapi BASI untuk cek SL/TP — pada
+      // 15m bisa tertinggal s/d 15 menit). Gunakan ticker.last bila tersedia.
+      let monitorPrice = price;
+      if (this.state.openPositions.length > 0 && this.client?.getTicker) {
+        try {
+          const ticker = await this.client.getTicker(this.config.symbol);
+          if (ticker?.last > 0) monitorPrice = ticker.last;
+        } catch { /* fallback ke close candle */ }
+      }
+      this.state.lastPrice = monitorPrice;
+
+      await this._checkOpenPositions(monitorPrice, atr);
+
+      // Lapor risk ke koordinator akun tiap tick (#5) — termasuk saat memegang
+      // posisi — agar gate daily-loss agregat lintas-bot selalu pakai data segar.
+      if (!this.config.dryRun && this.config.coordinator) {
+        const floatingLoss = this.state.openPositions.reduce((s, p) => {
+          const u = p.unrealizedPL || 0;
+          return u < 0 ? s + Math.abs(u) : s;
+        }, 0);
+        const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+        this.config.coordinator.reportRisk(botKey, { realizedLoss: this.state.dailyLoss, floatingLoss });
+      }
 
       if (this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
@@ -758,6 +859,13 @@ class BotEngine extends EventEmitter {
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
             // ── STEP 2b: TRENDING — sinyal trend-following normal ───────────────
+            // Hitung volatility & trend_strength untuk AFS component ranking (#BugA).
+            // Tanpa ini AFS menerima default (volatility=1, trend_strength=0.1) → komponen
+            // dipilih berdasarkan asumsi "dead market" bukan kondisi market nyata.
+            const atrPctNow = atr && price ? (atr / price) * 100 : 1.0;
+            const emaDelta  = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
+            const trendStr  = Math.min(emaDelta * 50, 1.0); // normalisasi 0–1
+
             const signal = detectSignal(indicators, lastIdx, {
               rsiOverbought:    this.config.rsiOverbought,
               rsiOversold:      this.config.rsiOversold,
@@ -768,6 +876,10 @@ class BotEngine extends EventEmitter {
               useBothSides:     this.config.useBothSides,
               signalType:       this.config.signalType,
               volSmaMultiplier: this.config.volSmaMultiplier,
+              // AFS: kondisi market nyata agar komponen dipilih dengan benar
+              volatility:       atrPctNow,
+              trend_strength:   trendStr,
+              balance:          this.state.capital,
             });
 
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
@@ -864,6 +976,9 @@ class BotEngine extends EventEmitter {
         this.state.errors = 0; // reset agar bot tidak mati permanen
         await new Promise(r => setTimeout(r, 120_000)); // tunggu 2 menit
       }
+    } finally {
+      // Selalu lepas guard re-entrancy, termasuk setelah backoff 120s di atas.
+      this._ticking = false;
     }
   }
 
@@ -967,13 +1082,30 @@ class BotEngine extends EventEmitter {
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
-    let availCap = this.config.dryRun ? this.state.capital : 500;
-    try {
-      if (!this.config.dryRun) {
+    // Tentukan modal acuan untuk sizing.
+    // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
+    // Jangan pernah pakai angka hardcoded di live: akun kecil bisa 10x oversize
+    // → likuidasi langsung. (SEV1 #2)
+    let availCap;
+    if (this.config.dryRun) {
+      availCap = this.state.capital;
+    } else {
+      try {
         const bal = await this.client.getBalance(this.config.marginCoin);
         availCap  = bal.available;
+        // Bagikan equity akun ke koordinator margin lintas-bot (#5)
+        if (this.config.coordinator) {
+          this.config.coordinator.setAccountEquity(bal.equity > 0 ? bal.equity : bal.available);
+        }
+      } catch (e) {
+        this._log("error", `Balance gagal dibaca — skip entry demi keamanan (${e.message})`);
+        return;
       }
-    } catch { /* pakai default */ }
+      if (!Number.isFinite(availCap) || availCap <= 0) {
+        this._log("warn", `Balance tidak valid (${availCap}) — skip entry`);
+        return;
+      }
+    }
 
     const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
@@ -991,23 +1123,42 @@ class BotEngine extends EventEmitter {
 
     if (finalSize < minLot) {
       const riskIfMinLot = (minLot * Math.abs(price - sl)) / availCap;
-      if (riskIfMinLot <= this.config.maxRiskPerTrade) {
+      // Batas penerimaan min-lot dibuat lebih ketat (#11): maksimal 2x risk normal,
+      // dan tidak boleh melewati maxRiskPerTrade. Sebelumnya boleh sampai 5% (5x niat).
+      const minLotRiskCap = Math.min(this.config.maxRiskPerTrade, this.config.riskPerTrade * 2);
+      if (riskIfMinLot <= minLotRiskCap) {
         finalSize    = minLot;
         actualRiskPct = riskIfMinLot;
         this._log("info",
           `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym} → pakai min lot. ` +
-          `Risk aktual: ${(riskIfMinLot * 100).toFixed(2)}% (batas: ${(this.config.maxRiskPerTrade * 100).toFixed(0)}%)`
+          `Risk aktual: ${(riskIfMinLot * 100).toFixed(2)}% (batas: ${(minLotRiskCap * 100).toFixed(2)}%)`
         );
       } else {
         this._log("warn",
           `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym}. ` +
-          `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(this.config.maxRiskPerTrade * 100).toFixed(0)}% → skip. ` +
+          `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(minLotRiskCap * 100).toFixed(2)}% → skip. ` +
           `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk trade ${sym} normal)`
         );
         return;
       }
     }
     // Ganti variabel size → finalSize untuk sisa kode di bawah
+
+    // ── Koordinasi margin lintas-bot (#5) ─────────────────────────────────────
+    // Margin awal = notional / leverage. Cek anggaran akun BERSAMA sebelum buka,
+    // supaya beberapa bot di akun yang sama tidak over-commit → likuidasi.
+    const lev            = this.config.leverage || 1;
+    const requiredMargin = (price * finalSize) / lev;
+    const botKey         = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+    if (!this.config.dryRun && this.config.coordinator) {
+      const verdict = this.config.coordinator.canOpen({
+        botKey, symbol: this.config.symbol, requiredMargin,
+      });
+      if (!verdict.ok) {
+        this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
+        return;
+      }
+    }
 
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
@@ -1030,8 +1181,14 @@ class BotEngine extends EventEmitter {
         );
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
+        // Reservasi margin di koordinator akun bersama (#5)
+        if (this.config.coordinator) {
+          this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin: requiredMargin });
+        }
+
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
+          marginReserved: requiredMargin,
           // SL+ tracking
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
@@ -1072,10 +1229,37 @@ class BotEngine extends EventEmitter {
 
           if (slOk && tpOk) {
             this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
-          } else {
+          } else if (!slOk) {
+            // SL TIDAK terkonfirmasi = posisi telanjang (kerugian tak terbatas).
+            // Perlakukan sebagai kondisi fatal: TUTUP posisi segera, jangan andalkan
+            // monitor manual (bergantung tick ≤60s + harga basi). (SEV1 #4)
             if (!slOk) this._log("error", `SL gagal: ${slErr}`);
             if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
-            this._log("warn", `⚠️ SL: ${slOk ? "✓" : "GAGAL"} | TP: ${tpOk ? "✓" : "GAGAL"} — bot monitor manual`);
+            this._log("error", `🚨 SL tidak terkonfirmasi — TUTUP posisi darurat (anti naked position)`);
+            try {
+              const closeSide = signal === "LONG" ? "close_long" : "close_short";
+              await this.client.closePosition(this.config.symbol, closeSide, finalSize);
+              this._log("warn", `Posisi ${signal} ditutup darurat ✓ — tidak ada order tanpa SL`);
+              // Posisi sudah ditutup → lepas reservasi margin di koordinator (#5)
+              if (this.config.coordinator) this.config.coordinator.release(botKey);
+              notifier.notifyClose?.({
+                symbol: this.config.symbol, side: signal, entryPrice: price,
+                exitPrice: price, pnl: 0, pnlPct: 0, reason: "SL_FAILED_EMERGENCY_CLOSE",
+                dryRun: false,
+              });
+            } catch (closeErr) {
+              // Gagal tutup pun → JANGAN catat sebagai posisi sehat. Tandai manual +
+              // alert keras agar operator turun tangan.
+              this._log("error", `‼️ GAGAL tutup darurat: ${closeErr.message} — INTERVENSI MANUAL DIPERLUKAN di exchange!`);
+              pos.manualSLTP = true;
+              pos.slFailed   = true;
+            }
+            // Jika berhasil ditutup, hentikan pemrosesan posisi ini (jangan simpan/track)
+            if (!pos.slFailed) return;
+          } else {
+            // TP gagal tapi SL OK — tidak fatal (downside terlindungi). Monitor manual TP.
+            this._log("error", `TP gagal: ${tpErr}`);
+            this._log("warn", `⚠️ TP GAGAL (SL ✓) — bot monitor TP manual`);
             pos.manualSLTP = true;
           }
         }
@@ -1112,10 +1296,15 @@ class BotEngine extends EventEmitter {
       }
     } else {
       this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
-      this.state.capital -= availCap * actualRiskPct;
+      // Margin yang "dikunci" disimpan persis di posisi (#9) agar saat close
+      // dikembalikan dalam jumlah yang sama — sebelumnya open & close memakai
+      // rumus berbeda → equity simulasi drift.
+      const marginReserved = availCap * actualRiskPct;
+      this.state.capital -= marginReserved;
 
       const pos = {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
+        marginReserved,        // margin terkunci, dikembalikan tepat saat close
         // SL+ tracking
         remainingSize: finalSize,
         R:             slDist,
@@ -1440,10 +1629,11 @@ class BotEngine extends EventEmitter {
       ? (price - pos.entry) * partialSize
       : (pos.entry - price) * partialSize;
     const pnlPct = ((price - pos.entry) / pos.entry) * 100 * (pos.side === "LONG" ? 1 : -1);
+    const fee    = await this._resolveFee(pos, price, partialSize);
 
     this._sep(`SL+ ${reason}`);
     this._log("trade", `PARTIAL CLOSE [${reason}] ${pos.side} — ${partialSize.toFixed(4)} unit @ $${price.toFixed(2)}`);
-    this._log("trade", `PnL partial: +$${pnl.toFixed(2)} | SL dipindah → $${newSL.toFixed(2)} (${newSLLabel})`);
+    this._log("trade", `PnL partial gross: +$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: +$${(pnl - fee).toFixed(2)} | SL → $${newSL.toFixed(2)} (${newSLLabel})`);
 
     if (!this.config.dryRun) {
       // ── Partial close di exchange ──────────────────────────────────────────
@@ -1472,6 +1662,7 @@ class BotEngine extends EventEmitter {
       exit:      price,
       pnl,
       pnlPct,
+      fee,
       reason,
       closedAt:  Date.now(),
       partial:   true,
@@ -1498,6 +1689,8 @@ class BotEngine extends EventEmitter {
         await db.closeTrade(partialDbId, {
           exitPrice: price,
           pnl,
+          pnlPct,
+          fee,
           reason,
           closeTime: new Date().toISOString(),
         });
@@ -1623,11 +1816,12 @@ class BotEngine extends EventEmitter {
           const pnl = pos.side === "LONG"
             ? (exitPrice - pos.entry) * remaining
             : (pos.entry - exitPrice) * remaining;
+          const fee = await this._resolveFee(pos, exitPrice, remaining);
 
           this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
           this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
           this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} [${priceSource}] | Size sisa: ${remaining.toFixed(4)}`);
-          this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} — balance diperbarui dari exchange`);
+          this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} — balance dari exchange`);
           if (pos.m1 || pos.m2) {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
             this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
@@ -1635,7 +1829,7 @@ class BotEngine extends EventEmitter {
 
           // Tutup trade record di DB
           if (pos.dbId) {
-            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: exitReason, closeTime: new Date().toISOString() }); } catch {}
+            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() }); } catch {}
           }
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
@@ -1662,7 +1856,7 @@ class BotEngine extends EventEmitter {
             this._log("info", `Trade sesi #${pos.restoredFrom} ditutup di sesi #${this.sessionId} (cross-session) — update sesi asal`);
           } else {
             // Trade milik sesi saat ini — masukkan ke state.trades normal
-            this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+            this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
           }
 
           this._updateRiskAfterClose(pnl);
@@ -1679,6 +1873,7 @@ class BotEngine extends EventEmitter {
 
         // Update state: hanya posisi yang masih ada di exchange
         this.state.openPositions = this.state.openPositions.filter(p => liveByKey.has(p.side));
+        this._releaseMarginIfFlat(); // lepas margin di koordinator bila sudah flat (#5)
 
         // Update unrealized PnL + markPrice dari exchange, lalu cek SL+ milestones
         for (const pos of this.state.openPositions) {
@@ -1737,15 +1932,17 @@ class BotEngine extends EventEmitter {
                   const pnl = pos.side === "LONG"
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
+                  const fee = await this._resolveFee(pos, exitPrice, pos.size);
                   if (pos.dbId) {
-                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, reason: hitTP ? "TP" : "SL", closeTime: new Date().toISOString() }); } catch {}
+                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitTP ? "TP" : "SL", closeTime: new Date().toISOString() }); } catch {}
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
                   if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
-                    this.state.trades.push({ ...pos, exit: exitPrice, pnl, reason: "Exchange", closedAt: Date.now() });
+                    this.state.trades.push({ ...pos, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
                   }
                   this._updateRiskAfterClose(pnl);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
+                  this._releaseMarginIfFlat(); // lepas margin di koordinator (#5)
                   if (ownerSid === this.sessionId) this._syncSessionStats();
                   else db.recalcSessionStats(ownerSid);
                 } else {
@@ -1778,15 +1975,22 @@ class BotEngine extends EventEmitter {
           ? (exitPrice - pos.entry) * remaining
           : (pos.entry - exitPrice) * remaining;
         const pnlPct    = ((pnl / (pos.entry * remaining)) * 100);
+        const fee       = await this._resolveFee(pos, exitPrice, remaining);
 
-        this.state.capital += pnl + pos.entry * remaining * this.config.riskPerTrade;
+        // Modal pakai NET (#9): kembalikan margin yang DIKUNCI saat open (persis,
+        // bukan rumus berbeda), tambah pnl gross, potong fee. Fallback ke rumus
+        // lama untuk posisi yang dipulihkan tanpa marginReserved.
+        const marginBack = pos.marginReserved != null
+          ? pos.marginReserved
+          : pos.entry * remaining * this.config.riskPerTrade;
+        this.state.capital += pnl - fee + marginBack;
         const reason    = hitTP ? "TP" : "SL";
         const closeTime = Date.now();
 
         this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
         this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
         this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
-        this._log("trade", `PnL sisa: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
+        this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
         if (pos.m1 || pos.m2) {
           const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
           this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
@@ -1794,7 +1998,7 @@ class BotEngine extends EventEmitter {
 
         if (this.sessionId && pos.dbId) {
           try {
-            await db.closeTrade(pos.dbId, { exitPrice, pnl, reason, closeTime: new Date(closeTime).toISOString() });
+            await db.closeTrade(pos.dbId, { exitPrice, pnl, pnlPct, fee, reason, closeTime: new Date(closeTime).toISOString() });
           } catch { /* jangan crash */ }
         }
 
@@ -1809,7 +2013,7 @@ class BotEngine extends EventEmitter {
           dryRun:     this.config.dryRun,
         });
 
-        this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, reason, closedAt: closeTime });
+        this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee, reason, closedAt: closeTime });
         this._updateRiskAfterClose(pnl);
         toClose.push(pos.id);
       }
@@ -1818,6 +2022,52 @@ class BotEngine extends EventEmitter {
 
     // Sync session stats ke DB setelah posisi ditutup (dry run)
     if (toClose.length > 0) this._syncSessionStats();
+  }
+
+  // ─────────────────────────────────────────────
+  // FEE — estimasi & resolusi biaya trading
+  // ─────────────────────────────────────────────
+  /**
+   * Estimasi fee trading round-trip (entry + exit) dari notional.
+   * Fee Bitget dihitung atas notional penuh (harga × size), bukan margin.
+   * Inilah penyebab gap "Net PnL gross" vs balance riil: fee tak pernah dikurangi.
+   */
+  _estimateFee(entryPrice, exitPrice, size) {
+    const rate = this.config.feeRate ?? 0.0006;
+    const notional = (Math.abs(entryPrice) + Math.abs(exitPrice)) * Math.abs(size);
+    return notional * rate;
+  }
+
+  /**
+   * Tentukan fee untuk satu close.
+   * - LIVE: coba fee aktual dari exchange (fetchMyTrades); fallback estimasi.
+   * - DRY-RUN/backtest: selalu estimasi notional × feeRate.
+   * @returns {Promise<number>} fee absolut (≥0)
+   */
+  async _resolveFee(pos, exitPrice, size) {
+    const estimate = this._estimateFee(pos.entry, exitPrice, size);
+    if (this.config.dryRun || !this.client?.getRecentFillFee) return estimate;
+    try {
+      const openedAt = typeof pos.openTime === "number"
+        ? pos.openTime
+        : Date.parse(pos.openTime || 0);
+      const actual = await this.client.getRecentFillFee(this.config.symbol, openedAt || 0);
+      return Number.isFinite(actual) && actual > 0 ? actual : estimate;
+    } catch {
+      return estimate;
+    }
+  }
+
+  /**
+   * Lepas reservasi margin di koordinator akun bila bot ini sudah FLAT
+   * (tidak ada posisi terbuka). Aman dipanggil berkali-kali (idempotent).
+   * Tiap bot = 1 simbol = maksimal 1 posisi, jadi flat ⇒ margin bisa dilepas. (#5)
+   */
+  _releaseMarginIfFlat() {
+    if (!this.config.coordinator) return;
+    if (this.state.openPositions.length > 0) return;
+    const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
+    this.config.coordinator.release(botKey);
   }
 
   // ─────────────────────────────────────────────
@@ -1831,8 +2081,9 @@ class BotEngine extends EventEmitter {
       const losses    = closed.filter(t => t.pnl <= 0).length;
       // total_trades = closed saja, open positions belum dihitung agar win rate tidak anomali
       const total     = closed.length;
-      const tradePnL  = this.state.trades.reduce((s, t) => s + (t.pnl || 0), 0);
-      const finalCap  = this.state.startCapital + tradePnL;
+      // final_capital pakai NET (pnl - fee - funding) agar cocok balance riil
+      const tradeNet  = this.state.trades.reduce((s, t) => s + ((t.pnl || 0) - (t.fee || 0) - (t.funding || 0)), 0);
+      const finalCap  = this.state.startCapital + tradeNet;
       db.updateSessionStats(this.sessionId, { finalCapital: finalCap, totalTrades: total, wins, losses });
     } catch { /* jangan crash */ }
   }

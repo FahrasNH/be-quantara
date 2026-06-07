@@ -124,26 +124,28 @@ class AuthService {
       const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
       const userId = decoded.userId;
 
-      // Find session for this user
-      const session = await prisma.session.findFirst({
-        where: { userId },
+      // Multi-device (#12): satu user bisa punya banyak sesi (banyak device).
+      // `findFirst` lama hanya mengambil SATU sesi → device lain gagal refresh
+      // karena hash-nya tidak cocok. Cocokkan token ke SEMUA sesi user yang
+      // masih berlaku via bcrypt.compare (hash tak bisa dicari lewat query).
+      const sessions = await prisma.session.findMany({
+        where: { userId, expiresAt: { gt: new Date() } },
       });
 
-      if (!session) {
+      if (!sessions || sessions.length === 0) {
         throw new Error('Session not found');
       }
 
-      if (session.expiresAt < new Date()) {
-        throw new Error('Refresh token expired');
+      let matched = null;
+      for (const s of sessions) {
+        if (!s.refreshTokenHash) continue;
+        // eslint-disable-next-line no-await-in-loop
+        if (await bcrypt.compare(refreshToken, s.refreshTokenHash)) {
+          matched = s;
+          break;
+        }
       }
-
-      // Verify token against bcrypt hash — plaintext storage removed (P1.3 hardening).
-      if (!session.refreshTokenHash) {
-        throw new Error('Invalid refresh token');
-      }
-
-      const tokenValid = await bcrypt.compare(refreshToken, session.refreshTokenHash);
-      if (!tokenValid) {
+      if (!matched) {
         throw new Error('Invalid refresh token');
       }
 

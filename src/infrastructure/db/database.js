@@ -71,6 +71,16 @@ const SCHEMA_SQL = `
       FOREIGN KEY (session_id) REFERENCES bot_sessions(id) ON DELETE SET NULL;
   EXCEPTION WHEN others THEN NULL; END $$;
 
+  -- Biaya trading (idempotent). Kolom pnl tetap GROSS (selisih harga x size).
+  -- Net PnL riil = pnl - fee - funding. Default 0 agar baris lama (fee tak
+  -- diketahui) net = gross -- hanya trade baru yang akurat. Lihat closeTrade().
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN fee DOUBLE PRECISION DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN funding DOUBLE PRECISION DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
   CREATE TABLE IF NOT EXISTS equity_snapshots (
     id             SERIAL PRIMARY KEY,
     session_id     INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
@@ -274,14 +284,15 @@ async function recalcSessionStats(sessionId) {
     const session = sRows[0];
     if (!session) return;
     const { rows: trades } = await pool.query(
-      `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+      `SELECT pnl, fee, funding FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
       [sessionId]
     );
     const wins     = trades.filter((t) => t.pnl > 0).length;
     const losses   = trades.filter((t) => t.pnl <= 0).length;
     const total    = trades.length;
-    const totalPnL = trades.reduce((s, t) => s + (t.pnl || 0), 0);
-    const finalCap = (session.initial_capital || 0) + totalPnL;
+    // final_capital pakai NET (pnl - fee - funding) agar cocok dengan balance riil
+    const totalNet = trades.reduce((s, t) => s + ((t.pnl || 0) - (t.fee || 0) - (t.funding || 0)), 0);
+    const finalCap = (session.initial_capital || 0) + totalNet;
     await pool.query(
       `UPDATE bot_sessions SET final_capital = $2, total_trades = $3, wins = $4, losses = $5 WHERE id = $1`,
       [sessionId, finalCap, total, wins, losses]
@@ -295,6 +306,8 @@ const SESSIONS_BASE = `
   SELECT
     s.*,
     COALESCE(t.actual_pnl,    0) AS actual_pnl,
+    COALESCE(t.actual_fee,    0) AS actual_fee,
+    COALESCE(t.actual_net,    0) AS actual_net,
     COALESCE(t.actual_wins,   0) AS actual_wins,
     COALESCE(t.actual_losses, 0) AS actual_losses,
     COALESCE(t.actual_total,  0) AS actual_total
@@ -303,6 +316,8 @@ const SESSIONS_BASE = `
     SELECT
       session_id,
       SUM(pnl)                                   AS actual_pnl,
+      SUM(COALESCE(fee,0) + COALESCE(funding,0)) AS actual_fee,
+      SUM(pnl - COALESCE(fee,0) - COALESCE(funding,0)) AS actual_net,
       SUM(CASE WHEN pnl > 0  THEN 1 ELSE 0 END)  AS actual_wins,
       SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END)  AS actual_losses,
       COUNT(*)                                   AS actual_total
@@ -341,8 +356,18 @@ async function getSessions(limit = 20, symbol = null, userId = null) {
   return rows.map(parseSession);
 }
 
-async function getSession(id) {
-  const { rows } = await pool.query(`SELECT * FROM bot_sessions WHERE id = $1`, [id]);
+async function getSession(id, userId = null) {
+  // Isolasi kepemilikan: hanya sesi milik userId (atau sesi legacy user_id NULL).
+  const params = [id];
+  let ownership = "";
+  if (userId) {
+    params.push(userId);
+    ownership = ` AND (user_id = $${params.length} OR user_id IS NULL)`;
+  }
+  const { rows } = await pool.query(
+    `SELECT * FROM bot_sessions WHERE id = $1${ownership}`,
+    params
+  );
   return rows[0] ? parseSession(rows[0]) : null;
 }
 
@@ -377,16 +402,18 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
   return rows[0].id;
 }
 
-async function closeTrade(tradeId, { exitPrice, pnl, reason, closeTime }) {
+async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime }) {
   await pool.query(
     `UPDATE trades
-     SET exit_price = $2, pnl = $3, pnl_pct = $4, reason = $5, close_time = $6
+     SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8
      WHERE id = $1`,
     [
       tradeId,
       exitPrice,
       pnl,
-      null,
+      pnlPct ?? null,
+      fee ?? 0,
+      funding ?? 0,
       reason,
       closeTime ? new Date(closeTime).toISOString() : new Date().toISOString(),
     ]
@@ -420,21 +447,68 @@ async function getTrades({ sessionId = null, symbol = null, limit = 100, userId 
   return rows;
 }
 
-async function getTradeStats(sessionId) {
+async function getTradeStats(sessionId, userId = null) {
+  // Cegah IDOR: stats hanya untuk sesi milik userId (atau legacy NULL).
+  const params = [sessionId];
+  let ownership = "";
+  if (userId) {
+    params.push(userId);
+    ownership = ` AND EXISTS (SELECT 1 FROM bot_sessions s
+                   WHERE s.id = t.session_id
+                     AND (s.user_id = $${params.length} OR s.user_id IS NULL))`;
+  }
   const { rows } = await pool.query(
     `SELECT
        COUNT(*) AS total,
        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
        SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses,
        SUM(pnl) AS total_pnl,
+       SUM(COALESCE(fee,0) + COALESCE(funding,0)) AS total_fee,
+       SUM(pnl - COALESCE(fee,0) - COALESCE(funding,0)) AS net_pnl,
        AVG(pnl) AS avg_pnl,
        MAX(pnl) AS best_trade,
        MIN(pnl) AS worst_trade
-     FROM trades
-     WHERE session_id = $1 AND close_time IS NOT NULL`,
-    [sessionId]
+     FROM trades t
+     WHERE t.session_id = $1 AND t.close_time IS NOT NULL${ownership}`,
+    params
   );
   return rows[0];
+}
+
+/**
+ * Statistik risk HARI INI (UTC) lintas-sesi untuk satu user+symbol+mode.
+ * Dipakai saat bot startup untuk MEMULIHKAN circuit-breaker (#3) — agar batas
+ * daily-loss / loss-streak / max-trade tidak tereset oleh restart/redeploy.
+ * Net = pnl - fee - funding (konsisten dengan akuntansi balance riil).
+ */
+async function getTodayRiskStats({ userId = null, symbol = null, dryRun = null } = {}) {
+  const params = [];
+  const conds = [
+    `t.close_time IS NOT NULL`,
+    `t.pnl IS NOT NULL`,
+    `(t.close_time AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date`,
+  ];
+  if (userId) { params.push(userId); conds.push(`(s.user_id = $${params.length} OR s.user_id IS NULL)`); }
+  if (symbol) { params.push(symbol); conds.push(`t.symbol = $${params.length}`); }
+  if (dryRun !== null) { params.push(dryRun ? 1 : 0); conds.push(`t.dry_run = $${params.length}`); }
+
+  const { rows } = await pool.query(
+    `SELECT t.pnl, t.fee, t.funding
+     FROM trades t
+     LEFT JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY t.close_time ASC`,
+    params
+  );
+
+  let dailyLoss = 0;
+  let consecLoss = 0;
+  for (const r of rows) {
+    const net = (r.pnl || 0) - (r.fee || 0) - (r.funding || 0);
+    if (net < 0) { dailyLoss += Math.abs(net); consecLoss += 1; }
+    else { consecLoss = 0; }
+  }
+  return { dailyLoss, dailyTradeCount: rows.length, consecLoss };
 }
 
 async function getOpenTrades(sessionId) {
@@ -449,12 +523,14 @@ async function getOpenTrades(sessionId) {
  * Export data trade lengkap dengan snapshot indikator — untuk analitik / ML.
  * Hanya trade yang sudah tertutup (punya exit_price dan pnl).
  */
-async function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
-  let where = `close_time IS NOT NULL AND indicators IS NOT NULL`;
+async function getInsights({ symbol = null, dryRun = null, limit = 500, userId = null } = {}) {
+  let where = `t.close_time IS NOT NULL AND t.indicators IS NOT NULL`;
   const params = [];
   let i = 1;
-  if (symbol) { where += ` AND symbol = $${i++}`; params.push(symbol); }
-  if (dryRun !== null) { where += ` AND dry_run = $${i++}`; params.push(dryRun ? 1 : 0); }
+  if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
+  if (dryRun !== null) { where += ` AND t.dry_run = $${i++}`; params.push(dryRun ? 1 : 0); }
+  // Cegah IDOR: sebelumnya endpoint ini membocorkan SEMUA trade+PnL semua user.
+  if (userId) { where += ` AND (s.user_id = $${i++} OR s.user_id IS NULL)`; params.push(userId); }
   params.push(Math.min(limit, 5000));
 
   const { rows } = await pool.query(
@@ -463,7 +539,7 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
      LEFT JOIN bot_sessions s ON s.id = t.session_id
      WHERE ${where}
      ORDER BY t.open_time DESC
-     LIMIT $${i}`,
+     LIMIT $${params.length}`,
     params
   );
 
@@ -487,6 +563,9 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500 } = {}) {
       tp:           row.tp,
       size:         row.size,
       pnl:          row.pnl,
+      fee:          row.fee ?? 0,
+      funding:      row.funding ?? 0,
+      pnlNet:       (row.pnl ?? 0) - (row.fee ?? 0) - (row.funding ?? 0),
       pnlPct:       row.pnl_pct,
       reason:       row.reason,
       dryRun:       row.dry_run === 1,
@@ -529,13 +608,22 @@ async function snapshotEquity({ sessionId, capital, price, openPositions }) {
   }
 }
 
-async function getEquity(sessionId) {
+async function getEquity(sessionId, userId = null) {
+  // Cegah IDOR: equity curve hanya untuk sesi milik userId (atau legacy NULL).
+  const params = [sessionId];
+  let ownership = "";
+  if (userId) {
+    params.push(userId);
+    ownership = ` AND EXISTS (SELECT 1 FROM bot_sessions s
+                   WHERE s.id = es.session_id
+                     AND (s.user_id = $${params.length} OR s.user_id IS NULL))`;
+  }
   const { rows } = await pool.query(
-    `SELECT timestamp, capital, price, open_positions
-     FROM equity_snapshots
-     WHERE session_id = $1
-     ORDER BY timestamp ASC`,
-    [sessionId]
+    `SELECT es.timestamp, es.capital, es.price, es.open_positions
+     FROM equity_snapshots es
+     WHERE es.session_id = $1${ownership}
+     ORDER BY es.timestamp ASC`,
+    params
   );
   return rows;
 }
@@ -544,14 +632,18 @@ async function getEquity(sessionId) {
  * Semua equity snapshot dari SEMUA sesi, diurutkan waktu (kurva akumulatif).
  * Opsional filter by mode ("live" | "dry_run").
  */
-async function getAllEquity(mode = "live") {
-  const modeFilter = mode ? "AND bs.mode = $1" : "";
-  const params     = mode ? [mode] : [];
+async function getAllEquity(mode = "live", userId = null) {
+  const params      = [];
+  const conditions  = [];
+  if (mode)   { params.push(mode);   conditions.push(`bs.mode = $${params.length}`); }
+  // Cegah IDOR: hanya sesi milik userId (atau legacy NULL) — sebelumnya bocor semua user.
+  if (userId) { params.push(userId); conditions.push(`(bs.user_id = $${params.length} OR bs.user_id IS NULL)`); }
+  const WHERE = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await pool.query(
     `SELECT es.timestamp, es.capital, es.price, es.open_positions, bs.symbol, bs.mode
      FROM equity_snapshots es
      JOIN bot_sessions bs ON bs.id = es.session_id
-     WHERE 1=1 ${modeFilter}
+     ${WHERE}
      ORDER BY es.timestamp ASC`,
     params
   );
@@ -627,10 +719,22 @@ async function insertLog({ sessionId, level, message }) {
   }
 }
 
-async function getLogs(sessionId, limit = 200) {
+async function getLogs(sessionId, limit = 200, userId = null) {
+  // Cegah IDOR: log hanya untuk sesi milik userId (atau legacy NULL).
+  const params = [sessionId];
+  let ownership = "";
+  if (userId) {
+    params.push(userId);
+    ownership = ` AND EXISTS (SELECT 1 FROM bot_sessions s
+                   WHERE s.id = logs.session_id
+                     AND (s.user_id = $${params.length} OR s.user_id IS NULL))`;
+  }
+  params.push(limit);
   const { rows } = await pool.query(
-    `SELECT * FROM logs WHERE session_id = $1 ORDER BY timestamp DESC LIMIT $2`,
-    [sessionId, limit]
+    `SELECT * FROM logs
+     WHERE session_id = $1${ownership}
+     ORDER BY timestamp DESC LIMIT $${params.length}`,
+    params
   );
   return rows;
 }
@@ -729,6 +833,7 @@ module.exports = {
   closeTrade,
   getTrades,
   getTradeStats,
+  getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
   getInsights,
