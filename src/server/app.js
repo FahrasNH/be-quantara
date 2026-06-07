@@ -129,6 +129,9 @@ function getCoordinator(userId) {
       userId,
       maxAccountUtilization:  cfg.maxAccountUtilization  ?? 0.8,
       maxConcurrentPositions: cfg.maxConcurrentPositions ?? 0,
+      // Batas kerugian harian AGREGAT lintas-bot (#5). Default 6% > per-bot 4%,
+      // memberi ruang tapi mencegah akumulasi 3×4%=12% di satu akun.
+      maxAccountDailyLossPct: parseFloat(process.env.MAX_ACCOUNT_DAILY_LOSS_PCT) || 0.06,
     });
   }
   return coordinatorsMap[userId];
