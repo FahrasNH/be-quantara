@@ -518,7 +518,7 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
      LEFT JOIN bot_sessions s ON s.id = t.session_id
      WHERE ${where}
      ORDER BY t.open_time DESC
-     LIMIT $${i}`,
+     LIMIT $${params.length}`,
     params
   );
 

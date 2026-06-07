@@ -859,6 +859,13 @@ class BotEngine extends EventEmitter {
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
             // ── STEP 2b: TRENDING — sinyal trend-following normal ───────────────
+            // Hitung volatility & trend_strength untuk AFS component ranking (#BugA).
+            // Tanpa ini AFS menerima default (volatility=1, trend_strength=0.1) → komponen
+            // dipilih berdasarkan asumsi "dead market" bukan kondisi market nyata.
+            const atrPctNow = atr && price ? (atr / price) * 100 : 1.0;
+            const emaDelta  = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
+            const trendStr  = Math.min(emaDelta * 50, 1.0); // normalisasi 0–1
+
             const signal = detectSignal(indicators, lastIdx, {
               rsiOverbought:    this.config.rsiOverbought,
               rsiOversold:      this.config.rsiOversold,
@@ -869,6 +876,10 @@ class BotEngine extends EventEmitter {
               useBothSides:     this.config.useBothSides,
               signalType:       this.config.signalType,
               volSmaMultiplier: this.config.volSmaMultiplier,
+              // AFS: kondisi market nyata agar komponen dipilih dengan benar
+              volatility:       atrPctNow,
+              trend_strength:   trendStr,
+              balance:          this.state.capital,
             });
 
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────

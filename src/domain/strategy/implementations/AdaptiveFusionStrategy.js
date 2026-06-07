@@ -217,6 +217,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     if (!rsi || !atr || closes.length < 3) return null;
 
+    // #BugB: slice sampai lastIdx+1 agar Component B & C tidak membaca candle yang
+    // masih forming (closes[closes.length-1] = candle aktif, belum confirmed).
+    // lastIdx = candles.length-2 = candle terakhir yang sudah closed sepenuhnya.
+    const closesConfirmed = closes.slice(0, lastIdx + 1);
+
     // P4: Get scores and filter out low-scoring components
     const marketConditions = {
       volatility:      config.volatility      || 1.0,
@@ -243,7 +248,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
       balance >= this.SUB_STRATEGIES.B.minCapital &&
       (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore
     ) {
-      signals.B = this._detectSignalB(rsi, emaFast, emaSlow, closes);
+      signals.B = this._detectSignalB(rsi, emaFast, emaSlow, closesConfirmed);
     }
 
     // Component C — only run if balance sufficient AND score meets threshold
@@ -251,7 +256,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
       balance >= this.SUB_STRATEGIES.C.minCapital &&
       (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore
     ) {
-      signals.C = this._detectSignalC(rsi, emaFast, emaSlow, closes);
+      signals.C = this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed);
     }
 
     const resolved = this._resolveSignalConflict(signals);
@@ -375,15 +380,15 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     const closeCurr = closes[closes.length - 1];
 
-    // LONG: price above slow EMA + fast above slow (uptrend structure) + RSI in healthy zone
-    // 35–75: wider than original 40–70 to catch more mid-trend entries, still avoids extremes
-    if (closeCurr > emaSlow && emaFast > emaSlow && rsi > 35 && rsi < 75) {
+    // LONG: price above slow EMA + fast above slow (uptrend structure) + RSI healthy.
+    // #BugC: range 35–75 terlalu lebar → fire nyaris setiap candle uptrend → noise tinggi.
+    // Diperketat ke 45–65: cukup lebar untuk mid-trend tapi menghindari overbought/oversold.
+    if (closeCurr > emaSlow && emaFast > emaSlow && rsi > 45 && rsi < 65) {
       return "LONG";
     }
 
-    // SHORT: price below slow EMA + fast below slow (downtrend) + RSI in healthy zone
-    // 25–65: symmetric adjustment (was 30–60)
-    if (closeCurr < emaSlow && emaFast < emaSlow && rsi < 65 && rsi > 25) {
+    // SHORT: symmetric. Range 35–55 (sebelumnya 25–65 terlalu lebar).
+    if (closeCurr < emaSlow && emaFast < emaSlow && rsi < 55 && rsi > 35) {
       return "SHORT";
     }
 
