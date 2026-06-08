@@ -27,8 +27,15 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-echo "==> git pull origin ${GIT_BRANCH}..."
-git pull origin "${GIT_BRANCH}"
+echo "==> git fetch origin ${GIT_BRANCH}..."
+git fetch origin "${GIT_BRANCH}"
+
+# Script di scripts/ kadang di-upload manual (scp) sebelum masuk repo — blokir git pull.
+echo "==> Bersihkan file untracked di scripts/ yang bentrok dengan merge..."
+git clean -fd -- scripts/ 2>/dev/null || true
+
+echo "==> git merge origin/${GIT_BRANCH}..."
+git merge --ff-only "origin/${GIT_BRANCH}"
 
 echo "==> npm ci..."
 npm ci
