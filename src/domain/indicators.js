@@ -182,6 +182,8 @@ function calcIndicators(candles, config = {}) {
     volSMA:   calcVolumeSMA(volumes, 20),  // Selalu hitung volume SMA
     closes,
     volumes,
+    highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
+    lows,
   };
 
   // EMA trend filter (EMA50 untuk Day Trading, EMA200 untuk Swing)
