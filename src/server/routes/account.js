@@ -1,7 +1,7 @@
 const { asyncHandler } = require("../../middleware/errorHandler");
 const { PrismaClient } = require("@prisma/client");
 const BitgetClient = require("../../infrastructure/exchange/BitgetClient");
-const { encrypt, decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
+const { encrypt, decrypt, isEncrypted, fingerprint } = require("../../infrastructure/security/crypto");
 const prisma = new PrismaClient();
 
 // Decrypt kredensial tersimpan. Toleran terhadap data lama yang masih plaintext
@@ -194,15 +194,43 @@ module.exports = function createAccountRouter() {
         });
       }
 
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          apiKey: encrypt(apiKey),
-          apiSecret: encrypt(apiSecret),
-          apiPassphrase: apiPassphrase ? encrypt(apiPassphrase) : null,
-          exchangeType,
-        },
+      // Cegah exchange account yang sama dipakai >1 user (hindari konflik bot).
+      const apiKeyHash = fingerprint(apiKey);
+      const existing = await prisma.user.findUnique({
+        where:  { apiKeyHash },
+        select: { id: true },
       });
+      if (existing && existing.id !== userId) {
+        return res.status(409).json({
+          ok: false,
+          statusCode: 409,
+          message: "API key exchange ini sudah terhubung ke akun lain. Satu exchange account hanya boleh dipakai satu user.",
+        });
+      }
+
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            apiKey: encrypt(apiKey),
+            apiSecret: encrypt(apiSecret),
+            apiPassphrase: apiPassphrase ? encrypt(apiPassphrase) : null,
+            apiKeyHash,
+            exchangeType,
+          },
+        });
+      } catch (e) {
+        // Jaring pengaman race condition: dua request paralel lolos cek findUnique
+        // di atas, lalu unique constraint apiKeyHash menolak yang kedua (P2002).
+        if (e.code === "P2002") {
+          return res.status(409).json({
+            ok: false,
+            statusCode: 409,
+            message: "API key exchange ini sudah terhubung ke akun lain. Satu exchange account hanya boleh dipakai satu user.",
+          });
+        }
+        throw e;
+      }
 
       balanceCache.delete(userId); // kredensial berubah → buang cache lama
 
@@ -230,6 +258,7 @@ module.exports = function createAccountRouter() {
           apiKey: null,
           apiSecret: null,
           apiPassphrase: null,
+          apiKeyHash: null,
           exchangeType: null,
         },
       });

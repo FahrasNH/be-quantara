@@ -18,7 +18,10 @@ model User {
   apiSecret    String?
   apiPassphrase String?
   exchangeType  String?  @default("bitget")
-  
+  // HMAC fingerprint of apiKey — unique so the same exchange account
+  // cannot be connected by two different users (prevents bot conflicts).
+  apiKeyHash    String?  @unique
+
   bots      Bot[]
   strategies UserStrategy[]
   auditLogs AuditLog[]

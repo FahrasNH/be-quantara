@@ -90,4 +90,25 @@ function isEncrypted(value) {
   return parts.length === 3 && parts.every(p => /^[0-9a-f]+$/i.test(p));
 }
 
-module.exports = { encrypt, decrypt, isEncrypted };
+/**
+ * Fingerprint deterministik dari sebuah secret (mis. apiKey exchange).
+ *
+ * encrypt() menghasilkan ciphertext berbeda tiap panggilan (IV random), jadi
+ * tidak bisa dipakai untuk unique constraint. fingerprint() memakai HMAC-SHA256
+ * dengan master key sehingga input sama → output sama → bisa di-index unik untuk
+ * mendeteksi apakah exchange API key yang sama sudah dipakai user lain.
+ *
+ * Memakai HMAC (bukan SHA polos) agar tidak rentan rainbow-table jika DB bocor.
+ *
+ * @param {string} plaintext
+ * @returns {string|null} hex digest, atau null kalau input kosong
+ */
+function fingerprint(plaintext) {
+  if (plaintext == null || plaintext === "") return null;
+  return crypto
+    .createHmac("sha256", getKey())
+    .update(String(plaintext))
+    .digest("hex");
+}
+
+module.exports = { encrypt, decrypt, isEncrypted, fingerprint };
