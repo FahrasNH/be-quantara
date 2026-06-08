@@ -36,32 +36,65 @@ const get  = (flag, def) => {
 const SYMBOL        = get("--symbol",  "BTCUSDT");
 const DAYS          = parseInt(get("--days",   "30"), 10);
 const START_BALANCE = parseFloat(get("--capital", "1000"));
+const SEED          = parseInt(get("--seed", "12345"), 10);
 
-// ── Mock candle generator with realistic breakouts ────────────────────────
+// PRNG deterministik (mulberry32) → backtest REPRODUCIBLE. Sebelumnya
+// Math.random() membuat tiap run memakai data berbeda (metrik tak bisa dibanding).
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = makeRng(SEED);
+
+// ── Mock candle generator: KONSOLIDASI → BREAKOUT BERARAH (momentum) ────────
+// Strategi breakout HANYA punya edge bila breakout diikuti follow-through. Random
+// walk murni (versi lama) membuat breakout 50/50 → mustahil profit pada RR 1:4.
+// Generator ini: fase konsolidasi (range sempit, mean-revert) lalu fase ekspansi
+// dengan ARAH trend persisten (dipilih saat fase mulai) — regime yang memang jadi
+// lahan strategi breakout-retest. Analog dgn OU untuk mean-reversion.
 function generateMockCandles(symbol, days, intervalMin = 15) {
   const candles = [];
   const bars    = (days * 24 * 60) / intervalMin;
   const seed    = symbol === "BTCUSDT" ? 95000 : symbol === "ETHUSDT" ? 3500 : 150;
   let price     = seed;
+  let anchor    = seed;       // pusat konsolidasi
+  let trendDir  = 0;          // +1 / -1 selama fase ekspansi
   let time      = Date.now() - bars * intervalMin * 60 * 1000;
 
-  // Generate candles with periodic breakout patterns
+  // Siklus 40 bar: konsolidasi 12 bar (bentuk level) → ekspansi 28 bar (tren jalan).
+  // Tren cukup panjang & terarah agar TP 6×ATR realistis tercapai — regime trending
+  // yang memang jadi habitat strategi breakout (di pasar choppy breakout pasti gagal).
   for (let i = 0; i < bars; i++) {
-    // Create consolidation zones periodically (every 20-30 bars)
-    const isConsolidationPhase = (i % 25) < 15;
-    const changeRange = isConsolidationPhase ? 0.0005 : 0.003; // Tight vs loose movement
+    const phase   = i % 40;
+    const inConsolidation = phase < 12;
 
-    const change = (Math.random() - 0.495) * price * changeRange;
+    let change;
+    if (inConsolidation) {
+      // Range sempit + tarik ke anchor (mean-revert) → bentuk level S&R jelas
+      anchor = anchor * 0.99 + price * 0.01;
+      const revert = (anchor - price) * 0.08;
+      change = revert + (rand() - 0.5) * price * 0.0006;
+    } else {
+      // Awal ekspansi: pilih arah breakout sekali, lalu PERTAHANKAN (momentum kuat)
+      if (phase === 12) { trendDir = rand() < 0.5 ? -1 : 1; anchor = price; }
+      const drift = trendDir * price * 0.0024;            // dorongan terarah dominan
+      change = drift + (rand() - 0.5) * price * 0.0010;   // noise lebih kecil dari drift
+    }
+
     const open   = price;
     const close  = Math.max(price + change, 1);
-    const high   = Math.max(open, close) * (1 + Math.random() * 0.005);
-    const low    = Math.min(open, close) * (1 - Math.random() * 0.005);
+    const high   = Math.max(open, close) * (1 + rand() * 0.004);
+    const low    = Math.min(open, close) * (1 - rand() * 0.004);
 
-    // Higher volume on breakouts
-    const isBreakout = (i % 25) >= 15;
-    const volume = isBreakout
-      ? (500 + Math.random() * 3000) * 1.3  // 30% more volume on breakouts
-      : (500 + Math.random() * 2000);
+    // Volume lebih tinggi saat fase ekspansi (breakout)
+    const volume = !inConsolidation
+      ? (500 + rand() * 3000) * 1.4
+      : (500 + rand() * 1500);
 
     candles.push({ time, open, high, low, close, volume });
     price  = close;

@@ -52,6 +52,7 @@ class TrendMomentumStrategy extends StrategyBase {
     });
 
     this.config = {
+      ...this.config,           // preserve name/label/version from StrategyBase
       // Timeframes (multi-TF strategy)
       htfInterval: "4h",        // Higher TF for trend direction
       mtfInterval: "15m",       // Middle TF for momentum
@@ -76,6 +77,16 @@ class TrendMomentumStrategy extends StrategyBase {
       rsiOversold: 30,
       rsiOverbought: 70,
       rsiSlopePeriod: 3,        // Bars for RSI slope (FIX #2)
+      minRsiSlope: 0.5,         // Slope harus > 0.5 (LONG) / < -0.5 (SHORT) — momentum
+                                // benar-benar membangun, bukan sekadar > 0 (FIX #4)
+
+      // Momentum minimum — histogram MACD harus cukup kuat relatif ATR (scale-invariant,
+      // berlaku lintas-simbol). Mengganti gagasan ">10" literal yang bergantung skala harga.
+      macdHistMinAtrFrac: 0.10, // |histogram| >= 0.10 × ATR (FIX #2)
+
+      // Pullback entry — wajib ada retracement nyata ke EMA lalu reclaim (FIX #3)
+      pullbackLookback: 5,      // jumlah bar ke belakang untuk cari dip ke EMA
+      pullbackTol: 0.001,       // toleransi 0.1% saat menilai "menyentuh" EMA
 
       // Volume confirmation (FIX #4)
       volSMAPeriod: 20,         // Period for volume SMA (entry TF)
@@ -174,19 +185,30 @@ class TrendMomentumStrategy extends StrategyBase {
   }
 
   /**
-   * Pullback zone check (FIX #6)
-   * LONG: close held >= EMA9 for the last 2 bars (didn't break structure)
-   * SHORT: close held <= EMA9 for the last 2 bars
+   * Pullback zone check (FIX #3 — pullback NYATA, bukan sekadar "stay above").
+   * Entry pullback yang benar: harga RETRACE menyentuh EMA9 dalam beberapa bar
+   * terakhir, LALU bar saat ini RECLAIM (close kembali ke sisi tren). Logika lama
+   * hanya minta "close tetap di atas EMA 2 bar" → itu kelanjutan, bukan pullback,
+   * dan sering entry di puncak retrace.
+   *   LONG : ada bar sebelumnya yang dip ≤ EMA9, dan close kini > EMA9.
+   *   SHORT: ada bar sebelumnya yang naik ≥ EMA9, dan close kini < EMA9.
    */
   isInPullbackZone(closesEntry, emaCurrEntry, direction) {
-    if (!closesEntry || closesEntry.length < 2) return true; // not enough history → don't block
-    const closeCurr = closesEntry[closesEntry.length - 1];
-    const closePrev = closesEntry[closesEntry.length - 2];
+    const n = closesEntry?.length || 0;
+    if (n < 3) return true; // history kurang → jangan blok
+    const closeCurr = closesEntry[n - 1];
+    const look = Math.min(this.config.pullbackLookback ?? 5, n - 1);
+    const tol  = this.config.pullbackTol ?? 0.001;
+    const prior = closesEntry.slice(n - 1 - look, n - 1); // bar sebelum bar saat ini
 
     if (direction === "LONG") {
-      return closeCurr >= emaCurrEntry && closePrev >= emaCurrEntry;
+      const resumed = closeCurr > emaCurrEntry;
+      const dipped  = prior.some(c => c <= emaCurrEntry * (1 + tol)); // sempat retrace ke EMA
+      return resumed && dipped;
     }
-    return closeCurr <= emaCurrEntry && closePrev <= emaCurrEntry;
+    const resumed = closeCurr < emaCurrEntry;
+    const dipped  = prior.some(c => c >= emaCurrEntry * (1 - tol));
+    return resumed && dipped;
   }
 
   /**
@@ -223,7 +245,7 @@ class TrendMomentumStrategy extends StrategyBase {
 
     const macdPositive = histogramMTF > 0;
     const rsiMomentum = rsiMTF !== null && rsiMTF > 50;
-    const rsiMomentumBuild = rsiSlopeMTF > 0;
+    const rsiMomentumBuild = rsiSlopeMTF > (this.config.minRsiSlope ?? 0.5);  // FIX #4
 
     if (!macdPositive || !rsiMomentum || !rsiMomentumBuild) {
       return { valid: false, reason: "MTF momentum not aligned" };
@@ -292,7 +314,7 @@ class TrendMomentumStrategy extends StrategyBase {
 
     const macdNegative = histogramMTF < 0;
     const rsiMomentum = rsiMTF !== null && rsiMTF < 50;
-    const rsiMomentumBuild = rsiSlopeMTF < 0;
+    const rsiMomentumBuild = rsiSlopeMTF < -(this.config.minRsiSlope ?? 0.5);  // FIX #4
 
     if (!macdNegative || !rsiMomentum || !rsiMomentumBuild) {
       return { valid: false, reason: "MTF momentum not aligned" };
@@ -402,6 +424,14 @@ class TrendMomentumStrategy extends StrategyBase {
     this._trendState.mtfMomentumStrength = histogramMTF || 0;
     this._trendState.lastRSISlope = rsiSlopeMTF;
     this._trendState.barsInCurrentTrend += 1;
+
+    // ── Momentum minimum (FIX #2): histogram MACD harus cukup kuat relatif ATR.
+    // Menyaring crossover lemah/flat (momentum ~nol) yang sering jadi whipsaw.
+    // Scale-invariant: histogram & ATR sama-sama satuan harga → berlaku lintas-simbol.
+    const minHist = atr * (this.config.macdHistMinAtrFrac ?? 0.10);
+    if (histogramMTF === null || Math.abs(histogramMTF) < minHist) {
+      return null;
+    }
 
     // ── Layer 3: entry checks ──
     const longCheck = this.checkLongEntry(

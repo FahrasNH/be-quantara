@@ -7,9 +7,9 @@
  * - Enter on RETEST (lower risk than breakout spike)
  * - Excellent risk-to-reward ratio (1:4.0+)
  *
- * Best for: FOUNDRY tier (1-2Jt capital, aggressive growth)
+ * Best for: VAULT tier (Rp30M+ capital, exclusive 4th strategy)
  * Win Rate: 51-56%
- * Annual Return: 350-420% (FOUNDRY target)
+ * Annual Return: contribution to VAULT portfolio
  * RR Ratio: 1:4.0
  */
 
@@ -30,12 +30,13 @@ class BreakoutRetestStrategy extends StrategyBase {
     });
 
     this.config = {
+      ...this.config,           // preserve name/label/version from StrategyBase
       // Level detection (4h timeframe)
       lookbackBars: 20,        // High/low of last 20 candles = S&R level
-      volumeMultiplier: 1.1,   // Breakout needs 1.1x volume
+      volumeMultiplier: 1.3,   // Breakout butuh 1.3x volume (Fix #2: 1.1 terlalu longgar)
       retestWindow: 5,         // Retest must occur within N bars of breakout, else level is stale
 
-      // Risk management (FOUNDRY tier)
+      // Risk management (VAULT tier)
       // SL calibration: raised from 0.5 → 1.5×ATR after diagnostic proved 0.5×ATR
       // sits inside normal bar noise (avg SL 268 < avg H-L range 535 on 15m BTC).
       // At 0.5×ATR, ~50% of bars breach SL on the next wick → 0% win rate.
@@ -48,7 +49,7 @@ class BreakoutRetestStrategy extends StrategyBase {
       // Position management
       maxTradesPerDay: 7,
       minCapital: 100,         // Minimum $100 to trade
-      leverage: 2,             // Allow 2x leverage for FOUNDRY
+      leverage: 1,             // Conservative leverage for VAULT
     };
 
     // Track breakout state for retest detection
@@ -61,15 +62,21 @@ class BreakoutRetestStrategy extends StrategyBase {
   }
 
   /**
-   * Detect support/resistance levels
-   * Returns { resistance, support, midpoint }
+   * Detect support/resistance levels.
+   * S&R sejati = high tertinggi / low terendah pada lookback (BUKAN close), karena
+   * level diuji oleh wick, bukan harga penutupan. (Fix #1)
+   * Backward-compatible: bila `lows` tak diberikan, fallback pakai `highs` sbg closes.
+   * Returns { resistance, support, midpoint, range }
    */
-  detectLevels(closes) {
-    if (closes.length < this.config.lookbackBars) return null;
+  detectLevels(highs, lows = null) {
+    const hi = highs || [];
+    const lo = lows || highs || [];
+    if (hi.length < this.config.lookbackBars || lo.length < this.config.lookbackBars) return null;
 
-    const lookback = closes.slice(-this.config.lookbackBars);
-    const resistance = Math.max(...lookback);  // Highest close
-    const support = Math.min(...lookback);     // Lowest close
+    const hiLB = hi.slice(-this.config.lookbackBars);
+    const loLB = lo.slice(-this.config.lookbackBars);
+    const resistance = Math.max(...hiLB);  // Highest HIGH
+    const support = Math.min(...loLB);     // Lowest LOW
     const midpoint = (resistance + support) / 2;
 
     return { resistance, support, midpoint, range: resistance - support };
@@ -125,36 +132,44 @@ class BreakoutRetestStrategy extends StrategyBase {
     return { valid: false };
   }
 
+  // Toleransi "sentuhan" retest: bar harus kembali ke ±RETEST_TOUCH_TOL dari level.
+  static get RETEST_TOUCH_TOL() { return 0.003; } // 0.3%
+
   /**
-   * Check for RETEST entry (safer than breakout spike)
-   * After breakout, wait for price to pull back to breakout level, then close back beyond it
+   * Check for RETEST entry (lebih aman dari mengejar spike breakout).
+   * Retest VALID hanya jika bar benar-benar MENYENTUH level lalu DITOLAK:
+   *  - LONG : low bar menyentuh zona level (wick turun ke ≈level), close di atas level.
+   *  - SHORT: high bar menyentuh zona level (wick naik ke ≈level), close di bawah level.
+   * Sebelumnya hanya cek "prev close di sisi lain" → lolos noise tanpa benar-benar
+   * menguji level (Fix #3). lows/highs opsional → fallback ke closes (kompatibel).
    */
-  checkRetestEntry(closes, direction, breakoutLevel) {
-    const closeCurr = closes[closes.length - 1];
-    const closePrev = closes[closes.length - 2];
+  checkRetestEntry(closes, direction, breakoutLevel, lows = null, highs = null) {
+    const n         = closes.length;
+    const closeCurr = closes[n - 1];
+    const lowCurr   = (lows  && lows[n - 1]  != null) ? lows[n - 1]  : closeCurr;
+    const highCurr  = (highs && highs[n - 1] != null) ? highs[n - 1] : closeCurr;
+    const tol       = BreakoutRetestStrategy.RETEST_TOUCH_TOL;
 
     if (direction === "LONG") {
-      // LONG retest: Price pulls back to/below level, then closes above
-      const pulledBack = closePrev <= breakoutLevel;
-      const closedAbove = closeCurr > breakoutLevel;
-
-      if (pulledBack && closedAbove) {
+      // Wick turun menyentuh level (≤ level×(1+tol)) lalu close di atas level
+      const touchedLevel = lowCurr <= breakoutLevel * (1 + tol);
+      const closedAbove  = closeCurr > breakoutLevel;
+      if (touchedLevel && closedAbove) {
         return {
           valid: true,
           entry: closeCurr,
-          reason: `Retest entry: pulled back to ${breakoutLevel.toFixed(2)}, closed above at ${closeCurr.toFixed(2)}`,
+          reason: `Retest LONG: low ${lowCurr.toFixed(2)} menyentuh ${breakoutLevel.toFixed(2)}, close di atas ${closeCurr.toFixed(2)}`,
         };
       }
     } else if (direction === "SHORT") {
-      // SHORT retest: Price pulls back to/above level, then closes below
-      const pulledBack = closePrev >= breakoutLevel;
-      const closedBelow = closeCurr < breakoutLevel;
-
-      if (pulledBack && closedBelow) {
+      // Wick naik menyentuh level (≥ level×(1−tol)) lalu close di bawah level
+      const touchedLevel = highCurr >= breakoutLevel * (1 - tol);
+      const closedBelow  = closeCurr < breakoutLevel;
+      if (touchedLevel && closedBelow) {
         return {
           valid: true,
           entry: closeCurr,
-          reason: `Retest entry: pulled back to ${breakoutLevel.toFixed(2)}, closed below at ${closeCurr.toFixed(2)}`,
+          reason: `Retest SHORT: high ${highCurr.toFixed(2)} menyentuh ${breakoutLevel.toFixed(2)}, close di bawah ${closeCurr.toFixed(2)}`,
         };
       }
     }
@@ -163,7 +178,7 @@ class BreakoutRetestStrategy extends StrategyBase {
   }
 
   /**
-   * Main signal detection (FOUNDRY tier)
+   * Main signal detection (VAULT tier)
    * 1. Detect levels (20-bar high/low)
    * 2. Detect breakout (with volume)
    * 3. Enter on retest (not on breakout spike)
@@ -176,14 +191,18 @@ class BreakoutRetestStrategy extends StrategyBase {
     // Without this, backtest evaluates the final bar's state on every iteration.
     const closes = (indicators.closes || []).slice(0, lastIdx + 1);
     const volumes = (indicators.volumes || []).slice(0, lastIdx + 1);
+    const highs = (indicators.highs || []).slice(0, lastIdx + 1);
+    const lows  = (indicators.lows  || []).slice(0, lastIdx + 1);
     const volSMA = indicators.volSMA?.[lastIdx] || 0;
     const atr = indicators.atr?.[lastIdx];
 
     if (!atr || closes.length < this.config.lookbackBars) return null;
 
-    // Step 1: Detect S&R levels (use closes BEFORE current bar to avoid including breakout itself)
-    const closesBeforeCurrent = closes.slice(0, -1);
-    const levels = this.detectLevels(closesBeforeCurrent);
+    // Step 1: Detect S&R levels dari HIGH/LOW sebelum bar saat ini (jangan ikutkan
+    // bar breakout itu sendiri). Fallback ke closes bila high/low tak tersedia. (Fix #1)
+    const highsBefore = (highs.length ? highs : closes).slice(0, -1);
+    const lowsBefore  = (lows.length  ? lows  : closes).slice(0, -1);
+    const levels = this.detectLevels(highsBefore, lowsBefore);
     if (!levels) return null;
 
     const { resistance, support } = levels;
@@ -225,7 +244,9 @@ class BreakoutRetestStrategy extends StrategyBase {
       const retestCheck = this.checkRetestEntry(
         closes,
         this._breakoutState.direction,
-        this._breakoutState.breakoutLevel
+        this._breakoutState.breakoutLevel,
+        lows,
+        highs
       );
 
       if (retestCheck.valid) {
@@ -240,7 +261,7 @@ class BreakoutRetestStrategy extends StrategyBase {
 
   /**
    * Calculate SL/TP based on ATR
-   * For FOUNDRY: 0.5x ATR SL, 4x ATR TP = 1:4 RR
+   * For VAULT: 1.5x ATR SL, 6x ATR TP = 1:4 RR
    */
   calculateRiskConfig(entryPrice, atr, signal) {
     const slDist = atr * this.config.slMultiplier;  // 0.5x ATR

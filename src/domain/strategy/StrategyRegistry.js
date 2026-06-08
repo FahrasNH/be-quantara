@@ -7,24 +7,24 @@
  * ─────────────────────────────────────────────
  */
 
-const AdaptiveFusionStrategy = require("./implementations/AdaptiveFusionStrategy");
+const AdaptiveFusionStrategy  = require("./implementations/AdaptiveFusionStrategy");
+const TrendMomentumStrategy   = require("./implementations/TrendMomentumStrategy");
+const MeanReversionStrategy   = require("./implementations/MeanReversionStrategy");
+const BreakoutRetestStrategy  = require("./implementations/BreakoutRetestStrategy");
 
 class StrategyRegistry {
   constructor() {
     this.strategies = new Map();
     this.defaultKey = null;
 
-    // Register built-in strategies
     this._registerBuiltInStrategies();
   }
 
-  /**
-   * Register built-in strategies
-   */
   _registerBuiltInStrategies() {
-    // Register Adaptive Fusion as primary strategy
-    const afs = new AdaptiveFusionStrategy();
-    this.register("ADAPTIVE_FUSION", afs);
+    this.register("ADAPTIVE_FUSION",  new AdaptiveFusionStrategy());
+    this.register("TREND_MOMENTUM",   new TrendMomentumStrategy());
+    this.register("MEAN_REVERSION",   new MeanReversionStrategy());
+    this.register("BREAKOUT_RETEST",  new BreakoutRetestStrategy());
     this.defaultKey = "ADAPTIVE_FUSION";
   }
 

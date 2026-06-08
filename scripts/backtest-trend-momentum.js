@@ -25,6 +25,20 @@ const get  = (flag, def) => {
 const SYMBOL        = get("--symbol",  "BTCUSDT");
 const DAYS          = parseInt(get("--days",   "60"), 10);
 const START_BALANCE = parseFloat(get("--capital", "10000000"));
+const SEED          = parseInt(get("--seed", "12345"), 10);
+
+// PRNG deterministik (mulberry32) → backtest REPRODUCIBLE (sebelumnya Math.random
+// membuat tiap run memakai data berbeda; metrik tak bisa dibandingkan antar-run).
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = makeRng(SEED);
 
 // ── Mock candle generator with REALISTIC alternating regimes ──────────────
 // Cycles through bull-trend → chop → bear-trend → chop so the strategy faces
@@ -45,29 +59,29 @@ function generateMockCandles(symbol, days, intervalMin = 5) {
     const regime = REGIMES[Math.floor(i / REGIME_LEN) % REGIMES.length];
 
     let drift;        // directional bias
-    let noise = (Math.random() - 0.5) * price * 0.0012;  // base noise
+    let noise = (rand() - 0.5) * price * 0.0012;  // base noise
 
     if (regime === "BULL") {
       drift = price * 0.0004;                              // upward bias
       // Occasional pullback/whipsaw (20% of bars push against trend)
-      if (Math.random() < 0.2) drift = -price * 0.0006;
+      if (rand() < 0.2) drift = -price * 0.0006;
     } else if (regime === "BEAR") {
       drift = -price * 0.0004;                             // downward bias
-      if (Math.random() < 0.2) drift = price * 0.0006;     // bear rally trap
+      if (rand() < 0.2) drift = price * 0.0006;     // bear rally trap
     } else {
       drift = 0;                                           // chop: no bias
-      noise = (Math.random() - 0.5) * price * 0.0008;      // tighter range
+      noise = (rand() - 0.5) * price * 0.0008;      // tighter range
     }
 
     const change = drift + noise;
     const open   = price;
     const close  = Math.max(price + change, 1);
-    const high   = Math.max(open, close) * (1 + Math.random() * 0.0025);
-    const low    = Math.min(open, close) * (1 - Math.random() * 0.0025);
+    const high   = Math.max(open, close) * (1 + rand() * 0.0025);
+    const low    = Math.min(open, close) * (1 - rand() * 0.0025);
 
     const volume = regime === "CHOP"
-      ? (800 + Math.random() * 2000)
-      : (1000 + Math.random() * 3000) * 1.2;
+      ? (800 + rand() * 2000)
+      : (1000 + rand() * 3000) * 1.2;
 
     candles.push({ time, open, high, low, close, volume });
     price  = close;

@@ -116,21 +116,27 @@ describe("BreakoutRetestStrategy", () => {
 
   describe("checkRetestEntry()", () => {
     it("should detect LONG retest entry", () => {
-      const closes = [100, 105, 110, 109, 108, 105, 106];  // Pull back to 105, close above
+      // Retest valid: low bar terakhir MENYENTUH level 105 (wick), close di atas (106).
+      const closes = [100, 105, 110, 109, 108, 105, 106];
+      const lows   = [ 99, 104, 108, 107, 106, 104, 105];  // wick turun menyentuh 105
+      const highs  = [101, 106, 111, 110, 109, 106, 107];
       const direction = "LONG";
       const breakoutLevel = 105;
 
-      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel);
+      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs);
 
       assert.strictEqual(result.valid, true, "Should detect LONG retest");
     });
 
     it("should detect SHORT retest entry", () => {
-      const closes = [100, 95, 90, 91, 92, 95, 94];  // Pull back to 95, close below
+      // Retest valid: high bar terakhir MENYENTUH level 95 (wick), close di bawah (94).
+      const closes = [100, 95, 90, 91, 92, 95, 94];
+      const highs  = [101, 96, 91, 92, 93, 96, 95];  // wick naik menyentuh 95
+      const lows   = [ 99, 94, 89, 90, 91, 94, 93];
       const direction = "SHORT";
       const breakoutLevel = 95;
 
-      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel);
+      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs);
 
       assert.strictEqual(result.valid, true, "Should detect SHORT retest");
     });
@@ -227,12 +233,12 @@ describe("BreakoutRetestStrategy", () => {
 
   // ── Configuration Tests ────────────────────────────────────────────
 
-  describe("Configuration (FOUNDRY tier)", () => {
-    it("should have correct FOUNDRY tier settings", () => {
+  describe("Configuration (VAULT tier)", () => {
+    it("should have correct VAULT tier settings", () => {
       assert.strictEqual(strategy.config.riskPerTrade, 0.03, "Risk should be 3%");
       assert.strictEqual(strategy.config.slMultiplier, 1.5, "SL should be 1.5x ATR (above noise floor)");
       assert.strictEqual(strategy.config.tpMultiplier, 6.0, "TP should be 6.0x ATR → RR 1:4");
-      assert.strictEqual(strategy.config.leverage, 2, "Leverage should be 2x");
+      assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
     it("should allow config updates", () => {

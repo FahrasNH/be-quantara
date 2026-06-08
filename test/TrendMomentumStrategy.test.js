@@ -456,13 +456,15 @@ describe("TrendMomentumStrategy", () => {
   // ──────────────────────────────────────────────────────────
 
   describe("isInPullbackZone", () => {
-    test("LONG valid: last 2 closes held above EMA9", () => {
+    test("LONG valid: dip ke EMA9 lalu reclaim (pullback nyata)", () => {
+      // prior berisi 42000 (di bawah EMA9 42420 = dip), close kini 42460 (reclaim)
       const closes = [42000, 42450, 42460];
       expect(strategy.isInPullbackZone(closes, 42420, "LONG")).toBe(true);
     });
 
-    test("LONG invalid: previous close broke below EMA9", () => {
-      const closes = [42000, 42400, 42460];  // prev 42400 < EMA9 42420
+    test("LONG invalid: tanpa pullback (close terus di atas EMA9 = kelanjutan)", () => {
+      // tak ada bar yang dip ke EMA9 → bukan pullback entry (FIX #3)
+      const closes = [42500, 42550, 42600];  // semua > EMA9 42420
       expect(strategy.isInPullbackZone(closes, 42420, "LONG")).toBe(false);
     });
 

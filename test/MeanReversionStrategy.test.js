@@ -94,8 +94,9 @@ describe("MeanReversionStrategy", () => {
     });
 
     test("LONG entry rejected: RSI not oversold enough", () => {
-      const closes = [41500, 41600, 41700, 41800, 41900];
-      const rsi = [null, null, null, null, 40];  // Not oversold
+      // Harga di zona valid (≤41500) agar gate RSI yang menolak, bukan zona.
+      const closes = [41000, 41100, 41200, 41250, 41300];
+      const rsi = [null, null, null, null, 40];  // Not oversold (>30)
       const volumes = [1500, 1600, 1700, 1800, 1900];
       const bbLevels = { lower: 41000, middle: 42000, upper: 43000, bandwidth: 1000 };
 
@@ -108,8 +109,8 @@ describe("MeanReversionStrategy", () => {
     });
 
     test("LONG entry rejected: RSI too extreme (panic)", () => {
-      const closes = [41500, 41600, 41700, 41800, 41900];
-      const rsi = [null, null, null, null, 10];  // Too extreme
+      const closes = [41000, 41100, 41200, 41250, 41300];  // dalam zona
+      const rsi = [null, null, null, null, 10];  // Too extreme (<15)
       const volumes = [1500, 1600, 1700, 1800, 1900];
       const bbLevels = { lower: 41000, middle: 42000, upper: 43000, bandwidth: 1000 };
 
@@ -149,8 +150,9 @@ describe("MeanReversionStrategy", () => {
       expect(result.reason).toContain("Volume");
     });
 
-    test("LONG entry rejected: price above middle (reversal done)", () => {
-      const closes = [41000, 41100, 41200, 41350, 42100];  // Above middle
+    test("LONG entry rejected: price too far from band (weak edge)", () => {
+      // Entry jauh dari band bawah (di atas zona ≤41500) → ditolak (TUNING #2).
+      const closes = [41000, 41100, 41200, 41350, 42100];  // di atas middle, jauh dari band
       const rsi = [null, null, null, null, 22];
       const volumes = [1500, 1600, 1700, 1800, 1900];
       const bbLevels = { lower: 41000, middle: 42000, upper: 43000, bandwidth: 1000 };
@@ -160,7 +162,7 @@ describe("MeanReversionStrategy", () => {
       );
 
       expect(result.valid).toBe(false);
-      expect(result.reason).toContain("already at");
+      expect(result.reason).toContain("terlalu jauh");
     });
 
     test("LONG entry rejected: high panic volume", () => {
@@ -222,8 +224,9 @@ describe("MeanReversionStrategy", () => {
     });
 
     test("SHORT entry rejected: RSI not overbought enough", () => {
-      const closes = [42500, 42400, 42300, 42200, 42100];
-      const rsi = [null, null, null, null, 60];  // Not overbought
+      // Harga di zona valid (≥42500) agar gate RSI yang menolak, bukan zona.
+      const closes = [43000, 42900, 42800, 42750, 42700];
+      const rsi = [null, null, null, null, 60];  // Not overbought (<70)
       const volumes = [1500, 1600, 1700, 1800, 1900];
       const bbLevels = { lower: 41000, middle: 42000, upper: 43000, bandwidth: 1000 };
 
@@ -236,8 +239,8 @@ describe("MeanReversionStrategy", () => {
     });
 
     test("SHORT entry rejected: RSI too extreme (euphoria)", () => {
-      const closes = [42500, 42400, 42300, 42200, 42100];
-      const rsi = [null, null, null, null, 90];  // Too extreme
+      const closes = [43000, 42900, 42800, 42750, 42700];  // dalam zona
+      const rsi = [null, null, null, null, 90];  // Too extreme (>85)
       const volumes = [1500, 1600, 1700, 1800, 1900];
       const bbLevels = { lower: 41000, middle: 42000, upper: 43000, bandwidth: 1000 };
 
@@ -277,8 +280,9 @@ describe("MeanReversionStrategy", () => {
       expect(result.reason).toContain("Volume");
     });
 
-    test("SHORT entry rejected: price below middle (reversal done)", () => {
-      const closes = [43000, 42900, 42800, 42650, 41900];  // Below middle
+    test("SHORT entry rejected: price too far from band (weak edge)", () => {
+      // Entry jauh dari band atas (di bawah zona ≥42500) → ditolak (TUNING #2).
+      const closes = [43000, 42900, 42800, 42650, 41900];  // di bawah middle, jauh dari band
       const rsi = [null, null, null, null, 78];
       const volumes = [1500, 1600, 1700, 1800, 1900];
       const bbLevels = { lower: 41000, middle: 42000, upper: 43000, bandwidth: 1000 };
@@ -288,7 +292,7 @@ describe("MeanReversionStrategy", () => {
       );
 
       expect(result.valid).toBe(false);
-      expect(result.reason).toContain("already at");
+      expect(result.reason).toContain("terlalu jauh");
     });
 
     test("SHORT entry rejected: high euphoria volume", () => {
