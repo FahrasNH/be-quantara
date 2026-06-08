@@ -11,6 +11,9 @@ const StrategyBase = require("./base/StrategyBase");
 
 // Implementations
 const AdaptiveFusionStrategy = require("./implementations/AdaptiveFusionStrategy");
+const TrendMomentumStrategy  = require("./implementations/TrendMomentumStrategy");
+const MeanReversionStrategy  = require("./implementations/MeanReversionStrategy");
+const BreakoutRetestStrategy = require("./implementations/BreakoutRetestStrategy");
 
 // Registry & Factory
 const { StrategyRegistry, strategyRegistry } = require("./StrategyRegistry");
@@ -19,6 +22,9 @@ module.exports = {
   // Classes
   StrategyBase,
   AdaptiveFusionStrategy,
+  TrendMomentumStrategy,
+  MeanReversionStrategy,
+  BreakoutRetestStrategy,
   StrategyRegistry,
 
   // Singleton instance

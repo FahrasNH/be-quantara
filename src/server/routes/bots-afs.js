@@ -11,6 +11,7 @@ module.exports = function createBotsRouter(helpers) {
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs } = require("../../infrastructure/db/botLogRepository");
+  const { assertStrategyAllowed, getStrategyEntitlements } = require("../../services/entitlement");
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
@@ -141,6 +142,13 @@ module.exports = function createBotsRouter(helpers) {
       const userId = req.userId;
       const { symbol } = req.params;
       const { strategyKey = "ADAPTIVE_FUSION", capital, dryRun } = req.body;
+
+      // Entitlement check — block strategy not allowed by user's tier
+      try {
+        await assertStrategyAllowed(userId, strategyKey);
+      } catch (e) {
+        return res.status(e.status).json(e.body);
+      }
 
       // Check if bot exists for this user
       let bot = await prisma.bot.findUnique({
@@ -300,6 +308,13 @@ module.exports = function createBotsRouter(helpers) {
           statusCode: 400,
           message: "strategyKey required",
         });
+      }
+
+      // Entitlement check
+      try {
+        await assertStrategyAllowed(userId, strategyKey);
+      } catch (e) {
+        return res.status(e.status).json(e.body);
       }
 
       const bot = await prisma.bot.findUnique({
@@ -503,22 +518,39 @@ module.exports = function createBotsRouter(helpers) {
 
   /**
    * GET /api/v1/bots/strategies/available
-   * List available strategies
+   * List strategies filtered by user's tier.
+   * Returns allowed strategies + locked list with required tier.
    */
-  router.get("/strategies/available", (req, res) => {
-    const { listStrategies } = require("../../domain/strategies");
-    const strategies = listStrategies();
+  router.get("/strategies/available", asyncHandler(async (req, res) => {
+    const { strategyRegistry } = require("../../domain/strategy");
+    const { listTiers } = require("../../domain/tierConfig");
+
+    const { tier, allowed, locked } = await getStrategyEntitlements(req.userId);
+
+    const toStrategyInfo = (key) => {
+      const s = strategyRegistry.get(key);
+      if (!s) return { key, label: key, description: "" };
+      return {
+        key,
+        label:       s.config.label,
+        description: s.config.description,
+        version:     s.config.version,
+      };
+    };
 
     res.json({
       ok: true,
-      strategies: strategies.map(s => ({
-        value: s.key,
-        label: s.label,
-        description: s.description,
-        signalType: s.signalType,
+      tier,
+      strategies: allowed.map(toStrategyInfo),
+      locked: locked.map(({ key, requiredTier }) => ({
+        ...toStrategyInfo(key),
+        requiredTier,
+      })),
+      tiers: listTiers().map(({ key, label, price, strategies }) => ({
+        key, label, price, strategies,
       })),
     });
-  });
+  }));
 
   /**
    * GET /api/v1/bots/strategies/info/:strategyKey

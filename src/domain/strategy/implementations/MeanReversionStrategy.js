@@ -33,6 +33,7 @@ class MeanReversionStrategy extends StrategyBase {
     });
 
     this.config = {
+      ...this.config,           // preserve name/label/version from StrategyBase
       // Bollinger Bands (mean reversion zones)
       bbPeriod: 20,
       bbStdDev: 2.0,

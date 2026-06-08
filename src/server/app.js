@@ -28,6 +28,7 @@ const createHistoryRouter = require("./routes/history");
 const createBacktestRouter = require("./routes/backtest");
 const createLegacyRouter = require("./routes/legacy");
 const createAccountRouter = require("./routes/account");
+const createAdminRouter = require("./routes/admin");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
@@ -218,6 +219,7 @@ app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, getAllBot
 
 // Account routes (protected)
 app.use("/api/v1/account", authMiddleware, createAccountRouter());
+app.use("/api/v1/admin",   createAdminRouter()); // no authMiddleware — protected by ADMIN_SECRET header
 
 // 404 handler
 app.use((req, res) => {

@@ -52,6 +52,7 @@ class TrendMomentumStrategy extends StrategyBase {
     });
 
     this.config = {
+      ...this.config,           // preserve name/label/version from StrategyBase
       // Timeframes (multi-TF strategy)
       htfInterval: "4h",        // Higher TF for trend direction
       mtfInterval: "15m",       // Middle TF for momentum

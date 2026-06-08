@@ -7,9 +7,9 @@
  * - Enter on RETEST (lower risk than breakout spike)
  * - Excellent risk-to-reward ratio (1:4.0+)
  *
- * Best for: FOUNDRY tier (1-2Jt capital, aggressive growth)
+ * Best for: VAULT tier (Rp30M+ capital, exclusive 4th strategy)
  * Win Rate: 51-56%
- * Annual Return: 350-420% (FOUNDRY target)
+ * Annual Return: contribution to VAULT portfolio
  * RR Ratio: 1:4.0
  */
 
@@ -30,12 +30,13 @@ class BreakoutRetestStrategy extends StrategyBase {
     });
 
     this.config = {
+      ...this.config,           // preserve name/label/version from StrategyBase
       // Level detection (4h timeframe)
       lookbackBars: 20,        // High/low of last 20 candles = S&R level
       volumeMultiplier: 1.3,   // Breakout butuh 1.3x volume (Fix #2: 1.1 terlalu longgar)
       retestWindow: 5,         // Retest must occur within N bars of breakout, else level is stale
 
-      // Risk management (FOUNDRY tier)
+      // Risk management (VAULT tier)
       // SL calibration: raised from 0.5 → 1.5×ATR after diagnostic proved 0.5×ATR
       // sits inside normal bar noise (avg SL 268 < avg H-L range 535 on 15m BTC).
       // At 0.5×ATR, ~50% of bars breach SL on the next wick → 0% win rate.
@@ -48,7 +49,7 @@ class BreakoutRetestStrategy extends StrategyBase {
       // Position management
       maxTradesPerDay: 7,
       minCapital: 100,         // Minimum $100 to trade
-      leverage: 2,             // Allow 2x leverage for FOUNDRY
+      leverage: 1,             // Conservative leverage for VAULT
     };
 
     // Track breakout state for retest detection
@@ -177,7 +178,7 @@ class BreakoutRetestStrategy extends StrategyBase {
   }
 
   /**
-   * Main signal detection (FOUNDRY tier)
+   * Main signal detection (VAULT tier)
    * 1. Detect levels (20-bar high/low)
    * 2. Detect breakout (with volume)
    * 3. Enter on retest (not on breakout spike)
@@ -260,7 +261,7 @@ class BreakoutRetestStrategy extends StrategyBase {
 
   /**
    * Calculate SL/TP based on ATR
-   * For FOUNDRY: 0.5x ATR SL, 4x ATR TP = 1:4 RR
+   * For VAULT: 1.5x ATR SL, 6x ATR TP = 1:4 RR
    */
   calculateRiskConfig(entryPrice, atr, signal) {
     const slDist = atr * this.config.slMultiplier;  // 0.5x ATR

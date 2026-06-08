@@ -31,9 +31,10 @@ model UserStrategy {
   id        String   @id @default(cuid())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String   @unique
-  
+
   strategyKey String  @default("ADAPTIVE_FUSION")
   balanceTier String  @default("C")
+  tier        String  @default("FOUNDRY")
   
   riskPerTrade Float  @default(0.01)
   maxOpenPositions Int @default(1)

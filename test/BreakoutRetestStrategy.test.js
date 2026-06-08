@@ -233,12 +233,12 @@ describe("BreakoutRetestStrategy", () => {
 
   // ── Configuration Tests ────────────────────────────────────────────
 
-  describe("Configuration (FOUNDRY tier)", () => {
-    it("should have correct FOUNDRY tier settings", () => {
+  describe("Configuration (VAULT tier)", () => {
+    it("should have correct VAULT tier settings", () => {
       assert.strictEqual(strategy.config.riskPerTrade, 0.03, "Risk should be 3%");
       assert.strictEqual(strategy.config.slMultiplier, 1.5, "SL should be 1.5x ATR (above noise floor)");
       assert.strictEqual(strategy.config.tpMultiplier, 6.0, "TP should be 6.0x ATR → RR 1:4");
-      assert.strictEqual(strategy.config.leverage, 2, "Leverage should be 2x");
+      assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
     it("should allow config updates", () => {
