@@ -244,11 +244,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
     }
 
     // Component B — only run if balance sufficient AND score meets threshold
+    // Teruskan emaLong (EMA50) agar B bisa pakai 3-EMA alignment (Day Trading intent)
     if (
       balance >= this.SUB_STRATEGIES.B.minCapital &&
       (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore
     ) {
-      signals.B = this._detectSignalB(rsi, emaFast, emaSlow, closesConfirmed);
+      const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
+      signals.B = this._detectSignalB(rsi, emaFast, emaSlow, emaLong, closesConfirmed);
     }
 
     // Component C — only run if balance sufficient AND score meets threshold
@@ -347,25 +349,48 @@ class AdaptiveFusionStrategy extends StrategyBase {
     return null;
   }
 
-  // ── P2: Component B — Day Trading ─────────────────────────────────────────
-  // Confirmed CANDLE CLOSE cross over EMA, not wick touch.
-  // Previous close must be on the opposite side of EMA to current close.
+  // ── Component B — Day Trading (v2.1: 3-EMA Alignment) ───────────────────
+  //
+  // Redesign dari "EMA21 crossover event" (firing 1x saja saat crossing) menjadi
+  // "3-EMA alignment state" (firing setiap candle selama tren terbentuk).
+  //
+  // Motivasi: crossover hanya terjadi 1–3x/hari pada 15m chart; setelah crossing
+  // B selalu null, tidak bisa berkontribusi ke voting majority (butuh 2/3).
+  // Dengan 3-EMA alignment B menjadi state-based seperti C, tapi LEBIH KETAT:
+  //   - C  : cukup close & EMA9 di satu sisi EMA21  (2-EMA)
+  //   - B  : butuh EMA9 > EMA21 > EMA50 SEMUA sejajar (3-EMA) + RSI non-ekstrem
+  //
+  // emaLong (EMA50) kini dipakai — sebelumnya dikonfigurasi tapi tidak diteruskan.
+  //
+  // @param {number}   rsi
+  // @param {number}   emaFast  — EMA9
+  // @param {number}   emaSlow  — EMA21
+  // @param {number|null} emaLong — EMA50 (dari indicators.emaTrend; null = abaikan filter)
+  // @param {number[]} closes
 
-  _detectSignalB(rsi, emaFast, emaSlow, closes) {
+  _detectSignalB(rsi, emaFast, emaSlow, emaLong, closes) {
     if (emaFast == null || emaSlow == null || closes.length < 2) return null;
 
-    const closeCurr = closes[closes.length - 1];   // confirmed current close
-    const closePrev = closes[closes.length - 2];   // previous candle close
+    const closeCurr = closes[closes.length - 1];
 
-    // LONG: previous close ≤ emaSlow, current close > emaSlow (confirmed bullish cross)
-    //       + RSI > 50 on current candle (trend confirmation)
-    if (closePrev <= emaSlow && closeCurr > emaSlow && rsi > 50) {
+    // LONG: EMA9 > EMA21 > EMA50 (full bullish alignment) + price > EMA21 + RSI 50–70
+    // (RSI cap 70: hindari entry saat overbought, tetap biarkan mid-trend)
+    if (
+      emaFast > emaSlow &&
+      (emaLong == null || emaSlow > emaLong) &&
+      closeCurr > emaSlow &&
+      rsi > 50 && rsi < 70
+    ) {
       return "LONG";
     }
 
-    // SHORT: previous close ≥ emaSlow, current close < emaSlow (confirmed bearish cross)
-    //        + RSI < 50 on current candle
-    if (closePrev >= emaSlow && closeCurr < emaSlow && rsi < 50) {
+    // SHORT: EMA9 < EMA21 < EMA50 (full bearish alignment) + price < EMA21 + RSI 30–50
+    if (
+      emaFast < emaSlow &&
+      (emaLong == null || emaSlow < emaLong) &&
+      closeCurr < emaSlow &&
+      rsi < 50 && rsi > 30
+    ) {
       return "SHORT";
     }
 

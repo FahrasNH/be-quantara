@@ -109,15 +109,26 @@ class AdaptiveStrategyEngine extends BotEngine {
       const indicators = this._calculateIndicators(klines);
       const lastIdx = klines.length - 1;
 
-      // Store for rankings
-      this.lastVolatility = indicators.volatility || 1.0;
-      this.lastTrendStrength = indicators.trend_strength || 0.1;
+      // Hitung volatility (ATR%) dan trend_strength (jarak EMA9-EMA21 relatif) dari
+      // data candle nyata. calcIndicators() tidak menghasilkan field ini sehingga
+      // tanpa kalkulasi manual AF selalu menerima default volatility=1, ts=0.1
+      // → komponen A/B/C dipilih dengan asumsi "dead market", bukan kondisi aktual.
+      {
+        const price  = klines[lastIdx].close;
+        const atr    = indicators.atr?.[lastIdx];
+        const emaF   = indicators.emaFast?.[lastIdx];
+        const emaS   = indicators.emaSlow?.[lastIdx];
+        this.lastVolatility    = atr && price ? (atr / price) * 100 : 1.0;
+        const emaDelta         = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
+        this.lastTrendStrength = Math.min(emaDelta * 50, 1.0);
+      }
 
       // Detect signal using strategy
       const signal = this.strategy.detectSignal(indicators, lastIdx, {
-        balance: this.capital,
-        volatility: this.lastVolatility,
-        htfTrend: "NEUTRAL",
+        balance:        this.capital,
+        volatility:     this.lastVolatility,
+        trend_strength: this.lastTrendStrength,
+        htfTrend:       "NEUTRAL",
       });
 
       if (!signal) return;
