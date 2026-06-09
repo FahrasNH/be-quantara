@@ -393,7 +393,19 @@ class BotEngine extends EventEmitter {
     // ── Restore posisi terbuka dari SEMUA sesi lama (lintas sesi) ─────────
     // Cari trades dengan close_time IS NULL untuk symbol ini di semua sesi
     try {
-      const orphans = await db.getOpenTradesBySymbol(this.config.symbol);
+      let orphans = await db.getOpenTradesBySymbol(this.config.symbol);
+      // Multi-Strategy per Coin: bila engine ini bagian dari grup (N strategi pada
+      // satu koin), batasi restore HANYA pada trade strategi ini — agar tiap engine
+      // tidak meng-klaim posisi milik strategi lain pada simbol yang sama.
+      // Legacy single-engine (tanpa groupKey) tetap memulihkan semua posisi simbol.
+      if (this.config.groupKey && this.config.strategyKey) {
+        orphans = orphans.filter((row) => {
+          let stratOfTrade = null;
+          try { stratOfTrade = row.indicators ? JSON.parse(row.indicators)?.strategy : null; } catch { /* ignore */ }
+          // Bila trade lama tidak punya atribusi strategi, jangan klaim di mode grup.
+          return stratOfTrade === this.config.strategyKey;
+        });
+      }
       if (orphans.length > 0) {
         this._log("info", `${orphans.length} posisi open dari sesi lama ditemukan — sinkronisasi dengan exchange...`);
 
@@ -508,7 +520,12 @@ class BotEngine extends EventEmitter {
         const sz  = p.remainingSize || p.size || 0;
         const margin = (p.entry * sz) / lev;
         const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
-        this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin });
+        this.config.coordinator.reserve(botKey, {
+          symbol: this.config.symbol, margin,
+          groupKey: this.config.groupKey ?? null,
+          strategyKey: this.config.strategyKey ?? null,
+          direction: p.side,
+        });
       }
     } catch (err) {
       this._log("warn", `Gagal restore posisi lama: ${err.message}`);
@@ -1238,9 +1255,19 @@ class BotEngine extends EventEmitter {
     const lev            = this.config.leverage || 1;
     const requiredMargin = (price * finalSize) / lev;
     const botKey         = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
-    if (!this.config.dryRun && this.config.coordinator) {
+    // Group guard berlaku di LIVE (anggaran margin + 1/simbol + direction lock) dan
+    // juga di DRY RUN bila engine ini bagian dari grup multi-strategi — agar AC-05
+    // (tidak ada LONG+SHORT serentak pada satu koin) tetap ditegakkan saat staging
+    // dry-run. Di dry-run, gate anggaran otomatis di-skip (equity akun = 0).
+    const useGroupGuard = this.config.coordinator &&
+      (this.config.groupKey || !this.config.dryRun);
+    if (useGroupGuard) {
       const verdict = this.config.coordinator.canOpen({
         botKey, symbol: this.config.symbol, requiredMargin,
+        // Multi-Strategy per Coin: groupKey mengizinkan >1 posisi/simbol untuk
+        // strategi segrup, direction menegakkan direction lock (AC-05).
+        groupKey:  this.config.groupKey ?? null,
+        direction: signal,
       });
       if (!verdict.ok) {
         this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
@@ -1271,7 +1298,12 @@ class BotEngine extends EventEmitter {
 
         // Reservasi margin di koordinator akun bersama (#5)
         if (this.config.coordinator) {
-          this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin: requiredMargin });
+          this.config.coordinator.reserve(botKey, {
+            symbol: this.config.symbol, margin: requiredMargin,
+            groupKey: this.config.groupKey ?? null,
+            strategyKey: this.config.strategyKey ?? null,
+            direction: signal,
+          });
         }
 
         const pos = {
@@ -1399,6 +1431,17 @@ class BotEngine extends EventEmitter {
         slCurrent:     sl,
         m1: false, m2: false, m3: false,
       };
+
+      // Dry-run multi-strategi: reservasi di koordinator agar direction lock (AC-05)
+      // terlihat oleh engine strategi lain pada koin yang sama. Dilepas otomatis
+      // saat flat via _releaseMarginIfFlat(). Legacy dry-run (tanpa groupKey) tidak
+      // mereservasi apa pun — perilaku lama tidak berubah.
+      if (this.config.groupKey && this.config.coordinator) {
+        this.config.coordinator.reserve(botKey, {
+          symbol: this.config.symbol, margin: marginReserved,
+          groupKey: this.config.groupKey, strategyKey: this.config.strategyKey, direction: signal,
+        });
+      }
 
       // Simpan ke DB (dry run)
       if (this.sessionId) {

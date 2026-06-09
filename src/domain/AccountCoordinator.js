@@ -152,7 +152,7 @@ class AccountCoordinator {
    *   ditegakkan karena committedMargin menjumlahkan semua reservasi (termasuk segrup).
    * @returns {{ ok: boolean, reason?: string, budget?: number, committed?: number }}
    */
-  canOpen({ botKey, symbol, requiredMargin, groupKey = null }) {
+  canOpen({ botKey, symbol, requiredMargin, groupKey = null, direction = null }) {
     // 1) Batas jumlah posisi serentak (jika diaktifkan)
     if (this.maxConcurrentPositions > 0 &&
         this.openCount(botKey) >= this.maxConcurrentPositions) {
@@ -162,6 +162,19 @@ class AccountCoordinator {
     // 2) Maks 1 posisi per simbol — kecuali strategi yang segrup (multi-strategi/koin)
     if (this.hasSymbol(symbol, botKey, groupKey)) {
       return { ok: false, reason: `Sudah ada posisi ${symbol} di akun ini` };
+    }
+
+    // 2b) Direction lock (AC-05): dalam SATU grup multi-strategi pada simbol yang
+    //     sama, dilarang membuka arah berlawanan (LONG + SHORT serentak). Strategi
+    //     pertama yang fire mengunci arah; arah berlawanan ditolak sampai flat.
+    if (groupKey && direction) {
+      const opposite = direction === "LONG" ? "SHORT" : "LONG";
+      if (this.hasGroupDirection(groupKey, symbol, opposite, botKey)) {
+        return {
+          ok: false,
+          reason: `Konflik arah pada ${symbol}: grup sudah memegang posisi ${opposite} — ${direction} ditolak (AC-05)`,
+        };
+      }
     }
 
     // 3) Anggaran margin — hanya bila equity diketahui
@@ -188,16 +201,31 @@ class AccountCoordinator {
   }
 
   /**
+   * Apakah grup ini sudah memegang posisi dengan arah tertentu pada simbol tsb?
+   * Dipakai untuk direction lock (AC-05).
+   */
+  hasGroupDirection(groupKey, symbol, direction, exceptBotKey = null) {
+    for (const [key, r] of this.reservations) {
+      if (key === exceptBotKey) continue;
+      if (r.groupKey === groupKey && r.symbol === symbol && r.direction === direction) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Catat reservasi margin untuk satu bot. Idempotent per botKey.
    * @param {string} botKey
-   * @param {{symbol: string, margin?: number, groupKey?: string, strategyKey?: string}} entry
+   * @param {{symbol: string, margin?: number, groupKey?: string, strategyKey?: string, direction?: string}} entry
    */
-  reserve(botKey, { symbol, margin, groupKey = null, strategyKey = null }) {
+  reserve(botKey, { symbol, margin, groupKey = null, strategyKey = null, direction = null }) {
     this.reservations.set(botKey, {
       symbol,
       margin: margin || 0,
       groupKey,
       strategyKey,
+      direction,
       ts: Date.now(),
     });
     return this;

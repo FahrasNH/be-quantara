@@ -165,6 +165,38 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
 }
 
 {
+  // Direction lock (AC-05): grup tidak boleh LONG + SHORT serentak pada simbol sama.
+  const c = new AC({ userId: "gd", maxAccountUtilization: 0.8 });
+  c.setAccountEquity(1000);
+  const groupKey = "gd:ETHUSDT";
+
+  // Strategi AF buka LONG pada ETH.
+  c.reserve("gd:ETHUSDT#AF", { symbol: "ETHUSDT", margin: 10, groupKey, strategyKey: "AF", direction: "LONG" });
+
+  // Strategi MR mau SHORT pada ETH (segrup) → DITOLAK (arah berlawanan).
+  const conflict = c.canOpen({
+    botKey: "gd:ETHUSDT#MR", symbol: "ETHUSDT", requiredMargin: 10,
+    groupKey, direction: "SHORT",
+  });
+  t("AC-05: SHORT ditolak saat grup sudah LONG (direction lock)", !conflict.ok);
+
+  // Strategi TM mau LONG juga (searah) → BOLEH (entry terdiversifikasi).
+  const sameDir = c.canOpen({
+    botKey: "gd:ETHUSDT#TM", symbol: "ETHUSDT", requiredMargin: 10,
+    groupKey, direction: "LONG",
+  });
+  t("AC-05: LONG searah tetap diizinkan (diversified)", sameDir.ok);
+
+  // Setelah grup flat (release), arah berlawanan boleh lagi.
+  c.releaseGroup("gd", "ETHUSDT");
+  const afterFlat = c.canOpen({
+    botKey: "gd:ETHUSDT#MR", symbol: "ETHUSDT", requiredMargin: 10,
+    groupKey, direction: "SHORT",
+  });
+  t("AC-05: setelah grup flat → SHORT boleh lagi", afterFlat.ok);
+}
+
+{
   // Backward-compat: legacy single-bot (tanpa groupKey) tetap 1-posisi/simbol.
   const c = new AC({ userId: "g4", maxAccountUtilization: 0.8 });
   c.setAccountEquity(1000);

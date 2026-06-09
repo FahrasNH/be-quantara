@@ -11,6 +11,8 @@ const rateLimit = require("express-rate-limit");
 
 const cfg = require("../config/env");
 const BotEngine = require("../application/BotEngine");
+const AdaptiveStrategyEngine = require("../application/AdaptiveStrategyEngine");
+const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinator");
 const AccountCoordinator = require("../domain/AccountCoordinator");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
@@ -191,6 +193,55 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
   return bot;
 }
 
+/**
+ * Buat instance MultiStrategyCoordinator untuk satu koin (fitur Auto Multi-Strategy
+ * Execution per Coin). Koordinator ini disimpan di botsMap pada slot yang sama
+ * dengan BotEngine sehingga route/WS memperlakukannya identik (getState/start/stop).
+ *
+ * @param {string} userId
+ * @param {string} symbol
+ * @param {Object} opts  — { strategies[], capital, dryRun, apiKey, apiSecret, passphrase, botId }
+ * @returns {MultiStrategyCoordinator}
+ */
+function createMultiStrategyInstance(userId, symbol, opts = {}) {
+  const key = makeKey(userId, symbol);
+  const existing = botsMap[key];
+  if (existing) {
+    if (existing.getState().running) return existing;
+    delete botsMap[key];
+  }
+
+  const accountCoordinator = getCoordinator(userId);
+
+  // engineFactory di-INJECT ke koordinator → satu AdaptiveStrategyEngine per strategi,
+  // berbagi AccountCoordinator + kredensial user. cfg dari koordinator sudah berisi
+  // strategyKey/capital/dryRun/botKey/groupKey.
+  const engineFactory = (strategyKey, cfg2) =>
+    new AdaptiveStrategyEngine({
+      ...cfg2,
+      coordinator: accountCoordinator,
+      apiKey:      opts.apiKey,
+      apiSecret:   opts.apiSecret,
+      passphrase:  opts.passphrase,
+      botId:       opts.botId,
+    });
+
+  const coordinator = new MultiStrategyCoordinator({
+    userId,
+    symbol,
+    strategies:   opts.strategies,
+    totalCapital: opts.capital,
+    engineFactory,
+    accountCoordinator,
+    dryRun:       opts.dryRun,
+    conflictMode: process.env.MULTI_STRATEGY_CONFLICT_MODE || "skip",
+    engineConfig: { botId: opts.botId },
+  });
+
+  botsMap[key] = coordinator;
+  return coordinator;
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────
 
 // Health check (public)
@@ -213,7 +264,7 @@ app.use("/api/v1/auth", createAuthRouter());
 
 // ✅ FIX: Apply auth middleware ONLY to protected routes
 // Bots routes (protected, user-isolated)
-app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, removeBotInstance, sharedClient }));
+app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient }));
 
 // Market routes (protected)
 app.use("/api/v1/market", authMiddleware, createMarketRouter({
