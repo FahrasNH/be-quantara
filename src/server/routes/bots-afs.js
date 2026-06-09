@@ -13,10 +13,9 @@ module.exports = function createBotsRouter(helpers) {
   const { getUserBotLogs } = require("../../infrastructure/db/botLogRepository");
   const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies } = require("../../services/entitlement");
 
-  // Feature flag: Auto Multi-Strategy Execution per Coin. Default OFF agar runtime
-  // produksi tidak berubah sebelum validasi staging (Sprint 4). Aktifkan di staging
-  // dengan MULTI_STRATEGY_ENABLED=true.
-  const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED === "true";
+  // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
+  // dry-run (TASK 4.3), OFF di production via MULTI_STRATEGY_ENABLED=false.
+  const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
 
   // ── Patch middleware/domain (Quantara Patch v1.0) ──────────────────────────
   const { strategyGuard } = require("../../middleware/strategyGuard");
