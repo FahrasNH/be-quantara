@@ -134,6 +134,50 @@ module.exports = function createAccountRouter() {
   );
 
   /**
+   * GET /api/v1/account/paper-balance
+   * Saldo virtual (paper wallet) untuk mode Dry Run. Independen dari exchange.
+   *
+   * equity = saldo awal virtual + realized PnL (trade dry-run yang CLOSED)
+   *                              + unrealized PnL (trade dry-run yang OPEN)
+   *
+   * Saldo awal dikonfigurasi via env DRY_RUN_VIRTUAL_BALANCE (default 1000 USDT).
+   */
+  router.get(
+    "/paper-balance",
+    asyncHandler(async (req, res) => {
+      const userId = req.userId;
+      const startingBalance = parseFloat(process.env.DRY_RUN_VIRTUAL_BALANCE) || 1000;
+
+      // Ambil semua trade dari bot dry-run milik user ini.
+      const trades = await prisma.trade.findMany({
+        where: { bot: { userId, dryRun: true } },
+        select: { pnl: true, status: true },
+      });
+
+      let realizedPnL = 0;
+      let unrealizedPnL = 0;
+      for (const t of trades) {
+        if (t.status === "CLOSED") realizedPnL += t.pnl || 0;
+        else unrealizedPnL += t.pnl || 0; // OPEN → mark-to-market bila tersedia
+      }
+
+      const equity = startingBalance + realizedPnL + unrealizedPnL;
+
+      res.json({
+        ok: true,
+        configured: true,
+        paper: true,
+        currency: "USDT",
+        startingBalance,
+        realizedPnL,
+        unrealizedPL: unrealizedPnL,
+        available: startingBalance + realizedPnL, // dana bebas = awal + realized
+        equity,
+      });
+    })
+  );
+
+  /**
    * GET /api/v1/account/keys
    * Get API keys (masked for security)
    */
