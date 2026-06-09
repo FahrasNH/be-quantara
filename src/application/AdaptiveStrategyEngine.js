@@ -247,8 +247,29 @@ class AdaptiveStrategyEngine extends BotEngine {
         }
       }
 
-      // 11. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
-      await this._handleSignal(signal, price, atr, indicators);
+      // 11. Bangun indicatorSnapshot SCALAR (bukan array mentah) dengan atribusi
+      //     strategi. Sebelumnya AFS engine mengirim `indicators` mentah (berisi
+      //     array rsi[]/atr[]/emaFast[]/emaSlow[]) tanpa field `strategy` →
+      //     insight CSV men-dump array & strategy kosong. Mirror BotEngine snapshot.
+      const emaTrendVal = indicators.emaTrend?.[lastIdx] ?? null;
+      const volNow      = candles[lastIdx].volume ?? 0;
+      const volSMANow   = indicators.volSMA?.[lastIdx] ?? 0;
+      const indicatorSnapshot = {
+        rsi:          indicators.rsi?.[lastIdx]     != null ? parseFloat(indicators.rsi[lastIdx].toFixed(2))   : null,
+        atr:          atr != null ? parseFloat(atr.toFixed(4)) : null,
+        atrPct:       atr && price ? parseFloat(((atr / price) * 100).toFixed(3)) : null,
+        emaFast:      indicators.emaFast?.[lastIdx] != null ? parseFloat(indicators.emaFast[lastIdx].toFixed(4)) : null,
+        emaSlow:      indicators.emaSlow?.[lastIdx] != null ? parseFloat(indicators.emaSlow[lastIdx].toFixed(4)) : null,
+        emaTrendVal:  emaTrendVal != null ? parseFloat(emaTrendVal.toFixed(4)) : null,
+        emaTrendBias: emaTrendVal != null ? (price > emaTrendVal ? "bullish" : "bearish") : null,
+        volumeRatio:  volSMANow > 0 ? parseFloat((volNow / volSMANow).toFixed(2)) : null,
+        htfTrend:     this.state.htfTrend ?? "NEUTRAL",
+        strategy:     this.strategyKey ?? null,
+        entryMode:    "multi_strategy",
+      };
+
+      // 12. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
+      await this._handleSignal(signal, price, atr, indicatorSnapshot);
     } catch (err) {
       console.error(`[${this.config.symbol}] Tick error:`, err.message);
     }
