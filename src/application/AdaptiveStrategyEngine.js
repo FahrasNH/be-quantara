@@ -238,7 +238,7 @@ class AdaptiveStrategyEngine extends BotEngine {
       //     bila engine bagian dari grup multi-strategi (punya groupCoordinator).
       const groupCoord = this.config.groupCoordinator;
       if (groupCoord && typeof groupCoord.canEnter === "function") {
-        const gate = groupCoord.canEnter(this.strategyKey, signal);
+        const gate = await groupCoord.canEnter(this.strategyKey, signal);
         if (!gate.allowed) {
           if (this.state.checkCount % 5 === 1) {
             console.log(`[${this.config.symbol}] Entry ditolak grup (${this.strategyKey}): ${gate.reason}`);

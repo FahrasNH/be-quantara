@@ -162,26 +162,37 @@ function runCanEnterTests() {
       maxPositionsPerCoin: 2,
     });
 
-    c.start().then(() => {
+    c.start().then(async () => {
       t("maxPositionsPerCoin = 2 tersimpan", c.maxPositionsPerCoin === 2);
 
+      // Tanpa DB injected → fallback ke state engine live (async)
       // Belum ada posisi → boleh entry
-      t("gate: kosong → SHORT diizinkan", c.canEnter("A", "SHORT").allowed === true);
+      t("gate: kosong → SHORT diizinkan", (await c.canEnter("A", "SHORT")).allowed === true);
 
       // 1 SHORT terbuka → SHORT ke-2 masih boleh (cap 2)
       engines.A.state.openPositions = [{ side: "SHORT" }];
-      t("gate: 1 SHORT → SHORT ke-2 diizinkan", c.canEnter("B", "SHORT").allowed === true);
+      t("gate: 1 SHORT → SHORT ke-2 diizinkan", (await c.canEnter("B", "SHORT")).allowed === true);
 
       // Hedge: ada SHORT → LONG ditolak
-      const hedge = c.canEnter("B", "LONG");
+      const hedge = await c.canEnter("B", "LONG");
       t("gate: hedge LONG ditolak saat ada SHORT", hedge.allowed === false);
       t("gate: alasan hedge benar", /Hedge/.test(hedge.reason));
 
       // 2 SHORT terbuka → SHORT ke-3 ditolak (cap tercapai)
       engines.B.state.openPositions = [{ side: "SHORT" }];
-      const capped = c.canEnter("C", "SHORT");
+      const capped = await c.canEnter("C", "SHORT");
       t("gate: cap 2 tercapai → SHORT ke-3 ditolak", capped.allowed === false);
       t("gate: alasan cap benar", /Cap per-koin/.test(capped.reason));
+
+      // DB-authoritative: DB injected → cap hitung dari DB (orphan ikut terhitung)
+      const fakeDb = { getOpenPositionsForGate: async () => [{ side: "SHORT" }, { side: "SHORT" }] };
+      const c2 = new MultiStrategyCoordinator({
+        userId: "u6", symbol: "ETHUSDT", strategies: ["A"], totalCapital: 100,
+        engineFactory: (k, cfg) => makeFakeEngine(k, cfg), maxPositionsPerCoin: 2, db: fakeDb,
+      });
+      await c2.start();
+      const dbCap = await c2.canEnter("A", "SHORT");
+      t("gate DB: 2 orphan di DB → entry ke-3 ditolak (cap dari DB)", dbCap.allowed === false && dbCap.open === 2);
 
       runGuardTests();
     });

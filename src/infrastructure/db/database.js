@@ -657,6 +657,28 @@ async function getOpenTradesBySymbol(symbol) {
   return rows;
 }
 
+/**
+ * Hitung posisi TERBUKA (close_time IS NULL) untuk satu user+symbol+mode.
+ * Sumber kebenaran tunggal untuk gate cap-per-koin (canEnter) — agar cap
+ * menghormati SEMUA posisi terbuka di DB, bukan hanya yang ada di memori engine
+ * live (mencegah penumpukan posisi baru di atas orphan yang belum ter-monitor).
+ * @returns {Promise<Array<{id:number, side:string}>>}
+ */
+async function getOpenPositionsForGate({ symbol, userId = null, dryRun = null }) {
+  const params = [symbol];
+  let where = `t.symbol = $1 AND t.close_time IS NULL`;
+  if (userId != null) { params.push(userId); where += ` AND s.user_id = $${params.length}`; }
+  if (dryRun != null) { params.push(dryRun ? 1 : 0); where += ` AND t.dry_run = $${params.length}`; }
+  const { rows } = await pool.query(
+    `SELECT t.id, t.side
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}`,
+    params
+  );
+  return rows;
+}
+
 // ── Equity ────────────────────────────────────
 
 /** Fire-and-forget best-effort — tidak boleh crash caller. */
@@ -900,6 +922,7 @@ module.exports = {
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
+  getOpenPositionsForGate,
   getInsights,
   getTradesExport,
   recalcSessionStats,

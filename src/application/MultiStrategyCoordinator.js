@@ -62,6 +62,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     pollIntervalMs = 0,
     engineConfig = {},
     maxPositionsPerCoin = 2,
+    db = null,
   }) {
     super();
 
@@ -86,6 +87,9 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.engineConfig = engineConfig;
     // Cap jumlah posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     this.maxPositionsPerCoin = Math.max(1, Number(maxPositionsPerCoin) || 2);
+    // DB di-inject (DI) → canEnter pakai DB sebagai sumber kebenaran tunggal.
+    // Null saat unit test → fallback ke state engine live.
+    this._db = db;
 
     /** @type {Map<string, object>} strategyKey -> engine */
     this.engines = new Map();
@@ -284,47 +288,59 @@ class MultiStrategyCoordinator extends EventEmitter {
   }
 
   /**
-   * GATE entry lintas-strategi (dipanggil engine SEBELUM membuka posisi).
-   * Menggantikan koordinasi berbasis poll yang racy dengan pengecekan sinkron
-   * pada saat entry. Menerapkan dua aturan:
-   *   1. Proteksi hedge: tolak jika sudah ada posisi arah BERLAWANAN di koin ini
-   *      (mencegah LONG+SHORT serentak = hedge tak disengaja).
-   *   2. Cap konsentrasi: tolak jika jumlah posisi terbuka di koin ini sudah
-   *      mencapai maxPositionsPerCoin (anti penumpukan satu arah lintas-strategi).
-   *
-   * @param {string} strategyKey  — strategi yang meminta entry
-   * @param {"LONG"|"SHORT"} direction
-   * @returns {{ allowed: boolean, reason: string, open: number, cap: number }}
+   * Kumpulkan posisi terbuka koin ini sebagai SUMBER KEBENARAN TUNGGAL.
+   * Prioritas DB (close_time IS NULL) bila tersedia — agar gate menghormati SEMUA
+   * posisi terbuka termasuk orphan yang belum ter-claim engine live (mencegah
+   * penumpukan posisi baru di atas orphan). Fallback ke state engine live bila
+   * DB tidak tersedia (mis. unit test dengan engine palsu).
+   * @returns {Promise<Array<{side:string}>>}
    */
-  canEnter(strategyKey, direction) {
-    const dir = String(direction || "").toUpperCase();
-    let totalOpen = 0;
-    let hasOpposite = false;
-
+  async _collectOpenPositions() {
+    // 1. Coba DB (otoritatif)
+    if (this._db && typeof this._db.getOpenPositionsForGate === "function") {
+      try {
+        const rows = await this._db.getOpenPositionsForGate({
+          symbol: this.symbol, userId: this.userId, dryRun: this.dryRun,
+        });
+        if (Array.isArray(rows)) return rows.map((r) => ({ side: r.side }));
+      } catch { /* fallback ke state engine */ }
+    }
+    // 2. Fallback: state engine live
+    const out = [];
     for (const [, engine] of this.engines) {
-      const positions = engine?.state?.openPositions || [];
-      for (const p of positions) {
-        totalOpen++;
-        const pSide = String(p.side || "").toUpperCase();
-        if (pSide && dir && pSide !== dir) hasOpposite = true;
-      }
+      for (const p of engine?.state?.openPositions || []) out.push({ side: p.side });
+    }
+    return out;
+  }
+
+  /**
+   * GATE entry lintas-strategi (dipanggil engine SEBELUM membuka posisi).
+   * ASYNC — menghitung exposure dari DB (sumber kebenaran tunggal). Aturan:
+   *   1. Proteksi hedge: tolak jika sudah ada posisi arah BERLAWANAN di koin ini.
+   *   2. Cap konsentrasi: tolak jika posisi terbuka >= maxPositionsPerCoin.
+   *
+   * @param {string} strategyKey
+   * @param {"LONG"|"SHORT"} direction
+   * @returns {Promise<{ allowed: boolean, reason: string, open: number, cap: number }>}
+   */
+  async canEnter(strategyKey, direction) {
+    const dir = String(direction || "").toUpperCase();
+    const positions = await this._collectOpenPositions();
+
+    let totalOpen = 0, hasOpposite = false;
+    for (const p of positions) {
+      totalOpen++;
+      const pSide = String(p.side || "").toUpperCase();
+      if (pSide && dir && pSide !== dir) hasOpposite = true;
     }
 
     if (hasOpposite) {
-      return {
-        allowed: false,
-        open: totalOpen,
-        cap: this.maxPositionsPerCoin,
-        reason: `Hedge guard: sudah ada posisi arah berlawanan di ${this.symbol}`,
-      };
+      return { allowed: false, open: totalOpen, cap: this.maxPositionsPerCoin,
+        reason: `Hedge guard: sudah ada posisi arah berlawanan di ${this.symbol}` };
     }
     if (totalOpen >= this.maxPositionsPerCoin) {
-      return {
-        allowed: false,
-        open: totalOpen,
-        cap: this.maxPositionsPerCoin,
-        reason: `Cap per-koin tercapai (${totalOpen}/${this.maxPositionsPerCoin}) di ${this.symbol}`,
-      };
+      return { allowed: false, open: totalOpen, cap: this.maxPositionsPerCoin,
+        reason: `Cap per-koin tercapai (${totalOpen}/${this.maxPositionsPerCoin}) di ${this.symbol}` };
     }
     return { allowed: true, open: totalOpen, cap: this.maxPositionsPerCoin, reason: "OK" };
   }
