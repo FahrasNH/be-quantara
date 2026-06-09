@@ -205,7 +205,20 @@ class AdaptiveStrategyEngine extends BotEngine {
         return;
       }
 
-      // 10. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
+      // 10. GATE lintas-strategi (cap per-koin + proteksi hedge). Dipanggil hanya
+      //     bila engine bagian dari grup multi-strategi (punya groupCoordinator).
+      const groupCoord = this.config.groupCoordinator;
+      if (groupCoord && typeof groupCoord.canEnter === "function") {
+        const gate = groupCoord.canEnter(this.strategyKey, signal);
+        if (!gate.allowed) {
+          if (this.state.checkCount % 5 === 1) {
+            console.log(`[${this.config.symbol}] Entry ditolak grup (${this.strategyKey}): ${gate.reason}`);
+          }
+          return;
+        }
+      }
+
+      // 11. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
       await this._handleSignal(signal, price, atr, indicators);
     } catch (err) {
       console.error(`[${this.config.symbol}] Tick error:`, err.message);

@@ -146,6 +146,43 @@ function runStateAggTest() {
       t("engines summary berisi 2 entri", st.engines.length === 2);
       t("multiStrategy flag = true", st.multiStrategy === true);
 
+      runCanEnterTests();
+    });
+  }
+}
+
+function runCanEnterTests() {
+  // ── canEnter gate: cap per-koin + proteksi hedge (anti penumpukan) ──────────
+  {
+    const engines = {};
+    const factory = (key, cfg) => { const e = makeFakeEngine(key, cfg); engines[key] = e; return e; };
+    const c = new MultiStrategyCoordinator({
+      userId: "u5", symbol: "BNBUSDT",
+      strategies: ["A", "B", "C", "D"], totalCapital: 1000, engineFactory: factory,
+      maxPositionsPerCoin: 2,
+    });
+
+    c.start().then(() => {
+      t("maxPositionsPerCoin = 2 tersimpan", c.maxPositionsPerCoin === 2);
+
+      // Belum ada posisi → boleh entry
+      t("gate: kosong → SHORT diizinkan", c.canEnter("A", "SHORT").allowed === true);
+
+      // 1 SHORT terbuka → SHORT ke-2 masih boleh (cap 2)
+      engines.A.state.openPositions = [{ side: "SHORT" }];
+      t("gate: 1 SHORT → SHORT ke-2 diizinkan", c.canEnter("B", "SHORT").allowed === true);
+
+      // Hedge: ada SHORT → LONG ditolak
+      const hedge = c.canEnter("B", "LONG");
+      t("gate: hedge LONG ditolak saat ada SHORT", hedge.allowed === false);
+      t("gate: alasan hedge benar", /Hedge/.test(hedge.reason));
+
+      // 2 SHORT terbuka → SHORT ke-3 ditolak (cap tercapai)
+      engines.B.state.openPositions = [{ side: "SHORT" }];
+      const capped = c.canEnter("C", "SHORT");
+      t("gate: cap 2 tercapai → SHORT ke-3 ditolak", capped.allowed === false);
+      t("gate: alasan cap benar", /Cap per-koin/.test(capped.reason));
+
       runGuardTests();
     });
   }

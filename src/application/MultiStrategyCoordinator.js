@@ -61,6 +61,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     conflictMode = "skip",
     pollIntervalMs = 0,
     engineConfig = {},
+    maxPositionsPerCoin = 2,
   }) {
     super();
 
@@ -83,6 +84,8 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.conflictMode = conflictMode === "majority" ? "majority" : "skip";
     this.pollIntervalMs = Number(pollIntervalMs) || 0;
     this.engineConfig = engineConfig;
+    // Cap jumlah posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
+    this.maxPositionsPerCoin = Math.max(1, Number(maxPositionsPerCoin) || 2);
 
     /** @type {Map<string, object>} strategyKey -> engine */
     this.engines = new Map();
@@ -142,6 +145,9 @@ class MultiStrategyCoordinator extends EventEmitter {
         isGroupLeader: i === 0,
         // Total capital grup — untuk log yang lebih informatif di _startup
         groupTotalCapital: this.totalCapital,
+        // Referensi balik ke koordinator grup → engine memanggil canEnter() sebagai
+        // gate sebelum membuka posisi (cap per-koin + proteksi hedge lintas-strategi).
+        groupCoordinator: this,
       });
 
       // Relay event engine → konsumen koordinator (WS streaming, dll.)
@@ -275,6 +281,52 @@ class MultiStrategyCoordinator extends EventEmitter {
       this._log("warn", `Conflict resolved: ${decision.reason}`);
     }
     return decision;
+  }
+
+  /**
+   * GATE entry lintas-strategi (dipanggil engine SEBELUM membuka posisi).
+   * Menggantikan koordinasi berbasis poll yang racy dengan pengecekan sinkron
+   * pada saat entry. Menerapkan dua aturan:
+   *   1. Proteksi hedge: tolak jika sudah ada posisi arah BERLAWANAN di koin ini
+   *      (mencegah LONG+SHORT serentak = hedge tak disengaja).
+   *   2. Cap konsentrasi: tolak jika jumlah posisi terbuka di koin ini sudah
+   *      mencapai maxPositionsPerCoin (anti penumpukan satu arah lintas-strategi).
+   *
+   * @param {string} strategyKey  — strategi yang meminta entry
+   * @param {"LONG"|"SHORT"} direction
+   * @returns {{ allowed: boolean, reason: string, open: number, cap: number }}
+   */
+  canEnter(strategyKey, direction) {
+    const dir = String(direction || "").toUpperCase();
+    let totalOpen = 0;
+    let hasOpposite = false;
+
+    for (const [, engine] of this.engines) {
+      const positions = engine?.state?.openPositions || [];
+      for (const p of positions) {
+        totalOpen++;
+        const pSide = String(p.side || "").toUpperCase();
+        if (pSide && dir && pSide !== dir) hasOpposite = true;
+      }
+    }
+
+    if (hasOpposite) {
+      return {
+        allowed: false,
+        open: totalOpen,
+        cap: this.maxPositionsPerCoin,
+        reason: `Hedge guard: sudah ada posisi arah berlawanan di ${this.symbol}`,
+      };
+    }
+    if (totalOpen >= this.maxPositionsPerCoin) {
+      return {
+        allowed: false,
+        open: totalOpen,
+        cap: this.maxPositionsPerCoin,
+        reason: `Cap per-koin tercapai (${totalOpen}/${this.maxPositionsPerCoin}) di ${this.symbol}`,
+      };
+    }
+    return { allowed: true, open: totalOpen, cap: this.maxPositionsPerCoin, reason: "OK" };
   }
 
   // ───────────────────────────────────────────────────────────────────────────
