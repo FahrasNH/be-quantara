@@ -55,16 +55,29 @@ function validateRegisterInput(req, res, next) {
   next();
 }
 
+/**
+ * Validasi input start bot.
+ *
+ * TASK 3.1 (Multi-Strategy per Coin): `strategyKey` BUKAN field wajib. Pada flow
+ * baru, strategi ditentukan otomatis dari tier user (getTierStrategies) sehingga FE
+ * tidak mengirim `strategyKey` sama sekali. Bila dikirim (FE lama / legacy), tetap
+ * divalidasi sebagai string opsional agar backward-compatible.
+ */
 function validateBotStartInput(req, res, next) {
-  const { strategyKey, capital } = req.body;
+  const { strategyKey, capital, dryRun } = req.body;
   const errors = [];
 
-  if (strategyKey && typeof strategyKey !== 'string') {
-    errors.push('strategyKey must be a string');
+  // Opsional — hanya divalidasi tipenya bila ada (tidak pernah required).
+  if (strategyKey !== undefined && typeof strategyKey !== 'string') {
+    errors.push('strategyKey must be a string when provided');
   }
 
-  if (capital && (typeof capital !== 'number' || capital <= 0)) {
+  if (capital !== undefined && (typeof capital !== 'number' || !Number.isFinite(capital) || capital <= 0)) {
     errors.push('capital must be a positive number');
+  }
+
+  if (dryRun !== undefined && typeof dryRun !== 'boolean') {
+    errors.push('dryRun must be a boolean');
   }
 
   if (errors.length > 0) {
