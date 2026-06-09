@@ -329,7 +329,11 @@ wss.on("connection", (ws, req) => {
       } catch { /* client mungkin sudah disconnect */ }
     }
 
-    instance.getLogs(WS_REPLAY_PER_BOT).forEach((entry) => {
+    // MultiStrategyCoordinator tidak punya getLogs — guard sebelum panggil
+    const logs = typeof instance.getLogs === "function"
+      ? instance.getLogs(WS_REPLAY_PER_BOT)
+      : [];
+    logs.forEach((entry) => {
       if (ws.readyState === 1) {
         try {
           ws.send(JSON.stringify({ type: "log", symbol, data: entry }));
