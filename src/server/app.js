@@ -40,6 +40,9 @@ cfg.validate();
 // MULTI_STRATEGY_ENABLED: default ON; disable lewat env MULTI_STRATEGY_ENABLED=false.
 const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
 
+// Entitlement service (dipakai resumeRunningBots untuk fallback tier-strategies)
+const { getTierStrategies } = require("../services/entitlement");
+
 // ── CORS & Security ────────────────────────────────────────────────────────
 // Domain produksi dibaca dari env (cfg.corsOrigins). Localhost ditangani terpisah.
 const ALLOWED_ORIGINS = cfg.corsOrigins;
@@ -420,22 +423,39 @@ async function resumeRunningBots() {
       }
 
       try {
-        // Pilih path resume: multi-strategy jika flag ON dan bot punya strategyGroup.
+        // Pilih path resume: multi-strategy jika flag ON.
         // Tanpa pengecekan ini setiap restart server akan selalu menjalankan BotEngine
         // legacy dengan strategyKey=ADAPTIVE_FUSION dari DB → log selalu "[ADAPTIVE_FUSION]".
-        const hasGroup = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0;
-        const useMulti = MULTI_STRATEGY_ENABLED && hasGroup;
+        //
+        // Prioritas strategyGroup:
+        //   1. Pakai bot.strategyGroup dari DB jika sudah terisi (bot pernah di-start multi-strategy)
+        //   2. Fallback: ambil dari tier user via getTierStrategies() — auto-upgrade bots legacy
+        //      yang punya strategyGroup=[] tapi seharusnya jalan multi-strategy (VAULT/MINT/FORGE)
+        let strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
+          ? bot.strategyGroup
+          : null;
+
+        if (MULTI_STRATEGY_ENABLED && !strategies) {
+          try {
+            const mode = bot.dryRun ? "dry" : "live";
+            strategies = await getTierStrategies(bot.userId, mode);
+          } catch (_) {
+            strategies = null; // fallback ke legacy jika gagal ambil tier
+          }
+        }
+
+        const useMulti = MULTI_STRATEGY_ENABLED && strategies && strategies.length > 0;
 
         let instance;
         if (useMulti) {
           instance = createMultiStrategyInstance(bot.userId, bot.symbol, {
-            strategies:  bot.strategyGroup,
+            strategies,
             capital:     bot.capital,
             dryRun:      bot.dryRun,
             botId:       bot.id,
             apiKey, apiSecret, passphrase,
           });
-          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${bot.strategyGroup.join(",")}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
         } else {
           instance = createBotInstance(bot.userId, bot.symbol, {
             capital:     bot.capital,
