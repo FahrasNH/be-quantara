@@ -13,6 +13,7 @@ const BotEngine = require("./BotEngine");
 const PositionManager = require("../domain/PositionManager");
 const { strategyRegistry } = require("../domain/strategy");
 const { calcIndicators } = require("../domain/indicators");
+const { isDuplicate } = require("../domain/signalIdempotency"); // FIX-3 (re-entry guard)
 
 class AdaptiveStrategyEngine extends BotEngine {
   constructor(config = {}) {
@@ -175,6 +176,34 @@ class AdaptiveStrategyEngine extends BotEngine {
       });
 
       if (!signal) return;
+
+      // 7b. RISK GATES — cooldown setelah loss, consec-loss, max trades/hari, daily
+      //     loss, ATR range. Tanpa ini AFS engine re-entry tanpa henti setelah SL
+      //     (bug "open posisi entry sama berulang"). Parent BotEngine._tick() punya
+      //     gate ini di baris ~892; override kita harus memanggilnya sendiri.
+      const riskGate = this._checkRiskGates(atr, price);
+      if (!riskGate.ok) {
+        if (this.state.checkCount % 10 === 1) {
+          console.log(`[${this.config.symbol}] 🚫 Skip entry (${this.strategyKey}): ${riskGate.reason}`);
+        }
+        return;
+      }
+
+      // 7c. IDEMPOTENCY (FIX-3) — cegah re-entry arah yang sama pada candle yang sama.
+      //     _fetchCandles cache hingga 15 menit → confirmed candle bisa identik antar
+      //     tick → entry/SL/TP identik berulang. Key = symbol+strategy+candleTime+arah.
+      const candleOpenTime = candles[lastIdx].timestamp ?? candles[lastIdx].openTime ?? candles[lastIdx].time;
+      if (isDuplicate({
+        symbol:         this.config.symbol,
+        strategy:       this.strategyKey,
+        candleOpenTime,
+        direction:      signal,
+      })) {
+        if (this.state.checkCount % 10 === 1) {
+          console.log(`[${this.config.symbol}] Duplicate signal dibuang (${this.strategyKey}) — ${signal} @candle ${candleOpenTime}`);
+        }
+        return;
+      }
 
       // 8. Cek konflik posisi — gunakan this.config.symbol
       const conflict = this.positionManager.checkEntryConflict(this.config.symbol);
