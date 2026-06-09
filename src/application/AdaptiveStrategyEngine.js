@@ -131,19 +131,38 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       // 3. Gunakan candle terkonfirmasi (n-2), sama seperti BotEngine parent
       const lastIdx = candles.length - 2;
+      const price   = candles[lastIdx].close;
+      const atr     = indicators.atr[lastIdx];
 
       // 4. Hitung volatility & trend_strength dari data nyata
       {
-        const price  = candles[lastIdx].close;
-        const atr    = indicators.atr?.[lastIdx];
-        const emaF   = indicators.emaFast?.[lastIdx];
-        const emaS   = indicators.emaSlow?.[lastIdx];
+        const emaF = indicators.emaFast?.[lastIdx];
+        const emaS = indicators.emaSlow?.[lastIdx];
         this.lastVolatility    = atr && price ? (atr / price) * 100 : 1.0;
         const emaDelta         = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
         this.lastTrendStrength = Math.min(emaDelta * 50, 1.0);
       }
 
-      // 5. Deteksi sinyal
+      // 5. Monitor SL/TP posisi yang sudah terbuka — WAJIB ada agar posisi bisa close.
+      //    Parent BotEngine._tick() melakukan ini di baris 856; karena kita override
+      //    penuh, kita harus panggil sendiri. Tanpa ini posisi tidak pernah di-close.
+      //    Pakai harga ticker real-time jika tersedia (lebih akurat dari close candle).
+      {
+        let monitorPrice = price;
+        if (this.state.openPositions.length > 0 && this.client?.getTicker) {
+          try {
+            const ticker = await this.client.getTicker(this.config.symbol);
+            if (ticker?.last > 0) monitorPrice = ticker.last;
+          } catch { /* fallback ke close candle */ }
+        }
+        this.state.lastPrice = monitorPrice;
+        await this._checkOpenPositions(monitorPrice, atr);
+      }
+
+      // 6. Jika posisi sudah penuh, skip deteksi sinyal baru
+      if (this.state.openPositions.length >= this.config.maxPositions) return;
+
+      // 7. Deteksi sinyal
       const signal = this.strategy.detectSignal(indicators, lastIdx, {
         balance:        this.capital || this.config.capital,
         volatility:     this.lastVolatility,
@@ -153,16 +172,14 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       if (!signal) return;
 
-      // 6. Cek konflik posisi — gunakan this.config.symbol
+      // 8. Cek konflik posisi — gunakan this.config.symbol
       const conflict = this.positionManager.checkEntryConflict(this.config.symbol);
       if (!conflict.allowed) {
         console.log(`[${this.config.symbol}] Position conflict: ${conflict.reason}`);
         return;
       }
 
-      // 7. Validasi entry
-      const price = candles[lastIdx].close;
-      const atr   = indicators.atr[lastIdx];
+      // 9. Validasi entry
       const validation = this.strategy.validateEntry(
         price,
         atr,
@@ -175,7 +192,7 @@ class AdaptiveStrategyEngine extends BotEngine {
         return;
       }
 
-      // 8. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
+      // 10. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
       await this._handleSignal(signal, price, atr, indicators);
     } catch (err) {
       console.error(`[${this.config.symbol}] Tick error:`, err.message);
