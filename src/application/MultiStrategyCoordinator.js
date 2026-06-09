@@ -184,6 +184,31 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.emit("status", this.getState());
   }
 
+  /**
+   * Rekonsiliasi strategi terhadap daftar yang diizinkan tier (TC-007).
+   * Dipanggil mis. setelah tier user downgrade — engine untuk strategi yang tidak
+   * lagi diizinkan dihentikan & dilepas, sisanya tetap berjalan.
+   * @param {string[]} allowedStrategies
+   * @returns {Promise<string[]>} daftar strategyKey yang dihentikan
+   */
+  async reconcileStrategies(allowedStrategies) {
+    const allowed = new Set(Array.isArray(allowedStrategies) ? allowedStrategies : []);
+    const stopped = [];
+    for (const [strategyKey, engine] of this.engines) {
+      if (allowed.has(strategyKey)) continue;
+      try { await engine.stop(); }
+      catch (e) { this._log("error", `reconcile stop [${strategyKey}] gagal: ${e.message}`); }
+      this.engines.delete(strategyKey);
+      stopped.push(strategyKey);
+    }
+    this.strategies = this.strategies.filter((s) => allowed.has(s));
+    if (stopped.length) {
+      this._log("warn", `Strategi dihentikan (tidak lagi diizinkan tier): ${stopped.join(", ")}`);
+      this.emit("status", this.getState());
+    }
+    return stopped;
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // SIGNAL ORCHESTRATION
   // ───────────────────────────────────────────────────────────────────────────
