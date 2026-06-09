@@ -1,7 +1,7 @@
 // Updated bots-afs.js to use passed-in helper functions and support userId filtering
 
 module.exports = function createBotsRouter(helpers) {
-  const { getBot, getAllBots, createBotInstance, removeBotInstance, sharedClient } = helpers;
+  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient } = helpers;
   const express = require("express");
   const router = express.Router();
   const { asyncHandler } = require("../../middleware/errorHandler");
@@ -11,13 +11,19 @@ module.exports = function createBotsRouter(helpers) {
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs } = require("../../infrastructure/db/botLogRepository");
-  const { assertStrategyAllowed, getStrategyEntitlements } = require("../../services/entitlement");
+  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies } = require("../../services/entitlement");
+
+  // Feature flag: Auto Multi-Strategy Execution per Coin. Default OFF agar runtime
+  // produksi tidak berubah sebelum validasi staging (Sprint 4). Aktifkan di staging
+  // dengan MULTI_STRATEGY_ENABLED=true.
+  const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED === "true";
 
   // ── Patch middleware/domain (Quantara Patch v1.0) ──────────────────────────
   const { strategyGuard } = require("../../middleware/strategyGuard");
   const { strategyChangeLimiter, emergencyStopConfirmGuard } = require("../../middleware/strategyRateLimiter");
   const { analyzeStrategyFit } = require("../../domain/strategyAnalysis");
   const { getMarketSnapshot } = require("../services/MarketSnapshotService");
+  const { issueConfirmToken, DEFAULT_MAX_AGE_MS } = require("../../infrastructure/security/confirmToken");
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
@@ -25,7 +31,7 @@ module.exports = function createBotsRouter(helpers) {
     return isEncrypted(value) ? decrypt(value) : value;
   }
 
-  /** Gabungkan record DB dengan state live BotEngine (jika instance ada). */
+  /** Gabungkan record DB dengan state live (BotEngine ATAU MultiStrategyCoordinator). */
   function mergeBotWithLiveState(userId, botRecord) {
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
@@ -37,6 +43,9 @@ module.exports = function createBotsRouter(helpers) {
         botId:       botRecord.symbol,
         running:     live.running,
         strategyKey: botRecord.strategyKey,
+        // Multi-Strategy per Coin: jika instance adalah koordinator, live.multiStrategy
+        // + live.strategyGroup + live.engines ikut tersurfacing ke FE (badge per-strategi).
+        strategyGroup: live.strategyGroup ?? botRecord.strategyGroup ?? [],
       };
     }
     return {
@@ -142,6 +151,21 @@ module.exports = function createBotsRouter(helpers) {
   );
 
   /**
+   * GET /api/v1/bots/:symbol/confirm-token  (TASK 3.5 — Security)
+   * Terbitkan token konfirmasi HMAC berumur pendek untuk force-close.
+   * Client mengirim token ini kembali pada POST /:symbol/stop { forceClose, confirm, confirmToken }.
+   * Ditaruh sebelum "/:symbol" agar tidak tertangkap route generik.
+   */
+  router.get(
+    "/:symbol/confirm-token",
+    validateSymbolParam,
+    asyncHandler(async (req, res) => {
+      const token = issueConfirmToken({ symbol: req.params.symbol, userId: req.userId });
+      res.json({ ok: true, confirmToken: token, expiresInMs: DEFAULT_MAX_AGE_MS });
+    })
+  );
+
+  /**
    * GET /api/v1/bots/:symbol
    * Get bot status
    */
@@ -191,41 +215,64 @@ module.exports = function createBotsRouter(helpers) {
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
-      const { strategyKey = "ADAPTIVE_FUSION", capital, dryRun } = req.body;
+      const { capital, dryRun } = req.body;
+      // FE lama mengirim strategyKey; FE baru (multi-strategy) tidak. Bedakan keduanya.
+      const explicitStrategyKey = req.body.strategyKey;
+      const mode = dryRun === false ? "live" : "dry";
 
-      // Entitlement check — block strategy not allowed by user's tier
-      try {
-        await assertStrategyAllowed(userId, strategyKey);
-      } catch (e) {
-        return res.status(e.status).json(e.body);
+      // ── Tentukan jalur eksekusi: multi-strategy (otomatis dari tier) vs legacy ──
+      // Multi aktif hanya bila flag ON DAN FE tidak memilih strategi manual.
+      const useMulti = MULTI_STRATEGY_ENABLED && !explicitStrategyKey;
+
+      let strategies = null;
+      if (useMulti) {
+        strategies = await getTierStrategies(userId, mode);
+        if (!strategies.length) {
+          return res.status(400).json({
+            ok: false,
+            statusCode: 400,
+            message: `Tier kamu belum punya strategi yang siap dijalankan pada mode ${mode}.`,
+          });
+        }
+      } else {
+        // Legacy: entitlement check untuk strategi tunggal yang dipilih.
+        const strategyKey = explicitStrategyKey || "ADAPTIVE_FUSION";
+        try {
+          await assertStrategyAllowed(userId, strategyKey);
+        } catch (e) {
+          return res.status(e.status).json(e.body);
+        }
+        strategies = [strategyKey];
       }
+
+      const capitalPerStrategy = (capital || 500) / strategies.length;
 
       // Check if bot exists for this user
       let bot = await prisma.bot.findUnique({
         where: { userId_symbol: { userId, symbol } },
       });
 
+      const botData = {
+        // strategyKey[0] disimpan untuk backward-compat (kolom lama tetap terisi).
+        strategyKey:        strategies[0],
+        strategyGroup:      useMulti ? strategies : [],
+        capitalPerStrategy: useMulti ? capitalPerStrategy : 0,
+        dryRun:             dryRun !== undefined ? dryRun !== false : (bot?.dryRun ?? true),
+      };
+
       // Create if doesn't exist
       if (!bot) {
         bot = await prisma.bot.create({
-          data: {
-            userId,
-            symbol,
-            capital: capital || 500,
-            strategyKey,
-            dryRun: dryRun !== false,
-          },
+          data: { userId, symbol, capital: capital || 500, ...botData },
         });
       } else {
-        // Update existing — simpan dryRun terbaru jika dikirim dari FE
         bot = await prisma.bot.update({
           where: { userId_symbol: { userId, symbol } },
           data: {
-            capital:     capital     || bot.capital,
-            strategyKey: strategyKey || bot.strategyKey,
-            dryRun:      dryRun !== undefined ? dryRun !== false : bot.dryRun,
-            running:     true,
-            startedAt:   new Date(),
+            capital:   capital || bot.capital,
+            ...botData,
+            running:   true,
+            startedAt: new Date(),
           },
         });
       }
@@ -245,18 +292,27 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // Create or get bot instance — sertakan kredensial user agar BotEngine
-      // bisa fetch balance & OHLCV nyata dari exchange
-      const instance = createBotInstance(userId, symbol, {
-        capital:     bot.capital,
-        strategyKey: bot.strategyKey,
-        dryRun:      bot.dryRun,
-        botId:       bot.id,
-        userId,                // diteruskan ke openSession → user_id di bot_sessions
-        apiKey:      decryptedApiKey,
-        apiSecret:   decryptedApiSecret,
-        passphrase:  decryptedPassphrase,
-      });
+      // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
+      const instance = useMulti
+        ? createMultiStrategyInstance(userId, symbol, {
+            strategies,
+            capital:    bot.capital,
+            dryRun:     bot.dryRun,
+            botId:      bot.id,
+            apiKey:     decryptedApiKey,
+            apiSecret:  decryptedApiSecret,
+            passphrase: decryptedPassphrase,
+          })
+        : createBotInstance(userId, symbol, {
+            capital:     bot.capital,
+            strategyKey: bot.strategyKey,
+            dryRun:      bot.dryRun,
+            botId:       bot.id,
+            userId,                // diteruskan ke openSession → user_id di bot_sessions
+            apiKey:      decryptedApiKey,
+            apiSecret:   decryptedApiSecret,
+            passphrase:  decryptedPassphrase,
+          });
 
       if (!instance.getState().running) {
         await instance.start();
@@ -351,6 +407,20 @@ module.exports = function createBotsRouter(helpers) {
       const userId = req.userId;
       const { symbol } = req.params;
       const { strategyKey } = req.body;
+
+      // TASK 3.3: pada flow Multi-Strategy per Coin, strategi ditentukan otomatis
+      // dari tier — pemilihan manual tidak relevan lagi. Saat fitur aktif, endpoint
+      // ini di-DEPRECATE (410 Gone). Saat flag OFF, tetap berfungsi (legacy) namun
+      // menandai Deprecation agar klien lama bisa bermigrasi.
+      if (MULTI_STRATEGY_ENABLED) {
+        return res.status(410).json({
+          ok: false,
+          statusCode: 410,
+          message: "Pemilihan strategi manual sudah tidak didukung. Strategi kini berjalan otomatis sesuai tier kamu.",
+          code: "STRATEGY_SELECTION_DEPRECATED",
+        });
+      }
+      res.setHeader("Deprecation", "true");
 
       if (!strategyKey || typeof strategyKey !== "string") {
         return res.status(400).json({
@@ -727,24 +797,36 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get("/strategies/available", asyncHandler(async (req, res) => {
     const { strategyRegistry } = require("../../domain/strategy");
-    const { listTiers } = require("../../domain/tierConfig");
+    const { listTiers, getTierConfig } = require("../../domain/tierConfig");
+    const { isStrategyLiveReady } = require("../../services/entitlement");
 
     const { tier, allowed, locked } = await getStrategyEntitlements(req.userId);
 
+    // TASK 3.2: tandai status tiap strategi. Pada flow Multi-Strategy per Coin,
+    // SEMUA strategi tier berjalan otomatis — ini hanya untuk display (bukan pilihan).
     const toStrategyInfo = (key) => {
       const s = strategyRegistry.get(key);
-      if (!s) return { key, label: key, description: "" };
+      const base = s
+        ? { key, label: s.config.label, description: s.config.description, version: s.config.version }
+        : { key, label: key, description: "" };
       return {
-        key,
-        label:       s.config.label,
-        description: s.config.description,
-        version:     s.config.version,
+        ...base,
+        status: isStrategyLiveReady(key) ? "active" : "dry_run_only",
       };
     };
+
+    const cfg = getTierConfig(tier);
+    const equalWeight = cfg?.capitalAllocation?.equal;
+    const count = allowed.length || 1;
 
     res.json({
       ok: true,
       tier,
+      // Multi-Strategy per Coin: strategi yang akan jalan OTOMATIS (display-only).
+      autoRun: true,
+      capitalAllocation: equalWeight ? `${(100 / count).toFixed(0)}% each` : "custom",
+      maxPositionsPerSymbol: cfg?.maxPositionsPerSymbol ?? count,
+      note: "All strategies run automatically. No manual selection required.",
       strategies: allowed.map(toStrategyInfo),
       locked: locked.map(({ key, requiredTier }) => ({
         ...toStrategyInfo(key),

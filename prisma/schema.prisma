@@ -74,6 +74,13 @@ model Bot {
   capital   Float    @default(500)
   strategyKey String  @default("ADAPTIVE_FUSION")
   dryRun    Boolean  @default(true)
+
+  // ── Multi-Strategy per Coin (Quantara feature) ──────────────────────────
+  // strategyGroup: semua strategi tier yang dijalankan serentak pada koin ini.
+  // Kosong = mode legacy single-strategy (pakai strategyKey di atas).
+  // capitalPerStrategy: capital / jumlah strategi (equal-weight allocation).
+  strategyGroup      String[] @default([])
+  capitalPerStrategy Float?   @default(0)
   
   running   Boolean  @default(false)
   startedAt DateTime?
@@ -106,8 +113,18 @@ model Trade {
   
   pnl       Float?
   pnlPercent Float?
-  
+
   status    String   @default("OPEN")
+
+  // ── Multi-Strategy attribution (Quantara feature) ───────────────────────
+  // firedByStrategy: strategi yang memfire entry ini (untuk atribusi & analitik).
+  // slPrice/tpPrice: harga SL/TP aktual yang dihitung saat entry.
+  // slMultiplier/tpMultiplier: dari config strategi yang fire (audit trail).
+  firedByStrategy String?
+  slPrice         Float?
+  tpPrice         Float?
+  slMultiplier    Float?
+  tpMultiplier    Float?
   
   enteredAt DateTime @default(now())
   exitedAt  DateTime?

@@ -13,6 +13,10 @@ const TIER_CONFIG = {
     price: 9,
     strategies: ["ADAPTIVE_FUSION"],
     maxPositions: 1,
+    // Multi-Strategy per Coin: alokasi modal equal-weight antar strategi pada
+    // satu koin, dan maks satu posisi per strategi per simbol.
+    capitalAllocation: { equal: true },
+    maxPositionsPerSymbol: 1,
     autoSelector: false,
     aiOptimizer: false,
     supportSLA: null,       // self-service
@@ -24,6 +28,8 @@ const TIER_CONFIG = {
     price: 29,
     strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"],
     maxPositions: 2,
+    capitalAllocation: { equal: true },
+    maxPositionsPerSymbol: 2,
     autoSelector: false,
     aiOptimizer: false,
     supportSLA: "48h",
@@ -35,6 +41,8 @@ const TIER_CONFIG = {
     price: 79,
     strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"],
     maxPositions: 3,
+    capitalAllocation: { equal: true },
+    maxPositionsPerSymbol: 3,
     autoSelector: true,
     aiOptimizer: false,     // static equal-weight allocation
     supportSLA: "24h",
@@ -46,6 +54,9 @@ const TIER_CONFIG = {
     price: 299,
     strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     maxPositions: 4,
+    // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
+    capitalAllocation: { equal: true /* dynamic: false */ },
+    maxPositionsPerSymbol: 4,   // bukan maxPositions global
     autoSelector: true,
     // AI optimizer feature flag — disabled until Fase 3
     aiOptimizer: process.env.VAULT_AI_OPTIMIZER_ENABLED === "true",
