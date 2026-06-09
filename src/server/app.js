@@ -36,6 +36,10 @@ const createSubscriptionRouter = require("./routes/subscription");
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
 
+// ── Feature flags ─────────────────────────────────────────────────────────
+// MULTI_STRATEGY_ENABLED: default ON; disable lewat env MULTI_STRATEGY_ENABLED=false.
+const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
+
 // ── CORS & Security ────────────────────────────────────────────────────────
 // Domain produksi dibaca dari env (cfg.corsOrigins). Localhost ditangani terpisah.
 const ALLOWED_ORIGINS = cfg.corsOrigins;
@@ -416,17 +420,36 @@ async function resumeRunningBots() {
       }
 
       try {
-        const instance = createBotInstance(bot.userId, bot.symbol, {
-          capital:     bot.capital,
-          strategyKey: bot.strategyKey,
-          dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
-          botId:       bot.id,
-          userId:      bot.userId,
-          apiKey, apiSecret, passphrase,
-        });
+        // Pilih path resume: multi-strategy jika flag ON dan bot punya strategyGroup.
+        // Tanpa pengecekan ini setiap restart server akan selalu menjalankan BotEngine
+        // legacy dengan strategyKey=ADAPTIVE_FUSION dari DB → log selalu "[ADAPTIVE_FUSION]".
+        const hasGroup = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0;
+        const useMulti = MULTI_STRATEGY_ENABLED && hasGroup;
+
+        let instance;
+        if (useMulti) {
+          instance = createMultiStrategyInstance(bot.userId, bot.symbol, {
+            strategies:  bot.strategyGroup,
+            capital:     bot.capital,
+            dryRun:      bot.dryRun,
+            botId:       bot.id,
+            apiKey, apiSecret, passphrase,
+          });
+          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${bot.strategyGroup.join(",")}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+        } else {
+          instance = createBotInstance(bot.userId, bot.symbol, {
+            capital:     bot.capital,
+            strategyKey: bot.strategyKey,
+            dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
+            botId:       bot.id,
+            userId:      bot.userId,
+            apiKey, apiSecret, passphrase,
+          });
+          console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+        }
+
         if (!instance.getState().running) await instance.start();
         resumed++;
-        console.log(`[Startup] Resume bot ${bot.symbol} (${bot.dryRun ? "dry-run" : "LIVE"})`);
       } catch (e) {
         console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
       }
