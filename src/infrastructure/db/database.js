@@ -523,8 +523,69 @@ async function getOpenTrades(sessionId) {
  * Export data trade lengkap dengan snapshot indikator — untuk analitik / ML.
  * Hanya trade yang sudah tertutup (punya exit_price dan pnl).
  */
+/**
+ * Export trade untuk CSV — sama dengan data yang ditampilkan di Riwayat Akun.
+ * Tidak memerlukan snapshot indikator (berbeda dengan getInsights).
+ */
+async function getTradesExport({ symbol = null, dryRun = null, limit = 5000, userId = null } = {}) {
+  const params = [];
+  let i = 1;
+  let where = "1=1";
+
+  if (userId) {
+    where = `(s.user_id = $${i++} OR s.user_id IS NULL OR t.session_id IS NULL)`;
+    params.push(userId);
+  }
+  if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
+  if (dryRun !== null) { where += ` AND t.dry_run = $${i++}`; params.push(dryRun ? 1 : 0); }
+  params.push(Math.min(limit, 5000));
+
+  const { rows } = await pool.query(
+    `SELECT t.*, s.mode, s.exchange AS session_exchange
+     FROM trades t
+     LEFT JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}
+     ORDER BY t.open_time DESC
+     LIMIT $${i}`,
+    params
+  );
+
+  return rows.map((row) => {
+    const ind = safeParseJSON(row.indicators);
+    const pnl = row.pnl ?? 0;
+    const fee = row.fee ?? 0;
+    const funding = row.funding ?? 0;
+    return {
+      id:          row.id,
+      sessionId:   row.session_id,
+      symbol:      row.symbol,
+      side:        row.side,
+      entryPrice:  row.entry_price,
+      exitPrice:   row.exit_price,
+      sl:          row.sl,
+      tp:          row.tp,
+      size:        row.size,
+      pnl,
+      fee,
+      funding,
+      pnlNet:      pnl - fee - funding,
+      pnlPct:      row.pnl_pct,
+      reason:      row.reason,
+      dryRun:      row.dry_run === 1,
+      mode:        row.mode ?? null,
+      exchange:    row.session_exchange ?? null,
+      strategy:    ind?.strategy ?? null,
+      openTime:    row.open_time,
+      closeTime:   row.close_time,
+      isPartial:   row.is_partial === 1,
+      result:      row.close_time && row.pnl != null ? (row.pnl > 0 ? "win" : "loss") : null,
+    };
+  });
+}
+
 async function getInsights({ symbol = null, dryRun = null, limit = 500, userId = null } = {}) {
-  let where = `t.close_time IS NOT NULL AND t.indicators IS NOT NULL`;
+  // Trade tertutup saja; kolom indicators opsional (trade lama bisa NULL → field indikator kosong).
+  let where = `t.close_time IS NOT NULL`;
   const params = [];
   let i = 1;
   if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
@@ -544,17 +605,20 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
   );
 
   return rows.map((row) => {
-    const ind = safeParseJSON(row.indicators);
+    const ind = safeParseJSON(row.indicators) || {};
+    const entry = row.entry_price;
+    const atrVal = ind.atr ?? row.atr ?? null;
     return {
       rsi:          ind.rsi          ?? null,
-      atr:          ind.atr          ?? null,
-      atrPct:       ind.atrPct       ?? null,
+      atr:          atrVal,
+      atrPct:       ind.atrPct ?? (atrVal && entry ? parseFloat(((atrVal / entry) * 100).toFixed(3)) : null),
       volumeRatio:  ind.volumeRatio  ?? null,
       emaFast:      ind.emaFast      ?? null,
       emaSlow:      ind.emaSlow      ?? null,
       emaTrendBias: ind.emaTrendBias ?? null,
       htfTrend:     ind.htfTrend     ?? null,
       strategy:     ind.strategy     ?? null,
+      entryMode:    ind.entryMode    ?? null,
       side:         row.side,
       symbol:       row.symbol,
       entryPrice:   row.entry_price,
@@ -837,6 +901,7 @@ module.exports = {
   getOpenTrades,
   getOpenTradesBySymbol,
   getInsights,
+  getTradesExport,
   recalcSessionStats,
   // equity
   snapshotEquity,

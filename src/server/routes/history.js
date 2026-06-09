@@ -56,11 +56,41 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
     }
   });
 
+  const toCsv = (data) => {
+    if (data.length === 0) {
+      return "id,sessionId,symbol,side,entryPrice,exitPrice,sl,tp,size,pnl,fee,funding,pnlNet,pnlPct,reason,dryRun,mode,exchange,strategy,openTime,closeTime,isPartial,result\n";
+    }
+    const headers = Object.keys(data[0]).join(",");
+    const rows = data.map(r =>
+      Object.values(r).map(v => {
+        if (v === null || v === undefined) return "";
+        const s = String(v);
+        return s.includes(",") || s.includes('"') || s.includes("\n")
+          ? `"${s.replace(/"/g, '""')}"`
+          : s;
+      }).join(",")
+    ).join("\n");
+    return `${headers}\n${rows}`;
+  };
+
   router.get("/trades", async (req, res) => {
     try {
       const sessionId = req.query.session_id ? safeInt(req.query.session_id, 0) : null;
       const symbol    = req.query.symbol || null;
-      const limit     = Math.min(safeInt(req.query.limit, 100), 1000);
+      const format    = req.query.format || "json";
+      const dryRun    = req.query.dry_run === undefined ? null
+        : req.query.dry_run === "true";
+      const limit     = format === "csv"
+        ? Math.min(safeInt(req.query.limit, 5000), 5000)
+        : Math.min(safeInt(req.query.limit, 100), 1000);
+
+      if (format === "csv") {
+        const data = await db.getTradesExport({ symbol, dryRun, limit, userId: req.userId ?? null });
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="quantara-trades-${Date.now()}.csv"`);
+        return res.send(toCsv(data));
+      }
+
       res.json(await db.getTrades({ sessionId, symbol, limit, userId: req.userId ?? null }));
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -177,14 +207,9 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
       const data = await db.getInsights({ symbol, dryRun, limit, userId: req.userId ?? null });
 
       if (format === "csv") {
-        if (data.length === 0) return res.status(200).send("No data");
-        const headers = Object.keys(data[0]).join(",");
-        const rows    = data.map(r =>
-          Object.values(r).map(v => (v === null ? "" : String(v))).join(",")
-        ).join("\n");
-        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="quantara-insights-${Date.now()}.csv"`);
-        return res.send(`${headers}\n${rows}`);
+        return res.send(toCsv(data));
       }
 
       // JSON default — sertakan summary statistik

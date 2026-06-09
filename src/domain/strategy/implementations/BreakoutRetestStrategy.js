@@ -52,13 +52,25 @@ class BreakoutRetestStrategy extends StrategyBase {
       leverage: 1,             // Conservative leverage for VAULT
     };
 
-    // Track breakout state for retest detection
-    this._breakoutState = {
-      direction: null,         // "LONG" or "SHORT"
-      breakoutLevel: null,     // Price level where breakout happened
-      breakoutBar: null,       // Bar index of breakout
-      confirmed: false,        // Is breakout confirmed?
-    };
+    // State per simbol agar singleton aman dipakai banyak bot
+    this._breakoutStates = new Map();
+  }
+
+  _stateKey(config = {}) {
+    return (config.symbol || "default").toUpperCase();
+  }
+
+  _getBreakoutState(config = {}) {
+    const key = this._stateKey(config);
+    if (!this._breakoutStates.has(key)) {
+      this._breakoutStates.set(key, {
+        direction: null,
+        breakoutLevel: null,
+        breakoutBar: null,
+        confirmed: false,
+      });
+    }
+    return this._breakoutStates.get(key);
   }
 
   /**
@@ -207,52 +219,50 @@ class BreakoutRetestStrategy extends StrategyBase {
 
     const { resistance, support } = levels;
 
+    const state = this._getBreakoutState(config);
+
     // Step 2: Check for LONG breakout
     const longBreakout = this.checkLongBreakout(closes, volumes, volSMA, resistance);
     if (longBreakout.valid) {
-      this._breakoutState = {
-        direction: "LONG",
-        breakoutLevel: resistance,
-        breakoutBar: lastIdx,
-        confirmed: false,
-      };
+      state.direction = "LONG";
+      state.breakoutLevel = resistance;
+      state.breakoutBar = lastIdx;
+      state.confirmed = false;
     }
 
     // Step 3: Check for SHORT breakout
     const shortBreakout = this.checkShortBreakout(closes, volumes, volSMA, support);
     if (shortBreakout.valid) {
-      this._breakoutState = {
-        direction: "SHORT",
-        breakoutLevel: support,
-        breakoutBar: lastIdx,
-        confirmed: false,
-      };
+      state.direction = "SHORT";
+      state.breakoutLevel = support;
+      state.breakoutBar = lastIdx;
+      state.confirmed = false;
     }
 
     // Step 4: Wait for RETEST entry (not immediate breakout)
     // Only check for retest if breakout was detected on a PREVIOUS bar
-    if (this._breakoutState.direction && this._breakoutState.breakoutBar < lastIdx) {
-      const barsSinceBreakout = lastIdx - this._breakoutState.breakoutBar;
+    if (state.direction && state.breakoutBar < lastIdx) {
+      const barsSinceBreakout = lastIdx - state.breakoutBar;
 
       // Expire stale breakouts: if the retest hasn't come within the window,
       // the level is no longer relevant — drop it to avoid entries on old levels.
       if (barsSinceBreakout > this.config.retestWindow) {
-        this.resetBreakoutState();
+        this.resetBreakoutState(config);
         return null;
       }
 
       const retestCheck = this.checkRetestEntry(
         closes,
-        this._breakoutState.direction,
-        this._breakoutState.breakoutLevel,
+        state.direction,
+        state.breakoutLevel,
         lows,
         highs
       );
 
       if (retestCheck.valid) {
-        const signal = this._breakoutState.direction;
-        this.resetBreakoutState();  // consume the breakout so it can't re-fire on the same level
-        return signal;  // "LONG" or "SHORT"
+        const signal = state.direction;
+        this.resetBreakoutState(config);
+        return signal;
       }
     }
 
@@ -348,20 +358,15 @@ class BreakoutRetestStrategy extends StrategyBase {
   /**
    * Get current breakout state
    */
-  getBreakoutState() {
-    return { ...this._breakoutState };
+  getBreakoutState(config = {}) {
+    return { ...this._getBreakoutState(config) };
   }
 
   /**
    * Reset breakout state (after trade closes)
    */
-  resetBreakoutState() {
-    this._breakoutState = {
-      direction: null,
-      breakoutLevel: null,
-      breakoutBar: null,
-      confirmed: false,
-    };
+  resetBreakoutState(config = {}) {
+    this._breakoutStates.delete(this._stateKey(config));
   }
 
   /**

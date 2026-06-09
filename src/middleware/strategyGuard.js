@@ -3,8 +3,9 @@
  * Middleware: blokir strategi yang belum production-ready dari start live/dry-run.
  *
  * ROOT CAUSE FIX (FIX-1):
- *   BREAKOUT_RETEST memiliki WR 0.7% (149 SL : 2 TP) — negative expectancy ekstrem.
- *   Tanpa guard ini, user bisa start bot dengan strategi yang dijamin rugi.
+ *   BREAKOUT_RETEST sempat WR 0.7% karena belum terintegrasi ke BotEngine (fallback ke
+ *   strategi B) + bug entry/SL. Setelah perbaikan: dry-run diizinkan, live diblokir
+ *   sampai validasi staging selesai.
  *
  * Catatan integrasi Quantara:
  *   Route Quantara mengirim strategi via `strategyKey` (lihat /:symbol/start dan
@@ -18,15 +19,15 @@
 
 'use strict';
 
-// Strategi yang diblokir dari mode apapun (live maupun dry-run)
-// Set STRATEGY_OVERRIDE=BREAKOUT_RETEST di .env khusus dev/staging untuk bypass
+// Strategi yang diblokir total (live maupun dry-run)
 const BLOCKED_STRATEGIES = new Set([
-  'BREAKOUT_RETEST',
+  // kosong — gunakan DRY_RUN_ONLY untuk strategi staging
 ]);
 
 // Strategi yang hanya boleh dry-run, belum boleh live
+// Set STRATEGY_OVERRIDE=BREAKOUT_RETEST di .env untuk izinkan live (dev saja)
 const DRY_RUN_ONLY_STRATEGIES = new Set([
-  // Tambah di sini jika ada strategi staging
+  'BREAKOUT_RETEST',
 ]);
 
 /**
@@ -55,12 +56,13 @@ function strategyGuard(req, res, next) {
     });
   }
 
-  // Dry-run only — boleh dry-run, tidak boleh live
-  if (DRY_RUN_ONLY_STRATEGIES.has(strategy) && !dryRun) {
+  // Dry-run only — boleh dry-run, tidak boleh live (kecuali STRATEGY_OVERRIDE)
+  if (DRY_RUN_ONLY_STRATEGIES.has(strategy) && !dryRun && !overrides.includes(strategy)) {
     return res.status(403).json({
       ok: false,
       statusCode: 403,
-      message: `Strategi "${strategy}" hanya tersedia dalam mode Dry Run saat ini.`,
+      message: `Strategi "${strategy}" hanya tersedia dalam mode Dry Run saat ini. ` +
+               `Sedang divalidasi di staging sebelum live.`,
       code: 'STRATEGY_DRYRUN_ONLY',
       strategy,
     });

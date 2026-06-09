@@ -38,7 +38,7 @@ function analyzeStrategyFit(marketData, currentStrategy) {
     ADAPTIVE_FUSION:  0,
     TREND_MOMENTUM:   0,
     MEAN_REVERSION:   0,
-    BREAKOUT_RETEST:  -999, // selalu negatif — strategi diblokir
+    BREAKOUT_RETEST:  0,
   };
 
   // === Market regime detection ===
@@ -88,6 +88,12 @@ function analyzeStrategyFit(marketData, currentStrategy) {
     signals.push({ type: 'htf_trend_warning', detail: `MR tidak direkomendasikan saat HTF ${htfTrend}` });
   }
 
+  // === BREAKOUT_RETEST score ===
+  // Cocok saat konsolidasi / volatilitas sedang-tinggi + volume breakout
+  scores.BREAKOUT_RETEST += ranging ? 20 : 0;
+  scores.BREAKOUT_RETEST += highVolume ? 10 : 0;
+  scores.BREAKOUT_RETEST += highATR ? 8 : 0;
+
   // === Tentukan rekomendasi ===
   const eligible = Object.entries(scores)
     .filter(([, s]) => s > 0)
@@ -121,7 +127,7 @@ function analyzeStrategyFit(marketData, currentStrategy) {
     confidence,
     currentStrategy,
     switchRecommended: recommended !== currentStrategy && confidence === 'high',
-    blockedStrategies: ['BREAKOUT_RETEST'],
+    blockedStrategies: [],
   };
 }
 

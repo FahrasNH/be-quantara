@@ -857,7 +857,8 @@ class BotEngine extends EventEmitter {
             this._log("info", `🚫 Skip entry: ${gate.reason}`);
           }
         } else {
-          if (this.state.htfTrend === "SIDEWAYS") {
+          // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
+          if (this.state.htfTrend === "SIDEWAYS" && this.config.signalType !== "BREAKOUT_RETEST") {
             // ── STEP 2a: SIDEWAYS — per-strategi (A diam, B breakout, C retest) ───
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
@@ -879,6 +880,7 @@ class BotEngine extends EventEmitter {
               useBothSides:     this.config.useBothSides,
               signalType:       this.config.signalType,
               volSmaMultiplier: this.config.volSmaMultiplier,
+              symbol:           this.config.symbol,
               // AFS: kondisi market nyata agar komponen dipilih dengan benar
               volatility:       atrPctNow,
               trend_strength:   trendStr,
@@ -920,8 +922,9 @@ class BotEngine extends EventEmitter {
             }
 
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
+            // BREAKOUT_RETEST: skip filter HTF — breakout/retest valid di konsolidasi
             let filteredSignal = mrSignal;
-            if (mrSignal && this.state.htfTrend !== "UNKNOWN") {
+            if (mrSignal && this.config.signalType !== "BREAKOUT_RETEST" && this.state.htfTrend !== "UNKNOWN") {
               if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
                 this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
@@ -966,6 +969,16 @@ class BotEngine extends EventEmitter {
                     `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
                   );
                 }
+              } else if (this.config.signalType === "BREAKOUT_RETEST") {
+                const BreakoutRetestStrategy = require("../domain/strategy/implementations/BreakoutRetestStrategy");
+                const brInstance = new BreakoutRetestStrategy();
+                const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal);
+                signalOptions.slDist = riskCfg.slDistance;
+                signalOptions.tpDist = riskCfg.tpDistance;
+                indicatorSnapshot.entryMode = "breakout_retest";
+                this._log("info",
+                  `[BR] RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+                );
               }
 
               // ── Idempotency guard (FIX-3) ───────────────────────────────────

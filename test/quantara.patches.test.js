@@ -92,24 +92,21 @@ describe('Quantara Patches', () => {});
 // ═══════════════════════════════════════════════════════════════════════════
 describe('[FIX-1] strategyGuard — BREAKOUT_RETEST blocker', () => {
 
-  it('harus blokir BREAKOUT_RETEST dengan 403', () => {
-    const req  = mockReq({ strategy: 'BREAKOUT_RETEST' });
+  it('harus allow BREAKOUT_RETEST dalam dry-run', () => {
+    const req  = mockReq({ strategyKey: 'BREAKOUT_RETEST', dryRun: true });
     const res  = mockRes();
-    const next = () => { throw new Error('next() seharusnya tidak dipanggil'); };
-
-    strategyGuard(req, res, next);
-
-    assert.strictEqual(res._status, 403);
-    assert.strictEqual(res._json.ok, false);
-    assert.strictEqual(res._json.code, 'STRATEGY_BLOCKED');
+    let nextCalled = false;
+    strategyGuard(req, res, () => { nextCalled = true; });
+    assert.strictEqual(nextCalled, true);
+    assert.strictEqual(res._status, null);
   });
 
-  it('harus blokir BREAKOUT_RETEST via field strategyKey juga', () => {
-    const req  = mockReq({ strategyKey: 'BREAKOUT_RETEST' });
+  it('harus blokir BREAKOUT_RETEST live dengan STRATEGY_DRYRUN_ONLY', () => {
+    const req  = mockReq({ strategyKey: 'BREAKOUT_RETEST', dryRun: false });
     const res  = mockRes();
     strategyGuard(req, res, () => { throw new Error('next() tak boleh dipanggil'); });
     assert.strictEqual(res._status, 403);
-    assert.strictEqual(res._json.code, 'STRATEGY_BLOCKED');
+    assert.strictEqual(res._json.code, 'STRATEGY_DRYRUN_ONLY');
   });
 
   it('harus allow ADAPTIVE_FUSION', () => {
@@ -146,8 +143,8 @@ describe('[FIX-1] strategyGuard — BREAKOUT_RETEST blocker', () => {
     assert.strictEqual(nextCalled, true);
   });
 
-  it('BLOCKED_STRATEGIES harus mengandung BREAKOUT_RETEST', () => {
-    assert.ok(BLOCKED_STRATEGIES.has('BREAKOUT_RETEST'));
+  it('BLOCKED_STRATEGIES tidak boleh mengandung BREAKOUT_RETEST', () => {
+    assert.ok(!BLOCKED_STRATEGIES.has('BREAKOUT_RETEST'));
   });
 });
 
@@ -304,10 +301,10 @@ describe('[FIX-2] analyzeStrategyFit — strategy analysis logic', () => {
     assert.strictEqual(result.recommended, 'MEAN_REVERSION');
   });
 
-  it('BREAKOUT_RETEST tidak boleh pernah jadi recommended', () => {
+  it('BREAKOUT_RETEST boleh muncul di strategyScores', () => {
     const result = analyzeStrategyFit(TRENDING_MARKET, 'BREAKOUT_RETEST');
-    assert.notStrictEqual(result.recommended, 'BREAKOUT_RETEST');
-    assert.ok(result.blockedStrategies.includes('BREAKOUT_RETEST'));
+    assert.ok('BREAKOUT_RETEST' in result.strategyScores);
+    assert.ok(!result.blockedStrategies.includes('BREAKOUT_RETEST'));
   });
 
   it('response harus mengandung semua required fields', () => {
