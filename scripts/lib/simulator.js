@@ -43,4 +43,31 @@ function simulateTrade(candles, entryIdx, direction, riskCfg) {
   return { entry, exit, pnl, exitBar: candles.length - 1, reason: "Timeout" };
 }
 
-module.exports = { simulateTrade };
+/**
+ * Biaya trading per-unit harga (same units as simulateTrade pnl), untuk backtest
+ * yang realistis. Fee dikenakan di kedua sisi (entry + exit notional); slippage
+ * di kedua fill. Mengembalikan biaya POSITIF (selalu mengurangi pnl).
+ *
+ * Contoh Bitget USDT-M taker: feeRate 0.0006 (0.06%/sisi), slippage ~0.0005.
+ *
+ * @param {number} entry
+ * @param {number} exit
+ * @param {{feeRate?:number, slippageRate?:number}} [opts]
+ * @returns {number} biaya per unit (≥ 0)
+ */
+function tradingCostPerUnit(entry, exit, { feeRate = 0, slippageRate = 0 } = {}) {
+  const e = Math.abs(Number(entry) || 0);
+  const x = Math.abs(Number(exit) || 0);
+  return (feeRate + slippageRate) * (e + x);
+}
+
+/**
+ * Terapkan biaya ke satu hasil simulateTrade. Mengembalikan salinan dengan
+ * grossPnl (asli), cost, dan pnl (net = gross − cost).
+ */
+function applyTradingCosts(trade, opts = {}) {
+  const cost = tradingCostPerUnit(trade.entry, trade.exit, opts);
+  return { ...trade, grossPnl: trade.pnl, cost, pnl: trade.pnl - cost };
+}
+
+module.exports = { simulateTrade, tradingCostPerUnit, applyTradingCosts };
