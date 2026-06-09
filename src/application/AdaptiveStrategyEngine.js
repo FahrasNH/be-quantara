@@ -12,6 +12,7 @@
 const BotEngine = require("./BotEngine");
 const PositionManager = require("../domain/PositionManager");
 const { strategyRegistry } = require("../domain/strategy");
+const { calcIndicators } = require("../domain/indicators");
 
 class AdaptiveStrategyEngine extends BotEngine {
   constructor(config = {}) {
@@ -28,6 +29,10 @@ class AdaptiveStrategyEngine extends BotEngine {
     // Initialize parent BotEngine
     super(config);
 
+    // BotEngine hanya menyimpan this.config.symbol, tidak this.symbol.
+    // Kita set eksplisit agar semua method di class ini bisa pakai this.symbol.
+    this.symbol = this.config.symbol;
+
     // Load strategy
     this.strategy = validation.strategy;
     this.strategyKey = strategyKey;
@@ -40,7 +45,7 @@ class AdaptiveStrategyEngine extends BotEngine {
       for (const pos of this.state.openPositions) {
         this.positionManager.addPosition({
           id: pos.id,
-          symbol: this.symbol,
+          symbol: this.config.symbol,
           side: pos.side,
           entry: pos.entry,
           strategyKey: this.strategyKey,
@@ -71,10 +76,13 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       const rankings = this.strategy.rankByMarketConditions(marketConditions);
 
+      // Guard: rankByMarketConditions pada beberapa strategi bisa return null/object bukan array
+      if (!Array.isArray(rankings)) return null;
+
       // Add activation check
       return rankings.map((r) => {
         const canActivate = this.strategy.canActivate(
-          this.capital,
+          this.capital || this.config.capital,
           "NEUTRAL",
           marketConditions.volatility
         );
@@ -97,24 +105,36 @@ class AdaptiveStrategyEngine extends BotEngine {
   }
 
   /**
-   * Override _tick() for AFS multi-strategy scanning
+   * Override _tick() for AFS multi-strategy scanning.
+   *
+   * Bug fixes (v2.2):
+   *  1. _fetchLatestKlines() tidak ada di BotEngine → pakai this._fetchCandles()
+   *  2. _calculateIndicators() tidak ada → pakai calcIndicators() (imported)
+   *  3. lastIdx = klines.length-1 salah → pakai candles.length-2 (candle terkonfirmasi)
+   *  4. this.symbol undefined → this.config.symbol (BotEngine tidak set this.symbol)
+   *  5. _handleSignal dipanggil dengan (signal,candle,indicators) → (signal,price,atr,snap,opts)
    */
   async _tick() {
     try {
-      // Get latest data
-      const klines = await this._fetchLatestKlines();
-      if (!klines || klines.length < 2) return;
+      // 1. Ambil data candle — method BotEngine yang benar
+      const candles = await this._fetchCandles();
+      if (!candles || candles.length < this.config.emaSlow + 20) return;
 
-      // Calculate indicators
-      const indicators = this._calculateIndicators(klines);
-      const lastIdx = klines.length - 1;
+      // 2. Hitung indikator — fungsi domain (bukan method instance)
+      const indicators = calcIndicators(candles, {
+        emaFast:   this.config.emaFast,
+        emaSlow:   this.config.emaSlow,
+        emaTrend:  this.config.emaTrend,
+        rsiPeriod: this.config.rsiPeriod,
+        atrPeriod: this.config.atrPeriod,
+      });
 
-      // Hitung volatility (ATR%) dan trend_strength (jarak EMA9-EMA21 relatif) dari
-      // data candle nyata. calcIndicators() tidak menghasilkan field ini sehingga
-      // tanpa kalkulasi manual AF selalu menerima default volatility=1, ts=0.1
-      // → komponen A/B/C dipilih dengan asumsi "dead market", bukan kondisi aktual.
+      // 3. Gunakan candle terkonfirmasi (n-2), sama seperti BotEngine parent
+      const lastIdx = candles.length - 2;
+
+      // 4. Hitung volatility & trend_strength dari data nyata
       {
-        const price  = klines[lastIdx].close;
+        const price  = candles[lastIdx].close;
         const atr    = indicators.atr?.[lastIdx];
         const emaF   = indicators.emaFast?.[lastIdx];
         const emaS   = indicators.emaSlow?.[lastIdx];
@@ -123,9 +143,9 @@ class AdaptiveStrategyEngine extends BotEngine {
         this.lastTrendStrength = Math.min(emaDelta * 50, 1.0);
       }
 
-      // Detect signal using strategy
+      // 5. Deteksi sinyal
       const signal = this.strategy.detectSignal(indicators, lastIdx, {
-        balance:        this.capital,
+        balance:        this.capital || this.config.capital,
         volatility:     this.lastVolatility,
         trend_strength: this.lastTrendStrength,
         htfTrend:       "NEUTRAL",
@@ -133,64 +153,61 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       if (!signal) return;
 
-      // Check position conflicts
-      const conflict = this.positionManager.checkEntryConflict(this.symbol);
+      // 6. Cek konflik posisi — gunakan this.config.symbol
+      const conflict = this.positionManager.checkEntryConflict(this.config.symbol);
       if (!conflict.allowed) {
-        console.log(
-          `[${this.symbol}] Position conflict: ${conflict.reason}`
-        );
+        console.log(`[${this.config.symbol}] Position conflict: ${conflict.reason}`);
         return;
       }
 
-      // Validate entry
+      // 7. Validasi entry
+      const price = candles[lastIdx].close;
+      const atr   = indicators.atr[lastIdx];
       const validation = this.strategy.validateEntry(
-        klines[lastIdx].close,
-        indicators.atr[lastIdx],
-        klines[lastIdx].volume,
-        indicators.volSMA || 0
+        price,
+        atr,
+        candles[lastIdx].volume,
+        indicators.volSMA?.[lastIdx] || 0
       );
 
       if (!validation.valid) {
-        console.log(
-          `[${this.symbol}] Entry validation failed: ${validation.reason}`
-        );
+        console.log(`[${this.config.symbol}] Entry validation failed: ${validation.reason}`);
         return;
       }
 
-      // Execute trade
-      await this._handleSignal(signal, klines[lastIdx], indicators);
+      // 8. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
+      await this._handleSignal(signal, price, atr, indicators);
     } catch (err) {
-      console.error(`[${this.symbol}] Tick error:`, err.message);
+      console.error(`[${this.config.symbol}] Tick error:`, err.message);
     }
   }
 
   /**
-   * Override _handleSignal() to track positions
+   * Override _handleSignal() to track positions.
+   * Signature harus sama dengan BotEngine: (signal, price, atr, indicatorSnapshot, options)
    */
-  async _handleSignal(signal, candle, indicators) {
+  async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
     try {
-      // Call parent implementation
-      const result = await super._handleSignal(signal, candle, indicators);
+      // Panggil parent dengan signature yang benar
+      const result = await super._handleSignal(signal, price, atr, indicatorSnapshot, options);
 
-      // Track position in manager
+      // Track position di manager
       if (result && result.positionId) {
         this.positionManager.addPosition({
           id: result.positionId,
-          symbol: this.symbol,
+          symbol: this.config.symbol,
           side: signal,
-          entry: candle.close,
+          entry: price,
           strategyKey: this.strategyKey,
           timestamp: new Date().getTime(),
         });
 
-        console.log(
-          `[${this.symbol}] Position tracked: ${result.positionId}`
-        );
+        console.log(`[${this.config.symbol}] Position tracked: ${result.positionId}`);
       }
 
       return result;
     } catch (err) {
-      console.error(`[${this.symbol}] Signal handling error:`, err.message);
+      console.error(`[${this.config.symbol}] Signal handling error:`, err.message);
       throw err;
     }
   }
@@ -215,7 +232,7 @@ class AdaptiveStrategyEngine extends BotEngine {
     for (const id of managerPositions) {
       if (!statePositions.has(id)) {
         this.positionManager.removePosition(id);
-        console.log(`[${this.symbol}] Position removed from manager: ${id}`);
+        console.log(`[${this.config.symbol}] Position removed from manager: ${id}`);
       }
     }
 
@@ -224,12 +241,12 @@ class AdaptiveStrategyEngine extends BotEngine {
       if (!managerPositions.has(pos.id)) {
         this.positionManager.addPosition({
           id: pos.id,
-          symbol: this.symbol,
+          symbol: this.config.symbol,
           side: pos.side,
           entry: pos.entry,
           strategyKey: this.strategyKey,
         });
-        console.log(`[${this.symbol}] Position added to manager: ${pos.id}`);
+        console.log(`[${this.config.symbol}] Position added to manager: ${pos.id}`);
       }
     }
   }
@@ -246,7 +263,7 @@ class AdaptiveStrategyEngine extends BotEngine {
       afsEnabled: true,
       rankings: this.getStrategyRankings(),
       positionConflicts: this.positionManager.checkEntryConflict(
-        this.symbol
+        this.config.symbol
       ),
       positionManager: this.positionManager.getSummary(),
     };
