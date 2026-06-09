@@ -13,6 +13,7 @@ const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSi
 const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
 const { getStrategy } = require("../domain/strategies");
+const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
@@ -1156,6 +1157,19 @@ class BotEngine extends EventEmitter {
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
+    // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
+    // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu
+    // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
+    // indikator yang dipersist di kolom trades.indicators agar setiap trade bisa
+    // ditelusuri ke strategi yang memfire-nya (AC-04).
+    const enrichedSnapshot = {
+      ...(indicatorSnapshot || {}),
+      ...buildTradeAttribution({
+        strategyKey: this.config.strategyKey,
+        sl, tp, slDist, tpDist, atr,
+      }),
+    };
+
     // Tentukan modal acuan untuk sizing.
     // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
     // Jangan pernah pakai angka hardcoded di live: akun kecil bisa 10x oversize
@@ -1349,7 +1363,7 @@ class BotEngine extends EventEmitter {
             sl, tp, size: finalSize, openTime, atr,
             dryRun:     false,
             orderId:    order?.orderId,
-            indicators: indicatorSnapshot,
+            indicators: enrichedSnapshot,
           });
         }
 
