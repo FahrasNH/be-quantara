@@ -402,7 +402,11 @@ class BotEngine extends EventEmitter {
         orphans = orphans.filter((row) => {
           let stratOfTrade = null;
           try { stratOfTrade = row.indicators ? JSON.parse(row.indicators)?.strategy : null; } catch { /* ignore */ }
-          // Bila trade lama tidak punya atribusi strategi, jangan klaim di mode grup.
+          // Engine grup non-leader: hanya klaim trade dengan atribusi strategi yang cocok.
+          // Engine grup LEADER (isGroupLeader=true): juga klaim legacy trades tanpa
+          // atribusi strategi — agar posisi yang dibuka sebelum multi-strategy di-deploy
+          // tetap bisa dipantau SL/TP dan ditutup dengan benar (tidak stuck selamanya).
+          if (stratOfTrade === null) return !!this.config.isGroupLeader;
           return stratOfTrade === this.config.strategyKey;
         });
       }
@@ -616,7 +620,12 @@ class BotEngine extends EventEmitter {
         if (this.config.dryRun) {
           // Dry-run: modal simulasi dari config DB, BUKAN saldo exchange nyata.
           this.state.capital = this.state.startCapital = this.config.capital || 500;
-          this._log("info", `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`);
+          // Jika engine adalah bagian dari grup multi-strategy, tampilkan modal
+          // per-engine DAN total grup agar tidak membingungkan.
+          const modalLog = this.config.groupTotalCapital && this.config.groupTotalCapital !== this.state.capital
+            ? `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT per strategi (total bot: $${this.config.groupTotalCapital.toFixed(2)}) (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`
+            : `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`;
+          this._log("info", modalLog);
         } else {
           // Live: gunakan equity total (available + margin terkunci).
           this.state.capital      = totalEquity;

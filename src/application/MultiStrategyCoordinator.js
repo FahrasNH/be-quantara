@@ -123,7 +123,8 @@ class MultiStrategyCoordinator extends EventEmitter {
       );
     }
 
-    for (const strategyKey of this.strategies) {
+    for (let i = 0; i < this.strategies.length; i++) {
+      const strategyKey = this.strategies[i];
       const engine = this.engineFactory(strategyKey, {
         ...this.engineConfig,
         userId: this.userId,
@@ -136,6 +137,11 @@ class MultiStrategyCoordinator extends EventEmitter {
         botKey: `${this.userId}:${this.symbol}#${strategyKey}`,
         groupKey: this.accountCoordinator?.groupKeyFor?.(this.userId, this.symbol)
           ?? `${this.userId}:${this.symbol}`,
+        // Engine pertama = group leader: bertanggung jawab meng-klaim legacy trades
+        // (yang tidak punya atribusi strategi) saat orphan recovery di _startup().
+        isGroupLeader: i === 0,
+        // Total capital grup — untuk log yang lebih informatif di _startup
+        groupTotalCapital: this.totalCapital,
       });
 
       // Relay event engine → konsumen koordinator (WS streaming, dll.)
