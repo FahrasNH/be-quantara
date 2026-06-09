@@ -8,7 +8,10 @@ const EventEmitter = require("events");
 const { getExchangeInfo } = require("../infrastructure/exchange");
 const BitgetClient = require("../infrastructure/exchange/BitgetClient");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
+// ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
+const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
+const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
 const { getStrategy } = require("../domain/strategies");
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
@@ -882,9 +885,43 @@ class BotEngine extends EventEmitter {
               balance:          this.state.capital,
             });
 
+            // ── STEP 2c: MEAN_REVERSION HTF regime guard (FIX-4) ──────────────
+            // MR tanpa filter akan counter-trend terus saat strong bull/bear →
+            // SL beruntun → daily loss limit. Blokir SHORT di strong bull dan
+            // LONG di strong bear, juga saat ATR HTF spike. Fail-open bila HTF
+            // tidak bisa diambil (konsisten dgn HTF trend filter di bawah).
+            let mrSignal = signal;
+            if (signal && (this.config.strategyKey === "MEAN_REVERSION" || this.config.signalType === "MEAN_REVERSION")) {
+              try {
+                const htf = htfCandlesCache || await this.client.getCandles(this.config.symbol, "1h", 60);
+                if (htf && htf.length >= 30) {
+                  const hCloses = htf.map(c => c.close);
+                  const hHighs  = htf.map(c => c.high);
+                  const hLows   = htf.map(c => c.low);
+                  const lastNN  = (a) => { for (let k = a.length - 1; k >= 0; k--) if (a[k] != null) return a[k]; return null; };
+                  const atrArr  = calcATR(hHighs, hLows, hCloses, 14);
+                  const htfData = {
+                    emaFast:     lastNN(calcEMA(hCloses, 9)),
+                    emaSlow:     lastNN(calcEMA(hCloses, 21)),
+                    rsi:         lastNN(calcRSI(hCloses, 14)),
+                    close:       hCloses[hCloses.length - 1],
+                    atr:         lastNN(atrArr),
+                    atrBaseline: lastNN(calcSMA(atrArr.map(v => (v == null ? 0 : v)), 20)),
+                  };
+                  const regimeCheck = meanReversionRegimeFilter({ direction: signal, htfData });
+                  if (!regimeCheck.allowed) {
+                    mrSignal = null;
+                    this._log("info", `[MR] Entry diblokir (${regimeCheck.regime}): ${regimeCheck.reason}`);
+                  }
+                }
+              } catch (e) {
+                this._log("warn", `[MR] HTF regime check gagal — fail-open: ${e.message}`);
+              }
+            }
+
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
-            let filteredSignal = signal;
-            if (signal && this.state.htfTrend !== "UNKNOWN") {
+            let filteredSignal = mrSignal;
+            if (mrSignal && this.state.htfTrend !== "UNKNOWN") {
               if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
                 this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
@@ -931,8 +968,24 @@ class BotEngine extends EventEmitter {
                 }
               }
 
-              await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
-              this.state.lastSignal = filteredSignal;
+              // ── Idempotency guard (FIX-3) ───────────────────────────────────
+              // Cegah dua posisi terbuka untuk sinyal yang sama bila tick/candle
+              // diproses dua kali (mis. polling overlap atau WS reconnect).
+              // Key = symbol + strategy + candleOpenTime + direction (TTL 5 menit).
+              const candleOpenTime = candles[lastIdx].timestamp ?? candles[lastIdx].openTime;
+              const dup = isDuplicate({
+                symbol:         this.config.symbol,
+                strategy:       this.config.strategyKey,
+                candleOpenTime,
+                direction:      filteredSignal,
+              });
+
+              if (dup) {
+                this._log("warn", `Duplicate signal dibuang — ${filteredSignal} @candle ${candleOpenTime}`);
+              } else {
+                await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
+                this.state.lastSignal = filteredSignal;
+              }
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
             }
@@ -1011,6 +1064,15 @@ class BotEngine extends EventEmitter {
       return candles;
     } catch (err) {
       this._log("warn", `Gagal ambil candles dari exchange: ${err.message}`);
+
+      // 2b. Fallback cache stale (hingga 24 jam) saat jaringan ke Bitget bermasalah
+      try {
+        const stale = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 86_400);
+        if (stale && stale.length >= this.config.emaSlow + 20) {
+          this._log("info", `Pakai candle cache (${stale.length} bar) — exchange tidak terjangkau`);
+          return stale;
+        }
+      } catch { /* abaikan */ }
     }
 
     // 3. Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),

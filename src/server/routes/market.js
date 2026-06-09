@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { Router } = require("express");
+const db = require("../../infrastructure/db/database");
 
 // parseInt yang aman — kembalikan `def` jika nilai tidak finite
 const safeInt = (val, def = 0) => {
@@ -62,7 +63,16 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
       const bot      = getBot(req.userId, sym);
       const interval = req.query.interval || bot?.config?.interval || "15m";
       const limit    = Math.min(safeInt(req.query.limit, 200), 500);
-      res.json(await sharedClient.getCandles(sym, interval, limit));
+
+      try {
+        const candles = await sharedClient.getCandles(sym, interval, limit);
+        db.cacheCandles("bitget", sym, interval, candles).catch(() => {});
+        return res.json(candles);
+      } catch (liveErr) {
+        const stale = await db.getCachedCandles("bitget", sym, interval, 86_400);
+        if (stale?.length) return res.json(stale);
+        throw liveErr;
+      }
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -74,6 +84,13 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
       const symbol    = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
       const timeframe = req.query.interval || "1d";
       const total     = Math.min(safeInt(req.query.limit, 500), 1000);
+
+      // Cache fresh 1 jam — hindari banyak request ke Bitget saat jaringan lambat
+      const cached = await db.getCachedCandles("bitget", symbol, timeframe, 3600);
+      if (cached && cached.length >= Math.min(total, 50)) {
+        return res.json(cached.slice(-total));
+      }
+
       const PAGE      = 200;
       const msPerBar  = INTERVAL_MS[timeframe] || 86_400_000;
       const allCandles = [];
@@ -93,8 +110,23 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
         .filter(c => { if (seen.has(c.timestamp)) return false; seen.add(c.timestamp); return true; })
         .sort((a, b) => a.timestamp - b.timestamp);
 
+      if (unique.length >= 50) {
+        db.cacheCandles("bitget", symbol, timeframe, unique).catch(() => {});
+        return res.json(unique);
+      }
+
+      // Fallback cache stale (24 jam) bila live fetch gagal sebagian
+      const stale = await db.getCachedCandles("bitget", symbol, timeframe, 86_400);
+      if (stale?.length >= 50) return res.json(stale.slice(-total));
+
       res.json(unique);
     } catch (err) {
+      try {
+        const symbol    = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
+        const timeframe = req.query.interval || "1d";
+        const stale = await db.getCachedCandles("bitget", symbol, timeframe, 86_400);
+        if (stale?.length >= 50) return res.json(stale);
+      } catch { /* noop */ }
       res.status(500).json({ error: err.message });
     }
   });

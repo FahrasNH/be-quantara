@@ -154,6 +154,20 @@ function getAllBots(userId) {
     .map(([, instance]) => instance);
 }
 
+// Hapus instance BotEngine dari memori (dipakai saat ganti strategi / edit config
+// / delete bot). Bot wajib sudah stopped sebelum dipanggil; sebagai pengaman kita
+// tetap stop() bila masih running agar tidak ada interval/loop yatim.
+function removeBotInstance(userId, symbol) {
+  const key = makeKey(userId, symbol);
+  const existing = botsMap[key];
+  if (!existing) return false;
+  try {
+    if (existing.getState().running) existing.stop();
+  } catch { /* abaikan — yang penting instance dilepas */ }
+  delete botsMap[key];
+  return true;
+}
+
 function createBotInstance(userId, symbol, configOverrides = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
@@ -199,7 +213,7 @@ app.use("/api/v1/auth", createAuthRouter());
 
 // ✅ FIX: Apply auth middleware ONLY to protected routes
 // Bots routes (protected, user-isolated)
-app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance }));
+app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, removeBotInstance, sharedClient }));
 
 // Market routes (protected)
 app.use("/api/v1/market", authMiddleware, createMarketRouter({
@@ -326,12 +340,10 @@ async function resumeRunningBots() {
   try {
     const { PrismaClient } = require("@prisma/client");
     const prisma = new PrismaClient();
-    const { decrypt, isEncrypted } = require("../infrastructure/security/crypto");
-    const dec = (v) => (!v ? null : isEncrypted(v) ? decrypt(v) : v);
+    const { getExchangeCredentials } = require("../services/userExchange");
 
     const bots = await prisma.bot.findMany({
-      where:   { running: true },
-      include: { user: { select: { apiKey: true, apiSecret: true, apiPassphrase: true } } },
+      where: { running: true },
     });
 
     // Log tanpa syarat → penanda pasti bahwa kode auto-resume sudah ter-deploy.
@@ -339,9 +351,10 @@ async function resumeRunningBots() {
 
     let resumed = 0, stopped = 0;
     for (const bot of bots) {
-      const apiKey     = dec(bot.user?.apiKey);
-      const apiSecret  = dec(bot.user?.apiSecret);
-      const passphrase = dec(bot.user?.apiPassphrase);
+      const creds = await getExchangeCredentials(bot.userId, "bitget");
+      const apiKey     = creds?.apiKey;
+      const apiSecret  = creds?.apiSecret;
+      const passphrase = creds?.apiPassphrase;
 
       // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
       if (!bot.dryRun && (!apiKey || !apiSecret)) {

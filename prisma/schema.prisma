@@ -22,12 +22,30 @@ model User {
   // cannot be connected by two different users (prevents bot conflicts).
   apiKeyHash    String?  @unique
 
-  bots      Bot[]
+  bots       Bot[]
   strategies UserStrategy[]
-  auditLogs AuditLog[]
-  
+  auditLogs  AuditLog[]
+  exchanges  UserExchange[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model UserExchange {
+  id            String   @id @default(cuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  exchangeType  String
+  apiKey        String
+  apiSecret     String
+  apiPassphrase String?
+  apiKeyHash    String   @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, exchangeType])
+  @@index([userId])
 }
 
 model UserStrategy {
