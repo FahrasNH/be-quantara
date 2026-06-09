@@ -291,7 +291,19 @@ class BotEngine extends EventEmitter {
       dryRun:        this.config.dryRun,
       capital:        this.state.capital,
       startCapital:   this.state.startCapital,
-      openPositions:  this.state.openPositions,
+      // Enrich tiap posisi dengan unrealizedPL terhitung agar FE bisa tampilkan
+      // PnL per-posisi (sebelumnya field ini hanya diisi di mode live → dry-run kosong).
+      openPositions:  this.state.openPositions.map((p) => {
+        let upnl = (p.unrealizedPL && p.unrealizedPL !== 0) ? p.unrealizedPL : null;
+        if (upnl == null) {
+          const px = this.state.lastPrice;
+          const sz = p.remainingSize || p.size || 0;
+          upnl = (px && p.entry)
+            ? (p.side === "LONG" ? (px - p.entry) * sz : (p.entry - px) * sz)
+            : 0;
+        }
+        return { ...p, unrealizedPL: upnl };
+      }),
       trades:         this.state.trades.slice(-50),
       // totalTrades = open + closed (bukan hanya closed)
       totalTrades:    this.state.trades.length + this.state.openPositions.length,

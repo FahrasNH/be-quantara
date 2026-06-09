@@ -290,6 +290,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     const engines = [];
     const openPositions = [];
     const trades = [];
+    let unrealizedPnL = 0;
 
     for (const [strategyKey, engine] of this.engines) {
       const st = typeof engine.getState === "function" ? engine.getState() : {};
@@ -301,11 +302,19 @@ class MultiStrategyCoordinator extends EventEmitter {
         closedTrades: (st.trades || []).length,
         lastSignal: st.lastSignal ?? null,
       });
-      for (const p of st.openPositions || []) openPositions.push({ ...p, strategyKey });
+      // Posisi tiap engine sudah di-enrich dengan unrealizedPL (lihat BotEngine.getState).
+      for (const p of st.openPositions || []) {
+        openPositions.push({ ...p, strategyKey });
+        unrealizedPnL += p.unrealizedPL || 0;
+      }
       for (const tr of st.trades || []) trades.push({ ...tr, strategyKey });
     }
 
-    const totalPnL = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const totalPnL  = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const totalFees = trades.reduce((s, t) => s + (t.fee || 0) + (t.funding || 0), 0);
+    const netPnL    = totalPnL - totalFees;
+    const wins      = trades.filter((t) => (t.pnl || 0) > 0).length;
+    const winRate   = trades.length > 0 ? Math.round((wins / trades.length) * 100) : 0;
 
     return {
       running: this.running,
@@ -324,6 +333,12 @@ class MultiStrategyCoordinator extends EventEmitter {
       closedTrades: trades.length,
       totalTrades: openPositions.length + trades.length,
       totalPnL,
+      totalFees,
+      netPnL,
+      // PnL mengambang agregat lintas-strategi — agar card "PnL net" menampilkan
+      // posisi terbuka, bukan selalu +$0.00.
+      unrealizedPnL,
+      winRate,
     };
   }
 }
