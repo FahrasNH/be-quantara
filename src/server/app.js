@@ -243,6 +243,9 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
     dryRun:       opts.dryRun,
     conflictMode: process.env.MULTI_STRATEGY_CONFLICT_MODE || "skip",
     engineConfig: { botId: opts.botId },
+    // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
+    // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
+    maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 2,
   });
 
   botsMap[key] = coordinator;
