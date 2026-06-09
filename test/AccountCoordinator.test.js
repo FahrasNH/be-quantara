@@ -101,6 +101,78 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
   t("equity unknown → gate akun di-skip (allow)", c.canTradeAccount().ok);
 }
 
+// ── Multi-Strategy group (TASK 1.4 / TC-008) ────────────────────────────────
+{
+  // 4 strategi × 25% capital pada SATU koin → total = capital, ≤ budget.
+  const c = new AC({ userId: "g1", maxAccountUtilization: 0.8 });
+  c.setAccountEquity(100); // budget = 80
+  const strategies = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+
+  const g = c.reserveGroup("g1", "ETHUSDT", strategies, 80); // total 80 (= budget)
+  t("reserveGroup → 4 reservasi (1/strategi)", g.count === 4);
+  t("reserveGroup → margin/strategi = 20 (80/4)", g.perStrategyMargin === 20);
+  t("group total committed = 80", c.committedMargin() === 80);
+
+  const util = c.getGroupUtilization("g1", "ETHUSDT");
+  t("getGroupUtilization reserved = 80", util.reserved === 80);
+  t("getGroupUtilization count = 4", util.count === 4);
+  t("getGroupUtilization util% = 100% (80/80 budget)", Math.abs(util.utilizationPct - 1) < 1e-9);
+
+  // Strategi segrup boleh berbagi simbol yang sama (bukan 1-posisi/simbol).
+  const sameGroup = c.canOpen({
+    botKey: "g1:ETHUSDT#TREND_MOMENTUM",
+    symbol: "ETHUSDT",
+    requiredMargin: 1,
+    groupKey: "g1:ETHUSDT",
+  });
+  t("strategi segrup → boleh berbagi simbol (bypass 1/simbol)", sameGroup.ok === true);
+
+  // Tapi strategi dari grup LAIN tetap diblok pada simbol yang sama.
+  const otherGroup = c.canOpen({
+    botKey: "g1:ETHUSDT#OUTSIDER",
+    symbol: "ETHUSDT",
+    requiredMargin: 1,
+    groupKey: "g1:OTHER", // groupKey berbeda
+  });
+  t("strategi grup LAIN pada simbol sama → tetap DITOLAK", !otherGroup.ok);
+}
+
+{
+  // Over-allocate: grup margin melebihi budget → strategi tambahan DITOLAK.
+  const c = new AC({ userId: "g2", maxAccountUtilization: 0.8 });
+  c.setAccountEquity(100); // budget 80
+  c.reserveGroup("g2", "BTCUSDT", ["AF", "TM", "MR", "BR"], 80); // sudah pas budget
+  const extra = c.canOpen({
+    botKey: "g2:SOLUSDT#AF",
+    symbol: "SOLUSDT",
+    requiredMargin: 5,
+    groupKey: "g2:SOLUSDT",
+  });
+  t("TC-008: grup penuh budget → koin lain DITOLAK (anti over-allocate)", !extra.ok);
+}
+
+{
+  // releaseGroup melepas semua reservasi grup, tidak menyentuh grup lain.
+  const c = new AC({ userId: "g3", maxAccountUtilization: 0.8 });
+  c.setAccountEquity(1000);
+  c.reserveGroup("g3", "ETHUSDT", ["AF", "TM"], 40);
+  c.reserveGroup("g3", "BTCUSDT", ["AF", "TM"], 60);
+  t("dua grup → committed 100", c.committedMargin() === 100);
+  const removed = c.releaseGroup("g3", "ETHUSDT");
+  t("releaseGroup ETH → lepas 2 reservasi", removed === 2);
+  t("setelah release ETH → committed 60 (BTC tetap)", c.committedMargin() === 60);
+  t("getGroupUtilization ETH setelah release → 0", c.getGroupUtilization("g3", "ETHUSDT").reserved === 0);
+}
+
+{
+  // Backward-compat: legacy single-bot (tanpa groupKey) tetap 1-posisi/simbol.
+  const c = new AC({ userId: "g4", maxAccountUtilization: 0.8 });
+  c.setAccountEquity(1000);
+  c.reserve("g4:BTCUSDT", { symbol: "BTCUSDT", margin: 10 }); // groupKey default null
+  const dup = c.canOpen({ botKey: "g4:BTCUSDT-2", symbol: "BTCUSDT", requiredMargin: 1 });
+  t("legacy (tanpa groupKey) → tetap maks 1 posisi/simbol", !dup.ok);
+}
+
 console.log(`\n  TESTS: ${pass} passed, ${fail} failed (${pass + fail} total)`);
 console.log(fail === 0 ? "  ✅ ALL TESTS PASSED\n" : "  ❌ SOME TESTS FAILED\n");
 process.exit(fail === 0 ? 0 : 1);

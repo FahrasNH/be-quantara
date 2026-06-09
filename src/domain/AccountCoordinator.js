@@ -99,6 +99,16 @@ class AccountCoordinator {
     return { ok: true, ddPct };
   }
 
+  /**
+   * Kunci grup multi-strategi = userId:symbol. Semua strategi yang berjalan
+   * serentak pada satu koin berbagi groupKey ini sehingga koordinator bisa
+   * (a) mengizinkan >1 posisi pada simbol yang sama selama masih satu grup, dan
+   * (b) membatasi TOTAL margin grup terhadap anggaran akun.
+   */
+  groupKeyFor(userId, symbol) {
+    return `${userId}:${symbol}`;
+  }
+
   /** Total margin yang sedang dipesan, opsional kecualikan satu botKey. */
   committedMargin(exceptBotKey = null) {
     let sum = 0;
@@ -114,10 +124,17 @@ class AccountCoordinator {
     return this.reservations.size - (this.reservations.has(exceptBotKey) ? 1 : 0);
   }
 
-  /** Apakah simbol ini sudah dipegang reservasi lain (selain botKey). */
-  hasSymbol(symbol, exceptBotKey = null) {
+  /**
+   * Apakah simbol ini sudah dipegang reservasi lain (selain botKey).
+   * @param {string} symbol
+   * @param {string|null} exceptBotKey   — abaikan reservasi milik botKey ini
+   * @param {string|null} exceptGroupKey — abaikan reservasi yang segrup (multi-strategi
+   *   pada satu koin boleh punya >1 posisi). null = perilaku legacy (1 posisi/simbol).
+   */
+  hasSymbol(symbol, exceptBotKey = null, exceptGroupKey = null) {
     for (const [key, r] of this.reservations) {
       if (key === exceptBotKey) continue;
+      if (exceptGroupKey && r.groupKey === exceptGroupKey) continue;
       if (r.symbol === symbol) return true;
     }
     return false;
@@ -129,17 +146,21 @@ class AccountCoordinator {
    * @param {string} p.botKey         — identitas bot (mis. "userId:SYMBOL")
    * @param {string} p.symbol
    * @param {number} p.requiredMargin — margin awal = notional / leverage (USDT)
+   * @param {string} [p.groupKey]     — grup multi-strategi (userId:symbol). Bila diisi,
+   *   batas 1-posisi-per-simbol diabaikan untuk strategi yang segrup (mereka memang
+   *   sengaja membuka beberapa posisi pada koin yang sama). Anggaran margin TOTAL tetap
+   *   ditegakkan karena committedMargin menjumlahkan semua reservasi (termasuk segrup).
    * @returns {{ ok: boolean, reason?: string, budget?: number, committed?: number }}
    */
-  canOpen({ botKey, symbol, requiredMargin }) {
+  canOpen({ botKey, symbol, requiredMargin, groupKey = null }) {
     // 1) Batas jumlah posisi serentak (jika diaktifkan)
     if (this.maxConcurrentPositions > 0 &&
         this.openCount(botKey) >= this.maxConcurrentPositions) {
       return { ok: false, reason: `Batas ${this.maxConcurrentPositions} posisi serentak (akun bersama) tercapai` };
     }
 
-    // 2) Maks 1 posisi per simbol di seluruh akun
-    if (this.hasSymbol(symbol, botKey)) {
+    // 2) Maks 1 posisi per simbol — kecuali strategi yang segrup (multi-strategi/koin)
+    if (this.hasSymbol(symbol, botKey, groupKey)) {
       return { ok: false, reason: `Sudah ada posisi ${symbol} di akun ini` };
     }
 
@@ -166,9 +187,19 @@ class AccountCoordinator {
     return { ok: true };
   }
 
-  /** Catat reservasi margin untuk satu bot. Idempotent per botKey. */
-  reserve(botKey, { symbol, margin }) {
-    this.reservations.set(botKey, { symbol, margin: margin || 0, ts: Date.now() });
+  /**
+   * Catat reservasi margin untuk satu bot. Idempotent per botKey.
+   * @param {string} botKey
+   * @param {{symbol: string, margin?: number, groupKey?: string, strategyKey?: string}} entry
+   */
+  reserve(botKey, { symbol, margin, groupKey = null, strategyKey = null }) {
+    this.reservations.set(botKey, {
+      symbol,
+      margin: margin || 0,
+      groupKey,
+      strategyKey,
+      ts: Date.now(),
+    });
     return this;
   }
 
@@ -176,6 +207,84 @@ class AccountCoordinator {
   release(botKey) {
     this.reservations.delete(botKey);
     return this;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // MULTI-STRATEGY GROUP (Auto Multi-Strategy Execution per Coin — TASK 1.4)
+  //
+  // Satu koin menjalankan N strategi serentak. Mereka direservasi sebagai unit
+  // grup (groupKey = userId:symbol) sehingga TOTAL margin grup terkontrol terhadap
+  // anggaran akun, namun tiap strategi tetap punya reservasi sendiri (botKey
+  // = groupKey#strategyKey) agar bisa dibuka/ditutup independen.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Reservasi margin untuk seluruh strategi pada satu koin (equal-weight).
+   * Mengganti reservasi grup yang ada untuk simbol ini (idempotent per grup).
+   * @param {string}   userId
+   * @param {string}   symbol
+   * @param {string[]} strategies   — daftar strategi yang jalan serentak
+   * @param {number}   totalMargin  — total margin grup (dibagi rata antar strategi)
+   * @returns {{ groupKey: string, perStrategyMargin: number, count: number }}
+   */
+  reserveGroup(userId, symbol, strategies, totalMargin) {
+    const groupKey = this.groupKeyFor(userId, symbol);
+    const list = Array.isArray(strategies) ? strategies.filter(Boolean) : [];
+    const perStrategyMargin = list.length > 0 ? (Number(totalMargin) || 0) / list.length : 0;
+
+    // Bersihkan reservasi grup lama dulu agar tidak menumpuk saat re-reserve.
+    this.releaseGroup(userId, symbol);
+
+    for (const strategyKey of list) {
+      this.reserve(`${groupKey}#${strategyKey}`, {
+        symbol,
+        margin: perStrategyMargin,
+        groupKey,
+        strategyKey,
+      });
+    }
+    return { groupKey, perStrategyMargin, count: list.length };
+  }
+
+  /**
+   * Lepas SEMUA reservasi milik grup (saat bot multi-strategi pada koin ini stop).
+   * @returns {number} jumlah reservasi yang dilepas
+   */
+  releaseGroup(userId, symbol) {
+    const groupKey = this.groupKeyFor(userId, symbol);
+    let removed = 0;
+    for (const [key, r] of this.reservations) {
+      if (r.groupKey === groupKey) {
+        this.reservations.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * Utilisasi margin satu grup multi-strategi pada satu koin.
+   * @returns {{ groupKey, symbol, reserved, count, strategies: string[], budget, utilizationPct }}
+   */
+  getGroupUtilization(userId, symbol) {
+    const groupKey = this.groupKeyFor(userId, symbol);
+    let reserved = 0;
+    const strategies = [];
+    for (const r of this.reservations.values()) {
+      if (r.groupKey !== groupKey) continue;
+      reserved += r.margin || 0;
+      if (r.strategyKey) strategies.push(r.strategyKey);
+    }
+    const budget = this.accountEquity * this.maxAccountUtilization;
+    return {
+      groupKey,
+      symbol,
+      reserved,
+      count: strategies.length,
+      strategies,
+      budget,
+      utilizationPct: budget > 0 ? reserved / budget : 0,
+    };
   }
 
   /** Ringkasan untuk debugging / UI. */
