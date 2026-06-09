@@ -144,9 +144,10 @@ class AdaptiveStrategyEngine extends BotEngine {
       }
 
       // 5. Monitor SL/TP posisi yang sudah terbuka — WAJIB ada agar posisi bisa close.
-      //    Parent BotEngine._tick() melakukan ini di baris 856; karena kita override
+      //    Parent BotEngine._tick() melakukan ini di baris ~865; karena kita override
       //    penuh, kita harus panggil sendiri. Tanpa ini posisi tidak pernah di-close.
       //    Pakai harga ticker real-time jika tersedia (lebih akurat dari close candle).
+      //    PENTING: super._checkOpenPositions (BUKAN this.) — lihat _syncPositionManager.
       {
         let monitorPrice = price;
         if (this.state.openPositions.length > 0 && this.client?.getTicker) {
@@ -156,7 +157,10 @@ class AdaptiveStrategyEngine extends BotEngine {
           } catch { /* fallback ke close candle */ }
         }
         this.state.lastPrice = monitorPrice;
-        await this._checkOpenPositions(monitorPrice, atr);
+        // SL/TP check + penutupan posisi (logika parent BotEngine)
+        await super._checkOpenPositions(monitorPrice, atr);
+        // Sinkronisasi position manager dengan state terbaru (setelah close)
+        this._syncPositionManager();
       }
 
       // 6. Jika posisi sudah penuh, skip deteksi sinyal baru
@@ -230,9 +234,15 @@ class AdaptiveStrategyEngine extends BotEngine {
   }
 
   /**
-   * Sync positions from state to position manager
+   * Sync positions from state to position manager.
+   *
+   * PENTING: method ini SENGAJA TIDAK bernama _checkOpenPositions agar tidak
+   * menutupi (shadow) BotEngine._checkOpenPositions(price, atr) yang melakukan
+   * pengecekan SL/TP + penutupan posisi. Sebelumnya method ini bernama
+   * _checkOpenPositions() tanpa argumen → memblokir logika SL/TP parent →
+   * posisi tidak pernah close meski harga sudah lewat TP.
    */
-  _checkOpenPositions() {
+  _syncPositionManager() {
     if (!this.state || !this.state.openPositions) return;
 
     // Get positions tracked in state
