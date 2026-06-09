@@ -408,6 +408,20 @@ module.exports = function createBotsRouter(helpers) {
       const { symbol } = req.params;
       const { strategyKey } = req.body;
 
+      // TASK 3.3: pada flow Multi-Strategy per Coin, strategi ditentukan otomatis
+      // dari tier — pemilihan manual tidak relevan lagi. Saat fitur aktif, endpoint
+      // ini di-DEPRECATE (410 Gone). Saat flag OFF, tetap berfungsi (legacy) namun
+      // menandai Deprecation agar klien lama bisa bermigrasi.
+      if (MULTI_STRATEGY_ENABLED) {
+        return res.status(410).json({
+          ok: false,
+          statusCode: 410,
+          message: "Pemilihan strategi manual sudah tidak didukung. Strategi kini berjalan otomatis sesuai tier kamu.",
+          code: "STRATEGY_SELECTION_DEPRECATED",
+        });
+      }
+      res.setHeader("Deprecation", "true");
+
       if (!strategyKey || typeof strategyKey !== "string") {
         return res.status(400).json({
           ok: false,
@@ -783,24 +797,36 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get("/strategies/available", asyncHandler(async (req, res) => {
     const { strategyRegistry } = require("../../domain/strategy");
-    const { listTiers } = require("../../domain/tierConfig");
+    const { listTiers, getTierConfig } = require("../../domain/tierConfig");
+    const { isStrategyLiveReady } = require("../../services/entitlement");
 
     const { tier, allowed, locked } = await getStrategyEntitlements(req.userId);
 
+    // TASK 3.2: tandai status tiap strategi. Pada flow Multi-Strategy per Coin,
+    // SEMUA strategi tier berjalan otomatis — ini hanya untuk display (bukan pilihan).
     const toStrategyInfo = (key) => {
       const s = strategyRegistry.get(key);
-      if (!s) return { key, label: key, description: "" };
+      const base = s
+        ? { key, label: s.config.label, description: s.config.description, version: s.config.version }
+        : { key, label: key, description: "" };
       return {
-        key,
-        label:       s.config.label,
-        description: s.config.description,
-        version:     s.config.version,
+        ...base,
+        status: isStrategyLiveReady(key) ? "active" : "dry_run_only",
       };
     };
+
+    const cfg = getTierConfig(tier);
+    const equalWeight = cfg?.capitalAllocation?.equal;
+    const count = allowed.length || 1;
 
     res.json({
       ok: true,
       tier,
+      // Multi-Strategy per Coin: strategi yang akan jalan OTOMATIS (display-only).
+      autoRun: true,
+      capitalAllocation: equalWeight ? `${(100 / count).toFixed(0)}% each` : "custom",
+      maxPositionsPerSymbol: cfg?.maxPositionsPerSymbol ?? count,
+      note: "All strategies run automatically. No manual selection required.",
       strategies: allowed.map(toStrategyInfo),
       locked: locked.map(({ key, requiredTier }) => ({
         ...toStrategyInfo(key),
