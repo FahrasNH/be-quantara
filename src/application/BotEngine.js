@@ -593,18 +593,17 @@ class BotEngine extends EventEmitter {
     } else {
       try {
         const bal = await this.client.getBalance(this.config.marginCoin);
-        if (this.config.dryRun && (!bal.available || bal.available <= 0)) {
-          this.state.capital = this.state.startCapital = 500;
-          this._log("warn", "Balance kosong, gunakan simulasi dengan modal $500");
+        const totalEquity = (bal.equity > 0 ? bal.equity : bal.available);
+
+        if (this.config.dryRun) {
+          // Dry-run: modal simulasi dari config DB, BUKAN saldo exchange nyata.
+          this.state.capital = this.state.startCapital = this.config.capital || 500;
+          this._log("info", `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`);
         } else {
-          // Gunakan equity total (available + margin terkunci) bukan available saja.
-          // Saat posisi terbuka, available turun (margin dikunci) tapi equity tetap.
-          const totalEquity = (bal.equity > 0 ? bal.equity : bal.available);
+          // Live: gunakan equity total (available + margin terkunci).
           this.state.capital      = totalEquity;
           this.state.startCapital = totalEquity;
           this._log("info", `Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
-        }
-        if (!this.config.dryRun) {
           await this.client.setLeverage(this.config.symbol, this.config.leverage);
           await this.client.setMarginMode(this.config.symbol, "crossed");
           this._log("info", `Leverage   : ${this.config.leverage}x diset ✓`);
@@ -612,8 +611,8 @@ class BotEngine extends EventEmitter {
       } catch (err) {
         this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${err.message}`);
         if (!this.config.dryRun) throw err;
-        this.state.capital = this.state.startCapital = 500;
-        this._log("warn", "Fallback ke DRY RUN dengan modal $500");
+        this.state.capital = this.state.startCapital = this.config.capital || 500;
+        this._log("warn", `Fallback DRY RUN dengan modal $${this.state.capital.toFixed(2)}`);
       }
     }
 
