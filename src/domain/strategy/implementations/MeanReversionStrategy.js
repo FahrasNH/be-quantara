@@ -411,6 +411,25 @@ class MeanReversionStrategy extends StrategyBase {
     };
   }
 
+  /**
+   * Validasi kondisi entry terakhir sebelum eksekusi (gate engine).
+   * Mean reversion beroperasi di pasar ranging/volatilitas sedang — ambang ATR
+   * lebih longgar di sisi bawah, volume tidak harus tinggi. Konfirmasi arah utama
+   * sudah ditangani detectSignal (Bollinger + RSI + confirmation bars).
+   */
+  validateEntry(price, atr, volume, volSMA) {
+    if (!price || !atr) return { valid: true, reason: "Data tidak lengkap — lewati gate" };
+    const atrPct   = (atr / price) * 100;
+    const volRatio = volSMA > 0 ? volume / volSMA : 1;
+    if (atrPct < 0.15 || atrPct > 4.0) {
+      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% di luar rentang sehat (0.15–4.0%)` };
+    }
+    if (volRatio < 0.5) {
+      return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× di bawah ambang (0.5×)` };
+    }
+    return { valid: true, reason: "Entry conditions met" };
+  }
+
   getConfig() {
     return this.config;
   }
