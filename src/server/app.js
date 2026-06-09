@@ -246,6 +246,9 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
     maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 2,
+    // Inject DB → canEnter pakai DB sebagai sumber kebenaran tunggal (cap menghormati
+    // SEMUA posisi terbuka termasuk orphan, bukan hanya state engine live).
+    db,
   });
 
   botsMap[key] = coordinator;
