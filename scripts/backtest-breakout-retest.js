@@ -24,7 +24,7 @@ require("dotenv").config();
 
 const BreakoutRetestStrategy = require("../src/domain/strategy/implementations/BreakoutRetestStrategy");
 const { calcIndicators } = require("../src/domain/indicators");
-const { simulateTrade }   = require("./lib/simulator");
+const { simulateTrade, tradingCostPerUnit } = require("./lib/simulator");
 
 // ── CLI args ──────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -37,6 +37,9 @@ const SYMBOL        = get("--symbol",  "BTCUSDT");
 const DAYS          = parseInt(get("--days",   "30"), 10);
 const START_BALANCE = parseFloat(get("--capital", "1000"));
 const SEED          = parseInt(get("--seed", "12345"), 10);
+// Biaya trading (untuk metrik COST-ADJUSTED). Default Bitget USDT-M taker.
+const FEE_RATE      = parseFloat(get("--fee", "0.0006"));      // 0.06% / sisi
+const SLIPPAGE_RATE = parseFloat(get("--slippage", "0.0005")); // 0.05% / fill
 
 // PRNG deterministik (mulberry32) → backtest REPRODUCIBLE. Sebelumnya
 // Math.random() membuat tiap run memakai data berbeda (metrik tak bisa dibanding).
@@ -139,9 +142,31 @@ async function runBacktest() {
   console.log(`  Expected: Win Rate 51-56%, RR 1:4.0, Annual Return 350-420%`);
   console.log(`${"═".repeat(70)}\n`);
 
-  // Load candles
-  const candles = generateMockCandles(SYMBOL, DAYS);
-  console.log(`📊 Candles loaded: ${candles.length} bars (15m, ${DAYS} days)`);
+  // Load candles — --real menarik data historis NYATA dari exchange (paginasi),
+  // selain itu pakai data sintetis ber-seed (default, jalan tanpa jaringan).
+  const USE_REAL = args.includes("--real");
+  let candles;
+  if (USE_REAL) {
+    process.env.BT_DATA_SOURCE = "REAL (exchange)";
+    const BitgetClient = require("../src/infrastructure/exchange/BitgetClient");
+    const { fetchHistoricalCandles } = require("./lib/historicalData");
+    const client = new BitgetClient(
+      process.env.BITGET_API_KEY || "", process.env.BITGET_SECRET_KEY || "", process.env.BITGET_PASSPHRASE || ""
+    );
+    const TF = get("--tf", "15m");
+    console.log(`🌐 Mengambil data historis NYATA ${SYMBOL} ${TF} (${DAYS} hari)…`);
+    candles = await fetchHistoricalCandles(client, SYMBOL, TF, DAYS, {
+      onProgress: (n) => process.stdout.write(`\r  …${n} candle`),
+    });
+    process.stdout.write("\n");
+    if (!candles || candles.length < 100) {
+      console.error(`❌ Data nyata tidak cukup (${candles?.length || 0} candle). Pastikan jaringan menjangkau exchange.`);
+      process.exit(1);
+    }
+  } else {
+    candles = generateMockCandles(SYMBOL, DAYS);
+  }
+  console.log(`📊 Candles loaded: ${candles.length} bars (${USE_REAL ? get("--tf", "15m") + ", REAL" : "15m, seeded"}, ${DAYS} days)`);
 
   // Calculate indicators
   const indicators = calcIndicators(candles, {
@@ -179,6 +204,13 @@ async function runBacktest() {
     const qty      = slDist > 0 ? riskAmt / slDist : 0;
     const realPnl  = trade.pnl * qty;
 
+    // COST-ADJUSTED (per-trade R, bebas dari artefak compounding):
+    //   grossR = pnl / 1R ; cost dalam R = biaya fee+slippage / 1R ; netR = gross − cost.
+    const costUnit = tradingCostPerUnit(trade.entry, trade.exit, { feeRate: FEE_RATE, slippageRate: SLIPPAGE_RATE });
+    const grossR   = slDist > 0 ? trade.pnl / slDist : 0;
+    const costR    = slDist > 0 ? costUnit / slDist : 0;
+    const netR     = grossR - costR;
+
     balance += realPnl;
     trades.push({
       bar:       i,
@@ -191,6 +223,7 @@ async function runBacktest() {
       pnlPct:    pnlPct.toFixed(3),
       reason:    trade.reason,
       rr:        riskCfg.riskReward,
+      grossR, costR, netR,
     });
     activeUntil = trade.exitBar;
   }
@@ -285,6 +318,33 @@ async function runBacktest() {
   console.log(`  ✅ Profit Factor 1.5 : ${passPF ? "PASS" : "FAIL"} (${pf})`);
 
   console.log(`\n${pass ? "✅ PASS — Strategy ready for paper trading" : "⚠️  REVIEW — Optimize strategy before live"}`);
+
+  // ── COST-ADJUSTED EXPECTANCY (per-trade R, net fee+slippage) ───────────────
+  // Untuk strategi high-RR, WR mentah menyesatkan; metrik yang benar adalah
+  // EXPECTANCY net biaya. Breakeven WR untuk RR R = 1/(1+R).
+  const n         = trades.length || 1;
+  const grossExpR = trades.reduce((s, t) => s + (t.grossR || 0), 0) / n;
+  const netExpR   = trades.reduce((s, t) => s + (t.netR || 0), 0) / n;
+  const avgCostR  = trades.reduce((s, t) => s + (t.costR || 0), 0) / n;
+  const netWins   = trades.filter(t => (t.netR || 0) > 0);
+  const netWR     = (netWins.length / n * 100);
+  const posR      = trades.filter(t => (t.netR || 0) > 0).reduce((s, t) => s + t.netR, 0);
+  const negR      = Math.abs(trades.filter(t => (t.netR || 0) < 0).reduce((s, t) => s + t.netR, 0));
+  const netPF     = negR > 0 ? posR / negR : Infinity;
+  const rrNum     = parseFloat(avgRR) || 0;
+  const breakevenWR = rrNum > 0 ? (100 / (1 + rrNum)) : 0;
+
+  console.log(`\n💰 COST-ADJUSTED (fee ${(FEE_RATE*100).toFixed(3)}%/sisi + slippage ${(SLIPPAGE_RATE*100).toFixed(3)}%/fill):`);
+  console.log(`  Breakeven WR @ RR1:${avgRR}  : ${breakevenWR.toFixed(1)}%  (WR di atas ini = profit)`);
+  console.log(`  Gross expectancy        : ${grossExpR >= 0 ? "+" : ""}${grossExpR.toFixed(3)} R/trade`);
+  console.log(`  Avg cost                : -${avgCostR.toFixed(3)} R/trade`);
+  console.log(`  NET expectancy          : ${netExpR >= 0 ? "+" : ""}${netExpR.toFixed(3)} R/trade  ${netExpR > 0 ? "✅" : "❌"}`);
+  console.log(`  NET win rate            : ${netWR.toFixed(1)}%`);
+  console.log(`  NET profit factor       : ${netPF.toFixed(2)}  ${netPF >= 1.5 ? "✅" : netPF >= 1 ? "⚠️" : "❌"}`);
+  console.log(`\n  → Verdict expectancy: ${netExpR > 0
+    ? "POSITIF net biaya — secara struktural menguntungkan meski WR < 51%"
+    : "NEGATIF net biaya — tidak layak live"}`);
+  console.log(`  ⚠️  Catatan: angka ini dari data ${process.env.BT_DATA_SOURCE || "SINTETIS ber-seed"}. Untuk keputusan live, jalankan dengan data historis NYATA.`);
   console.log(`${"═".repeat(70)}\n`);
 }
 
