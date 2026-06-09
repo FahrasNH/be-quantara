@@ -183,13 +183,22 @@ class AdaptiveStrategyEngine extends BotEngine {
         return;
       }
 
-      // 9. Validasi entry
-      const validation = this.strategy.validateEntry(
-        price,
-        atr,
-        candles[lastIdx].volume,
-        indicators.volSMA?.[lastIdx] || 0
-      );
+      // 9. Validasi entry — degrade mulus bila strategi tidak mengimplementasikan
+      //    validateEntry (jangan crash tick; anggap valid agar detectSignal yang memutuskan).
+      let validation = { valid: true, reason: "no validateEntry" };
+      if (typeof this.strategy.validateEntry === "function") {
+        try {
+          validation = this.strategy.validateEntry(
+            price,
+            atr,
+            candles[lastIdx].volume,
+            indicators.volSMA?.[lastIdx] || 0
+          );
+        } catch (e) {
+          // Strategi belum implement → jangan blokir, log sekali per beberapa tick
+          validation = { valid: true, reason: `validateEntry skip: ${e.message}` };
+        }
+      }
 
       if (!validation.valid) {
         console.log(`[${this.config.symbol}] Entry validation failed: ${validation.reason}`);
