@@ -198,33 +198,40 @@ describe("BreakoutRetestStrategy", () => {
   // ── LONG & SHORT Signal Handling Tests ──────────────────────────────
 
   describe("LONG & SHORT handling", () => {
-    it("should track LONG breakout state", () => {
-      strategy._breakoutState.direction = "LONG";
-      strategy._breakoutState.breakoutLevel = 105;
-      strategy._breakoutState.confirmed = false;
+    // State breakout per-symbol (Map): akses via _getBreakoutState(config),
+    // getBreakoutState(config), resetBreakoutState(config).
+    const cfg = { symbol: "BTCUSDT" };
 
-      const state = strategy.getBreakoutState();
+    it("should track LONG breakout state", () => {
+      const bs = strategy._getBreakoutState(cfg);
+      bs.direction = "LONG";
+      bs.breakoutLevel = 105;
+      bs.confirmed = false;
+
+      const state = strategy.getBreakoutState(cfg);
 
       assert.strictEqual(state.direction, "LONG", "Should track LONG direction");
       assert.strictEqual(state.breakoutLevel, 105, "Should track breakout level");
     });
 
     it("should track SHORT breakout state", () => {
-      strategy._breakoutState.direction = "SHORT";
-      strategy._breakoutState.breakoutLevel = 95;
-      strategy._breakoutState.confirmed = false;
+      const bs = strategy._getBreakoutState(cfg);
+      bs.direction = "SHORT";
+      bs.breakoutLevel = 95;
+      bs.confirmed = false;
 
-      const state = strategy.getBreakoutState();
+      const state = strategy.getBreakoutState(cfg);
 
       assert.strictEqual(state.direction, "SHORT", "Should track SHORT direction");
     });
 
     it("should reset breakout state after trade", () => {
-      strategy._breakoutState.direction = "LONG";
-      strategy._breakoutState.confirmed = true;
+      const bs = strategy._getBreakoutState(cfg);
+      bs.direction = "LONG";
+      bs.confirmed = true;
 
-      strategy.resetBreakoutState();
-      const state = strategy.getBreakoutState();
+      strategy.resetBreakoutState(cfg);
+      const state = strategy.getBreakoutState(cfg);
 
       assert.strictEqual(state.direction, null, "Should reset direction");
       assert.strictEqual(state.confirmed, false, "Should reset confirmed flag");
