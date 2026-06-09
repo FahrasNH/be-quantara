@@ -23,6 +23,7 @@ module.exports = function createBotsRouter(helpers) {
   const { strategyChangeLimiter, emergencyStopConfirmGuard } = require("../../middleware/strategyRateLimiter");
   const { analyzeStrategyFit } = require("../../domain/strategyAnalysis");
   const { getMarketSnapshot } = require("../services/MarketSnapshotService");
+  const { issueConfirmToken, DEFAULT_MAX_AGE_MS } = require("../../infrastructure/security/confirmToken");
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
@@ -146,6 +147,21 @@ module.exports = function createBotsRouter(helpers) {
 
       const analysis = analyzeStrategyFit({ ...snapshot, symbol }, currentStrategy);
       return res.json(analysis);
+    })
+  );
+
+  /**
+   * GET /api/v1/bots/:symbol/confirm-token  (TASK 3.5 — Security)
+   * Terbitkan token konfirmasi HMAC berumur pendek untuk force-close.
+   * Client mengirim token ini kembali pada POST /:symbol/stop { forceClose, confirm, confirmToken }.
+   * Ditaruh sebelum "/:symbol" agar tidak tertangkap route generik.
+   */
+  router.get(
+    "/:symbol/confirm-token",
+    validateSymbolParam,
+    asyncHandler(async (req, res) => {
+      const token = issueConfirmToken({ symbol: req.params.symbol, userId: req.userId });
+      res.json({ ok: true, confirmToken: token, expiresInMs: DEFAULT_MAX_AGE_MS });
     })
   );
 

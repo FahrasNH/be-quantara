@@ -15,6 +15,7 @@
 
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
+const { verifyConfirmToken } = require('../infrastructure/security/confirmToken');
 
 /**
  * Rate limiter untuk strategy switch.
@@ -46,11 +47,13 @@ const strategyChangeLimiter = rateLimit({
  * Middleware: Double-confirm untuk operasi stop + force-close.
  *
  * Client WAJIB mengirim body:
- *   { forceClose: true, confirm: true, confirmToken: "STOP_<SYMBOL>_<userId_last4>" }
+ *   { forceClose: true, confirm: true, confirmToken: "<ts>.<hmac>" }
  *
- * Stop biasa (tanpa forceClose) TIDAK memerlukan konfirmasi.
+ * confirmToken di-issue server via GET /bots/:symbol/confirm-token (HMAC, umur 5
+ * menit). Stop biasa (tanpa forceClose) TIDAK memerlukan konfirmasi.
  *
- * ROOT CAUSE: tanpa ini, satu request malformed atau CSRF bisa force-close posisi live.
+ * ROOT CAUSE (FIX-5 / TASK 3.5): token lama predictable (STOP_<symbol>_<last4>)
+ * → bisa dipalsukan. Diganti token HMAC server-issued (lihat confirmToken.js).
  */
 function emergencyStopConfirmGuard(req, res, next) {
   const { forceClose, confirm, confirmToken } = req.body ?? {};
@@ -69,14 +72,13 @@ function emergencyStopConfirmGuard(req, res, next) {
 
   const { symbol } = req.params;
   const userId     = req.userId ?? '';
-  const last4      = userId.toString().slice(-4);
-  const expected   = `STOP_${symbol}_${last4}`;
 
-  if (!confirmToken || confirmToken !== expected) {
+  if (!verifyConfirmToken(confirmToken, { symbol, userId })) {
     return res.status(400).json({
       ok: false,
       statusCode: 400,
-      message: `Token konfirmasi tidak cocok. Format: "STOP_${symbol}_XXXX"`,
+      message: 'Token konfirmasi tidak valid atau kedaluwarsa. Ambil token baru via GET /bots/' +
+               `${symbol}/confirm-token lalu kirim ulang dalam 5 menit.`,
       code: 'INVALID_CONFIRM_TOKEN',
     });
   }
