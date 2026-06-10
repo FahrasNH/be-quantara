@@ -57,7 +57,7 @@ server {
   }
 
   location / {
-    root /var/www/quantara;
+    root /var/www/quantara-prod/fe;
     try_files $uri $uri/ /index.html;
   }
 }
