@@ -81,7 +81,12 @@ model Bot {
   // capitalPerStrategy: capital / jumlah strategi (equal-weight allocation).
   strategyGroup      String[] @default([])
   capitalPerStrategy Float?   @default(0)
-  
+
+  // ── Take-Profit mode ────────────────────────────────────────────────────
+  // "full"    → posisi lari ke TP penuh tanpa dipotong (default, reward optimal)
+  // "partial" → partial close di +1R/+2R + SL geser ke BEP/+1R (risiko lebih rendah)
+  tpMode     String   @default("full")
+
   running   Boolean  @default(false)
   startedAt DateTime?
   stoppedAt DateTime?

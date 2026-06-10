@@ -116,8 +116,13 @@ class BotEngine extends EventEmitter {
       cooldownAfterLoss: strat.cooldownAfterLoss || 5,
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
-      // ── SL+ (Trailing Partial Take Profit) ───────────────────────────────
-      slPlusEnabled:     true,   // aktif secara default
+      // ── Take-Profit mode ─────────────────────────────────────────────────
+      // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
+      // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R (risiko ↓, reward ↓)
+      tpMode: "full",
+
+      // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
+      slPlusEnabled:     true,   // legacy; dikontrol oleh tpMode
       slPlusPartial1Pct: 0.40,   // +1R → 40% partial, SL ke BEP
       slPlusPartial2Pct: 0.275,  // +2R → 27.5% partial, SL ke +1R
 
@@ -1709,6 +1714,9 @@ class BotEngine extends EventEmitter {
    * @param {number} price — harga penutupan candle terakhir
    */
   async _checkSLPlusMilestones(pos, price) {
+    // tpMode "full" → skip semua milestone; posisi lari ke TP penuh tanpa dipotong.
+    // Backward compat: bila tpMode belum diset (bot lama), default ke "full".
+    if ((this.config.tpMode ?? "full") === "full") return;
     if (!this.config.slPlusEnabled) return;
     if (pos.remainingSize <= 0) return;
 
