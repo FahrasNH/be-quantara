@@ -10,8 +10,8 @@ set -euo pipefail
 
 BE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VPS_HOST="${VPS_HOST:-root@187.77.135.156}"
-REMOTE_BE="${REMOTE_BE:-/opt/quantara-staging/be-bot-trading}"
-PM2_APP="${PM2_APP:-quantara-staging}"
+REMOTE_BE="${REMOTE_BE:-/opt/quantara-staging/be}"
+PM2_APP="${PM2_APP:-be-quantara-staging}"
 
 if [[ "${SKIP_CONFIRM:-}" != "1" ]]; then
   echo "⚠️  STAGING BE deploy → ${VPS_HOST}:${REMOTE_BE}"
