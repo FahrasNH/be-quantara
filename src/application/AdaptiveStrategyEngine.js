@@ -34,6 +34,13 @@ class AdaptiveStrategyEngine extends BotEngine {
     // Kita set eksplisit agar semua method di class ini bisa pakai this.symbol.
     this.symbol = this.config.symbol;
 
+    // Pindahkan groupCoordinator KELUAR dari this.config → simpan sebagai properti
+    // engine. Alasan: config di-JSON.stringify saat openSession; coordinator berisi
+    // Timeout (setInterval) + referensi sirkular → "Converting circular structure
+    // to JSON". Sebagai properti engine, tidak ikut diserialisasi.
+    this.groupCoordinator = this.config.groupCoordinator || null;
+    if (this.config.groupCoordinator) delete this.config.groupCoordinator;
+
     // Load strategy
     this.strategy = validation.strategy;
     this.strategyKey = strategyKey;
@@ -236,7 +243,7 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       // 10. GATE lintas-strategi (cap per-koin + proteksi hedge). Dipanggil hanya
       //     bila engine bagian dari grup multi-strategi (punya groupCoordinator).
-      const groupCoord = this.config.groupCoordinator;
+      const groupCoord = this.groupCoordinator;
       if (groupCoord && typeof groupCoord.canEnter === "function") {
         const gate = await groupCoord.canEnter(this.strategyKey, signal);
         if (!gate.allowed) {
