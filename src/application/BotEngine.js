@@ -8,8 +8,12 @@ const EventEmitter = require("events");
 const { getExchangeInfo } = require("../infrastructure/exchange");
 const BitgetClient = require("../infrastructure/exchange/BitgetClient");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
+// ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
+const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
+const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
 const { getStrategy } = require("../domain/strategies");
+const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
@@ -112,8 +116,13 @@ class BotEngine extends EventEmitter {
       cooldownAfterLoss: strat.cooldownAfterLoss || 5,
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
-      // ── SL+ (Trailing Partial Take Profit) ───────────────────────────────
-      slPlusEnabled:     true,   // aktif secara default
+      // ── Take-Profit mode ─────────────────────────────────────────────────
+      // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
+      // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R (risiko ↓, reward ↓)
+      tpMode: "full",
+
+      // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
+      slPlusEnabled:     true,   // legacy; dikontrol oleh tpMode
       slPlusPartial1Pct: 0.40,   // +1R → 40% partial, SL ke BEP
       slPlusPartial2Pct: 0.275,  // +2R → 27.5% partial, SL ke +1R
 
@@ -287,7 +296,19 @@ class BotEngine extends EventEmitter {
       dryRun:        this.config.dryRun,
       capital:        this.state.capital,
       startCapital:   this.state.startCapital,
-      openPositions:  this.state.openPositions,
+      // Enrich tiap posisi dengan unrealizedPL terhitung agar FE bisa tampilkan
+      // PnL per-posisi (sebelumnya field ini hanya diisi di mode live → dry-run kosong).
+      openPositions:  this.state.openPositions.map((p) => {
+        let upnl = (p.unrealizedPL && p.unrealizedPL !== 0) ? p.unrealizedPL : null;
+        if (upnl == null) {
+          const px = this.state.lastPrice;
+          const sz = p.remainingSize || p.size || 0;
+          upnl = (px && p.entry)
+            ? (p.side === "LONG" ? (px - p.entry) * sz : (p.entry - px) * sz)
+            : 0;
+        }
+        return { ...p, unrealizedPL: upnl };
+      }),
       trades:         this.state.trades.slice(-50),
       // totalTrades = open + closed (bukan hanya closed)
       totalTrades:    this.state.trades.length + this.state.openPositions.length,
@@ -389,7 +410,23 @@ class BotEngine extends EventEmitter {
     // ── Restore posisi terbuka dari SEMUA sesi lama (lintas sesi) ─────────
     // Cari trades dengan close_time IS NULL untuk symbol ini di semua sesi
     try {
-      const orphans = await db.getOpenTradesBySymbol(this.config.symbol);
+      let orphans = await db.getOpenTradesBySymbol(this.config.symbol);
+      // Multi-Strategy per Coin: bila engine ini bagian dari grup (N strategi pada
+      // satu koin), batasi restore HANYA pada trade strategi ini — agar tiap engine
+      // tidak meng-klaim posisi milik strategi lain pada simbol yang sama.
+      // Legacy single-engine (tanpa groupKey) tetap memulihkan semua posisi simbol.
+      if (this.config.groupKey && this.config.strategyKey) {
+        orphans = orphans.filter((row) => {
+          let stratOfTrade = null;
+          try { stratOfTrade = row.indicators ? JSON.parse(row.indicators)?.strategy : null; } catch { /* ignore */ }
+          // Engine grup non-leader: hanya klaim trade dengan atribusi strategi yang cocok.
+          // Engine grup LEADER (isGroupLeader=true): juga klaim legacy trades tanpa
+          // atribusi strategi — agar posisi yang dibuka sebelum multi-strategy di-deploy
+          // tetap bisa dipantau SL/TP dan ditutup dengan benar (tidak stuck selamanya).
+          if (stratOfTrade === null) return !!this.config.isGroupLeader;
+          return stratOfTrade === this.config.strategyKey;
+        });
+      }
       if (orphans.length > 0) {
         this._log("info", `${orphans.length} posisi open dari sesi lama ditemukan — sinkronisasi dengan exchange...`);
 
@@ -504,7 +541,12 @@ class BotEngine extends EventEmitter {
         const sz  = p.remainingSize || p.size || 0;
         const margin = (p.entry * sz) / lev;
         const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
-        this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin });
+        this.config.coordinator.reserve(botKey, {
+          symbol: this.config.symbol, margin,
+          groupKey: this.config.groupKey ?? null,
+          strategyKey: this.config.strategyKey ?? null,
+          direction: p.side,
+        });
       }
     } catch (err) {
       this._log("warn", `Gagal restore posisi lama: ${err.message}`);
@@ -590,18 +632,22 @@ class BotEngine extends EventEmitter {
     } else {
       try {
         const bal = await this.client.getBalance(this.config.marginCoin);
-        if (this.config.dryRun && (!bal.available || bal.available <= 0)) {
-          this.state.capital = this.state.startCapital = 500;
-          this._log("warn", "Balance kosong, gunakan simulasi dengan modal $500");
+        const totalEquity = (bal.equity > 0 ? bal.equity : bal.available);
+
+        if (this.config.dryRun) {
+          // Dry-run: modal simulasi dari config DB, BUKAN saldo exchange nyata.
+          this.state.capital = this.state.startCapital = this.config.capital || 500;
+          // Jika engine adalah bagian dari grup multi-strategy, tampilkan modal
+          // per-engine DAN total grup agar tidak membingungkan.
+          const modalLog = this.config.groupTotalCapital && this.config.groupTotalCapital !== this.state.capital
+            ? `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT per strategi (total bot: $${this.config.groupTotalCapital.toFixed(2)}) (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`
+            : `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`;
+          this._log("info", modalLog);
         } else {
-          // Gunakan equity total (available + margin terkunci) bukan available saja.
-          // Saat posisi terbuka, available turun (margin dikunci) tapi equity tetap.
-          const totalEquity = (bal.equity > 0 ? bal.equity : bal.available);
+          // Live: gunakan equity total (available + margin terkunci).
           this.state.capital      = totalEquity;
           this.state.startCapital = totalEquity;
           this._log("info", `Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
-        }
-        if (!this.config.dryRun) {
           await this.client.setLeverage(this.config.symbol, this.config.leverage);
           await this.client.setMarginMode(this.config.symbol, "crossed");
           this._log("info", `Leverage   : ${this.config.leverage}x diset ✓`);
@@ -609,8 +655,8 @@ class BotEngine extends EventEmitter {
       } catch (err) {
         this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${err.message}`);
         if (!this.config.dryRun) throw err;
-        this.state.capital = this.state.startCapital = 500;
-        this._log("warn", "Fallback ke DRY RUN dengan modal $500");
+        this.state.capital = this.state.startCapital = this.config.capital || 500;
+        this._log("warn", `Fallback DRY RUN dengan modal $${this.state.capital.toFixed(2)}`);
       }
     }
 
@@ -854,7 +900,8 @@ class BotEngine extends EventEmitter {
             this._log("info", `🚫 Skip entry: ${gate.reason}`);
           }
         } else {
-          if (this.state.htfTrend === "SIDEWAYS") {
+          // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
+          if (this.state.htfTrend === "SIDEWAYS" && this.config.signalType !== "BREAKOUT_RETEST") {
             // ── STEP 2a: SIDEWAYS — per-strategi (A diam, B breakout, C retest) ───
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
@@ -876,15 +923,51 @@ class BotEngine extends EventEmitter {
               useBothSides:     this.config.useBothSides,
               signalType:       this.config.signalType,
               volSmaMultiplier: this.config.volSmaMultiplier,
+              symbol:           this.config.symbol,
               // AFS: kondisi market nyata agar komponen dipilih dengan benar
               volatility:       atrPctNow,
               trend_strength:   trendStr,
               balance:          this.state.capital,
             });
 
+            // ── STEP 2c: MEAN_REVERSION HTF regime guard (FIX-4) ──────────────
+            // MR tanpa filter akan counter-trend terus saat strong bull/bear →
+            // SL beruntun → daily loss limit. Blokir SHORT di strong bull dan
+            // LONG di strong bear, juga saat ATR HTF spike. Fail-open bila HTF
+            // tidak bisa diambil (konsisten dgn HTF trend filter di bawah).
+            let mrSignal = signal;
+            if (signal && (this.config.strategyKey === "MEAN_REVERSION" || this.config.signalType === "MEAN_REVERSION")) {
+              try {
+                const htf = htfCandlesCache || await this.client.getCandles(this.config.symbol, "1h", 60);
+                if (htf && htf.length >= 30) {
+                  const hCloses = htf.map(c => c.close);
+                  const hHighs  = htf.map(c => c.high);
+                  const hLows   = htf.map(c => c.low);
+                  const lastNN  = (a) => { for (let k = a.length - 1; k >= 0; k--) if (a[k] != null) return a[k]; return null; };
+                  const atrArr  = calcATR(hHighs, hLows, hCloses, 14);
+                  const htfData = {
+                    emaFast:     lastNN(calcEMA(hCloses, 9)),
+                    emaSlow:     lastNN(calcEMA(hCloses, 21)),
+                    rsi:         lastNN(calcRSI(hCloses, 14)),
+                    close:       hCloses[hCloses.length - 1],
+                    atr:         lastNN(atrArr),
+                    atrBaseline: lastNN(calcSMA(atrArr.map(v => (v == null ? 0 : v)), 20)),
+                  };
+                  const regimeCheck = meanReversionRegimeFilter({ direction: signal, htfData });
+                  if (!regimeCheck.allowed) {
+                    mrSignal = null;
+                    this._log("info", `[MR] Entry diblokir (${regimeCheck.regime}): ${regimeCheck.reason}`);
+                  }
+                }
+              } catch (e) {
+                this._log("warn", `[MR] HTF regime check gagal — fail-open: ${e.message}`);
+              }
+            }
+
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
-            let filteredSignal = signal;
-            if (signal && this.state.htfTrend !== "UNKNOWN") {
+            // BREAKOUT_RETEST: skip filter HTF — breakout/retest valid di konsolidasi
+            let filteredSignal = mrSignal;
+            if (mrSignal && this.config.signalType !== "BREAKOUT_RETEST" && this.state.htfTrend !== "UNKNOWN") {
               if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
                 this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
@@ -929,10 +1012,36 @@ class BotEngine extends EventEmitter {
                     `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
                   );
                 }
+              } else if (this.config.signalType === "BREAKOUT_RETEST") {
+                const BreakoutRetestStrategy = require("../domain/strategy/implementations/BreakoutRetestStrategy");
+                const brInstance = new BreakoutRetestStrategy();
+                const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal);
+                signalOptions.slDist = riskCfg.slDistance;
+                signalOptions.tpDist = riskCfg.tpDistance;
+                indicatorSnapshot.entryMode = "breakout_retest";
+                this._log("info",
+                  `[BR] RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+                );
               }
 
-              await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
-              this.state.lastSignal = filteredSignal;
+              // ── Idempotency guard (FIX-3) ───────────────────────────────────
+              // Cegah dua posisi terbuka untuk sinyal yang sama bila tick/candle
+              // diproses dua kali (mis. polling overlap atau WS reconnect).
+              // Key = symbol + strategy + candleOpenTime + direction (TTL 5 menit).
+              const candleOpenTime = candles[lastIdx].timestamp ?? candles[lastIdx].openTime;
+              const dup = isDuplicate({
+                symbol:         this.config.symbol,
+                strategy:       this.config.strategyKey,
+                candleOpenTime,
+                direction:      filteredSignal,
+              });
+
+              if (dup) {
+                this._log("warn", `Duplicate signal dibuang — ${filteredSignal} @candle ${candleOpenTime}`);
+              } else {
+                await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
+                this.state.lastSignal = filteredSignal;
+              }
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
             }
@@ -1011,6 +1120,15 @@ class BotEngine extends EventEmitter {
       return candles;
     } catch (err) {
       this._log("warn", `Gagal ambil candles dari exchange: ${err.message}`);
+
+      // 2b. Fallback cache stale (hingga 24 jam) saat jaringan ke Bitget bermasalah
+      try {
+        const stale = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 86_400);
+        if (stale && stale.length >= this.config.emaSlow + 20) {
+          this._log("info", `Pakai candle cache (${stale.length} bar) — exchange tidak terjangkau`);
+          return stale;
+        }
+      } catch { /* abaikan */ }
     }
 
     // 3. Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
@@ -1076,11 +1194,42 @@ class BotEngine extends EventEmitter {
   async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
+    // BUG-003: dedup open — cegah pembukaan posisi duplikat untuk symbol+side yang
+    // sama dalam jendela singkat (mis. tick ganda / restart bot men-trigger ulang
+    // sinyal yang sama). Tanpa ini muncul "ghost trade" entry==exit pnl=0.
+    const DEDUP_WINDOW_MS = 5000;
+    const dedupKey = `${this.config.symbol}:${signal}`;
+    this._lastOpenAt = this._lastOpenAt || {};
+    const now0 = Date.now();
+    if (this._lastOpenAt[dedupKey] && now0 - this._lastOpenAt[dedupKey] < DEDUP_WINDOW_MS) {
+      this._log("warn", `Dedup: open ${signal} ${this.config.symbol} diabaikan (duplikat <${DEDUP_WINDOW_MS}ms)`);
+      return;
+    }
+    // Juga skip jika sudah ada posisi terbuka arah sama untuk simbol ini.
+    if (this.state.openPositions.some(p => p.side === signal)) {
+      this._log("warn", `Dedup: sudah ada posisi ${signal} ${this.config.symbol} terbuka — skip open duplikat`);
+      return;
+    }
+    this._lastOpenAt[dedupKey] = now0;
+
     const slDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
     // tpDist can be overridden independently (used by ADAPTIVE_FUSION per-component RR)
     const tpDist = options.tpDist != null ? options.tpDist : slDist * this.config.riskReward;
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
+
+    // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
+    // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu
+    // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
+    // indikator yang dipersist di kolom trades.indicators agar setiap trade bisa
+    // ditelusuri ke strategi yang memfire-nya (AC-04).
+    const enrichedSnapshot = {
+      ...(indicatorSnapshot || {}),
+      ...buildTradeAttribution({
+        strategyKey: this.config.strategyKey,
+        sl, tp, slDist, tpDist, atr,
+      }),
+    };
 
     // Tentukan modal acuan untuk sizing.
     // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
@@ -1150,9 +1299,19 @@ class BotEngine extends EventEmitter {
     const lev            = this.config.leverage || 1;
     const requiredMargin = (price * finalSize) / lev;
     const botKey         = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
-    if (!this.config.dryRun && this.config.coordinator) {
+    // Group guard berlaku di LIVE (anggaran margin + 1/simbol + direction lock) dan
+    // juga di DRY RUN bila engine ini bagian dari grup multi-strategi — agar AC-05
+    // (tidak ada LONG+SHORT serentak pada satu koin) tetap ditegakkan saat staging
+    // dry-run. Di dry-run, gate anggaran otomatis di-skip (equity akun = 0).
+    const useGroupGuard = this.config.coordinator &&
+      (this.config.groupKey || !this.config.dryRun);
+    if (useGroupGuard) {
       const verdict = this.config.coordinator.canOpen({
         botKey, symbol: this.config.symbol, requiredMargin,
+        // Multi-Strategy per Coin: groupKey mengizinkan >1 posisi/simbol untuk
+        // strategi segrup, direction menegakkan direction lock (AC-05).
+        groupKey:  this.config.groupKey ?? null,
+        direction: signal,
       });
       if (!verdict.ok) {
         this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
@@ -1183,12 +1342,21 @@ class BotEngine extends EventEmitter {
 
         // Reservasi margin di koordinator akun bersama (#5)
         if (this.config.coordinator) {
-          this.config.coordinator.reserve(botKey, { symbol: this.config.symbol, margin: requiredMargin });
+          this.config.coordinator.reserve(botKey, {
+            symbol: this.config.symbol, margin: requiredMargin,
+            groupKey: this.config.groupKey ?? null,
+            strategyKey: this.config.strategyKey ?? null,
+            direction: signal,
+          });
         }
 
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
           marginReserved: requiredMargin,
+          // BUG-004: simpan snapshot indikator entry agar partial-close bisa
+          // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
+          entrySnapshot: enrichedSnapshot,
+          strategyName:  this.config.strategyKey ?? null,
           // SL+ tracking
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
@@ -1275,7 +1443,9 @@ class BotEngine extends EventEmitter {
             sl, tp, size: finalSize, openTime, atr,
             dryRun:     false,
             orderId:    order?.orderId,
-            indicators: indicatorSnapshot,
+            indicators: enrichedSnapshot,
+            // BUG-001: denormalisasi nama strategi di kolom eksplisit saat OPEN.
+            strategyName: this.config.strategyKey ?? null,
           });
         }
 
@@ -1305,12 +1475,26 @@ class BotEngine extends EventEmitter {
       const pos = {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
         marginReserved,        // margin terkunci, dikembalikan tepat saat close
+        // BUG-004: snapshot entry untuk diwariskan ke partial-close.
+        entrySnapshot: enrichedSnapshot,
+        strategyName:  this.config.strategyKey ?? null,
         // SL+ tracking
         remainingSize: finalSize,
         R:             slDist,
         slCurrent:     sl,
         m1: false, m2: false, m3: false,
       };
+
+      // Dry-run multi-strategi: reservasi di koordinator agar direction lock (AC-05)
+      // terlihat oleh engine strategi lain pada koin yang sama. Dilepas otomatis
+      // saat flat via _releaseMarginIfFlat(). Legacy dry-run (tanpa groupKey) tidak
+      // mereservasi apa pun — perilaku lama tidak berubah.
+      if (this.config.groupKey && this.config.coordinator) {
+        this.config.coordinator.reserve(botKey, {
+          symbol: this.config.symbol, margin: marginReserved,
+          groupKey: this.config.groupKey, strategyKey: this.config.strategyKey, direction: signal,
+        });
+      }
 
       // Simpan ke DB (dry run)
       if (this.sessionId) {
@@ -1323,7 +1507,11 @@ class BotEngine extends EventEmitter {
           sl, tp, size: finalSize, openTime, atr,
           dryRun:     true,
           orderId:    pos.id,
-          indicators: indicatorSnapshot,
+          // BUG-001: gunakan snapshot yang sudah diperkaya atribusi (firedByStrategy)
+          // + persist strategyName eksplisit. Sebelumnya dry-run pakai indicatorSnapshot
+          // mentah → 33/49 trade dry-run tampil "(belum tercatat)".
+          indicators: enrichedSnapshot,
+          strategyName: this.config.strategyKey ?? null,
         });
       }
 
@@ -1557,10 +1745,23 @@ class BotEngine extends EventEmitter {
    * @param {number} price — harga penutupan candle terakhir
    */
   async _checkSLPlusMilestones(pos, price) {
+    // tpMode "full" → skip semua milestone; posisi lari ke TP penuh tanpa dipotong.
+    // Backward compat: bila tpMode belum diset (bot lama), default ke "full".
+    if ((this.config.tpMode ?? "full") === "full") return;
     if (!this.config.slPlusEnabled) return;
     if (pos.remainingSize <= 0) return;
 
-    const R     = pos.R;
+    const R = pos.R;
+    // QA-002: cegah pembagian rMult = gain/R saat R = 0 / non-finite (atr≈0 atau
+    // slDist override strategi = 0). Tanpa guard → rMult = Infinity/NaN yang
+    // men-trigger SEMUA milestone (+1R/+2R/+3R) sekaligus → cascade partial close
+    // dan NaN merembet ke kalkulasi PnL. Skip milestone bila R tidak valid.
+    if (!Number.isFinite(R) || R <= 0) {
+      if (this.state.checkCount % 20 === 1) {
+        this._log("warn", `SL+ milestone di-skip: risk distance (R) tidak valid (R=${R}) ${this.config.symbol}`);
+      }
+      return;
+    }
     const gain  = pos.side === "LONG" ? price - pos.entry : pos.entry - price;
     const rMult = gain / R;
 
@@ -1685,6 +1886,14 @@ class BotEngine extends EventEmitter {
           atr:        pos.atr,
           dryRun:     this.config.dryRun,
           orderId:    `${pos.id}_${reason}`,
+          // BUG-004: salin snapshot indikator dari ENTRY asli (RSI/ATR/ATR%),
+          // jika tidak ada fallback ke ATR posisi agar tidak NaN.
+          indicators: pos.entrySnapshot ?? (pos.atr != null
+            ? { atr: pos.atr, atrPct: pos.entry ? parseFloat(((pos.atr / pos.entry) * 100).toFixed(3)) : null }
+            : null),
+          // BUG-001: strategi pada partial trade.
+          strategyName: pos.strategyName ?? this.config.strategyKey ?? null,
+          isPartial:    true,
         });
         await db.closeTrade(partialDbId, {
           exitPrice: price,

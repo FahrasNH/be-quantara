@@ -81,6 +81,27 @@ const SCHEMA_SQL = `
     ALTER TABLE trades ADD COLUMN funding DOUBLE PRECISION DEFAULT 0;
   EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 
+  -- BUG-001: nama strategi di-denormalisasi langsung di trade record (saat OPEN).
+  -- Sebelumnya strategi hanya tersimpan di blob JSON indicators dan kerap NULL
+  -- untuk trade dry-run/partial sehingga tampil "(belum tercatat)" di export.
+  -- Kolom eksplisit ini jadi sumber kebenaran tunggal untuk export & analitik.
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN strategy_name TEXT;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+  -- BUG-003: status trade — 'open' | 'closed' | 'cancelled'. Trade zero-fill
+  -- (exit == entry, pnl == 0) ditandai 'cancelled' agar tidak dihitung sebagai
+  -- loss di win-rate. Default 'open'; di-set saat close.
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN status TEXT DEFAULT 'open';
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+  -- BUG-001/004: tandai trade partial-exit secara eksplisit (kolom is_partial
+  -- sudah dibaca getTradesExport tapi belum pernah ditulis).
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN is_partial INTEGER DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
   CREATE TABLE IF NOT EXISTS equity_snapshots (
     id             SERIAL PRIMARY KEY,
     session_id     INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
@@ -154,7 +175,9 @@ async function init() {
     );
     for (const s of allSessions) {
       const { rows } = await pool.query(
-        `SELECT pnl FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+        `SELECT pnl FROM trades
+         WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL
+           AND status IS DISTINCT FROM 'cancelled'`,
         [s.id]
       );
       if (rows.length === 0) {
@@ -193,9 +216,32 @@ async function init() {
 
 // ── Sessions ──────────────────────────────────
 
+/**
+ * Serialisasi config bot dengan AMAN — buang runtime object yang tidak boleh
+ * dipersist (coordinator/groupCoordinator/client/fungsi/Timeout) dan tahan
+ * terhadap referensi sirkular. Mencegah "Converting circular structure to JSON".
+ */
+function safeStringifyConfig(config) {
+  const DROP = new Set(["coordinator", "groupCoordinator", "client", "_db", "db"]);
+  const seen = new WeakSet();
+  return JSON.stringify(config ?? {}, (key, val) => {
+    if (DROP.has(key)) return undefined;
+    if (typeof val === "function") return undefined;
+    if (val && typeof val === "object") {
+      // Buang objek non-plain yang rawan sirkular (Timeout, Map, instance kelas runtime)
+      const ctor = val.constructor && val.constructor.name;
+      if (ctor && !["Object", "Array"].includes(ctor)) return undefined;
+      if (seen.has(val)) return undefined;
+      seen.add(val);
+    }
+    return val;
+  });
+}
+
 async function openSession({ exchange, symbol, mode, initialCapital, config, userId }) {
   const resolvedMode = mode || (config?.dryRun ? "dry_run" : "live");
   const initCap      = initialCapital ?? 0;
+  const configJson   = safeStringifyConfig(config);
 
   // Reuse sesi aktif (stopped_at IS NULL) untuk user+symbol+mode yang sama.
   // Ini mencegah sesi duplikat setiap kali bot di-start ulang.
@@ -210,7 +256,7 @@ async function openSession({ exchange, symbol, mode, initialCapital, config, use
       // Update config terbaru agar tidak stale, tapi jangan ubah initial_capital
       await pool.query(
         `UPDATE bot_sessions SET config = $2 WHERE id = $1`,
-        [existing[0].id, JSON.stringify(config ?? {})]
+        [existing[0].id, configJson]
       );
       return existing[0].id;
     }
@@ -227,7 +273,7 @@ async function openSession({ exchange, symbol, mode, initialCapital, config, use
       symbol,
       resolvedMode,
       initCap,
-      JSON.stringify(config ?? {}),
+      configJson,
     ]
   );
   return rows[0].id;
@@ -284,7 +330,9 @@ async function recalcSessionStats(sessionId) {
     const session = sRows[0];
     if (!session) return;
     const { rows: trades } = await pool.query(
-      `SELECT pnl, fee, funding FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+      `SELECT pnl, fee, funding FROM trades
+       WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL
+         AND status IS DISTINCT FROM 'cancelled'`,
       [sessionId]
     );
     const wins     = trades.filter((t) => t.pnl > 0).length;
@@ -323,6 +371,7 @@ const SESSIONS_BASE = `
       COUNT(*)                                   AS actual_total
     FROM trades
     WHERE close_time IS NOT NULL AND pnl IS NOT NULL
+      AND status IS DISTINCT FROM 'cancelled'
     GROUP BY session_id
   ) t ON t.session_id = s.id`;
 
@@ -377,11 +426,16 @@ function parseSession(row) {
 
 // ── Trades ────────────────────────────────────
 
-async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators }) {
+async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators, strategyName, isPartial }) {
+  // BUG-001: denormalisasi strategyName di kolom eksplisit AT OPEN time. Fallback
+  // ke field di dalam snapshot indikator (strategy / firedByStrategy) agar caller
+  // lama yang hanya mengirim indicators tetap tercatat.
+  const resolvedStrategy =
+    strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null;
   const { rows } = await pool.query(
     `INSERT INTO trades
-       (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators, strategy_name, status, is_partial)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'open', $15)
      RETURNING id`,
     [
       sessionId,
@@ -397,25 +451,60 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
       dryRun ? 1 : 0,
       orderId ?? null,
       indicators ? JSON.stringify(indicators) : null,
+      resolvedStrategy,
+      isPartial ? 1 : 0,
     ]
   );
   return rows[0].id;
 }
 
 async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime }) {
+  const feeVal     = fee ?? 0;
+  const fundingVal = funding ?? 0;
+  const pnlGross   = pnl ?? 0;
+  const pnlNet     = pnlGross - feeVal - fundingVal;
+
+  // Ambil entry_price + size untuk: (a) BUG-002 menghitung pnl_pct dari notional,
+  // (b) BUG-003 mendeteksi zero-fill (exit == entry & pnl gross == 0).
+  const { rows: trows } = await pool.query(
+    `SELECT entry_price, size FROM trades WHERE id = $1`,
+    [tradeId]
+  );
+  const trade    = trows[0] || {};
+  const notional = (trade.entry_price || 0) * (trade.size || 0);
+
+  // BUG-002: pnl_pct = (pnlNet / notional) * 100. Sebelumnya beberapa caller
+  // mengirim (exitPrice - entry)/entry (perubahan harga) → offset sistematis
+  // sebesar fee. Hitung ulang dari net & notional agar konsisten lintas-caller.
+  let resolvedPct = pnlPct ?? null;
+  if (notional > 0) {
+    resolvedPct = parseFloat(((pnlNet / notional) * 100).toFixed(4));
+  }
+
+  // BUG-003: zero-fill ghost trade — exit == entry dan pnl gross == 0 → bukan
+  // loss riil, melainkan fill kosong (mis. restart bot / double-close). Tandai
+  // 'cancelled' agar dikecualikan dari win-rate.
+  const isZeroFill =
+    trade.entry_price != null &&
+    exitPrice != null &&
+    Number(exitPrice) === Number(trade.entry_price) &&
+    pnlGross === 0;
+  const status = isZeroFill ? "cancelled" : "closed";
+
   await pool.query(
     `UPDATE trades
-     SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8
+     SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8, status = $9
      WHERE id = $1`,
     [
       tradeId,
       exitPrice,
       pnl,
-      pnlPct ?? null,
-      fee ?? 0,
-      funding ?? 0,
+      resolvedPct,
+      feeVal,
+      fundingVal,
       reason,
       closeTime ? new Date(closeTime).toISOString() : new Date().toISOString(),
+      status,
     ]
   );
 }
@@ -469,7 +558,8 @@ async function getTradeStats(sessionId, userId = null) {
        MAX(pnl) AS best_trade,
        MIN(pnl) AS worst_trade
      FROM trades t
-     WHERE t.session_id = $1 AND t.close_time IS NOT NULL${ownership}`,
+     WHERE t.session_id = $1 AND t.close_time IS NOT NULL
+       AND t.status IS DISTINCT FROM 'cancelled'${ownership}`,
     params
   );
   return rows[0];
@@ -486,6 +576,7 @@ async function getTodayRiskStats({ userId = null, symbol = null, dryRun = null }
   const conds = [
     `t.close_time IS NOT NULL`,
     `t.pnl IS NOT NULL`,
+    `t.status IS DISTINCT FROM 'cancelled'`,
     `(t.close_time AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date`,
   ];
   if (userId) { params.push(userId); conds.push(`(s.user_id = $${params.length} OR s.user_id IS NULL)`); }
@@ -523,8 +614,125 @@ async function getOpenTrades(sessionId) {
  * Export data trade lengkap dengan snapshot indikator — untuk analitik / ML.
  * Hanya trade yang sudah tertutup (punya exit_price dan pnl).
  */
+/**
+ * Export trade untuk CSV — sama dengan data yang ditampilkan di Riwayat Akun.
+ * Tidak memerlukan snapshot indikator (berbeda dengan getInsights).
+ */
+async function getTradesExport({ symbol = null, dryRun = null, limit = 5000, userId = null } = {}) {
+  const params = [];
+  let i = 1;
+  let where = "1=1";
+
+  if (userId) {
+    where = `(s.user_id = $${i++} OR s.user_id IS NULL OR t.session_id IS NULL)`;
+    params.push(userId);
+  }
+  if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
+  if (dryRun !== null) { where += ` AND t.dry_run = $${i++}`; params.push(dryRun ? 1 : 0); }
+  params.push(Math.min(limit, 5000));
+
+  const { rows } = await pool.query(
+    `SELECT t.*, s.mode, s.exchange AS session_exchange
+     FROM trades t
+     LEFT JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}
+     ORDER BY t.open_time DESC
+     LIMIT $${i}`,
+    params
+  );
+
+  return rows.map(mapExportRow);
+}
+
+/**
+ * Pure mapper: baris DB `trades` → objek export (CSV/JSON). Diekspos terpisah agar
+ * bisa diunit-test tanpa DB. Menangani BUG-001/002/003/006/008 + FEAT-001.
+ */
+function mapExportRow(row) {
+  const ind = safeParseJSON(row.indicators);
+  const isOpen = !row.close_time;
+  const isCancelled = row.status === "cancelled";
+  const pnl = row.pnl ?? 0;
+  const fee = row.fee ?? 0;
+  const funding = row.funding ?? 0;
+  const pnlNet = pnl - fee - funding;
+
+  // BUG-001: strategi dari kolom denormalisasi; fallback ke blob lama untuk
+  // baris pra-migrasi. "Untracked" hanya bila benar-benar tak ada data.
+  const strategy =
+    row.strategy_name ?? ind?.strategy ?? ind?.firedByStrategy ?? "Untracked";
+
+  // FEAT-001: Planned R:R = |tp-entry| / |entry-sl|; Actual R:R (R-multiple)
+  // = pnlNet / plannedRisk, plannedRisk = |entry-sl| * size.
+  const entry = row.entry_price;
+  const plannedRR =
+    row.tp != null && row.sl != null && Math.abs(entry - row.sl) > 0
+      ? parseFloat((Math.abs(row.tp - entry) / Math.abs(entry - row.sl)).toFixed(2))
+      : null;
+  const plannedRisk =
+    row.sl != null && row.size != null ? Math.abs(entry - row.sl) * row.size : null;
+  const actualRR =
+    !isOpen && plannedRisk && plannedRisk > 0
+      ? parseFloat((pnlNet / plannedRisk).toFixed(2))
+      : null;
+  const durationMs =
+    !isOpen && row.open_time && row.close_time
+      ? new Date(row.close_time).getTime() - new Date(row.open_time).getTime()
+      : null;
+
+  // BUG-008: field exit/close kosong untuk trade open → tampilkan 'N/A'.
+  const NA = "N/A";
+  return {
+    id:          row.id,
+    sessionId:   row.session_id,
+    symbol:      row.symbol,
+    side:        row.side,
+    entryPrice:  entry,
+    exitPrice:   isOpen ? NA : row.exit_price,
+    sl:          row.sl,
+    tp:          row.tp,
+    size:        row.size,
+    pnl:         isOpen ? NA : pnl,
+    fee:         isOpen ? NA : fee,
+    funding:     isOpen ? NA : funding,
+    pnlNet:      isOpen ? NA : pnlNet,
+    pnlPct:      isOpen ? NA : (row.pnl_pct ?? null),
+    reason:      isOpen ? NA : (row.reason ?? NA),
+    dryRun:      row.dry_run === 1,
+    mode:        row.mode ?? null,
+    exchange:    row.session_exchange ?? null,
+    strategy,
+    // BUG-006: status dalam bahasa Inggris.
+    status:      isOpen ? "Open" : (isCancelled ? "Cancelled" : "Closed"),
+    openTime:    row.open_time,
+    closeTime:   isOpen ? NA : row.close_time,
+    isPartial:   row.is_partial === 1,
+    // FEAT-001
+    duration:    isOpen ? NA : formatDuration(durationMs),
+    plannedRR:   plannedRR ?? NA,
+    actualRR:    isOpen ? NA : (actualRR ?? NA),
+    // BUG-003: trade cancelled tidak dihitung win/loss.
+    result:      isOpen ? NA : (isCancelled ? "cancelled" : (pnl > 0 ? "win" : "loss")),
+  };
+}
+
+/**
+ * Format durasi (ms) menjadi "1h 42m" / "3m" / "45s". BUG/FEAT-001.
+ */
+function formatDuration(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "N/A";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
 async function getInsights({ symbol = null, dryRun = null, limit = 500, userId = null } = {}) {
-  let where = `t.close_time IS NOT NULL AND t.indicators IS NOT NULL`;
+  // Trade tertutup saja; kolom indicators opsional (trade lama bisa NULL → field indikator kosong).
+  let where = `t.close_time IS NOT NULL`;
   const params = [];
   let i = 1;
   if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
@@ -544,17 +752,20 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
   );
 
   return rows.map((row) => {
-    const ind = safeParseJSON(row.indicators);
+    const ind = safeParseJSON(row.indicators) || {};
+    const entry = row.entry_price;
+    const atrVal = ind.atr ?? row.atr ?? null;
     return {
       rsi:          ind.rsi          ?? null,
-      atr:          ind.atr          ?? null,
-      atrPct:       ind.atrPct       ?? null,
+      atr:          atrVal,
+      atrPct:       ind.atrPct ?? (atrVal && entry ? parseFloat(((atrVal / entry) * 100).toFixed(3)) : null),
       volumeRatio:  ind.volumeRatio  ?? null,
       emaFast:      ind.emaFast      ?? null,
       emaSlow:      ind.emaSlow      ?? null,
       emaTrendBias: ind.emaTrendBias ?? null,
       htfTrend:     ind.htfTrend     ?? null,
-      strategy:     ind.strategy     ?? null,
+      strategy:     row.strategy_name ?? ind.strategy ?? ind.firedByStrategy ?? null,
+      entryMode:    ind.entryMode    ?? null,
       side:         row.side,
       symbol:       row.symbol,
       entryPrice:   row.entry_price,
@@ -571,7 +782,7 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
       dryRun:       row.dry_run === 1,
       openTime:     row.open_time,
       closeTime:    row.close_time,
-      result:       row.pnl > 0 ? "win" : "loss",
+      result:       row.status === "cancelled" ? "cancelled" : (row.pnl > 0 ? "win" : "loss"),
       rMultiple:    row.sl && row.entry_price ? parseFloat(((row.exit_price - row.entry_price) / Math.abs(row.entry_price - row.sl)).toFixed(2)) : null,
     };
   });
@@ -589,6 +800,28 @@ async function getOpenTradesBySymbol(symbol) {
      WHERE t.symbol = $1 AND t.close_time IS NULL
      ORDER BY t.open_time ASC`,
     [symbol]
+  );
+  return rows;
+}
+
+/**
+ * Hitung posisi TERBUKA (close_time IS NULL) untuk satu user+symbol+mode.
+ * Sumber kebenaran tunggal untuk gate cap-per-koin (canEnter) — agar cap
+ * menghormati SEMUA posisi terbuka di DB, bukan hanya yang ada di memori engine
+ * live (mencegah penumpukan posisi baru di atas orphan yang belum ter-monitor).
+ * @returns {Promise<Array<{id:number, side:string}>>}
+ */
+async function getOpenPositionsForGate({ symbol, userId = null, dryRun = null }) {
+  const params = [symbol];
+  let where = `t.symbol = $1 AND t.close_time IS NULL`;
+  if (userId != null) { params.push(userId); where += ` AND s.user_id = $${params.length}`; }
+  if (dryRun != null) { params.push(dryRun ? 1 : 0); where += ` AND t.dry_run = $${params.length}`; }
+  const { rows } = await pool.query(
+    `SELECT t.id, t.side
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}`,
+    params
   );
   return rows;
 }
@@ -836,7 +1069,11 @@ module.exports = {
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
+  getOpenPositionsForGate,
   getInsights,
+  getTradesExport,
+  mapExportRow,
+  formatDuration,
   recalcSessionStats,
   // equity
   snapshotEquity,

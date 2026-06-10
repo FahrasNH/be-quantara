@@ -1,0 +1,224 @@
+const { PrismaClient } = require("@prisma/client");
+const { encrypt, decrypt, isEncrypted, fingerprint } = require("../infrastructure/security/crypto");
+
+const prisma = new PrismaClient();
+
+function assertUserExchangeModel() {
+  if (!prisma.userExchange) {
+    const err = new Error(
+      "Prisma client belum di-generate ulang. Jalankan: npx prisma generate && restart server."
+    );
+    err.statusCode = 500;
+    throw err;
+  }
+}
+
+function safeDecrypt(value) {
+  if (!value) return null;
+  return isEncrypted(value) ? decrypt(value) : value;
+}
+
+function mask(val) {
+  if (!val || val.length < 8) return val ? "****" : null;
+  return `${val.substring(0, 4)}****${val.substring(val.length - 4)}`;
+}
+
+/** Salin kredensial legacy (kolom User) ke UserExchange bila belum ada. */
+async function migrateLegacyIfNeeded(userId) {
+  assertUserExchangeModel();
+  const [legacy, existing] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { apiKey: true, apiSecret: true, apiPassphrase: true, exchangeType: true, apiKeyHash: true },
+    }),
+    prisma.userExchange.count({ where: { userId } }),
+  ]);
+
+  if (existing > 0 || !legacy?.apiKey || !legacy?.apiSecret || !legacy?.apiKeyHash) return;
+
+  await prisma.userExchange.create({
+    data: {
+      userId,
+      exchangeType: legacy.exchangeType || "bitget",
+      apiKey: legacy.apiKey,
+      apiSecret: legacy.apiSecret,
+      apiPassphrase: legacy.apiPassphrase,
+      apiKeyHash: legacy.apiKeyHash,
+    },
+  });
+}
+
+async function listExchangesMasked(userId) {
+  await migrateLegacyIfNeeded(userId);
+  const rows = await prisma.userExchange.findMany({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return rows.map((row) => ({
+    exchangeType: row.exchangeType,
+    apiKey: mask(safeDecrypt(row.apiKey)),
+    apiSecret: mask(safeDecrypt(row.apiSecret)),
+    apiPassphrase: row.apiPassphrase ? "****" : null,
+    configured: true,
+  }));
+}
+
+async function getExchangeCredentials(userId, exchangeType = "bitget") {
+  await migrateLegacyIfNeeded(userId);
+
+  const row = await prisma.userExchange.findUnique({
+    where: { userId_exchangeType: { userId, exchangeType } },
+  });
+
+  if (row) {
+    return {
+      exchangeType: row.exchangeType,
+      apiKey: safeDecrypt(row.apiKey),
+      apiSecret: safeDecrypt(row.apiSecret),
+      apiPassphrase: safeDecrypt(row.apiPassphrase),
+    };
+  }
+
+  // Fallback legacy User columns
+  const legacy = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { apiKey: true, apiSecret: true, apiPassphrase: true, exchangeType: true },
+  });
+
+  if (!legacy?.apiKey || !legacy?.apiSecret) return null;
+
+  return {
+    exchangeType: legacy.exchangeType || "bitget",
+    apiKey: safeDecrypt(legacy.apiKey),
+    apiSecret: safeDecrypt(legacy.apiSecret),
+    apiPassphrase: safeDecrypt(legacy.apiPassphrase),
+  };
+}
+
+async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchangeType = "bitget" }) {
+  const existing = await prisma.userExchange.findUnique({
+    where: { userId_exchangeType: { userId, exchangeType } },
+  });
+
+  const resolvedApiKey = apiKey || (existing ? safeDecrypt(existing.apiKey) : null);
+  const resolvedSecret = apiSecret || (existing ? safeDecrypt(existing.apiSecret) : null);
+  const resolvedPass = apiPassphrase !== undefined && apiPassphrase !== ""
+    ? apiPassphrase
+    : (existing ? safeDecrypt(existing.apiPassphrase) : null);
+
+  if (!existing && (!apiKey || !apiSecret)) {
+    const err = new Error("apiKey and apiSecret are required");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!resolvedApiKey || !resolvedSecret) {
+    const err = new Error("apiKey and apiSecret are required");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (exchangeType === "bitget" && !resolvedPass) {
+    const err = new Error("Passphrase is required for Bitget");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const apiKeyHash = fingerprint(resolvedApiKey);
+  const conflict = await prisma.userExchange.findUnique({
+    where: { apiKeyHash },
+    select: { userId: true, exchangeType: true },
+  });
+
+  if (conflict && (conflict.userId !== userId || conflict.exchangeType !== exchangeType)) {
+    const err = new Error("API key exchange ini sudah terhubung ke akun lain. Satu exchange account hanya boleh dipakai satu user.");
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const data = {
+    apiKey: encrypt(resolvedApiKey),
+    apiSecret: encrypt(resolvedSecret),
+    apiPassphrase: resolvedPass ? encrypt(resolvedPass) : null,
+    apiKeyHash,
+  };
+
+  await prisma.userExchange.upsert({
+    where: { userId_exchangeType: { userId, exchangeType } },
+    create: { userId, exchangeType, ...data },
+    update: data,
+  });
+
+  // Sinkronkan kolom legacy User (default exchange) agar kode lama tetap jalan
+  const primary = await prisma.userExchange.findFirst({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (primary) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        apiKey: primary.apiKey,
+        apiSecret: primary.apiSecret,
+        apiPassphrase: primary.apiPassphrase,
+        apiKeyHash: primary.apiKeyHash,
+        exchangeType: primary.exchangeType,
+      },
+    });
+  }
+
+  return { exchangeType, configured: true };
+}
+
+async function deleteExchange(userId, exchangeType) {
+  await migrateLegacyIfNeeded(userId);
+
+  const deleted = await prisma.userExchange.deleteMany({
+    where: { userId, exchangeType },
+  });
+
+  if (deleted.count === 0) {
+    const err = new Error("Exchange tidak ditemukan");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const remaining = await prisma.userExchange.findFirst({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (remaining) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        apiKey: remaining.apiKey,
+        apiSecret: remaining.apiSecret,
+        apiPassphrase: remaining.apiPassphrase,
+        apiKeyHash: remaining.apiKeyHash,
+        exchangeType: remaining.exchangeType,
+      },
+    });
+  } else {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        apiKey: null,
+        apiSecret: null,
+        apiPassphrase: null,
+        apiKeyHash: null,
+        exchangeType: null,
+      },
+    });
+  }
+}
+
+module.exports = {
+  listExchangesMasked,
+  getExchangeCredentials,
+  upsertExchange,
+  deleteExchange,
+  mask,
+};

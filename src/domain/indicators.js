@@ -750,6 +750,7 @@ function detectSidewaysBreakout(htfCandles, config = {}) {
 let _adaptiveFusionInstance = null;
 let _trendMomentumInstance = null;
 let _meanReversionInstance = null;
+let _breakoutRetestInstance = null;
 function getAdaptiveFusionInstance() {
   if (!_adaptiveFusionInstance) {
     const AdaptiveFusionStrategy = require("./strategy/implementations/AdaptiveFusionStrategy");
@@ -788,6 +789,14 @@ function getMeanReversionInstance() {
   return _meanReversionInstance;
 }
 
+function getBreakoutRetestInstance() {
+  if (!_breakoutRetestInstance) {
+    const BreakoutRetestStrategy = require("./strategy/implementations/BreakoutRetestStrategy");
+    _breakoutRetestInstance = new BreakoutRetestStrategy();
+  }
+  return _breakoutRetestInstance;
+}
+
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
   const signalType = config.signalType || "PDF_DAYTRADING";
 
@@ -812,6 +821,12 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
     case "MEAN_REVERSION": {
       const mr = getMeanReversionInstance();
       return mr.detectSignal(indicators, i, config);
+    }
+
+    // BREAKOUT_RETEST — level breakout + retest confirmation (VAULT tier)
+    case "BREAKOUT_RETEST": {
+      const br = getBreakoutRetestInstance();
+      return br.detectSignal(indicators, i, config);
     }
 
     // Legacy support

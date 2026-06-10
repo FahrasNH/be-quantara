@@ -7,8 +7,32 @@
 
 const { PrismaClient } = require("@prisma/client");
 const { canUseStrategy, getTierConfig, migrateLegacyTier } = require("../domain/tierConfig");
+// Sumber kebenaran strategi yang belum boleh live (single source of truth).
+const { DRY_RUN_ONLY_STRATEGIES } = require("../middleware/strategyGuard");
 
 const prisma = new PrismaClient();
+
+/**
+ * Apakah strategi sudah siap untuk LIVE trading (bukan dry-run-only)?
+ * Pure function — mengacu ke DRY_RUN_ONLY_STRATEGIES (mis. BREAKOUT_RETEST).
+ * @param {string} strategyKey
+ * @returns {boolean}
+ */
+function isStrategyLiveReady(strategyKey) {
+  return !DRY_RUN_ONLY_STRATEGIES.has(strategyKey);
+}
+
+/**
+ * Saring daftar strategi sesuai mode eksekusi.
+ * Pure function (mudah di-test) — dipisah dari getTierStrategies yang menyentuh DB.
+ * @param {string[]} strategies
+ * @param {("dry"|"live")} mode
+ * @returns {string[]}
+ */
+function filterStrategiesByMode(strategies, mode) {
+  const list = Array.isArray(strategies) ? strategies : [];
+  return mode === "live" ? list.filter(isStrategyLiveReady) : list.slice();
+}
 
 /**
  * Fetch user's current tier from DB.
@@ -98,8 +122,27 @@ async function getStrategyEntitlements(userId) {
   return { tier, allowed, locked };
 }
 
+/**
+ * Daftar strategi yang HARUS dijalankan otomatis untuk user (dari tier-nya).
+ * Inti fitur "Auto Multi-Strategy Execution per Coin": user tidak memilih strategi;
+ * semua strategi tier dijalankan serentak. Dalam mode "live", strategi yang masih
+ * dry-run-only (mis. BREAKOUT_RETEST) di-exclude agar tidak live trade (AC-07).
+ *
+ * @param {string} userId
+ * @param {("dry"|"live")} [mode="dry"]
+ * @returns {Promise<string[]>}
+ */
+async function getTierStrategies(userId, mode = "dry") {
+  const tier = await getUserTier(userId);
+  const config = getTierConfig(tier);
+  return filterStrategiesByMode(config?.strategies ?? [], mode);
+}
+
 module.exports = {
   getUserTier,
   assertStrategyAllowed,
   getStrategyEntitlements,
+  getTierStrategies,
+  isStrategyLiveReady,
+  filterStrategiesByMode,
 };

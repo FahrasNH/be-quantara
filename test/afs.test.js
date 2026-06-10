@@ -208,6 +208,100 @@ for (const [key, config] of Object.entries(subStrategies)) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// TEST 8: Component B — 3-EMA Alignment (v2.1 Redesign)
+// Verifikasi bahwa B tidak lagi null di trending market yang sudah berjalan.
+// ═════════════════════════════════════════════════════════════════════════
+console.log("\nTEST 8: Component B — 3-EMA Alignment State Detection");
+console.log("─".repeat(50));
+
+let b8pass = 0, b8fail = 0;
+const tB = (name, got, want) => {
+  const ok = got === want;
+  if (ok) { b8pass++; console.log(`  ✅ ${name}`); }
+  else     { b8fail++; console.log(`  ❌ ${name}: got ${got}, want ${want}`); }
+};
+
+// Helper: buat array panjang N dengan nilai fill untuk elemen awal, val di akhir.
+// detectSignal punya early guard `if (lastIdx < 30) return null` sehingga kita butuh
+// minimal 31 elemen (lastIdx = 30).
+function mkArr(n, fill, val) { return Array(n).fill(fill).concat([val]); }
+const N = 30; // lastIdx akan = N (31 elemen, 0..N)
+
+// Kondisi downtrend BTC mirip log nyata: EMA9 < EMA21 < EMA50, price < EMA21, RSI 42
+// SEBELUM fix: closePrev >= EMA21 → FALSE → null. SEKARANG: 3-EMA alignment → SHORT
+{
+  const btcIndicators = {
+    closes:    mkArr(N, 63000, 62488),
+    emaFast:   mkArr(N, null,  62683.93),  // EMA9
+    emaSlow:   mkArr(N, null,  62776.78),  // EMA21
+    emaTrend:  mkArr(N, null,  62925.00),  // EMA50
+    rsi:       mkArr(N, 42,    42.4),
+    atr:       mkArr(N, null,  189.08),
+    volumes:   mkArr(N, 1,     1),
+    volSMA:    mkArr(N, null,  null),
+  };
+  const sig = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 0.30, trend_strength: 0.15 });
+  tB("BTC downtrend — detectSignal SHORT (tidak null seperti sebelumnya)", sig, "SHORT");
+  const meta = afs.getLastSignalMeta();
+  tB("lastSignalMeta tersedia setelah signal", meta !== null, true);
+}
+
+// Kondisi uptrend: EMA9 > EMA21 > EMA50, price > EMA21, RSI 57 → B LONG
+{
+  const upIndicators = {
+    closes:    mkArr(N, 100, 104),
+    emaFast:   mkArr(N, null, 103.5),  // EMA9
+    emaSlow:   mkArr(N, null, 102.5),  // EMA21
+    emaTrend:  mkArr(N, null, 101.0),  // EMA50
+    rsi:       mkArr(N, 55,   57),
+    atr:       mkArr(N, null, 0.5),
+    volumes:   mkArr(N, 100,  100),
+    volSMA:    mkArr(N, 80,   80),
+  };
+  const sig = afs.detectSignal(upIndicators, N, { balance: 500, volatility: 0.5, trend_strength: 0.5 });
+  tB("Uptrend — detectSignal LONG", sig, "LONG");
+}
+
+// Jika EMA alignment TIDAK sejajar (mixed), B harus null
+{
+  const mixedIndicators = {
+    closes:    [100, 99, 100, 101, 100],
+    emaFast:   [null, null, null, null, 100.5],  // EMA9 > EMA21 (bullish short-term)
+    emaSlow:   [null, null, null, null, 100.2],  // EMA21
+    emaTrend:  [null, null, null, null, 100.8],  // EMA50 > EMA21 → bearish medium = MIXED
+    rsi:       [null, null, null, null, 55],
+    atr:       [null, null, null, null, 0.3],
+    volumes:   [100, 100, 100, 100, 100],
+    volSMA:    [null, null, null, null, 80],
+  };
+  // EMA9(100.5) > EMA21(100.2) tapi EMA50(100.8) > EMA21 → tidak fully aligned
+  const sig = afs._detectSignalB(55, 100.5, 100.2, 100.8, [99, 100, 101, 100, 100.5]);
+  tB("Mixed EMA (tidak fully aligned) — B null", sig, null);
+}
+
+// Jika emaTrend null (tidak tersedia), B tetap bisa fire dengan 2-EMA fallback
+{
+  const noTrendInd = { closes: [99, 99.5, 100, 100.5, 101], emaFast: [null,null,null,null,100.8], emaSlow: [null,null,null,null,100.2], rsi: [null,null,null,null,58], atr: [null,null,null,null,0.3], volumes: [100,100,100,100,100], volSMA: [null,null,null,null,80] };
+  const sig = afs._detectSignalB(58, 100.8, 100.2, null, [99, 99.5, 100, 100.5, 101]);
+  tB("emaTrend=null (fallback 2-EMA) — B fires LONG", sig, "LONG");
+}
+
+// RSI overbought (≥70) — B harus null (filter overbought)
+{
+  const sig = afs._detectSignalB(72, 103.5, 102.5, 101.0, [100, 101, 102, 103, 104]);
+  tB("RSI overbought (72) — B null", sig, null);
+}
+
+// RSI oversold (≤30) di SHORT setup — B harus null
+{
+  const sig = afs._detectSignalB(28, 96.5, 97.5, 99.0, [101, 100, 99, 98, 97]);
+  tB("RSI oversold (28) — B null", sig, null);
+}
+
+console.log(`\nComponent B: ${b8pass} passed, ${b8fail} failed`);
+if (b8fail > 0) { console.log("⚠️  Component B tests FAILED"); process.exitCode = 1; }
+
+// ═════════════════════════════════════════════════════════════════════════
 // SUMMARY
 // ═════════════════════════════════════════════════════════════════════════
 console.log("\n" + "═".repeat(50));

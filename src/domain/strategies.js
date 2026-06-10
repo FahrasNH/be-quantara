@@ -388,6 +388,60 @@ const STRATEGIES = {
     winrate:       "~55-60%",
     risk:          "Rendah",
   },
+
+  // ─────────────────────────────────────────────
+  // BREAKOUT_RETEST — Breakout + Retest (VAULT Tier)
+  //
+  //   Entry TF  : 15m — deteksi level S&R 20-bar, breakout + retest
+  //   SL        : 1.5× ATR | TP: 6× ATR (RR 1:4)
+  //   Risk      : 3% per trade
+  // ─────────────────────────────────────────────
+  BREAKOUT_RETEST: {
+    name:          "BREAKOUT_RETEST",
+    label:         "Breakout + Retest",
+    description:   "Breakout level S&R dengan konfirmasi retest. RR 1:4, cocok market konsolidasi.",
+
+    emaFast:       9,
+    emaSlow:       21,
+    emaTrend:      50,
+
+    rsiPeriod:     14,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    40,
+    rsiLongMax:    70,
+    rsiShortMin:   30,
+    rsiShortMax:   60,
+
+    atrPeriod:     14,
+    atrMultiplier: 1.5,        // SL = 1.5× ATR (di atas noise bar)
+    riskReward:    4,          // TP = 6× ATR → RR 6/1.5 = 1:4
+    atrMinMult:    0.2,
+    atrMaxMult:    5.0,
+
+    higherTf:      "4h",
+    htfEmaFast:    9,
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.25,
+
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:     0.03,
+    maxDailyLossPct:  0.08,
+    maxTradesPerDay:  7,
+    cooldownAfterLoss: 5,
+    maxConsecLoss:    3,
+
+    leverage:      1,
+    interval:      "15m",
+    checkInterval: 900000,
+
+    signalType:    "BREAKOUT_RETEST",
+
+    trades:        "2-7 trade/hari",
+    winrate:       "~51-56%",
+    risk:          "Sedang-Tinggi",
+  },
 };
 
 function getStrategy(overrideKey = null) {

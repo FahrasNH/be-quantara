@@ -4,6 +4,53 @@
 // ─────────────────────────────────────────────
 
 const ccxt = require("ccxt");
+const axios = require("axios");
+const https = require("https");
+
+const BITGET_BASE = "https://api.bitget.com";
+const RETRYABLE_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|socket disconnected|TLS|timeout|network|aborted/i;
+
+// Paksa IPv4 — sering lebih stabil dari IPv6 untuk api.bitget.com di beberapa jaringan.
+const httpsAgent = new https.Agent({ family: 4, keepAlive: true });
+
+async function bitgetGet(path, params, { retries = 3, timeout = 25_000 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const { data } = await axios.get(`${BITGET_BASE}${path}`, {
+        params,
+        timeout,
+        httpsAgent,
+        headers: { "User-Agent": "QuantaraBot/2.0" },
+      });
+      return data;
+    } catch (err) {
+      lastErr = err;
+      const msg = err.message || "";
+      if (attempt < retries - 1 && RETRYABLE_RE.test(msg)) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+function isNetworkError(err) {
+  return RETRYABLE_RE.test(err?.message || "");
+}
+const TF_MAP = {
+  "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+  "1h": "1H", "2h": "2H", "4h": "4H", "6h": "6H", "12h": "12H",
+  "1d": "1D", "1w": "1W",
+};
+
+function toRawSymbol(symbol) {
+  if (!symbol) return "BTCUSDT";
+  if (symbol.includes("/")) return symbol.split("/")[0].toUpperCase() + "USDT";
+  return symbol.toUpperCase();
+}
 
 class BitgetCCXTClient {
   constructor(apiKey, secretKey, passphrase) {
@@ -14,8 +61,59 @@ class BitgetCCXTClient {
       enableRateLimit: true,
       rateLimit: 100,
       sandbox: false,
+      options: {
+        defaultType: "swap",
+        defaultSettle: "USDT",
+      },
     });
     this.symbol = null;
+  }
+
+  /** Public market data via Bitget Mix API — hindari CCXT loadMarkets (spot/coins). */
+  async _fetchMixCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
+    const params = {
+      symbol: toRawSymbol(symbol),
+      productType: "USDT-FUTURES",
+      granularity: TF_MAP[String(timeframe).toLowerCase()] || timeframe,
+      limit: Math.min(limit, 500),
+    };
+    if (since) params.startTime = String(since);
+
+    const data = await bitgetGet("/api/v2/mix/market/candles", params);
+
+    if (data?.code !== "00000" || !Array.isArray(data.data) || data.data.length === 0) {
+      throw new Error(data?.msg || "No candles data received");
+    }
+
+    return data.data.map((c) => ({
+      timestamp: parseInt(c[0], 10),
+      date: new Date(parseInt(c[0], 10)).toISOString(),
+      open: parseFloat(c[1]),
+      high: parseFloat(c[2]),
+      low: parseFloat(c[3]),
+      close: parseFloat(c[4]),
+      volume: parseFloat(c[5]),
+    }));
+  }
+
+  async _fetchMixTicker(symbol) {
+    const data = await bitgetGet("/api/v2/mix/market/ticker", {
+      symbol: toRawSymbol(symbol),
+      productType: "USDT-FUTURES",
+    });
+
+    if (data?.code !== "00000" || !Array.isArray(data.data) || !data.data[0]) {
+      throw new Error(data?.msg || "No ticker data received");
+    }
+
+    const t = data.data[0];
+    return {
+      symbol: toRawSymbol(symbol),
+      last: parseFloat(t.lastPr || t.close || 0),
+      bestBid: parseFloat(t.bidPr || 0),
+      bestAsk: parseFloat(t.askPr || 0),
+      change24h: parseFloat(t.change24h || t.changeUtc24h || 0),
+    };
   }
 
   // ─────────────────────────────────────────────
@@ -24,57 +122,66 @@ class BitgetCCXTClient {
 
   async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
     try {
-      // CCXT Bitget format: BTC/USDT:USDT (untuk swap/futures)
-      let marketSymbol = symbol;
-      if (!marketSymbol.includes("/")) {
-        // Convert BTCUSDT -> BTC/USDT
-        const base = marketSymbol.slice(0, -4); // Remove USDT suffix
-        marketSymbol = `${base}/USDT:USDT`;
+      return await this._fetchMixCandles(symbol, timeframe, limit, since);
+    } catch (directErr) {
+      // Jangan fallback ke CCXT untuk error jaringan — endpoint sama, hanya lebih lambat.
+      if (isNetworkError(directErr)) {
+        throw new Error(`getCandles error: ${directErr.message}`);
       }
-
-      const candles = await this.exchange.fetchOHLCV(
-        marketSymbol,
-        timeframe,
-        since,
-        Math.min(limit, 500)
-      );
-
-      if (!Array.isArray(candles) || candles.length === 0) {
-        throw new Error("No candles data received");
+      try {
+        let marketSymbol = symbol;
+        if (!marketSymbol.includes("/")) {
+          const base = marketSymbol.slice(0, -4);
+          marketSymbol = `${base}/USDT:USDT`;
+        }
+        const candles = await this.exchange.fetchOHLCV(
+          marketSymbol,
+          timeframe,
+          since,
+          Math.min(limit, 500)
+        );
+        if (!Array.isArray(candles) || candles.length === 0) {
+          throw new Error("No candles data received");
+        }
+        return candles.map((c) => ({
+          timestamp: c[0],
+          date: new Date(c[0]).toISOString(),
+          open: parseFloat(c[1]),
+          high: parseFloat(c[2]),
+          low: parseFloat(c[3]),
+          close: parseFloat(c[4]),
+          volume: parseFloat(c[5]),
+        }));
+      } catch {
+        throw new Error(`getCandles error: ${directErr.message}`);
       }
-
-      return candles.map(c => ({
-        timestamp: c[0],
-        date: new Date(c[0]).toISOString(),
-        open: parseFloat(c[1]),
-        high: parseFloat(c[2]),
-        low: parseFloat(c[3]),
-        close: parseFloat(c[4]),
-        volume: parseFloat(c[5]),
-      }));
-    } catch (err) {
-      throw new Error(`getCandles error: ${err.message}`);
     }
   }
 
   async getTicker(symbol) {
     try {
-      let marketSymbol = symbol;
-      if (!marketSymbol.includes("/")) {
-        const base = marketSymbol.slice(0, -4);
-        marketSymbol = `${base}/USDT:USDT`;
+      return await this._fetchMixTicker(symbol);
+    } catch (directErr) {
+      if (isNetworkError(directErr)) {
+        throw new Error(`getTicker error: ${directErr.message}`);
       }
-
-      const ticker = await this.exchange.fetchTicker(marketSymbol);
-      return {
-        symbol,
-        last: ticker.last,
-        bestBid: ticker.bid,
-        bestAsk: ticker.ask,
-        change24h: ticker.percentage || 0,
-      };
-    } catch (err) {
-      throw new Error(`getTicker error: ${err.message}`);
+      try {
+        let marketSymbol = symbol;
+        if (!marketSymbol.includes("/")) {
+          const base = marketSymbol.slice(0, -4);
+          marketSymbol = `${base}/USDT:USDT`;
+        }
+        const ticker = await this.exchange.fetchTicker(marketSymbol);
+        return {
+          symbol,
+          last: ticker.last,
+          bestBid: ticker.bid,
+          bestAsk: ticker.ask,
+          change24h: ticker.percentage || 0,
+        };
+      } catch {
+        throw new Error(`getTicker error: ${directErr.message}`);
+      }
     }
   }
 

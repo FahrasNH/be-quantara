@@ -11,6 +11,8 @@ const rateLimit = require("express-rate-limit");
 
 const cfg = require("../config/env");
 const BotEngine = require("../application/BotEngine");
+const AdaptiveStrategyEngine = require("../application/AdaptiveStrategyEngine");
+const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinator");
 const AccountCoordinator = require("../domain/AccountCoordinator");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
@@ -33,6 +35,13 @@ const createSubscriptionRouter = require("./routes/subscription");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
+
+// ── Feature flags ─────────────────────────────────────────────────────────
+// MULTI_STRATEGY_ENABLED: default ON; disable lewat env MULTI_STRATEGY_ENABLED=false.
+const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
+
+// Entitlement service (dipakai resumeRunningBots untuk fallback tier-strategies)
+const { getTierStrategies } = require("../services/entitlement");
 
 // ── CORS & Security ────────────────────────────────────────────────────────
 // Domain produksi dibaca dari env (cfg.corsOrigins). Localhost ditangani terpisah.
@@ -154,6 +163,20 @@ function getAllBots(userId) {
     .map(([, instance]) => instance);
 }
 
+// Hapus instance BotEngine dari memori (dipakai saat ganti strategi / edit config
+// / delete bot). Bot wajib sudah stopped sebelum dipanggil; sebagai pengaman kita
+// tetap stop() bila masih running agar tidak ada interval/loop yatim.
+function removeBotInstance(userId, symbol) {
+  const key = makeKey(userId, symbol);
+  const existing = botsMap[key];
+  if (!existing) return false;
+  try {
+    if (existing.getState().running) existing.stop();
+  } catch { /* abaikan — yang penting instance dilepas */ }
+  delete botsMap[key];
+  return true;
+}
+
 function createBotInstance(userId, symbol, configOverrides = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
@@ -175,6 +198,61 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
   });
   botsMap[key] = bot;
   return bot;
+}
+
+/**
+ * Buat instance MultiStrategyCoordinator untuk satu koin (fitur Auto Multi-Strategy
+ * Execution per Coin). Koordinator ini disimpan di botsMap pada slot yang sama
+ * dengan BotEngine sehingga route/WS memperlakukannya identik (getState/start/stop).
+ *
+ * @param {string} userId
+ * @param {string} symbol
+ * @param {Object} opts  — { strategies[], capital, dryRun, apiKey, apiSecret, passphrase, botId }
+ * @returns {MultiStrategyCoordinator}
+ */
+function createMultiStrategyInstance(userId, symbol, opts = {}) {
+  const key = makeKey(userId, symbol);
+  const existing = botsMap[key];
+  if (existing) {
+    if (existing.getState().running) return existing;
+    delete botsMap[key];
+  }
+
+  const accountCoordinator = getCoordinator(userId);
+
+  // engineFactory di-INJECT ke koordinator → satu AdaptiveStrategyEngine per strategi,
+  // berbagi AccountCoordinator + kredensial user. cfg dari koordinator sudah berisi
+  // strategyKey/capital/dryRun/botKey/groupKey.
+  const engineFactory = (strategyKey, cfg2) =>
+    new AdaptiveStrategyEngine({
+      ...cfg2,
+      coordinator: accountCoordinator,
+      apiKey:      opts.apiKey,
+      apiSecret:   opts.apiSecret,
+      passphrase:  opts.passphrase,
+      botId:       opts.botId,
+    });
+
+  const coordinator = new MultiStrategyCoordinator({
+    userId,
+    symbol,
+    strategies:   opts.strategies,
+    totalCapital: opts.capital,
+    engineFactory,
+    accountCoordinator,
+    dryRun:       opts.dryRun,
+    conflictMode: process.env.MULTI_STRATEGY_CONFLICT_MODE || "skip",
+    engineConfig: { botId: opts.botId },
+    // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
+    // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
+    maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 2,
+    // Inject DB → canEnter pakai DB sebagai sumber kebenaran tunggal (cap menghormati
+    // SEMUA posisi terbuka termasuk orphan, bukan hanya state engine live).
+    db,
+  });
+
+  botsMap[key] = coordinator;
+  return coordinator;
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────
@@ -199,7 +277,7 @@ app.use("/api/v1/auth", createAuthRouter());
 
 // ✅ FIX: Apply auth middleware ONLY to protected routes
 // Bots routes (protected, user-isolated)
-app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance }));
+app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient }));
 
 // Market routes (protected)
 app.use("/api/v1/market", authMiddleware, createMarketRouter({
@@ -216,7 +294,7 @@ app.use("/api/v1/history", authMiddleware, createHistoryRouter({ SYMBOLS_LIST: c
 app.use("/api/v1/backtest", authMiddleware, createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));
 
 // Legacy routes (protected - deprecated)
-app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, getAllBots }));
+app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_LIST: cfg.symbolsList }));
 
 // Account routes (protected)
 app.use("/api/v1/account", authMiddleware, createAccountRouter());
@@ -257,7 +335,11 @@ wss.on("connection", (ws, req) => {
       } catch { /* client mungkin sudah disconnect */ }
     }
 
-    instance.getLogs(WS_REPLAY_PER_BOT).forEach((entry) => {
+    // MultiStrategyCoordinator tidak punya getLogs — guard sebelum panggil
+    const logs = typeof instance.getLogs === "function"
+      ? instance.getLogs(WS_REPLAY_PER_BOT)
+      : [];
+    logs.forEach((entry) => {
       if (ws.readyState === 1) {
         try {
           ws.send(JSON.stringify({ type: "log", symbol, data: entry }));
@@ -326,12 +408,10 @@ async function resumeRunningBots() {
   try {
     const { PrismaClient } = require("@prisma/client");
     const prisma = new PrismaClient();
-    const { decrypt, isEncrypted } = require("../infrastructure/security/crypto");
-    const dec = (v) => (!v ? null : isEncrypted(v) ? decrypt(v) : v);
+    const { getExchangeCredentials } = require("../services/userExchange");
 
     const bots = await prisma.bot.findMany({
-      where:   { running: true },
-      include: { user: { select: { apiKey: true, apiSecret: true, apiPassphrase: true } } },
+      where: { running: true },
     });
 
     // Log tanpa syarat → penanda pasti bahwa kode auto-resume sudah ter-deploy.
@@ -339,9 +419,10 @@ async function resumeRunningBots() {
 
     let resumed = 0, stopped = 0;
     for (const bot of bots) {
-      const apiKey     = dec(bot.user?.apiKey);
-      const apiSecret  = dec(bot.user?.apiSecret);
-      const passphrase = dec(bot.user?.apiPassphrase);
+      const creds = await getExchangeCredentials(bot.userId, "bitget");
+      const apiKey     = creds?.apiKey;
+      const apiSecret  = creds?.apiSecret;
+      const passphrase = creds?.apiPassphrase;
 
       // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
       if (!bot.dryRun && (!apiKey || !apiSecret)) {
@@ -352,17 +433,55 @@ async function resumeRunningBots() {
       }
 
       try {
-        const instance = createBotInstance(bot.userId, bot.symbol, {
-          capital:     bot.capital,
-          strategyKey: bot.strategyKey,
-          dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
-          botId:       bot.id,
-          userId:      bot.userId,
-          apiKey, apiSecret, passphrase,
-        });
+        // Pilih path resume: multi-strategy jika flag ON.
+        // Tanpa pengecekan ini setiap restart server akan selalu menjalankan BotEngine
+        // legacy dengan strategyKey=ADAPTIVE_FUSION dari DB → log selalu "[ADAPTIVE_FUSION]".
+        //
+        // Prioritas strategyGroup:
+        //   1. Pakai bot.strategyGroup dari DB jika sudah terisi (bot pernah di-start multi-strategy)
+        //   2. Fallback: ambil dari tier user via getTierStrategies() — auto-upgrade bots legacy
+        //      yang punya strategyGroup=[] tapi seharusnya jalan multi-strategy (VAULT/MINT/FORGE)
+        let strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
+          ? bot.strategyGroup
+          : null;
+
+        if (MULTI_STRATEGY_ENABLED && !strategies) {
+          try {
+            const mode = bot.dryRun ? "dry" : "live";
+            strategies = await getTierStrategies(bot.userId, mode);
+          } catch (_) {
+            strategies = null; // fallback ke legacy jika gagal ambil tier
+          }
+        }
+
+        const useMulti = MULTI_STRATEGY_ENABLED && strategies && strategies.length > 0;
+
+        let instance;
+        if (useMulti) {
+          instance = createMultiStrategyInstance(bot.userId, bot.symbol, {
+            strategies,
+            capital:     bot.capital,
+            dryRun:      bot.dryRun,
+            tpMode:      bot.tpMode ?? "full",
+            botId:       bot.id,
+            apiKey, apiSecret, passphrase,
+          });
+          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
+        } else {
+          instance = createBotInstance(bot.userId, bot.symbol, {
+            capital:     bot.capital,
+            strategyKey: bot.strategyKey,
+            dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
+            tpMode:      bot.tpMode ?? "full",
+            botId:       bot.id,
+            userId:      bot.userId,
+            apiKey, apiSecret, passphrase,
+          });
+          console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+        }
+
         if (!instance.getState().running) await instance.start();
         resumed++;
-        console.log(`[Startup] Resume bot ${bot.symbol} (${bot.dryRun ? "dry-run" : "LIVE"})`);
       } catch (e) {
         console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
       }
