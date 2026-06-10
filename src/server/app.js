@@ -294,7 +294,7 @@ app.use("/api/v1/history", authMiddleware, createHistoryRouter({ SYMBOLS_LIST: c
 app.use("/api/v1/backtest", authMiddleware, createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));
 
 // Legacy routes (protected - deprecated)
-app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, getAllBots }));
+app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_LIST: cfg.symbolsList }));
 
 // Account routes (protected)
 app.use("/api/v1/account", authMiddleware, createAccountRouter());

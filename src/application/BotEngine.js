@@ -1720,7 +1720,17 @@ class BotEngine extends EventEmitter {
     if (!this.config.slPlusEnabled) return;
     if (pos.remainingSize <= 0) return;
 
-    const R     = pos.R;
+    const R = pos.R;
+    // QA-002: cegah pembagian rMult = gain/R saat R = 0 / non-finite (atr≈0 atau
+    // slDist override strategi = 0). Tanpa guard → rMult = Infinity/NaN yang
+    // men-trigger SEMUA milestone (+1R/+2R/+3R) sekaligus → cascade partial close
+    // dan NaN merembet ke kalkulasi PnL. Skip milestone bila R tidak valid.
+    if (!Number.isFinite(R) || R <= 0) {
+      if (this.state.checkCount % 20 === 1) {
+        this._log("warn", `SL+ milestone di-skip: risk distance (R) tidak valid (R=${R}) ${this.config.symbol}`);
+      }
+      return;
+    }
     const gain  = pos.side === "LONG" ? price - pos.entry : pos.entry - price;
     const rMult = gain / R;
 

@@ -88,6 +88,11 @@ const cfg = {
       "your-secret-key-change-in-production",
       "your-refresh-secret-key-change-in-production",
     ];
+    // SEC-004: kunci enkripsi contoh yang pernah ter-commit di .env.example.
+    // WAJIB ditolak di production — jika operator copy contoh ke prod, semua
+    // API key exchange tersimpan bisa didekripsi siapa pun yang punya repo.
+    const PUBLISHED_ENCRYPTION_KEY =
+      "c13aec676c24983a3addcec886a7a2d5df09c85f2adbcb0bd1de0adaa1340754";
 
     if (!this.DATABASE_URL) errors.push("DATABASE_URL belum diset.");
     if (!this.JWT_SECRET) errors.push("JWT_SECRET belum diset.");
@@ -106,6 +111,13 @@ const cfg = {
       }
       if (this.JWT_SECRET && this.JWT_SECRET === this.JWT_REFRESH_SECRET) {
         errors.push("JWT_SECRET dan JWT_REFRESH_SECRET tidak boleh sama.");
+      }
+      if (this.ENCRYPTION_KEY === PUBLISHED_ENCRYPTION_KEY) {
+        errors.push(
+          "ENCRYPTION_KEY masih memakai nilai contoh dari .env.example yang pernah ter-commit " +
+          "— WAJIB generate baru (openssl rand -hex 32). Jika key contoh ini pernah dipakai di " +
+          "production, rotate key lalu re-encrypt semua API key exchange tersimpan."
+        );
       }
       // Gerbang konsistensi DB↔environment: cegah app production menunjuk ke
       // database staging (akar masalah insiden login 2026-06-10). Override
