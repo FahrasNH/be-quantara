@@ -30,15 +30,10 @@ fi
 echo "==> git fetch origin ${GIT_BRANCH}..."
 git fetch origin "${GIT_BRANCH}"
 
-# Script di scripts/ kadang di-upload manual (scp) sebelum masuk repo — blokir git pull.
-echo "==> Bersihkan file untracked di scripts/ yang bentrok dengan merge..."
-git clean -fd -- scripts/ 2>/dev/null || true
-
-echo "==> git merge origin/${GIT_BRANCH}..."
-git merge "origin/${GIT_BRANCH}" --no-edit || {
-  echo "ERROR: git merge failed — resolve conflicts on VPS manually"
-  exit 1
-}
+# Deploy server: selaraskan ke origin (hindari merge conflict dari file lokal/manual)
+echo "==> git reset --hard origin/${GIT_BRANCH}..."
+git merge --abort 2>/dev/null || true
+git reset --hard "origin/${GIT_BRANCH}"
 
 echo "==> npm ci..."
 npm ci

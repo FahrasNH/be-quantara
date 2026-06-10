@@ -63,11 +63,10 @@ ssh "$STAGING_VPS_USER@$STAGING_VPS_HOST" << REMOTE_SCRIPT
   echo "==> git fetch origin \${GIT_BRANCH}..."
   git fetch origin "\$GIT_BRANCH"
 
-  echo "==> git merge origin/\${GIT_BRANCH}..."
-  git merge "origin/\$GIT_BRANCH" --no-edit || {
-    echo "ERROR: git merge failed — resolve conflicts on VPS manually"
-    exit 1
-  }
+  # Deploy server: selaraskan ke origin (hindari merge conflict dari file lokal)
+  echo "==> git reset --hard origin/\${GIT_BRANCH}..."
+  git merge --abort 2>/dev/null || true
+  git reset --hard "origin/\$GIT_BRANCH"
 
   echo "==> npm install (with fallback)..."
   if [[ ! -f package-lock.json ]]; then
