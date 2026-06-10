@@ -35,7 +35,10 @@ echo "==> Bersihkan file untracked di scripts/ yang bentrok dengan merge..."
 git clean -fd -- scripts/ 2>/dev/null || true
 
 echo "==> git merge origin/${GIT_BRANCH}..."
-git merge --ff-only "origin/${GIT_BRANCH}"
+git merge "origin/${GIT_BRANCH}" --no-edit || {
+  echo "ERROR: git merge failed — resolve conflicts on VPS manually"
+  exit 1
+}
 
 echo "==> npm ci..."
 npm ci
