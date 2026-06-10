@@ -21,6 +21,10 @@
 
 "use strict";
 
+// Muat .env agar DATABASE_URL tersedia saat script dijalankan langsung via `node`
+// (PM2 otomatis load env, tapi `node scripts/...` dari shell tidak).
+require("dotenv").config();
+
 const { Pool } = require("pg");
 
 function arg(name, fallback = null) {
