@@ -38,11 +38,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "UserExchange_apiKeyHash_key"
 CREATE INDEX IF NOT EXISTS "UserExchange_userId_idx"
     ON "UserExchange"("userId");
 
+-- Check pg_class (relations) not pg_constraint: the original add_user_exchange
+-- migration created this as a bare CREATE UNIQUE INDEX, so its name lives in
+-- pg_class as an index — not as a named constraint. Checking pg_class covers
+-- both the index-backed and constraint-backed cases.
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'UserExchange_userId_exchangeType_key'
+        SELECT 1 FROM pg_class
+        WHERE relname = 'UserExchange_userId_exchangeType_key'
     ) THEN
         ALTER TABLE "UserExchange"
             ADD CONSTRAINT "UserExchange_userId_exchangeType_key"
