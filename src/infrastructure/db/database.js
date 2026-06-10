@@ -193,9 +193,32 @@ async function init() {
 
 // ── Sessions ──────────────────────────────────
 
+/**
+ * Serialisasi config bot dengan AMAN — buang runtime object yang tidak boleh
+ * dipersist (coordinator/groupCoordinator/client/fungsi/Timeout) dan tahan
+ * terhadap referensi sirkular. Mencegah "Converting circular structure to JSON".
+ */
+function safeStringifyConfig(config) {
+  const DROP = new Set(["coordinator", "groupCoordinator", "client", "_db", "db"]);
+  const seen = new WeakSet();
+  return JSON.stringify(config ?? {}, (key, val) => {
+    if (DROP.has(key)) return undefined;
+    if (typeof val === "function") return undefined;
+    if (val && typeof val === "object") {
+      // Buang objek non-plain yang rawan sirkular (Timeout, Map, instance kelas runtime)
+      const ctor = val.constructor && val.constructor.name;
+      if (ctor && !["Object", "Array"].includes(ctor)) return undefined;
+      if (seen.has(val)) return undefined;
+      seen.add(val);
+    }
+    return val;
+  });
+}
+
 async function openSession({ exchange, symbol, mode, initialCapital, config, userId }) {
   const resolvedMode = mode || (config?.dryRun ? "dry_run" : "live");
   const initCap      = initialCapital ?? 0;
+  const configJson   = safeStringifyConfig(config);
 
   // Reuse sesi aktif (stopped_at IS NULL) untuk user+symbol+mode yang sama.
   // Ini mencegah sesi duplikat setiap kali bot di-start ulang.
@@ -210,7 +233,7 @@ async function openSession({ exchange, symbol, mode, initialCapital, config, use
       // Update config terbaru agar tidak stale, tapi jangan ubah initial_capital
       await pool.query(
         `UPDATE bot_sessions SET config = $2 WHERE id = $1`,
-        [existing[0].id, JSON.stringify(config ?? {})]
+        [existing[0].id, configJson]
       );
       return existing[0].id;
     }
@@ -227,7 +250,7 @@ async function openSession({ exchange, symbol, mode, initialCapital, config, use
       symbol,
       resolvedMode,
       initCap,
-      JSON.stringify(config ?? {}),
+      configJson,
     ]
   );
   return rows[0].id;
