@@ -1,3 +1,9 @@
+-- Prerequisite: apiKeyHash column must exist on User before we can read it below.
+-- This was missing from all prior migrations (was only db-pushed locally).
+-- IF NOT EXISTS guard makes this safe to re-run on envs where column already exists.
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "apiKeyHash" TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS "User_apiKeyHash_key" ON "User"("apiKeyHash");
+
 -- CreateTable
 CREATE TABLE "UserExchange" (
     "id" TEXT NOT NULL,
