@@ -1,80 +1,46 @@
 # Production Deploy — Quantara
 
-Production berjalan di VPS `187.77.135.156` port **80** (nginx) + backend PM2 **`be-quantara`** port **3000**.
+> **Panduan deploy utama:** [DEPLOY_QUICK_START.md](../DEPLOY_QUICK_START.md)
 
-| Lingkungan | URL | PM2 | FE path |
-|------------|-----|-----|---------|
-| Production | `http://187.77.135.156` | `be-quantara` | `/var/www/quantara` |
-| Staging | `http://187.77.135.156:8080` | `quantara-staging` | `/var/www/quantara-staging` |
+Production berjalan di VPS `187.77.135.156` — nginx port **80/443** + backend PM2 **`quantara`** port **3000**.
 
-## Deploy production (FE + BE sekaligus)
+| Lingkungan | URL | PM2 | BE path | FE path |
+|------------|-----|-----|---------|---------|
+| Production | `https://quantara.software` | `quantara` | `/opt/quantara/be` | `/var/www/quantara/fe` |
+| Staging | `http://187.77.135.156:8080` | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
+
+## Deploy production
 
 ```bash
 cd fe-bot-trading
 git pull origin main
 chmod +x deploy-production.sh
-./deploy-production.sh
-```
-
-### Opsi partial
-
-```bash
-./deploy-production.sh --fe-only   # hanya frontend
-./deploy-production.sh --be-only   # hanya backend
-```
-
-### Deploy BE saja (dari repo backend)
-
-```bash
-cd be-bot-trading
-git pull origin main
-chmod +x scripts/deploy-production.sh
-./scripts/deploy-production.sh
+./deploy-production.sh              # FE + BE
+./deploy-production.sh --fe-only    # hanya frontend
+./deploy-production.sh --be-only      # hanya backend
 ```
 
 Atau langsung di VPS:
 
 ```bash
-cd /opt/quantara/be-bot-trading   # sesuaikan path Anda
+cd /opt/quantara/be
 ./scripts/deploy-production-vps.sh
 ```
 
-## First-time setup production (VPS baru)
+## TLS / HTTPS
 
 ```bash
-scp scripts/setup-production-vps.sh root@187.77.135.156:/tmp/
-ssh root@187.77.135.156 'bash /tmp/setup-production-vps.sh'
+DOMAIN=quantara.software EMAIL=your@email.com bash scripts/setup-tls-https.sh
 ```
 
-Edit `.env` di server sebelum migrate jika belum pernah di-setup.
+## Skrip terkait
 
-## Environment variables (override)
-
-```bash
-export VPS_HOST=root@187.77.135.156
-export REMOTE_BE=/opt/quantara/be-bot-trading   # path repo BE di VPS
-export PM2_APP=be-quantara                       # nama proses PM2
-export SKIP_CONFIRM=1                            # non-interaktif (CI)
-```
-
-## File referensi
-
-| File | Fungsi |
-|------|--------|
-| [`fe-bot-trading/deploy-production.sh`](../fe-bot-trading/deploy-production.sh) | Deploy FE + BE dari repo frontend |
-| [`scripts/deploy-production.sh`](scripts/deploy-production.sh) | Deploy BE saja via SSH |
-| [`scripts/deploy-production-vps.sh`](scripts/deploy-production-vps.sh) | Pull + migrate + restart (jalan di VPS) |
-| [`scripts/setup-production-vps.sh`](scripts/setup-production-vps.sh) | Setup awal production |
-| [`nginx/quantara-production.conf.example`](nginx/quantara-production.conf.example) | nginx port 80 |
-
-## Verifikasi
-
-```bash
-curl http://187.77.135.156/api/v1/health
-pm2 logs be-quantara --lines 50
-```
+| File | Peran |
+|------|-------|
+| [`fe-bot-trading/deploy-production.sh`](../fe-bot-trading/deploy-production.sh) | Deploy FE + BE dari lokal |
+| [`scripts/deploy-production-vps.sh`](scripts/deploy-production-vps.sh) | Deploy BE di VPS |
 
 ## Alur disarankan
 
-1. Uji di **staging** (`./deploy-staging.sh`)
-2. Jika OK → **production** (`./deploy-production.sh`)
+1. Uji di **staging** (`./deploy-staging.sh` dari branch `staging`)
+2. Jika OK → merge ke `main` → **production** (`./deploy-production.sh`)

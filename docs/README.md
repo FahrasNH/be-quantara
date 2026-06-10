@@ -9,7 +9,7 @@ Indeks dokumentasi operasional & teknis (Priority 5).
 | [MONITORING.md](MONITORING.md) | Threshold risk per-bot & akun, yang dipantau, sinyal alert |
 | [EMERGENCY.md](EMERGENCY.md) | Prosedur darurat: naked position, stop-all, key bocor, rollback |
 
-Lihat juga (di root repo): `RUNBOOK_GO_LIVE.md`, `.env.staging.example`, `deploy-staging.sh`.
+Lihat juga: `RUNBOOK_GO_LIVE.md`, `.env.staging.example`, [`DEPLOY_QUICK_START.md`](../../DEPLOY_QUICK_START.md), [`fe-bot-trading/deploy-staging.sh`](../../fe-bot-trading/deploy-staging.sh).
 
 > ⚠️ **Status validasi:** Backtest strategi masih memakai data **sintetis** (ber-seed,
 > reproducible). Validasi dengan OHLCV nyata Bitget **wajib** sebelum live trading.

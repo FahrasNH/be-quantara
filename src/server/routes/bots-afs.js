@@ -858,7 +858,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get("/strategies/info/:key", (req, res) => {
     const { key } = req.params;
-    const { STRATEGIES } = require("../../domain/strategies");
+    const { STRATEGIES } = require("../../domain/legacyStrategies");
 
     const strategyConfig = STRATEGIES[key];
 

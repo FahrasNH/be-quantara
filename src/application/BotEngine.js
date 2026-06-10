@@ -12,7 +12,7 @@ const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSi
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
-const { getStrategy } = require("../domain/strategies");
+const { getStrategy } = require("../domain/legacyStrategies");
 const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
