@@ -12,7 +12,7 @@
 set -euo pipefail
 
 BE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PM2_APP="${PM2_APP:-quantara-staging}"
+PM2_APP="${PM2_APP:-be-quantara-staging}"
 GIT_BRANCH="${GIT_BRANCH:-staging}"
 
 cd "${BE_DIR}"
@@ -48,7 +48,7 @@ if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
   pm2 restart "${PM2_APP}"
 else
   echo "==> pm2 start (app belum ada)..."
-  pm2 start ecosystem.config.js --only quantara-staging 2>/dev/null \
+  pm2 start ecosystem.config.js --only be-quantara-staging 2>/dev/null \
     || pm2 start index.js --name "${PM2_APP}"
 fi
 
