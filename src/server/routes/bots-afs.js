@@ -76,6 +76,7 @@ module.exports = function createBotsRouter(helpers) {
           capital: true,
           strategyKey: true,
           dryRun: true,
+          tpMode: true,
           running: true,
           startedAt: true,
           totalTrades: true,
@@ -215,6 +216,9 @@ module.exports = function createBotsRouter(helpers) {
       const userId = req.userId;
       const { symbol } = req.params;
       const { capital, dryRun } = req.body;
+      // tpMode: "full" (default) | "partial" — dikontrol FE per bot
+      const tpModeRaw = req.body.tpMode;
+      const tpMode = tpModeRaw === "partial" ? "partial" : "full"; // whitelist
       // FE lama mengirim strategyKey; FE baru (multi-strategy) tidak. Bedakan keduanya.
       const explicitStrategyKey = req.body.strategyKey;
       const mode = dryRun === false ? "live" : "dry";
@@ -257,6 +261,7 @@ module.exports = function createBotsRouter(helpers) {
         strategyGroup:      useMulti ? strategies : [],
         capitalPerStrategy: useMulti ? capitalPerStrategy : 0,
         dryRun:             dryRun !== undefined ? dryRun !== false : (bot?.dryRun ?? true),
+        tpMode,
       };
 
       // Create if doesn't exist
@@ -297,6 +302,7 @@ module.exports = function createBotsRouter(helpers) {
             strategies,
             capital:    bot.capital,
             dryRun:     bot.dryRun,
+            tpMode:     bot.tpMode ?? "full",
             botId:      bot.id,
             apiKey:     decryptedApiKey,
             apiSecret:  decryptedApiSecret,
@@ -306,6 +312,7 @@ module.exports = function createBotsRouter(helpers) {
             capital:     bot.capital,
             strategyKey: bot.strategyKey,
             dryRun:      bot.dryRun,
+            tpMode:      bot.tpMode ?? "full",
             botId:       bot.id,
             userId,                // diteruskan ke openSession → user_id di bot_sessions
             apiKey:      decryptedApiKey,
@@ -504,13 +511,13 @@ module.exports = function createBotsRouter(helpers) {
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
-      const { strategyKey, capital } = req.body ?? {};
+      const { strategyKey, capital, tpMode } = req.body ?? {};
 
-      if (strategyKey === undefined && capital === undefined) {
+      if (strategyKey === undefined && capital === undefined && tpMode === undefined) {
         return res.status(400).json({
           ok: false,
           statusCode: 400,
-          message: "Tidak ada perubahan. Kirim strategyKey dan/atau capital.",
+          message: "Tidak ada perubahan. Kirim strategyKey, capital, dan/atau tpMode.",
         });
       }
 
@@ -554,6 +561,14 @@ module.exports = function createBotsRouter(helpers) {
           return res.status(400).json({ ok: false, statusCode: 400, message: "capital harus angka lebih dari 0" });
         }
         data.capital = cap;
+      }
+
+      // Validasi tpMode bila dikirim
+      if (tpMode !== undefined) {
+        if (tpMode !== "full" && tpMode !== "partial") {
+          return res.status(400).json({ ok: false, statusCode: 400, message: "tpMode harus 'full' atau 'partial'" });
+        }
+        data.tpMode = tpMode;
       }
 
       const updated = await prisma.bot.update({

@@ -462,15 +462,17 @@ async function resumeRunningBots() {
             strategies,
             capital:     bot.capital,
             dryRun:      bot.dryRun,
+            tpMode:      bot.tpMode ?? "full",
             botId:       bot.id,
             apiKey, apiSecret, passphrase,
           });
-          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
         } else {
           instance = createBotInstance(bot.userId, bot.symbol, {
             capital:     bot.capital,
             strategyKey: bot.strategyKey,
             dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
+            tpMode:      bot.tpMode ?? "full",
             botId:       bot.id,
             userId:      bot.userId,
             apiKey, apiSecret, passphrase,
