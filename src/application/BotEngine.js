@@ -1194,6 +1194,24 @@ class BotEngine extends EventEmitter {
   async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
+    // BUG-003: dedup open — cegah pembukaan posisi duplikat untuk symbol+side yang
+    // sama dalam jendela singkat (mis. tick ganda / restart bot men-trigger ulang
+    // sinyal yang sama). Tanpa ini muncul "ghost trade" entry==exit pnl=0.
+    const DEDUP_WINDOW_MS = 5000;
+    const dedupKey = `${this.config.symbol}:${signal}`;
+    this._lastOpenAt = this._lastOpenAt || {};
+    const now0 = Date.now();
+    if (this._lastOpenAt[dedupKey] && now0 - this._lastOpenAt[dedupKey] < DEDUP_WINDOW_MS) {
+      this._log("warn", `Dedup: open ${signal} ${this.config.symbol} diabaikan (duplikat <${DEDUP_WINDOW_MS}ms)`);
+      return;
+    }
+    // Juga skip jika sudah ada posisi terbuka arah sama untuk simbol ini.
+    if (this.state.openPositions.some(p => p.side === signal)) {
+      this._log("warn", `Dedup: sudah ada posisi ${signal} ${this.config.symbol} terbuka — skip open duplikat`);
+      return;
+    }
+    this._lastOpenAt[dedupKey] = now0;
+
     const slDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
     // tpDist can be overridden independently (used by ADAPTIVE_FUSION per-component RR)
     const tpDist = options.tpDist != null ? options.tpDist : slDist * this.config.riskReward;
@@ -1335,6 +1353,10 @@ class BotEngine extends EventEmitter {
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
           marginReserved: requiredMargin,
+          // BUG-004: simpan snapshot indikator entry agar partial-close bisa
+          // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
+          entrySnapshot: enrichedSnapshot,
+          strategyName:  this.config.strategyKey ?? null,
           // SL+ tracking
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
@@ -1422,6 +1444,8 @@ class BotEngine extends EventEmitter {
             dryRun:     false,
             orderId:    order?.orderId,
             indicators: enrichedSnapshot,
+            // BUG-001: denormalisasi nama strategi di kolom eksplisit saat OPEN.
+            strategyName: this.config.strategyKey ?? null,
           });
         }
 
@@ -1451,6 +1475,9 @@ class BotEngine extends EventEmitter {
       const pos = {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
         marginReserved,        // margin terkunci, dikembalikan tepat saat close
+        // BUG-004: snapshot entry untuk diwariskan ke partial-close.
+        entrySnapshot: enrichedSnapshot,
+        strategyName:  this.config.strategyKey ?? null,
         // SL+ tracking
         remainingSize: finalSize,
         R:             slDist,
@@ -1480,7 +1507,11 @@ class BotEngine extends EventEmitter {
           sl, tp, size: finalSize, openTime, atr,
           dryRun:     true,
           orderId:    pos.id,
-          indicators: indicatorSnapshot,
+          // BUG-001: gunakan snapshot yang sudah diperkaya atribusi (firedByStrategy)
+          // + persist strategyName eksplisit. Sebelumnya dry-run pakai indicatorSnapshot
+          // mentah → 33/49 trade dry-run tampil "(belum tercatat)".
+          indicators: enrichedSnapshot,
+          strategyName: this.config.strategyKey ?? null,
         });
       }
 
@@ -1855,6 +1886,14 @@ class BotEngine extends EventEmitter {
           atr:        pos.atr,
           dryRun:     this.config.dryRun,
           orderId:    `${pos.id}_${reason}`,
+          // BUG-004: salin snapshot indikator dari ENTRY asli (RSI/ATR/ATR%),
+          // jika tidak ada fallback ke ATR posisi agar tidak NaN.
+          indicators: pos.entrySnapshot ?? (pos.atr != null
+            ? { atr: pos.atr, atrPct: pos.entry ? parseFloat(((pos.atr / pos.entry) * 100).toFixed(3)) : null }
+            : null),
+          // BUG-001: strategi pada partial trade.
+          strategyName: pos.strategyName ?? this.config.strategyKey ?? null,
+          isPartial:    true,
         });
         await db.closeTrade(partialDbId, {
           exitPrice: price,

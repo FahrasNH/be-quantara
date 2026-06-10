@@ -56,21 +56,84 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
     }
   });
 
-  const toCsv = (data) => {
-    if (data.length === 0) {
-      return "id,sessionId,symbol,side,entryPrice,exitPrice,sl,tp,size,pnl,fee,funding,pnlNet,pnlPct,reason,dryRun,mode,exchange,strategy,openTime,closeTime,isPartial,result\n";
-    }
-    const headers = Object.keys(data[0]).join(",");
-    const rows = data.map(r =>
-      Object.values(r).map(v => {
-        if (v === null || v === undefined) return "";
-        const s = String(v);
-        return s.includes(",") || s.includes('"') || s.includes("\n")
-          ? `"${s.replace(/"/g, '""')}"`
-          : s;
-      }).join(",")
-    ).join("\n");
-    return `${headers}\n${rows}`;
+  // Urutan kolom eksplisit untuk export trade (FEAT-001 menambah Duration /
+  // Planned R:R / Actual R:R; BUG-006 semua header bahasa Inggris). Map dari
+  // field getTradesExport → label header CSV.
+  const TRADE_COLUMNS = [
+    ["id",          "ID"],
+    ["sessionId",   "Session ID"],
+    ["symbol",      "Symbol"],
+    ["side",        "Side"],
+    ["strategy",    "Strategy"],
+    ["status",      "Status"],
+    ["entryPrice",  "Entry Price"],
+    ["exitPrice",   "Exit Price"],
+    ["sl",          "SL"],
+    ["tp",          "TP"],
+    ["size",        "Size"],
+    ["pnl",         "PnL Gross"],
+    ["fee",         "Fee"],
+    ["funding",     "Funding"],
+    ["pnlNet",      "PnL Net"],
+    ["pnlPct",      "PnL %"],
+    ["plannedRR",   "Planned R:R"],
+    ["actualRR",    "Actual R:R"],
+    ["duration",    "Duration"],
+    ["reason",      "Reason"],
+    ["dryRun",      "DryRun"],
+    ["mode",        "Mode"],
+    ["exchange",    "Exchange"],
+    ["openTime",    "Open Time"],
+    ["closeTime",   "Close Time"],
+    ["isPartial",   "Is Partial"],
+    ["result",      "Result"],
+  ];
+
+  const escapeCsv = (v) => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+
+  const toCsv = (data, columns = TRADE_COLUMNS) => {
+    // columns = null → derive dari keys baris pertama (dipakai endpoint insights
+    // yang punya skema field berbeda). label = key apa adanya.
+    const cols = columns ?? (data[0] ? Object.keys(data[0]).map((k) => [k, k]) : []);
+    const header = cols.map(([, label]) => label).join(",");
+    const rows = data.map((r) =>
+      cols.map(([key]) => escapeCsv(r[key])).join(",")
+    );
+    return [header, ...rows].join("\n");
+  };
+
+  // Ringkasan performa (Performance Summary) — header eksplisit Metric,Value.
+  // Hanya menghitung trade tertutup (status "Closed"); open & cancelled dikecualikan
+  // dari total (BUG-008). Tidak ada baris pemisah kosong (BUG-005).
+  const buildSummaryCsv = (data) => {
+    const closed = data.filter((r) => r.status === "Closed");
+    const wins   = closed.filter((r) => r.result === "win").length;
+    const losses = closed.filter((r) => r.result === "loss").length;
+    const open      = data.filter((r) => r.status === "Open").length;
+    const cancelled = data.filter((r) => r.status === "Cancelled").length;
+    const netPnl = closed.reduce((s, r) => s + (Number(r.pnlNet) || 0), 0);
+    const winRate = closed.length ? ((wins / closed.length) * 100).toFixed(1) : "0.0";
+
+    const metrics = [
+      ["Performance Summary", ""],
+      ["Total Trades (exported)", data.length],
+      ["Closed Trades", closed.length],
+      ["Open Trades", open],
+      ["Cancelled Trades", cancelled],
+      ["Wins", wins],
+      ["Losses", losses],
+      ["Win Rate %", winRate],
+      ["Net PnL", netPnl.toFixed(4)],
+    ];
+    const header = "Metric,Value";
+    const rows = metrics.map(([m, v]) => `${escapeCsv(m)},${escapeCsv(v)}`);
+    return [header, ...rows].join("\n");
   };
 
   router.get("/trades", async (req, res) => {
@@ -88,7 +151,11 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
         const data = await db.getTradesExport({ symbol, dryRun, limit, userId: req.userId ?? null });
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="quantara-trades-${Date.now()}.csv"`);
-        return res.send(toCsv(data));
+        // BUG-005/008: blok ringkasan dengan header eksplisit Metric,Value (bukan
+        // "Unnamed: 1") dan TANPA baris kosong; total hanya dari trade tertutup
+        // (status closed) — open & cancelled dikecualikan.
+        const summaryCsv = buildSummaryCsv(data);
+        return res.send(`${summaryCsv}\n${toCsv(data)}`);
       }
 
       res.json(await db.getTrades({ sessionId, symbol, limit, userId: req.userId ?? null }));
@@ -158,7 +225,9 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
       const results  = [];
       for (const s of sessions) {
         const { rows: trades } = await db._pool.query(
-          `SELECT pnl, fee, funding FROM trades WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL`,
+          `SELECT pnl, fee, funding FROM trades
+           WHERE session_id = $1 AND close_time IS NOT NULL AND pnl IS NOT NULL
+             AND status IS DISTINCT FROM 'cancelled'`,
           [s.id]
         );
         if (trades.length === 0) continue;
@@ -209,7 +278,7 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
       if (format === "csv") {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="quantara-insights-${Date.now()}.csv"`);
-        return res.send(toCsv(data));
+        return res.send(toCsv(data, null));
       }
 
       // JSON default — sertakan summary statistik
