@@ -33,8 +33,24 @@ git pull origin "${GIT_BRANCH}"
 echo "==> npm ci..."
 npm ci
 
+echo "==> Backup DB sebelum migrate (jaring pengaman)..."
+bash scripts/backup-db.sh || {
+  echo "ERROR: backup gagal — batalkan deploy sebelum menyentuh skema."
+  exit 1
+}
+
 echo "==> prisma migrate deploy..."
 npx prisma migrate deploy
+
+# ── Gerbang drift: app TIDAK boleh restart di atas skema yang tak cocok ──────
+# Menangkap kasus history desync (insiden 2026-06-10): migrate deploy "sukses"
+# tapi skema sebenarnya tertinggal. migrate status akan melaporkan ketidakcocokan.
+echo "==> Verifikasi skema (drift gate)..."
+if ! npx prisma migrate status | grep -q "Database schema is up to date"; then
+  echo "ERROR: Skema database TIDAK selaras dengan migrasi (drift terdeteksi)."
+  echo "       App TIDAK di-restart. Investigasi: npx prisma migrate status"
+  exit 1
+fi
 
 if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
   echo "==> pm2 restart ${PM2_APP}..."
