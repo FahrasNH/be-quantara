@@ -7,6 +7,7 @@ const {
   upsertExchange,
   deleteExchange,
 } = require("../../services/userExchange");
+const cfg = require("../../config/env");
 
 const prisma = new PrismaClient();
 
@@ -171,6 +172,16 @@ module.exports = function createAccountRouter() {
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { apiKey, apiSecret, apiPassphrase, exchangeType = "bitget" } = req.body;
+
+      // Validate exchange against allowed list (production: bitget only)
+      const allowedExchanges = cfg.allowedExchanges;
+      if (allowedExchanges && !allowedExchanges.includes(exchangeType?.toLowerCase())) {
+        return res.status(403).json({
+          ok: false,
+          statusCode: 403,
+          message: `Exchange "${exchangeType}" tidak didukung. Hanya ${allowedExchanges.join(", ")} yang tersedia saat ini.`,
+        });
+      }
 
       try {
         const result = await upsertExchange(userId, {

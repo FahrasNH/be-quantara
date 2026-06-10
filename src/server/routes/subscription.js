@@ -14,6 +14,7 @@ module.exports = function createSubscriptionRouter() {
   const { listTiers, getTierConfig, TIER_ORDER } = require("../../domain/tierConfig");
   const { getUserTier } = require("../../services/entitlement");
   const AuthService = require("../../services/AuthService");
+  const cfg = require("../../config/env");
 
   const prisma = new PrismaClient();
 
@@ -29,6 +30,12 @@ module.exports = function createSubscriptionRouter() {
       const tier   = await getUserTier(req.userId);
       const config = getTierConfig(tier);
 
+      // Filter plans to allowed tiers only (production: FOUNDRY only)
+      const allowedTiers = cfg.allowedTiers;
+      const plans = allowedTiers
+        ? listTiers().filter(t => allowedTiers.includes(t.key))
+        : listTiers();
+
       res.json({
         ok: true,
         current: {
@@ -41,7 +48,7 @@ module.exports = function createSubscriptionRouter() {
           aiOptimizer:  config?.aiOptimizer ?? false,
           supportSLA:   config?.supportSLA ?? null,
         },
-        plans: listTiers(),
+        plans,
       });
     })
   );
@@ -62,6 +69,16 @@ module.exports = function createSubscriptionRouter() {
           ok: false,
           statusCode: 400,
           message: `tier harus salah satu dari: ${TIER_ORDER.join(", ")}`,
+        });
+      }
+
+      // Block upgrade to tiers not available in this environment
+      const allowedTiers = cfg.allowedTiers;
+      if (allowedTiers && !allowedTiers.includes(tier)) {
+        return res.status(403).json({
+          ok: false,
+          statusCode: 403,
+          message: `Tier ${tier} tidak tersedia saat ini. Hubungi support untuk informasi lebih lanjut.`,
         });
       }
 

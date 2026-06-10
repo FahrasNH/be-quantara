@@ -42,7 +42,26 @@ const cfg = {
   // agar ganti domain tidak perlu edit kode. Localhost selalu diizinkan terpisah.
   CORS_ORIGINS_RAW: process.env.CORS_ORIGINS || "http://187.77.135.156",
 
+  // ── Production Feature Flags ─────────────────────────────────────────────────
+  // ALLOWED_TIERS: comma-separated tier keys visible to users (empty = all tiers).
+  // ALLOWED_EXCHANGES: comma-separated exchange ids accepted (empty = all).
+  // Example .env.production: ALLOWED_TIERS=FOUNDRY  ALLOWED_EXCHANGES=bitget
+  ALLOWED_TIERS_RAW:     process.env.ALLOWED_TIERS     || "",
+  ALLOWED_EXCHANGES_RAW: process.env.ALLOWED_EXCHANGES || "",
+
   // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  // Tiers yang ditampilkan ke user. null = semua tier diizinkan.
+  get allowedTiers() {
+    if (!this.ALLOWED_TIERS_RAW) return null;
+    return this.ALLOWED_TIERS_RAW.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+  },
+
+  // Exchange yang diterima. null = semua exchange diizinkan.
+  get allowedExchanges() {
+    if (!this.ALLOWED_EXCHANGES_RAW) return null;
+    return this.ALLOWED_EXCHANGES_RAW.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  },
 
   // Daftar origin CORS yang diizinkan (selain localhost)
   get corsOrigins() {
