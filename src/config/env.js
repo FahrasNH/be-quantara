@@ -71,6 +71,12 @@ const cfg = {
     return this.NODE_ENV === "production";
   },
 
+  // Nama database dari DATABASE_URL (postgresql://user:pass@host:port/DBNAME?...)
+  get dbName() {
+    const m = this.DATABASE_URL.match(/\/([^/?]+)(\?|$)/);
+    return m ? m[1] : "";
+  },
+
   /**
    * Validasi env wajib sebelum server start. Di production, fail-fast jika ada
    * secret yang kosong atau masih memakai nilai placeholder default.
@@ -100,6 +106,19 @@ const cfg = {
       }
       if (this.JWT_SECRET && this.JWT_SECRET === this.JWT_REFRESH_SECRET) {
         errors.push("JWT_SECRET dan JWT_REFRESH_SECRET tidak boleh sama.");
+      }
+      // Gerbang konsistensi DB↔environment: cegah app production menunjuk ke
+      // database staging (akar masalah insiden login 2026-06-10). Override
+      // sengaja dengan ALLOW_DB_ENV_MISMATCH=1 jika memang satu DB dipakai bersama.
+      if (
+        process.env.ALLOW_DB_ENV_MISMATCH !== "1" &&
+        /staging|dev|test/i.test(this.dbName)
+      ) {
+        errors.push(
+          `NODE_ENV=production tapi DATABASE_URL menunjuk database "${this.dbName}" ` +
+          `(terindikasi non-produksi). Perbaiki DATABASE_URL, atau set ` +
+          `ALLOW_DB_ENV_MISMATCH=1 bila ini memang disengaja.`
+        );
       }
     }
 
