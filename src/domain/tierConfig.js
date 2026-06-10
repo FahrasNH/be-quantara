@@ -21,6 +21,7 @@ const TIER_CONFIG = {
     aiOptimizer: false,
     supportSLA: null,       // self-service
     capitalRange: { min: 1_000_000, max: 2_000_000 },
+    badge: null,
   },
 
   FORGE: {
@@ -34,6 +35,7 @@ const TIER_CONFIG = {
     aiOptimizer: false,
     supportSLA: "48h",
     capitalRange: { min: 2_000_000, max: 5_000_000 },
+    badge: "Popular",
   },
 
   MINT: {
@@ -62,6 +64,7 @@ const TIER_CONFIG = {
     aiOptimizer: process.env.VAULT_AI_OPTIMIZER_ENABLED === "true",
     supportSLA: "2h",
     capitalRange: { min: 30_000_000, max: null },
+    badge: "Premium",
   },
 };
 
