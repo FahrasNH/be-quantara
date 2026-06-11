@@ -50,29 +50,27 @@ function calcPlannedRR(entry, sl, tp) {
 /**
  * Tentukan strategy dari fingerprint R:R + side + RSI.
  * Return null jika tidak bisa ditentukan (jangan force-label).
+ *
+ * RSI boleh null untuk MEAN_REVERSION karena R:R 3.00 + LONG adalah
+ * sidik jari unik yang tidak overlap dengan strategy lain.
  */
 function inferStrategy(rr, side, rsi) {
   if (rr == null) return null;
 
-  // TREND_MOMENTUM: R:R ≈ 1.92, LONG, RSI 55-65
+  // MEAN_REVERSION: R:R ≈ 3.00, LONG — RSI tidak diperlukan karena R:R ini
+  // unik hanya dimiliki MR. Ini menangani trade lama yang RSI-nya tidak tersimpan.
+  if (rr >= 2.70 && rr <= 3.30 && side === "LONG") {
+    if (rsi == null || rsi < 40) return "MEAN_REVERSION";
+  }
+
+  // TREND_MOMENTUM: R:R ≈ 1.92, LONG, RSI 55-68
   if (rr >= 1.80 && rr <= 2.05 && side === "LONG" && rsi != null && rsi >= 55 && rsi <= 68) {
     return "TREND_MOMENTUM";
   }
 
-  // MEAN_REVERSION: R:R ≈ 3.00, LONG, RSI < 35
-  if (rr >= 2.70 && rr <= 3.30 && side === "LONG" && rsi != null && rsi < 35) {
-    return "MEAN_REVERSION";
-  }
-
-  // ADAPTIVE_FUSION: R:R ≈ 2.00, SHORT, RSI 30-55
+  // ADAPTIVE_FUSION: R:R ≈ 2.00, SHORT, RSI 28-55
   if (rr >= 1.80 && rr <= 2.20 && side === "SHORT" && rsi != null && rsi >= 28 && rsi <= 55) {
     return "ADAPTIVE_FUSION";
-  }
-
-  // Bisa juga AF LONG yang masuk di RSI tinggi (data: RSI 61-68)
-  if (rr >= 1.80 && rr <= 2.20 && side === "LONG" && rsi != null && rsi >= 55) {
-    // Overlap dengan TM — TM sudah diprioritaskan di atas, ini sisa
-    return null;
   }
 
   return null;
