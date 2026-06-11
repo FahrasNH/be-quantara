@@ -294,5 +294,40 @@ module.exports = function createAccountRouter() {
     })
   );
 
+  // ── Exchange Switch: GET /account/exchange/status ────────────────────────
+  router.get(
+    "/exchange/status",
+    asyncHandler(async (req, res) => {
+      const { getExchangeStatus } = require("../../services/exchangeSwitch");
+      const status = await getExchangeStatus(req.userId);
+      res.json({ ok: true, ...status });
+    })
+  );
+
+  // ── Exchange Switch: POST /account/exchange/switch ────────────────────────
+  router.post(
+    "/exchange/switch",
+    asyncHandler(async (req, res) => {
+      const { switchExchange } = require("../../services/exchangeSwitch");
+      const { newExchange, apiKey, secretKey, passphrase } = req.body;
+      if (!newExchange || !apiKey || !secretKey) {
+        return res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: "newExchange, apiKey, dan secretKey wajib diisi.",
+        });
+      }
+      const result = await switchExchange(req.userId, {
+        newExchange,
+        apiKey,
+        secretKey,
+        passphrase,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+      res.json(result);
+    })
+  );
+
   return router;
 };
