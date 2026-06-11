@@ -2,19 +2,19 @@
 
 > **Panduan deploy utama:** [DEPLOY_QUICK_START.md](../DEPLOY_QUICK_START.md)
 
-Production dan staging berjalan berdampingan di VPS `187.77.135.156`:
+Production dan staging berjalan berdampingan di VPS `staging.quantara.software`:
 
 | Lingkungan | URL | BE port | PM2 | BE path | FE path |
 |------------|-----|---------|-----|---------|---------|
 | Production | `https://quantara.software` | 3000 | `quantara` | `/opt/quantara/be` | `/var/www/quantara/fe` |
-| Staging | `http://187.77.135.156:8080` | 3001 | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
+| Staging | `http://staging.quantara.software:8080` | 3001 | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
 
 ## First-time setup (sekali saja)
 
 ```bash
 cd be-bot-trading
-scp scripts/setup-staging-vps.sh root@187.77.135.156:/tmp/
-ssh root@187.77.135.156 'bash /tmp/setup-staging-vps.sh'
+scp scripts/setup-staging-vps.sh root@staging.quantara.software:/tmp/
+ssh root@staging.quantara.software 'bash /tmp/setup-staging-vps.sh'
 ```
 
 Salin `.env.staging.example` → `.env` di VPS (`/opt/quantara-staging/be/.env`).
@@ -26,7 +26,7 @@ Dari mesin lokal (disarankan):
 ```bash
 cd fe-bot-trading
 git pull origin staging
-export STAGING_VPS_HOST="187.77.135.156"
+export STAGING_VPS_HOST="staging.quantara.software"
 ./deploy-staging.sh              # FE + BE
 ./deploy-staging.sh --fe-only    # hanya frontend
 ./deploy-staging.sh --be-only    # hanya backend
