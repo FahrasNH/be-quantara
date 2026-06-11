@@ -12,7 +12,7 @@ const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSi
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
-const { getStrategy } = require("../domain/strategies");
+const { getStrategy } = require("../domain/legacyStrategies");
 const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
@@ -1218,6 +1218,28 @@ class BotEngine extends EventEmitter {
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
+    // BUG-08: Hard guard — SL/TP harus finite, positif, dan berada di sisi yang benar.
+    // Sinyal dengan SL/TP invalid tidak boleh membuka posisi (unlimited-loss risk).
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      this._log("warn",
+        `[GUARD-SL/TP] SL/TP tidak valid — sinyal diabaikan. ` +
+        `sl=${sl} tp=${tp} price=${price} slDist=${slDist?.toFixed?.(4)} tpDist=${tpDist?.toFixed?.(4)}`
+      );
+      return;
+    }
+    if ((signal === "LONG" && sl >= price) || (signal === "SHORT" && sl <= price)) {
+      this._log("warn",
+        `[GUARD-SL/TP] SL berada di sisi salah untuk ${signal} — sinyal diabaikan. sl=${sl} price=${price}`
+      );
+      return;
+    }
+    if ((signal === "LONG" && tp <= price) || (signal === "SHORT" && tp >= price)) {
+      this._log("warn",
+        `[GUARD-SL/TP] TP berada di sisi salah untuk ${signal} — sinyal diabaikan. tp=${tp} price=${price}`
+      );
+      return;
+    }
+
     // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
     // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
@@ -1306,18 +1328,58 @@ class BotEngine extends EventEmitter {
     const useGroupGuard = this.config.coordinator &&
       (this.config.groupKey || !this.config.dryRun);
     if (useGroupGuard) {
+      let marginToCheck = requiredMargin;
       const verdict = this.config.coordinator.canOpen({
-        botKey, symbol: this.config.symbol, requiredMargin,
-        // Multi-Strategy per Coin: groupKey mengizinkan >1 posisi/simbol untuk
-        // strategi segrup, direction menegakkan direction lock (AC-05).
+        botKey, symbol: this.config.symbol, requiredMargin: marginToCheck,
         groupKey:  this.config.groupKey ?? null,
         direction: signal,
       });
       if (!verdict.ok) {
-        this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
-        return;
+        // Jika gagal karena budget margin (bukan batas posisi/simbol), coba
+        // scale-down size agar pas dalam anggaran yang tersisa.
+        if (verdict.budget !== undefined && verdict.committed !== undefined) {
+          const availBudget = verdict.budget - verdict.committed;
+          if (availBudget > 0) {
+            const scaledSize = Math.floor((availBudget * lev / price) / minLot) * minLot;
+            if (scaledSize >= minLot) {
+              finalSize    = scaledSize;
+              marginToCheck = (price * finalSize) / lev;
+              const verdict2 = this.config.coordinator.canOpen({
+                botKey, symbol: this.config.symbol, requiredMargin: marginToCheck,
+                groupKey: this.config.groupKey ?? null, direction: signal,
+              });
+              if (verdict2.ok) {
+                this._log("info",
+                  `📐 Size dikecilkan ke ${finalSize} ${sym} agar masuk anggaran ` +
+                  `($${marginToCheck.toFixed(2)} margin dari $${availBudget.toFixed(2)} tersisa)`
+                );
+                // update actualRiskPct karena size berubah
+                actualRiskPct = (finalSize * Math.abs(price - sl)) / availCap;
+              } else {
+                this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
+                return;
+              }
+            } else {
+              this._log("warn",
+                `🚦 Entry ditahan: anggaran tersisa $${availBudget.toFixed(2)} < ` +
+                `margin min lot ${sym} $${((price * minLot) / lev).toFixed(2)}. ` +
+                `Top-up akun atau tunggu posisi lain tutup.`
+              );
+              return;
+            }
+          } else {
+            this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
+            return;
+          }
+        } else {
+          this._log("warn", `🚦 Entry ditahan koordinator akun: ${verdict.reason}`);
+          return;
+        }
       }
     }
+
+    // requiredMargin mungkin berubah jika size di-scale-down oleh koordinator
+    const finalMargin = (price * finalSize) / lev;
 
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
@@ -1343,7 +1405,7 @@ class BotEngine extends EventEmitter {
         // Reservasi margin di koordinator akun bersama (#5)
         if (this.config.coordinator) {
           this.config.coordinator.reserve(botKey, {
-            symbol: this.config.symbol, margin: requiredMargin,
+            symbol: this.config.symbol, margin: finalMargin,
             groupKey: this.config.groupKey ?? null,
             strategyKey: this.config.strategyKey ?? null,
             direction: signal,
@@ -1352,7 +1414,7 @@ class BotEngine extends EventEmitter {
 
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
-          marginReserved: requiredMargin,
+          marginReserved: finalMargin,
           // BUG-004: simpan snapshot indikator entry agar partial-close bisa
           // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
           entrySnapshot: enrichedSnapshot,

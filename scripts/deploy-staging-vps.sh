@@ -12,7 +12,7 @@
 set -euo pipefail
 
 BE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PM2_APP="${PM2_APP:-be-quantara-staging}"
+PM2_APP="${PM2_APP:-quantara-staging}"
 GIT_BRANCH="${GIT_BRANCH:-staging}"
 
 cd "${BE_DIR}"
@@ -30,12 +30,10 @@ fi
 echo "==> git fetch origin ${GIT_BRANCH}..."
 git fetch origin "${GIT_BRANCH}"
 
-# Script di scripts/ kadang di-upload manual (scp) sebelum masuk repo — blokir git pull.
-echo "==> Bersihkan file untracked di scripts/ yang bentrok dengan merge..."
-git clean -fd -- scripts/ 2>/dev/null || true
-
-echo "==> git merge origin/${GIT_BRANCH}..."
-git merge --ff-only "origin/${GIT_BRANCH}"
+# Deploy server: selaraskan ke origin (hindari merge conflict dari file lokal/manual)
+echo "==> git reset --hard origin/${GIT_BRANCH}..."
+git merge --abort 2>/dev/null || true
+git reset --hard "origin/${GIT_BRANCH}"
 
 echo "==> npm ci..."
 npm ci
@@ -48,7 +46,7 @@ if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
   pm2 restart "${PM2_APP}"
 else
   echo "==> pm2 start (app belum ada)..."
-  pm2 start ecosystem.config.js --only be-quantara-staging 2>/dev/null \
+  pm2 start ecosystem.config.js --only quantara-staging 2>/dev/null \
     || pm2 start index.js --name "${PM2_APP}"
 fi
 

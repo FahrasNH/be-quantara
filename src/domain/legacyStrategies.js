@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// strategies.js — Kumpulan Strategi Trading
+// legacyStrategies.js — Kumpulan Strategi Trading (legacy A/B/C)
 //
 // Berdasarkan: "Dokumentasi Panduan Strategi Trading"
 //   Aggressive Scalping, Day Trading, dan Swing Trading

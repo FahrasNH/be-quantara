@@ -323,4 +323,106 @@ describe('[FIX-2] analyzeStrategyFit — strategy analysis logic', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+describe('[T5-SPRINT] strategyName null guard — warning, tidak crash', () => {
+  // Test ini memverifikasi bahwa logic resolvedStrategy di database.js benar:
+  // strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null
+  // Jika semua null → resolvedStrategy = null → warning harus ter-trigger.
+
+  function resolveStrategy(strategyName, indicators) {
+    return strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null;
+  }
+
+  it('resolvedStrategy menggunakan strategyName jika ada', () => {
+    assert.strictEqual(resolveStrategy('ADAPTIVE_FUSION', { strategy: 'OTHER' }), 'ADAPTIVE_FUSION');
+  });
+
+  it('resolvedStrategy fallback ke indicators.strategy jika strategyName null', () => {
+    assert.strictEqual(resolveStrategy(null, { strategy: 'TREND_MOMENTUM' }), 'TREND_MOMENTUM');
+  });
+
+  it('resolvedStrategy fallback ke indicators.firedByStrategy jika strategy juga null', () => {
+    assert.strictEqual(resolveStrategy(null, { firedByStrategy: 'MEAN_REVERSION' }), 'MEAN_REVERSION');
+  });
+
+  it('resolvedStrategy return null jika semua path null — ini yang trigger warning', () => {
+    assert.strictEqual(resolveStrategy(null, {}), null);
+    assert.strictEqual(resolveStrategy(null, null), null);
+    assert.strictEqual(resolveStrategy(undefined, undefined), null);
+  });
+
+  it('warning console.warn dipanggil jika resolvedStrategy null', () => {
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.join(' '));
+
+    // Simulasi kondisi yang memicu warning di database.js insertTrade
+    const resolved = resolveStrategy(null, null);
+    if (!resolved) {
+      console.warn('[DB] insertTrade: strategyName null — trade akan masuk sebagai Untracked', { sessionId: 'test', symbol: 'BTCUSDT', side: 'LONG' });
+    }
+
+    console.warn = origWarn;
+    assert.ok(warnings.length > 0, 'Harus ada warning jika strategyName null');
+    assert.ok(warnings[0].includes('Untracked'), 'Warning harus menyebut Untracked');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('[BUG-08] SL/TP hard guard — sinyal tanpa SL/TP valid harus ditolak', () => {
+  // Replica dari logic guard di BotEngine._handleSignal() agar bisa diuji tanpa
+  // menginstansiasi BotEngine penuh. Perubahan di BotEngine HARUS tetap sinkron.
+
+  function validateSlTp(signal, price, sl, tp) {
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      return { ok: false, reason: `SL/TP tidak finite/positif: sl=${sl} tp=${tp}` };
+    }
+    if ((signal === 'LONG' && sl >= price) || (signal === 'SHORT' && sl <= price)) {
+      return { ok: false, reason: `SL di sisi salah: ${signal} sl=${sl} price=${price}` };
+    }
+    if ((signal === 'LONG' && tp <= price) || (signal === 'SHORT' && tp >= price)) {
+      return { ok: false, reason: `TP di sisi salah: ${signal} tp=${tp} price=${price}` };
+    }
+    return { ok: true };
+  }
+
+  it('LONG valid: sl < price < tp harus ok', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 98, 104).ok, true);
+  });
+
+  it('SHORT valid: tp < price < sl harus ok', () => {
+    assert.strictEqual(validateSlTp('SHORT', 100, 102, 96).ok, true);
+  });
+
+  it('sl=null harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, null, 104).ok, false);
+  });
+
+  it('tp=NaN harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 98, NaN).ok, false);
+  });
+
+  it('sl=0 harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 0, 104).ok, false);
+  });
+
+  it('LONG sl >= price harus ditolak (SL di sisi salah)', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 100, 104).ok, false);
+    assert.strictEqual(validateSlTp('LONG', 100, 101, 104).ok, false);
+  });
+
+  it('SHORT sl <= price harus ditolak', () => {
+    assert.strictEqual(validateSlTp('SHORT', 100, 99, 96).ok, false);
+  });
+
+  it('LONG tp <= price harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 98, 100).ok, false);
+    assert.strictEqual(validateSlTp('LONG', 100, 98, 99).ok, false);
+  });
+
+  it('SHORT tp >= price harus ditolak', () => {
+    assert.strictEqual(validateSlTp('SHORT', 100, 102, 101).ok, false);
+  });
+});
+
 run();

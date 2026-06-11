@@ -380,15 +380,14 @@ const SESSIONS_BASE = `
  * @param {string|null} symbol — filter per simbol (null = semua)
  */
 async function getSessions(limit = 20, symbol = null, userId = null) {
-  // Isolasi per user: return sesi milik userId ATAU sesi lama yang user_id-nya NULL
-  // (data sebelum kolom user_id ditambahkan tetap visible — tidak hilang).
+  // FIX IDOR: isolasi strict per user — hanya sesi milik userId.
+  // Sesi legacy (user_id IS NULL) tidak lagi di-expose ke semua user.
   const conditions = [];
   const params     = [];
 
   if (userId) {
     params.push(userId);
-    // user_id = milikku ATAU user_id IS NULL (sesi lama sebelum isolasi)
-    conditions.push(`(s.user_id = $${params.length} OR s.user_id IS NULL)`);
+    conditions.push(`s.user_id = $${params.length}`);
   }
   if (symbol) {
     params.push(symbol.toUpperCase());
@@ -406,12 +405,12 @@ async function getSessions(limit = 20, symbol = null, userId = null) {
 }
 
 async function getSession(id, userId = null) {
-  // Isolasi kepemilikan: hanya sesi milik userId (atau sesi legacy user_id NULL).
+  // FIX IDOR: isolasi strict — hanya sesi milik userId.
   const params = [id];
   let ownership = "";
   if (userId) {
     params.push(userId);
-    ownership = ` AND (user_id = $${params.length} OR user_id IS NULL)`;
+    ownership = ` AND user_id = $${params.length}`;
   }
   const { rows } = await pool.query(
     `SELECT * FROM bot_sessions WHERE id = $1${ownership}`,
@@ -432,6 +431,11 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
   // lama yang hanya mengirim indicators tetap tercatat.
   const resolvedStrategy =
     strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null;
+
+  if (!resolvedStrategy) {
+    console.warn('[DB] insertTrade: strategyName null — trade akan masuk sebagai Untracked', { sessionId, symbol, side });
+  }
+
   const { rows } = await pool.query(
     `INSERT INTO trades
        (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators, strategy_name, status, is_partial)
@@ -510,13 +514,12 @@ async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reaso
 }
 
 async function getTrades({ sessionId = null, symbol = null, limit = 100, userId = null } = {}) {
-  // Isolasi per user: return trade dari sesi milik userId ATAU sesi lama (user_id NULL).
-  // LEFT JOIN agar trade yang session_id-nya NULL (orphan dari SET NULL) tetap ikut.
+  // FIX IDOR: return hanya trade dari sesi milik userId (strict).
   if (userId) {
     const { rows } = await pool.query(
       `SELECT t.* FROM trades t
-       LEFT JOIN bot_sessions s ON s.id = t.session_id
-       WHERE (s.user_id = $1 OR s.user_id IS NULL OR t.session_id IS NULL)
+       INNER JOIN bot_sessions s ON s.id = t.session_id
+       WHERE s.user_id = $1
          AND ($2::int  IS NULL OR t.session_id = $2)
          AND ($3::text IS NULL OR t.symbol     = $3)
        ORDER BY t.open_time DESC
@@ -537,14 +540,14 @@ async function getTrades({ sessionId = null, symbol = null, limit = 100, userId 
 }
 
 async function getTradeStats(sessionId, userId = null) {
-  // Cegah IDOR: stats hanya untuk sesi milik userId (atau legacy NULL).
+  // FIX IDOR: stats hanya untuk sesi milik userId (strict).
   const params = [sessionId];
   let ownership = "";
   if (userId) {
     params.push(userId);
     ownership = ` AND EXISTS (SELECT 1 FROM bot_sessions s
                    WHERE s.id = t.session_id
-                     AND (s.user_id = $${params.length} OR s.user_id IS NULL))`;
+                     AND s.user_id = $${params.length})`;
   }
   const { rows } = await pool.query(
     `SELECT
@@ -579,7 +582,7 @@ async function getTodayRiskStats({ userId = null, symbol = null, dryRun = null }
     `t.status IS DISTINCT FROM 'cancelled'`,
     `(t.close_time AT TIME ZONE 'UTC')::date = (now() AT TIME ZONE 'UTC')::date`,
   ];
-  if (userId) { params.push(userId); conds.push(`(s.user_id = $${params.length} OR s.user_id IS NULL)`); }
+  if (userId) { params.push(userId); conds.push(`s.user_id = $${params.length}`); }
   if (symbol) { params.push(symbol); conds.push(`t.symbol = $${params.length}`); }
   if (dryRun !== null) { params.push(dryRun ? 1 : 0); conds.push(`t.dry_run = $${params.length}`); }
 
@@ -624,7 +627,7 @@ async function getTradesExport({ symbol = null, dryRun = null, limit = 5000, use
   let where = "1=1";
 
   if (userId) {
-    where = `(s.user_id = $${i++} OR s.user_id IS NULL OR t.session_id IS NULL)`;
+    where = `s.user_id = $${i++}`;
     params.push(userId);
   }
   if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
@@ -738,7 +741,7 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
   if (symbol) { where += ` AND t.symbol = $${i++}`; params.push(symbol); }
   if (dryRun !== null) { where += ` AND t.dry_run = $${i++}`; params.push(dryRun ? 1 : 0); }
   // Cegah IDOR: sebelumnya endpoint ini membocorkan SEMUA trade+PnL semua user.
-  if (userId) { where += ` AND (s.user_id = $${i++} OR s.user_id IS NULL)`; params.push(userId); }
+  if (userId) { where += ` AND s.user_id = $${i++}`; params.push(userId); }
   params.push(Math.min(limit, 5000));
 
   const { rows } = await pool.query(
@@ -849,7 +852,7 @@ async function getEquity(sessionId, userId = null) {
     params.push(userId);
     ownership = ` AND EXISTS (SELECT 1 FROM bot_sessions s
                    WHERE s.id = es.session_id
-                     AND (s.user_id = $${params.length} OR s.user_id IS NULL))`;
+                     AND s.user_id = $${params.length})`;
   }
   const { rows } = await pool.query(
     `SELECT es.timestamp, es.capital, es.price, es.open_positions
@@ -960,7 +963,7 @@ async function getLogs(sessionId, limit = 200, userId = null) {
     params.push(userId);
     ownership = ` AND EXISTS (SELECT 1 FROM bot_sessions s
                    WHERE s.id = logs.session_id
-                     AND (s.user_id = $${params.length} OR s.user_id IS NULL))`;
+                     AND s.user_id = $${params.length})`;
   }
   params.push(limit);
   const { rows } = await pool.query(

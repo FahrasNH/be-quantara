@@ -21,4 +21,7 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Agent worktrees (local snapshots)
+.claude/
+
 /src/generated/prisma

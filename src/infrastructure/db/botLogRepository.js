@@ -51,4 +51,19 @@ async function getUserBotLogs(userId, limit = 800) {
     }));
 }
 
-module.exports = { persistBotLog, getUserBotLogs };
+/**
+ * Hapus semua log untuk bot-bot milik user — dipanggil saat user klik "Clear Logs".
+ */
+async function deleteUserBotLogs(userId) {
+  const bots = await prisma.bot.findMany({
+    where:  { userId },
+    select: { id: true },
+  });
+  if (bots.length === 0) return 0;
+  const result = await prisma.botLog.deleteMany({
+    where: { botId: { in: bots.map(b => b.id) } },
+  });
+  return result.count;
+}
+
+module.exports = { persistBotLog, getUserBotLogs, deleteUserBotLogs };
