@@ -277,7 +277,7 @@ app.use("/api/v1/auth", createAuthRouter());
 
 // ✅ FIX: Apply auth middleware ONLY to protected routes
 // Bots routes (protected, user-isolated)
-app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient }));
+app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator }));
 
 // Market routes (protected)
 app.use("/api/v1/market", authMiddleware, createMarketRouter({
