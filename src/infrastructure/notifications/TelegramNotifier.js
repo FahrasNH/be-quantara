@@ -14,12 +14,17 @@
 //    TELEGRAM_CHAT_ID=123456789
 // ─────────────────────────────────────────────
 
-const TG_TOKEN   = process.env.TELEGRAM_BOT_TOKEN;
-const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const ENABLED    = !!(TG_TOKEN && TG_CHAT_ID);
+const cfg = require("../../config/env");
 
-if (!ENABLED) {
+const TG_TOKEN = cfg.TELEGRAM_BOT_TOKEN;
+const TG_CHAT_ID = cfg.TELEGRAM_CHAT_ID;
+const hasCreds = !!(TG_TOKEN && TG_CHAT_ID);
+const ENABLED = hasCreds && cfg.NODE_ENV !== "development";
+
+if (!hasCreds) {
   console.log("[Notifier] Notifikasi Telegram NONAKTIF — set TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID di .env");
+} else if (cfg.NODE_ENV === "development") {
+  console.log("[Notifier] Notifikasi Telegram NONAKTIF — dimatikan di development");
 } else {
   console.log(`[Notifier] ✅ Notifikasi Telegram AKTIF → Chat ID: ${TG_CHAT_ID}`);
 }
