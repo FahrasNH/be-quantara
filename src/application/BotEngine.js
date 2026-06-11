@@ -1218,6 +1218,28 @@ class BotEngine extends EventEmitter {
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
+    // BUG-08: Hard guard — SL/TP harus finite, positif, dan berada di sisi yang benar.
+    // Sinyal dengan SL/TP invalid tidak boleh membuka posisi (unlimited-loss risk).
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      this._log("warn",
+        `[GUARD-SL/TP] SL/TP tidak valid — sinyal diabaikan. ` +
+        `sl=${sl} tp=${tp} price=${price} slDist=${slDist?.toFixed?.(4)} tpDist=${tpDist?.toFixed?.(4)}`
+      );
+      return;
+    }
+    if ((signal === "LONG" && sl >= price) || (signal === "SHORT" && sl <= price)) {
+      this._log("warn",
+        `[GUARD-SL/TP] SL berada di sisi salah untuk ${signal} — sinyal diabaikan. sl=${sl} price=${price}`
+      );
+      return;
+    }
+    if ((signal === "LONG" && tp <= price) || (signal === "SHORT" && tp >= price)) {
+      this._log("warn",
+        `[GUARD-SL/TP] TP berada di sisi salah untuk ${signal} — sinyal diabaikan. tp=${tp} price=${price}`
+      );
+      return;
+    }
+
     // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
     // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot

@@ -368,4 +368,61 @@ describe('[T5-SPRINT] strategyName null guard — warning, tidak crash', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+describe('[BUG-08] SL/TP hard guard — sinyal tanpa SL/TP valid harus ditolak', () => {
+  // Replica dari logic guard di BotEngine._handleSignal() agar bisa diuji tanpa
+  // menginstansiasi BotEngine penuh. Perubahan di BotEngine HARUS tetap sinkron.
+
+  function validateSlTp(signal, price, sl, tp) {
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      return { ok: false, reason: `SL/TP tidak finite/positif: sl=${sl} tp=${tp}` };
+    }
+    if ((signal === 'LONG' && sl >= price) || (signal === 'SHORT' && sl <= price)) {
+      return { ok: false, reason: `SL di sisi salah: ${signal} sl=${sl} price=${price}` };
+    }
+    if ((signal === 'LONG' && tp <= price) || (signal === 'SHORT' && tp >= price)) {
+      return { ok: false, reason: `TP di sisi salah: ${signal} tp=${tp} price=${price}` };
+    }
+    return { ok: true };
+  }
+
+  it('LONG valid: sl < price < tp harus ok', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 98, 104).ok, true);
+  });
+
+  it('SHORT valid: tp < price < sl harus ok', () => {
+    assert.strictEqual(validateSlTp('SHORT', 100, 102, 96).ok, true);
+  });
+
+  it('sl=null harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, null, 104).ok, false);
+  });
+
+  it('tp=NaN harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 98, NaN).ok, false);
+  });
+
+  it('sl=0 harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 0, 104).ok, false);
+  });
+
+  it('LONG sl >= price harus ditolak (SL di sisi salah)', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 100, 104).ok, false);
+    assert.strictEqual(validateSlTp('LONG', 100, 101, 104).ok, false);
+  });
+
+  it('SHORT sl <= price harus ditolak', () => {
+    assert.strictEqual(validateSlTp('SHORT', 100, 99, 96).ok, false);
+  });
+
+  it('LONG tp <= price harus ditolak', () => {
+    assert.strictEqual(validateSlTp('LONG', 100, 98, 100).ok, false);
+    assert.strictEqual(validateSlTp('LONG', 100, 98, 99).ok, false);
+  });
+
+  it('SHORT tp >= price harus ditolak', () => {
+    assert.strictEqual(validateSlTp('SHORT', 100, 102, 101).ok, false);
+  });
+});
+
 run();

@@ -136,14 +136,44 @@ async function main() {
         openTime: row.open_time,
       });
     } else {
-      skipped.push({
-        id: row.id,
-        symbol: row.symbol,
-        side: row.side,
-        rr: rr?.toFixed(2) ?? "null",
-        rsi: rsi?.toFixed(1) ?? "null",
-        openTime: row.open_time,
-      });
+      // 3. Proximity matching — cari strategi dari trade sibling dalam ±5 menit
+      //    dengan symbol+side yang sama. Dipakai untuk partial-close atau duplicate
+      //    entry dimana entry/sl/tp tidak tersimpan (rr=null rsi=null).
+      const proximityResult = await pool.query(`
+        SELECT strategy_name, COUNT(*) as cnt
+        FROM trades
+        WHERE symbol = $1
+          AND side   = $2
+          AND strategy_name IS NOT NULL
+          AND strategy_name != 'Untracked'
+          AND open_time BETWEEN $3 - INTERVAL '5 minutes'
+                             AND $3 + INTERVAL '5 minutes'
+          AND id != $4
+        GROUP BY strategy_name
+        ORDER BY cnt DESC
+        LIMIT 1
+      `, [row.symbol, row.side, row.open_time, row.id]);
+
+      if (proximityResult.rows.length > 0) {
+        const proximityStrategy = proximityResult.rows[0].strategy_name;
+        updates.push({
+          id: row.id,
+          strategy: proximityStrategy,
+          method: `proximity (±5min, symbol=${row.symbol}, side=${row.side})`,
+          symbol: row.symbol,
+          side: row.side,
+          openTime: row.open_time,
+        });
+      } else {
+        skipped.push({
+          id: row.id,
+          symbol: row.symbol,
+          side: row.side,
+          rr: rr?.toFixed(2) ?? "null",
+          rsi: rsi?.toFixed(1) ?? "null",
+          openTime: row.open_time,
+        });
+      }
     }
   }
 
