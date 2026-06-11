@@ -188,6 +188,14 @@ async function switchExchange(userId, { newExchange, apiKey, secretKey, passphra
     data: { deletedAt: null },
   });
 
+  // ── Invariant enforcement: tepat SATU exchange aktif per user ──────────────
+  // Defends against partial-failure / legacy state: soft-delete setiap record
+  // yang masih aktif tetapi BUKAN exchange yang baru dipilih. Idempotent.
+  await prisma.userExchange.updateMany({
+    where: { userId, deletedAt: null, NOT: { exchangeType: newExchange } },
+    data: { deletedAt: new Date() },
+  });
+
   // ── 7. Write AuditLog ─────────────────────────────────────────────────────
   await prisma.auditLog.create({
     data: {
