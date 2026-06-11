@@ -12,7 +12,7 @@
 const BotEngine = require("./BotEngine");
 const PositionManager = require("../domain/PositionManager");
 const { strategyRegistry } = require("../domain/strategy");
-const { calcIndicators } = require("../domain/indicators");
+const { calcIndicators, detectHTFTrend } = require("../domain/indicators");
 const { isDuplicate } = require("../domain/signalIdempotency"); // FIX-3 (re-entry guard)
 
 class AdaptiveStrategyEngine extends BotEngine {
@@ -174,12 +174,32 @@ class AdaptiveStrategyEngine extends BotEngine {
       // 6. Jika posisi sudah penuh, skip deteksi sinyal baru
       if (this.state.openPositions.length >= this.config.maxPositions) return;
 
-      // 7. Deteksi sinyal
+      // 6b. HTF trend filter — cerminkan logika BotEngine._tick() agar
+      //     TrendMomentum (butuh htfTrend LONG/SHORT) dan MeanReversion
+      //     (gate: htfTrend !== UNKNOWN) bekerja dengan benar.
+      //     Override _tick() sebelumnya melewati blok ini → htfTrend selalu UNKNOWN.
+      if (this.config.higherTf) {
+        try {
+          const htfCandles = await this.client.getCandles(
+            this.config.symbol, this.config.higherTf,
+            Math.max(this.config.htfEmaSlow + 10, 50),
+          );
+          this.state.htfTrend = detectHTFTrend(htfCandles, {
+            htfEmaFast:           this.config.htfEmaFast,
+            htfEmaSlow:           this.config.htfEmaSlow,
+            sidewaysThresholdPct: this.config.sidewaysThresholdPct,
+          });
+        } catch {
+          this.state.htfTrend = "UNKNOWN"; // fetch gagal → tetap allow trade
+        }
+      }
+
+      // 7. Deteksi sinyal — kirim htfTrend dari state (bukan hardcoded "NEUTRAL")
       const signal = this.strategy.detectSignal(indicators, lastIdx, {
         balance:        this.capital || this.config.capital,
         volatility:     this.lastVolatility,
         trend_strength: this.lastTrendStrength,
-        htfTrend:       "NEUTRAL",
+        htfTrend:       this.state.htfTrend,
       });
 
       if (!signal) return;
