@@ -319,13 +319,38 @@ const server = http.createServer(app);
 // ── WebSocket Setup ───────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: "/ws" });
 
+// Helper: ekstrak userId dari JWT di WS handshake request.
+// Token bisa datang dari query string (?token=...) atau header Sec-WebSocket-Protocol.
+function wsAuthUserId(req) {
+  try {
+    const AuthService = require("../services/AuthService");
+    const url = new URL(req.url, "http://localhost");
+    const token = url.searchParams.get("token");
+    if (!token) return null;
+    const payload = AuthService.verifyAccessToken(token);
+    return payload?.userId ?? null;
+  } catch {
+    return null;
+  }
+}
+
 wss.on("connection", (ws, req) => {
   const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
-  console.log(`[WS] Client connected: ${clientIp}`);
 
-  // Replay buffer in-memory (100 entri terakhir per bot) + snapshot status live
+  // FIX: autentikasi WS saat koneksi — tolak koneksi tanpa token valid.
+  const wsUserId = wsAuthUserId(req);
+  if (!wsUserId) {
+    ws.close(4401, "Unauthorized");
+    console.log(`[WS] Rejected unauthenticated connection from ${clientIp}`);
+    return;
+  }
+  ws.userId = wsUserId;
+  console.log(`[WS] Client connected: ${clientIp} (user: ${wsUserId})`);
+
+  // Replay buffer in-memory (100 entri terakhir per bot) + snapshot status live.
+  // FIX: hanya replay bot milik userId yang terautentikasi.
   const WS_REPLAY_PER_BOT = 100;
-  Object.values(botsMap).forEach((instance) => {
+  getAllBots(wsUserId).forEach((instance) => {
     const symbol = instance.config?.symbol;
     if (!symbol) return;
 
@@ -361,7 +386,7 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    console.log(`[WS] Client disconnected: ${clientIp}`);
+    console.log(`[WS] Client disconnected: ${clientIp} (user: ${wsUserId})`);
   });
 
   ws.on("error", (err) => {
@@ -369,10 +394,12 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// Broadcast bot logs + status ke WebSocket clients
+// Broadcast bot logs + status ke WebSocket clients.
+// FIX: hanya kirim ke client yang userId-nya cocok dengan pemilik bot.
 const originalEmit = BotEngine.prototype.emit;
 BotEngine.prototype.emit = function (event, ...args) {
   const symbol = this.config?.symbol;
+  const botUserId = this.config?.userId;
   if (!symbol) return originalEmit.call(this, event, ...args);
 
   if (event === "log" || event === "status") {
@@ -381,7 +408,11 @@ BotEngine.prototype.emit = function (event, ...args) {
       : { type: "status", symbol, data: args[0] };
 
     wss.clients.forEach((client) => {
-      if (client.readyState === 1 && (!client.botSymbol || client.botSymbol === symbol)) {
+      if (
+        client.readyState === 1 &&
+        client.userId === botUserId &&
+        (!client.botSymbol || client.botSymbol === symbol)
+      ) {
         try {
           client.send(JSON.stringify(payload));
         } catch { /* client mungkin sudah disconnect */ }
