@@ -535,6 +535,9 @@ db.init()
     });
     // Backup otomatis tiap 24 jam — berjalan di dalam proses Node.js, tanpa cron
     backup.start();
+    // Purge soft-deleted exchange keys older than 7 days (every 6h)
+    const { scheduleKeyPurge } = require("../services/exchangeKeyPurge");
+    scheduleKeyPurge();
     // Pulihkan bot yang sedang berjalan (async, tidak memblok startup)
     resumeRunningBots();
   })

@@ -41,6 +41,9 @@ model UserExchange {
   apiPassphrase String?
   apiKeyHash    String   @unique
 
+  label         String?   // future multi-exchange label
+  deletedAt     DateTime? // soft-delete flag (null = active)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
