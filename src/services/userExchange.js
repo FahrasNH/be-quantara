@@ -50,8 +50,10 @@ async function migrateLegacyIfNeeded(userId) {
 
 async function listExchangesMasked(userId) {
   await migrateLegacyIfNeeded(userId);
+  // Hanya tampilkan exchange aktif. Record yang sudah di-switch (soft-deleted,
+  // deletedAt != null) TIDAK boleh muncul lagi sebagai "Connected".
   const rows = await prisma.userExchange.findMany({
-    where: { userId },
+    where: { userId, deletedAt: null },
     orderBy: { createdAt: "asc" },
   });
 
@@ -67,8 +69,9 @@ async function listExchangesMasked(userId) {
 async function getExchangeCredentials(userId, exchangeType = "bitget") {
   await migrateLegacyIfNeeded(userId);
 
-  const row = await prisma.userExchange.findUnique({
-    where: { userId_exchangeType: { userId, exchangeType } },
+  // findFirst + deletedAt:null — jangan pakai kredensial yang sudah di-revoke (soft-deleted).
+  const row = await prisma.userExchange.findFirst({
+    where: { userId, exchangeType, deletedAt: null },
   });
 
   if (row) {
@@ -152,7 +155,7 @@ async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchan
 
   // Sinkronkan kolom legacy User (default exchange) agar kode lama tetap jalan
   const primary = await prisma.userExchange.findFirst({
-    where: { userId },
+    where: { userId, deletedAt: null },
     orderBy: { createdAt: "asc" },
   });
 
@@ -186,7 +189,7 @@ async function deleteExchange(userId, exchangeType) {
   }
 
   const remaining = await prisma.userExchange.findFirst({
-    where: { userId },
+    where: { userId, deletedAt: null },
     orderBy: { createdAt: "asc" },
   });
 
