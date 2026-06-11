@@ -43,9 +43,11 @@ const cfg = {
   CORS_ORIGINS_RAW: process.env.CORS_ORIGINS || "http://187.77.135.156",
 
   // ── Production Feature Flags ─────────────────────────────────────────────────
-  // ALLOWED_TIERS: comma-separated tier keys visible to users (empty = all tiers).
-  // ALLOWED_EXCHANGES: comma-separated exchange ids accepted (empty = all).
-  // Example .env.production: ALLOWED_TIERS=FOUNDRY  ALLOWED_EXCHANGES=bitget
+  // ALLOWED_TIERS: comma-separated tier keys visible to users.
+  //   empty / unset = semua tier (FOUNDRY, MINT, VAULT) diizinkan  ← default production
+  //   "FOUNDRY"     = hanya tier dasar (mode staging/closed-beta)
+  // ALLOWED_EXCHANGES: comma-separated exchange ids accepted.
+  //   empty / unset = semua exchange  |  "bitget" = hanya Bitget  ← production default
   ALLOWED_TIERS_RAW:     process.env.ALLOWED_TIERS     || "",
   ALLOWED_EXCHANGES_RAW: process.env.ALLOWED_EXCHANGES || "",
 

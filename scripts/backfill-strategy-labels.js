@@ -146,8 +146,8 @@ async function main() {
           AND side   = $2
           AND strategy_name IS NOT NULL
           AND strategy_name != 'Untracked'
-          AND open_time BETWEEN $3 - INTERVAL '5 minutes'
-                             AND $3 + INTERVAL '5 minutes'
+          AND open_time BETWEEN $3::timestamptz - INTERVAL '5 minutes'
+                             AND $3::timestamptz + INTERVAL '5 minutes'
           AND id != $4
         GROUP BY strategy_name
         ORDER BY cnt DESC
