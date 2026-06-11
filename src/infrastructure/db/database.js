@@ -432,6 +432,11 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
   // lama yang hanya mengirim indicators tetap tercatat.
   const resolvedStrategy =
     strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null;
+
+  if (!resolvedStrategy) {
+    console.warn('[DB] insertTrade: strategyName null — trade akan masuk sebagai Untracked', { sessionId, symbol, side });
+  }
+
   const { rows } = await pool.query(
     `INSERT INTO trades
        (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators, strategy_name, status, is_partial)

@@ -50,8 +50,8 @@ class MeanReversionStrategy extends StrategyBase {
 
       // Risk management (VAULT tier - ultra-conservative)
       riskPerTrade: 0.01,     // 1% per trade ONLY
-      slMultiplier: 1.0,      // SL = 1.0x ATR (very tight)
-      tpMultiplier: 3.0,      // TP = 3.0x ATR (reach mean)
+      slMultiplier: 1.5,      // SL = 1.5x ATR (wider — prevent stop-hunt, per dry-run 2026-06-09)
+      tpMultiplier: 3.0,      // TP = 3.0x ATR (reach mean) → effective RR = 2.0 with 1.5x SL
       leverage: 1.0,          // NO leverage
 
       // Position management
@@ -329,7 +329,7 @@ class MeanReversionStrategy extends StrategyBase {
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
       takeProfit: parseFloat(takeProfit.toFixed(8)),
-      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // 3.0
+      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // 2.0 (tp 3.0x / sl 1.5x)
       slDistance: slDist,
       tpDistance: tpDist,
       slMultiplier: this.config.slMultiplier,
