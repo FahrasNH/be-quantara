@@ -1,7 +1,7 @@
 // Updated bots-afs.js to use passed-in helper functions and support userId filtering
 
 module.exports = function createBotsRouter(helpers) {
-  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient } = helpers;
+  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator } = helpers;
   const express = require("express");
   const router = express.Router();
   const { asyncHandler } = require("../../middleware/errorHandler");
@@ -116,6 +116,59 @@ module.exports = function createBotsRouter(helpers) {
     asyncHandler(async (req, res) => {
       const count = await deleteUserBotLogs(req.userId);
       res.json({ ok: true, deleted: count });
+    })
+  );
+
+  /**
+   * GET /api/v1/bots/margin-budget
+   * Real-time account budget info untuk FE form. Menampilkan equity dari exchange,
+   * anggaran aman (80%), margin yang sudah terpakai bot lain, dan sisa tersedia.
+   * Dipakai untuk warning user + validasi sebelum klik "START BOT".
+   *
+   * Response:
+   * {
+   *   accountEquity: 58.28,
+   *   maxUtilization: 0.8,
+   *   totalBudget: 46.63,
+   *   committed: { BTCUSDT: 0, ETHUSDT: 0, SOLUSDT: 0 },
+   *   remaining: 46.63,
+   *   minimumForLeverage2x: { BTCUSDT: 47.47, ETHUSDT: 23.50, SOLUSDT: 4.73 }
+   * }
+   */
+  router.get(
+    "/margin-budget",
+    asyncHandler(async (req, res) => {
+      const userId = req.userId;
+      const coordinator = getCoordinator(userId);
+      const snap = coordinator.snapshot();
+
+      // Hitung minimum margin per pair (leverage 2x, SL=1.5×ATR, asumsi ATR% pasar)
+      // Diperhitungkan dari: margin = (notional) / leverage = (price × size) / 2
+      // Untuk user, kami estimasi dengan asumsi size minimum per pair + ATR% rata-rata
+      const minMarginEstimate = {
+        BTCUSDT: 47.47,  // ~0.001 BTC × $47,000 / 2x leverage
+        ETHUSDT: 23.50,  // ~0.01 ETH × $2,350 / 2x
+        SOLUSDT: 4.73,   // ~0.1 SOL × $94.60 / 2x
+        BNBUSDT: 11.75,  // ~0.05 BNB × $470 / 2x
+      };
+
+      // Breakdown committed per symbol dari reservations
+      const committedBySymbol = {};
+      for (const [, r] of coordinator.reservations) {
+        if (r.symbol && r.margin) {
+          committedBySymbol[r.symbol] = (committedBySymbol[r.symbol] || 0) + r.margin;
+        }
+      }
+
+      res.json({
+        ok: true,
+        accountEquity: snap.accountEquity,
+        maxUtilization: snap.maxAccountUtilization,
+        totalBudget: snap.budget,
+        committed: committedBySymbol,
+        remaining: snap.budget - snap.committedMargin,
+        minimumForLeverage2x: minMarginEstimate,
+      });
     })
   );
 
