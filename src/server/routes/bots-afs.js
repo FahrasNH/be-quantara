@@ -10,7 +10,7 @@ module.exports = function createBotsRouter(helpers) {
   const prisma = new PrismaClient();
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
-  const { getUserBotLogs } = require("../../infrastructure/db/botLogRepository");
+  const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
   const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies } = require("../../services/entitlement");
 
   // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
@@ -104,6 +104,18 @@ module.exports = function createBotsRouter(helpers) {
       const logs  = await getUserBotLogs(req.userId, limit);
 
       res.json({ ok: true, count: logs.length, logs });
+    })
+  );
+
+  /**
+   * DELETE /api/v1/bots/logs
+   * Hapus semua log bot milik user dari DB — dipanggil saat user klik "Clear Logs".
+   */
+  router.delete(
+    "/logs",
+    asyncHandler(async (req, res) => {
+      const count = await deleteUserBotLogs(req.userId);
+      res.json({ ok: true, deleted: count });
     })
   );
 
@@ -858,7 +870,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get("/strategies/info/:key", (req, res) => {
     const { key } = req.params;
-    const { STRATEGIES } = require("../../domain/strategies");
+    const { STRATEGIES } = require("../../domain/legacyStrategies");
 
     const strategyConfig = STRATEGIES[key];
 

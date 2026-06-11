@@ -12,7 +12,7 @@ const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSi
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
-const { getStrategy } = require("../domain/strategies");
+const { getStrategy } = require("../domain/legacyStrategies");
 const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
@@ -1217,6 +1217,28 @@ class BotEngine extends EventEmitter {
     const tpDist = options.tpDist != null ? options.tpDist : slDist * this.config.riskReward;
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
+
+    // BUG-08: Hard guard — SL/TP harus finite, positif, dan berada di sisi yang benar.
+    // Sinyal dengan SL/TP invalid tidak boleh membuka posisi (unlimited-loss risk).
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      this._log("warn",
+        `[GUARD-SL/TP] SL/TP tidak valid — sinyal diabaikan. ` +
+        `sl=${sl} tp=${tp} price=${price} slDist=${slDist?.toFixed?.(4)} tpDist=${tpDist?.toFixed?.(4)}`
+      );
+      return;
+    }
+    if ((signal === "LONG" && sl >= price) || (signal === "SHORT" && sl <= price)) {
+      this._log("warn",
+        `[GUARD-SL/TP] SL berada di sisi salah untuk ${signal} — sinyal diabaikan. sl=${sl} price=${price}`
+      );
+      return;
+    }
+    if ((signal === "LONG" && tp <= price) || (signal === "SHORT" && tp >= price)) {
+      this._log("warn",
+        `[GUARD-SL/TP] TP berada di sisi salah untuk ${signal} — sinyal diabaikan. tp=${tp} price=${price}`
+      );
+      return;
+    }
 
     // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
     // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu

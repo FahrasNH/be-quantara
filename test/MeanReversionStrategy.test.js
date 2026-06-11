@@ -372,9 +372,9 @@ describe("MeanReversionStrategy", () => {
       const bbLevels = { middle: 42300, lower: 41000, upper: 43000 };
       const riskCfg = strategy.calculateRiskConfig(entry, atr, "LONG", bbLevels);
 
-      expect(riskCfg.stopLoss).toBe(42000 - 100);  // 41900
+      expect(riskCfg.stopLoss).toBe(42000 - 150);  // 41850 (1.5x ATR)
       expect(riskCfg.takeProfit).toBeGreaterThanOrEqual(42000 + 100 * 3);  // At least 3x ATR
-      expect(riskCfg.riskReward).toBe(3.0);  // 3.0x ATR / 1.0x ATR
+      expect(riskCfg.riskReward).toBe(2.0);  // 3.0x ATR / 1.5x ATR = 2.0
     });
 
     test("SHORT SL/TP calculation", () => {
@@ -383,17 +383,28 @@ describe("MeanReversionStrategy", () => {
       const bbLevels = { middle: 41700, lower: 41000, upper: 43000 };
       const riskCfg = strategy.calculateRiskConfig(entry, atr, "SHORT", bbLevels);
 
-      expect(riskCfg.stopLoss).toBe(42000 + 100);  // 42100
+      expect(riskCfg.stopLoss).toBe(42000 + 150);  // 42150 (1.5x ATR)
       expect(riskCfg.takeProfit).toBeLessThanOrEqual(42000 - 100 * 3);  // At most 3x ATR down
-      expect(riskCfg.riskReward).toBe(3.0);
+      expect(riskCfg.riskReward).toBe(2.0);
     });
 
-    test("RR ratio always 3.0", () => {
+    test("RR ratio always 2.0 (tp 3.0x / sl 1.5x)", () => {
       const riskCfg1 = strategy.calculateRiskConfig(42000, 100, "LONG");
       const riskCfg2 = strategy.calculateRiskConfig(50000, 200, "SHORT");
 
-      expect(riskCfg1.riskReward).toBe(3.0);
-      expect(riskCfg2.riskReward).toBe(3.0);
+      expect(riskCfg1.riskReward).toBe(2.0);
+      expect(riskCfg2.riskReward).toBe(2.0);
+    });
+
+    test("SL distance = 1.5x ATR (T5: MR SL guard)", () => {
+      const entry = 100;
+      const atr   = 1.0;
+      const longCfg  = strategy.calculateRiskConfig(entry, atr, "LONG");
+      const shortCfg = strategy.calculateRiskConfig(entry, atr, "SHORT");
+
+      expect(longCfg.stopLoss).toBeCloseTo(entry - 1.5 * atr, 5);
+      expect(shortCfg.stopLoss).toBeCloseTo(entry + 1.5 * atr, 5);
+      expect(longCfg.slMultiplier).toBe(1.5);
     });
 
     test("BB target is stored but may not be used", () => {
@@ -456,7 +467,7 @@ describe("MeanReversionStrategy", () => {
 
   describe("Configuration", () => {
     test("Default config set correctly", () => {
-      expect(strategy.config.slMultiplier).toBe(1.0);
+      expect(strategy.config.slMultiplier).toBe(1.5);
       expect(strategy.config.tpMultiplier).toBe(3.0);
       expect(strategy.config.riskPerTrade).toBe(0.01);
       expect(strategy.config.leverage).toBe(1.0);

@@ -4,7 +4,7 @@
  */
 
 const express = require("express");
-const { asyncHandler } = require("../../infrastructure/middleware/errorHandler");
+const { asyncHandler } = require("../../middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
 const BacktestHistoryService = require("../services/BacktestHistoryService");
 const ReportGeneratorService = require("../services/ReportGeneratorService");

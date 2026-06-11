@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# setup-tls-duckdns.sh — Aktifkan HTTPS Lets Encrypt utk domain DuckDNS (OPS-002).
+# setup-tls-https.sh — Aktifkan HTTPS Lets Encrypt untuk domain custom
+# (mis. quantara.software di Niagahoster).
 #
-# PRASYARAT (lakukan dulu di duckdns.org):
-#   1. Login duckdns.org (via GitHub/Google) — GRATIS
-#   2. Buat subdomain, mis. "quantara-app"
-#   3. Isi "current ip" = 187.77.135.156 → klik "update ip"
-#   4. Tunggu ~1-5 menit; verifikasi: dig +short quantara-app.duckdns.org
-#      harus mengembalikan 187.77.135.156
-#
-# Lalu jalankan di VPS sebagai root:
-#   DOMAIN=quantara-app.duckdns.org EMAIL=fahras.fnh@gmail.com \
-#     bash scripts/setup-tls-duckdns.sh
+# PRASYARAT:
+#   1. Domain harus sudah pointing ke IP VPS (187.77.135.156)
+#   2. Verifikasi: nslookup quantara.software → 187.77.135.156
+#   3. Jalankan di VPS sebagai root:
+#      DOMAIN=quantara.software EMAIL=fahras.fnh@gmail.com \
+#        bash scripts/setup-tls-https.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DOMAIN="${DOMAIN:?Set DOMAIN, mis. DOMAIN=quantara-app.duckdns.org}"
+DOMAIN="${DOMAIN:?Set DOMAIN, mis. DOMAIN=quantara.software}"
 EMAIL="${EMAIL:?Set EMAIL untuk notifikasi Lets Encrypt}"
 NGINX_SITE="/etc/nginx/sites-available/quantara"
 
@@ -23,7 +20,7 @@ echo "==> [1/6] Cek DNS: $DOMAIN harus mengarah ke VPS ini..."
 RESOLVED="$(dig +short "$DOMAIN" | tail -1 || true)"
 echo "    $DOMAIN → ${RESOLVED:-(kosong)}"
 if [[ -z "$RESOLVED" ]]; then
-  echo "❌ DNS belum resolve. Pastikan IP di duckdns.org sudah di-update & tunggu propagasi."
+  echo "❌ DNS belum resolve. Pastikan domain sudah pointing ke 187.77.135.156 & tunggu propagasi."
   exit 1
 fi
 
@@ -63,4 +60,4 @@ echo "   1. BE .env production -> CORS_ORIGINS=https://$DOMAIN"
 echo "   2. FE .env.production -> VITE_API_URL=https://$DOMAIN"
 echo "                           VITE_WS_URL=wss://$DOMAIN"
 echo '   3. Rebuild FE & re-deploy:  ./deploy-production.sh --fe-only'
-echo '   4. Restart BE:  pm2 restart be-quantara'
+echo '   4. Restart BE:  pm2 restart be-quantara-prod'

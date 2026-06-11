@@ -26,8 +26,7 @@ server {
 
 # ── HTTPS :443 ───────────────────────────────────────────────────────────────
 server {
-  listen 443 ssl;
-  http2 on;
+  listen 443 ssl http2;
   server_name YOUR_SUBDOMAIN.duckdns.org;
 
   ssl_certificate     /etc/letsencrypt/live/YOUR_SUBDOMAIN.duckdns.org/fullchain.pem;
