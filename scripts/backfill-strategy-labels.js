@@ -121,7 +121,11 @@ async function main() {
 
     // 2. Inferensi dari R:R + side + RSI
     const rr = calcPlannedRR(row.entry_price, row.sl, row.tp);
-    const rsi = ind?.rsi ?? null;
+    // Blob lama menyimpan RSI sebagai array penuh; blob baru (post-44bc878) sudah scalar.
+    const rsiRaw = ind?.rsi ?? null;
+    const rsi = Array.isArray(rsiRaw)
+      ? (rsiRaw.length > 0 ? rsiRaw[rsiRaw.length - 1] : null)
+      : (typeof rsiRaw === 'number' ? rsiRaw : null);
     const inferred = inferStrategy(rr, row.side, rsi);
 
     if (inferred) {
