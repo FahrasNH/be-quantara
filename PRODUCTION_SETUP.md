@@ -2,12 +2,13 @@
 
 > **Panduan deploy utama:** [DEPLOY_QUICK_START.md](../DEPLOY_QUICK_START.md)
 
-Production berjalan di VPS `187.77.135.156` — nginx port **80/443** + backend PM2 **`quantara`** port **3000**.
+Production berjalan di VPS `quantara.software` — nginx port **80/443** + backend PM2 **`quantara`** port **3000**.
+Staging berjalan pada subdomain `staging.quantara.software` — nginx port **8080** + backend PM2 **`quantara-staging`** port **3001**.
 
 | Lingkungan | URL | PM2 | BE path | FE path |
 |------------|-----|-----|---------|---------|
 | Production | `https://quantara.software` | `quantara` | `/opt/quantara/be` | `/var/www/quantara/fe` |
-| Staging | `http://187.77.135.156:8080` | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
+| Staging | `https://staging.quantara.software:8080` | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
 
 ## Deploy production
 
