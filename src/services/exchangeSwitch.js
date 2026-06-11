@@ -133,6 +133,7 @@ async function switchExchange(userId, { newExchange, apiKey, secretKey, passphra
   if (recentSwitches >= 3) {
     const err = new Error("Terlalu banyak pergantian exchange. Maksimal 3 kali per 24 jam.");
     err.statusCode = 429;
+    err.code = "RATE_LIMIT_EXCEEDED";
     throw err;
   }
 
@@ -148,6 +149,13 @@ async function switchExchange(userId, { newExchange, apiKey, secretKey, passphra
     );
     err.statusCode = 409;
     err.blockerReason = status.blockerReason;
+    // Contract code per QA-01: OPEN_POSITIONS_EXIST | BOT_RUNNING | BOTH
+    err.code =
+      status.blockerReason === "BOTH"
+        ? "BOTH"
+        : status.blockerReason === "OPEN_POSITIONS"
+        ? "OPEN_POSITIONS_EXIST"
+        : "BOT_RUNNING";
     err.positions = status.positions;
     throw err;
   }

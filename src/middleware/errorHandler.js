@@ -26,12 +26,19 @@ function errorHandler(err, req, res, next) {
 
   // Custom errors
   if (err.statusCode) {
-    return res.status(err.statusCode).json({
+    const body = {
       ok: false,
       statusCode: err.statusCode,
       message: err.message,
       errors: [err.message],
-    });
+    };
+    // Pass through optional structured fields when a handler attaches them
+    // (e.g. Exchange Switch 409 guard exposes blockerReason + open positions —
+    //  see API contract AC-01/AC-02). Only included when present.
+    if (err.code !== undefined) body.code = err.code;
+    if (err.blockerReason !== undefined) body.blockerReason = err.blockerReason;
+    if (err.positions !== undefined) body.positions = err.positions;
+    return res.status(err.statusCode).json(body);
   }
 
   // Generic error
