@@ -151,19 +151,25 @@ class AdaptiveStrategyEngine extends BotEngine {
         this.lastTrendStrength = Math.min(emaDelta * 50, 1.0);
       }
 
+      // 4b. Harga ticker REAL-TIME — dipakai untuk monitoring SL/TP DAN harga
+      //     entry. Post-mortem 11–12 Jun: entry direkam di `price` (close candle
+      //     confirmed, basi s/d 15 menit) sementara SL dicek pakai ticker live →
+      //     3 trade kena SL < 1 menit karena harga riil sudah jauh dari "harga
+      //     entry" sejak awal. livePrice null = ticker tidak tersedia.
+      let livePrice = null;
+      if (this.client?.getTicker) {
+        try {
+          const ticker = await this.client.getTicker(this.config.symbol);
+          if (ticker?.last > 0) livePrice = ticker.last;
+        } catch { /* livePrice tetap null — ditangani fail-closed di step 11b */ }
+      }
+
       // 5. Monitor SL/TP posisi yang sudah terbuka — WAJIB ada agar posisi bisa close.
       //    Parent BotEngine._tick() melakukan ini di baris ~865; karena kita override
       //    penuh, kita harus panggil sendiri. Tanpa ini posisi tidak pernah di-close.
-      //    Pakai harga ticker real-time jika tersedia (lebih akurat dari close candle).
       //    PENTING: super._checkOpenPositions (BUKAN this.) — lihat _syncPositionManager.
       {
-        let monitorPrice = price;
-        if (this.state.openPositions.length > 0 && this.client?.getTicker) {
-          try {
-            const ticker = await this.client.getTicker(this.config.symbol);
-            if (ticker?.last > 0) monitorPrice = ticker.last;
-          } catch { /* fallback ke close candle */ }
-        }
+        const monitorPrice = livePrice ?? price;
         this.state.lastPrice = monitorPrice;
         // SL/TP check + penutupan posisi (logika parent BotEngine)
         await super._checkOpenPositions(monitorPrice, atr);
@@ -190,8 +196,20 @@ class AdaptiveStrategyEngine extends BotEngine {
             sidewaysThresholdPct: this.config.sidewaysThresholdPct,
           });
         } catch {
-          this.state.htfTrend = "UNKNOWN"; // fetch gagal → tetap allow trade
+          // FAIL-CLOSED: tanpa data regime HTF, jangan buka posisi baru (diblok
+          // di 6c). Sebelumnya fail-open → 10/18 trade loss dry-run 11–12 Jun
+          // masuk saat htfTrend=UNKNOWN. Posisi terbuka tetap dikelola normal.
+          this.state.htfTrend = "UNKNOWN";
         }
+      }
+
+      // 6c. FAIL-CLOSED — HTF dikonfigurasi tapi trend tak bisa ditentukan →
+      //     blok entry baru (mirror BotEngine._tick() STEP 3).
+      if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
+        if (this.state.checkCount % 10 === 1) {
+          console.log(`[${this.config.symbol}] 🚫 [BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed) — ${this.strategyKey}`);
+        }
+        return;
       }
 
       // 7. Deteksi sinyal — kirim htfTrend dari state (bukan hardcoded "NEUTRAL")
@@ -203,6 +221,18 @@ class AdaptiveStrategyEngine extends BotEngine {
       });
 
       if (!signal) return;
+
+      // 7a. FILTER HTF DIRECTIONAL — jangan lawan tren timeframe besar (mirror
+      //     BotEngine._tick() STEP 3). Post-mortem 11–12 Jun: SHORT ETHUSDT saat
+      //     HTF BULLISH → SL. Override _tick() ini sebelumnya tidak punya blok ini.
+      if (signal === "LONG" && this.state.htfTrend === "BEARISH") {
+        console.log(`[${this.config.symbol}] [HTF] LONG diblok — ${this.config.higherTf} BEARISH (${this.strategyKey})`);
+        return;
+      }
+      if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
+        console.log(`[${this.config.symbol}] [HTF] SHORT diblok — ${this.config.higherTf} BULLISH (${this.strategyKey})`);
+        return;
+      }
 
       // 7b. RISK GATES — cooldown setelah loss, consec-loss, max trades/hari, daily
       //     loss, ATR range. Tanpa ini AFS engine re-entry tanpa henti setelah SL
@@ -295,8 +325,54 @@ class AdaptiveStrategyEngine extends BotEngine {
         entryMode:    "multi_strategy",
       };
 
+      // 11b. HARGA ENTRY = ticker live, BUKAN close candle confirmed (basi s/d
+      //      15 menit). Fail-closed: jika exchange punya getTicker tapi fetch
+      //      gagal, skip entry tick ini — jangan buka posisi di harga fiktif.
+      //      Fallback ke close candle hanya bila client tidak punya getTicker
+      //      sama sekali (mis. stub test) — tidak ada data lebih baik.
+      let entryPrice = price;
+      if (this.client?.getTicker) {
+        if (livePrice == null) {
+          console.log(`[${this.config.symbol}] 🚫 Skip entry (${this.strategyKey}): ticker tidak tersedia — hindari entry di harga basi`);
+          return;
+        }
+        entryPrice = livePrice;
+      }
+
+      // 11c. GUARD SINYAL BASI — jika harga riil sudah bergerak > 1×ATR dari
+      //      close candle yang memicu sinyal, setup sudah tidak relevan
+      //      (penyebab pola "SL dalam 1 menit" pada data 11–12 Jun).
+      if (atr > 0 && Math.abs(entryPrice - price) > atr) {
+        console.log(
+          `[${this.config.symbol}] 🚫 Skip entry (${this.strategyKey}): harga live $${entryPrice} ` +
+          `sudah ${(Math.abs(entryPrice - price) / atr).toFixed(1)}×ATR dari candle sinyal $${price} — sinyal basi`
+        );
+        return;
+      }
+
+      // 11d. SL/TP PER-KOMPONEN (P1) — sebelumnya _handleSignal dipanggil TANPA
+      //      options → SL selalu 1.5×ATR & TP 2×SL dari config default, fix P1
+      //      (calculateRiskConfig) jadi dead code di jalur multi_strategy.
+      //      Data 11–12 Jun: 18/18 trade pakai 1.5×ATR walau komponen C menang.
+      const signalOptions = {};
+      const meta = typeof this.strategy.getLastSignalMeta === "function"
+        ? this.strategy.getLastSignalMeta()
+        : null;
+      if (meta && typeof this.strategy.calculateRiskConfig === "function") {
+        const riskCfg = this.strategy.calculateRiskConfig(entryPrice, atr, signal, meta.component);
+        signalOptions.slDist = riskCfg.slDistance;
+        signalOptions.tpDist = riskCfg.tpDistance;
+        indicatorSnapshot.afComponent  = meta.component;
+        indicatorSnapshot.afVotes      = meta.votes;
+        indicatorSnapshot.afMarketCond = meta.marketCond;
+        console.log(
+          `[${this.config.symbol}] [AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
+          `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+        );
+      }
+
       // 12. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
-      await this._handleSignal(signal, price, atr, indicatorSnapshot);
+      await this._handleSignal(signal, entryPrice, atr, indicatorSnapshot, signalOptions);
     } catch (err) {
       console.error(`[${this.config.symbol}] Tick error:`, err.message);
     }
