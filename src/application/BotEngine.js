@@ -916,7 +916,7 @@ class BotEngine extends EventEmitter {
         const gate = this._checkRiskGates(atr, price);
         if (!gate.ok) {
           if (this.state.checkCount % 10 === 1) {
-            this._log("info", `🚫 Skip entry: ${gate.reason}`);
+            this._log("info", `[SKIP] ${gate.reason}`);
           }
         } else {
           // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
@@ -993,14 +993,14 @@ class BotEngine extends EventEmitter {
                 // masuk tanpa konfirmasi regime. Tanpa data regime = tanpa entry.
                 filteredSignal = null;
                 if (this.state.checkCount % 10 === 1) {
-                  this._log("info", `⛔ Entry diblok — HTF ${this.config.higherTf} tidak tersedia (fail-closed)`);
+                  this._log("info", `[BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed)`);
                 }
               } else if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
-                this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
+                this._log("info", `[HTF] LONG diblok — ${this.config.higherTf} BEARISH`);
               } else if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
                 filteredSignal = null;
-                this._log("info", `🟢 SHORT diblok — HTF ${this.config.higherTf} BULLISH`);
+                this._log("info", `[HTF] SHORT diblok — ${this.config.higherTf} BULLISH`);
               }
             }
 
@@ -1010,7 +1010,7 @@ class BotEngine extends EventEmitter {
             // Signature direkam di _updateRiskAfterClose; candle baru → harga close
             // berbeda → guard otomatis lolos.
             if (filteredSignal && this.state.lastLossSetup === `${filteredSignal}@${price}`) {
-              this._log("info", `🔁 Entry diblok — setup identik dengan loss terakhir (${filteredSignal} @ $${price}); tunggu candle baru`);
+              this._log("info", `[CHURN] Entry diblok — setup identik dengan loss terakhir (${filteredSignal} @ $${price}); tunggu candle baru`);
               filteredSignal = null;
             }
 
@@ -1423,7 +1423,7 @@ class BotEngine extends EventEmitter {
     this._sep(`SINYAL ${signal}`);
     this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
     this._log("trade", `Entry: $${price.toLocaleString()} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
-    this._log("info",  `📊 Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
+    this._log("info",  `[STATS] Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
 
     const openTime = Date.now();
 
@@ -1525,7 +1525,7 @@ class BotEngine extends EventEmitter {
           } else {
             // TP gagal tapi SL OK — tidak fatal (downside terlindungi). Monitor manual TP.
             this._log("error", `TP gagal: ${tpErr}`);
-            this._log("warn", `⚠️ TP GAGAL (SL ✓) — bot monitor TP manual`);
+            this._log("warn", `[WARN] TP GAGAL (SL OK) — bot monitor TP manual`);
             pos.manualSLTP = true;
           }
         }
@@ -1646,7 +1646,7 @@ class BotEngine extends EventEmitter {
     // ── Strat A: diam total ────────────────────────────────────────────────────
     if (signalType === "PDF_SCALPING") {
       if (this.state.checkCount % 10 === 1) {
-        this._log("info", `📊 [${this.config.strategyKey}] HTF ${this.config.higherTf} SIDEWAYS — menunggu trend jelas (Strat A diam)`);
+        this._log("info", `[HTF] ${this.config.strategyKey} SIDEWAYS — menunggu trend jelas (Strat A diam)`);
       }
       return;
     }
@@ -1665,7 +1665,7 @@ class BotEngine extends EventEmitter {
 
       if (!bo) {
         if (this.state.checkCount % 10 === 1) {
-          this._log("info", `📊 [${this.config.strategyKey}] HTF ${this.config.higherTf} SIDEWAYS — menunggu breakout range`);
+          this._log("info", `[HTF] ${this.config.strategyKey} SIDEWAYS — menunggu breakout range`);
         }
         return;
       }
@@ -1674,8 +1674,8 @@ class BotEngine extends EventEmitter {
       if (bo.signal === this.state.lastSignal) return;
 
       this._log("trade",
-        `🔥 BREAKOUT SIDEWAYS ${bo.signal}! ` +
-        `Range [${bo.rangeLow.toFixed(2)}–${bo.rangeHigh.toFixed(2)}] ditembus`
+        `[BREAKOUT] SIDEWAYS ${bo.signal}! ` +
+        `Range [${bo.rangeLow.toFixed(2)}-${bo.rangeHigh.toFixed(2)}] ditembus`
       );
 
       // SL ditempatkan di balik tepi range (bukan ATR dari entry)
@@ -1712,11 +1712,11 @@ class BotEngine extends EventEmitter {
         if (bo) {
           this.state.sidewaysBreakout = { ...bo, detectedAt: Date.now() };
           this._log("info",
-            `⏳ [${this.config.strategyKey}] Breakout ${bo.signal} terdeteksi ` +
+            `[BREAKOUT] ${this.config.strategyKey} Breakout ${bo.signal} terdeteksi ` +
             `@ range edge ${bo.rangeEdge.toFixed(2)} — menunggu retest...`
           );
         } else if (this.state.checkCount % 10 === 1) {
-          this._log("info", `📊 [${this.config.strategyKey}] HTF ${this.config.higherTf} SIDEWAYS — menunggu breakout + retest`);
+          this._log("info", `[HTF] ${this.config.strategyKey} SIDEWAYS — menunggu breakout + retest`);
         }
         return;
       }
@@ -1724,7 +1724,7 @@ class BotEngine extends EventEmitter {
       // Ada breakout tersimpan: timeout check (10 × checkInterval)
       const timeout = this.config.checkInterval * 10;
       if (Date.now() - this.state.sidewaysBreakout.detectedAt > timeout) {
-        this._log("info", `⏰ [${this.config.strategyKey}] Breakout timeout — reset state sideways`);
+        this._log("info", `[TIMEOUT] ${this.config.strategyKey} Breakout timeout — reset state sideways`);
         this.state.sidewaysBreakout = null;
         return;
       }
@@ -1735,7 +1735,7 @@ class BotEngine extends EventEmitter {
       if (retestResult === null) {
         // False breakout: harga kembali ke dalam range
         this._log("warn",
-          `❌ [${this.config.strategyKey}] Breakout ${this.state.sidewaysBreakout.signal} INVALID ` +
+          `[INVALID] ${this.config.strategyKey} Breakout ${this.state.sidewaysBreakout.signal} INVALID ` +
           `— harga balik ke range. Reset.`
         );
         this.state.sidewaysBreakout = null;
@@ -1747,7 +1747,7 @@ class BotEngine extends EventEmitter {
         if (this.state.checkCount % 5 === 1) {
           const bo = this.state.sidewaysBreakout;
           this._log("info",
-            `⏳ [${this.config.strategyKey}] Menunggu retest ke ` +
+            `[RETEST] ${this.config.strategyKey} Menunggu retest ke ` +
             `${bo.signal === "LONG" ? `area ${bo.rangeHigh.toFixed(2)}` : `area ${bo.rangeLow.toFixed(2)}`}...`
           );
         }
@@ -1761,7 +1761,7 @@ class BotEngine extends EventEmitter {
         : (bo.rangeHigh + bo.atr * 0.3) - price;       // SL di atas range high
 
       this._log("trade",
-        `🎯 [${this.config.strategyKey}] RETEST VALID! ${bo.signal} @ $${price.toFixed(2)} ` +
+        `[VALID] ${this.config.strategyKey} RETEST VALID! ${bo.signal} @ $${price.toFixed(2)} ` +
         `(range edge: $${bo.rangeEdge.toFixed(2)} | SL dist: $${slDist.toFixed(2)})`
       );
 
@@ -1913,7 +1913,7 @@ class BotEngine extends EventEmitter {
       pos.m3 = true;
       const remaining = pos.remainingSize;
       this._sep(`SL+ MILESTONE +3R`);
-      this._log("trade", `🎯 ${pos.side} +3R tercapai! Sisa ${remaining.toFixed(4)} unit menuju TP $${pos.tp?.toFixed(2) || "N/A"}`);
+      this._log("trade", `[+3R] ${pos.side} +3R tercapai! Sisa ${remaining.toFixed(4)} unit menuju TP $${pos.tp?.toFixed(2) || "N/A"}`);
       this._log("info",  `SL terkunci di +1R ($${pos.slCurrent?.toFixed(2)}) — posisi tidak bisa rugi`);
     }
   }
@@ -2207,7 +2207,7 @@ class BotEngine extends EventEmitter {
             const hitSL = pos.side === "LONG" ? price <= pos.sl : price >= pos.sl;
             const hitTP = pos.side === "LONG" ? price >= pos.tp : price <= pos.tp;
             if (hitSL || hitTP) {
-              const reason = hitTP ? "TP ✅" : "SL ❌";
+              const reason = hitTP ? "TP" : "SL";
               this._log("warn", `Manual close ${pos.side} — ${reason} (manual monitor) @ $${price.toFixed(2)}`);
               try {
                 await this.client.closePosition(
@@ -2215,7 +2215,7 @@ class BotEngine extends EventEmitter {
                   pos.side === "LONG" ? "close_long" : "close_short",
                   pos.size,
                 );
-                this._log("trade", `Posisi ditutup manual ✓`);
+                this._log("trade", `Posisi ditutup manual`);
               } catch (e) {
                 const isAlreadyClosed =
                   e.message?.includes("22002") ||
@@ -2223,7 +2223,7 @@ class BotEngine extends EventEmitter {
                   e.message?.includes("position not exist");
 
                 if (isAlreadyClosed) {
-                  this._log("info", `Posisi ${pos.side} sudah ditutup oleh exchange ✓ (state sync)`);
+                  this._log("info", `Posisi ${pos.side} sudah ditutup oleh exchange (state sync)`);
                   // Coba ambil fill price aktual; fallback ke SL/TP estimate
                   let exitPrice = null;
                   if (this.client.getRecentFillPrice) {
@@ -2294,8 +2294,8 @@ class BotEngine extends EventEmitter {
         const reason    = hitTP ? "TP" : "SL";
         const closeTime = Date.now();
 
-        this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
-        this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT ✅" : "STOP LOSS ❌"}`);
+        this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT" : "STOP LOSS"}`);
+        this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT" : "STOP LOSS"}`);
         this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
         this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
         if (pos.m1 || pos.m2) {
