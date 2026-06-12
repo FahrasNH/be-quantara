@@ -349,6 +349,21 @@ class MultiStrategyCoordinator extends EventEmitter {
   // STATE
   // ───────────────────────────────────────────────────────────────────────────
 
+  // Session ID dari SEMUA engine strategi (tiap strategi membuka sesinya sendiri).
+  // history.js memakai ini untuk menandai sesi "ACTIVE" — tanpa ini, sesi
+  // multi-strategy tak pernah cocok (coordinator tak punya sessionId tunggal) →
+  // label ACTIVE tak muncul & sesi yang masih jalan ditandai closed.
+  getSessionIds() {
+    const ids = [];
+    for (const [, engine] of this.engines) {
+      const list = typeof engine?.getSessionIds === "function"
+        ? engine.getSessionIds()
+        : (engine?.sessionId ? [engine.sessionId] : []);
+      for (const id of list) if (id) ids.push(id);
+    }
+    return ids;
+  }
+
   /**
    * State teragregasi lintas-engine. Bentuknya kompatibel dengan BotEngine.getState()
    * (running, symbol, openPositions[], trades[], totalPnL) agar server tidak perlu
