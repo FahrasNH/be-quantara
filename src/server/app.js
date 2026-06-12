@@ -403,9 +403,17 @@ BotEngine.prototype.emit = function (event, ...args) {
   if (!symbol) return originalEmit.call(this, event, ...args);
 
   if (event === "log" || event === "status") {
+    // Engine bagian dari MultiStrategyCoordinator → siarkan STATE TERAGREGASI
+    // koordinator (modal/PnL/posisi gabungan 4 strategi), bukan state parsial 1
+    // engine. Tanpa ini, status teragregasi hanya muncul saat poll 60s → kartu FE
+    // tampak "tidak update" walau bot ticking tiap 30s–5m.
+    const coord = this.config?.groupCoordinator;
+    const statusData = (event === "status" && coord && typeof coord.getState === "function")
+      ? coord.getState()
+      : args[0];
     const payload = event === "log"
       ? { type: "log", symbol, data: args[0] }
-      : { type: "status", symbol, data: args[0] };
+      : { type: "status", symbol, data: statusData };
 
     wss.clients.forEach((client) => {
       if (

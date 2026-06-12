@@ -27,11 +27,17 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
       // masih running di memory (sessionId cocok). Tanpa ini, crash/restart VPS
       // membuat stopped_at tetap NULL → semua sesi lama tampak "AKTIF" di UI.
       const liveBots = getAllBots ? getAllBots(req.userId) : [];
-      const liveSessionIds = new Set(
-        liveBots
-          .filter(b => b.getState?.().running && b.sessionId)
-          .map(b => b.sessionId)
-      );
+      // Kumpulkan SEMUA session id yang sedang live. Untuk multi-strategy, satu bot
+      // (coordinator) menampung banyak engine — masing-masing punya sessionId sendiri.
+      // getSessionIds() menyatukan keduanya (engine tunggal → [id]; coordinator → [id…]).
+      const liveSessionIds = new Set();
+      for (const b of liveBots) {
+        if (!b.getState?.().running) continue;
+        const ids = typeof b.getSessionIds === "function"
+          ? b.getSessionIds()
+          : (b.sessionId ? [b.sessionId] : []);
+        for (const id of ids) if (id) liveSessionIds.add(id);
+      }
 
       const enriched = sessions.map(s => ({
         ...s,
