@@ -1,5 +1,5 @@
 /**
- * AdaptiveFusionStrategy.js — v2.0 (Professional Trader Feedback)
+ * AdaptiveFusionStrategy.js — v2.2 (Post-mortem dry-run 11–12 Jun)
  *
  * Fixes applied:
  *  P1 — calculateRiskConfig(): component-aware SL/TP multipliers
@@ -8,6 +8,18 @@
  *  P4 — detectSignal(): skip components with score below threshold
  *  P5 — getMarketThresholds() + interpretMarketCondition()
  *  P6 — component-level position guard (tracked via _lastSignalMeta)
+ *
+ * v2.2 (root-cause fixes dari 18/18 loss dry-run 11–12 Jun):
+ *  P7 — detectSignal(): blok entry saat DEAD_MARKET. Semua 18 trade loss
+ *       terjadi pada ATR% 0.30–0.45 + trend_strength < 0.06 — persis regime
+ *       yang threshold strategi sendiri klasifikasikan sebagai dead market,
+ *       tapi klasifikasinya tidak pernah dipakai untuk memblok entry.
+ *  P8 — _detectSignalB(): EVENT-BASED (fresh crossover / pullback-resume),
+ *       bukan state-based. Sebelumnya B & C overlap hampir total (alignment
+ *       + RSI band beririsan) → kuorum 2/3 tercapai di hampir setiap candle
+ *       selama tren → entry telat/chasing (rata-rata +0.2–0.76% di atas EMA9).
+ *  P9 — cooldownAfterLoss 3 → 30 menit (selaras default BotEngine; nilai 3
+ *       meng-override balik fix cooldown 30 menit via `strat.cooldownAfterLoss`).
  */
 
 const StrategyBase = require("../base/StrategyBase");
@@ -21,7 +33,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "2.0.0",
+      version: "2.2.0",
       enabled: true,
       ...config,
     });
@@ -227,6 +239,20 @@ class AdaptiveFusionStrategy extends StrategyBase {
       volatility:      config.volatility      || 1.0,
       trend_strength:  config.trend_strength  || 0.1,
     };
+
+    // P7: Regime gate — JANGAN entry di dead market. Post-mortem 11–12 Jun:
+    // 18/18 trade SL terjadi saat ATR% 0.30–0.45 & trend_strength < 0.06.
+    // Di regime ini SL 1–2×ATR berada di dalam noise normal candle 15m,
+    // sementara TP 2.5–3×ATR butuh pergerakan yang hampir tak pernah terjadi
+    // → SL hampir pasti tersentuh duluan. Catatan: default config (vol=1.0,
+    // trend=0.1) juga terklasifikasi DEAD_MARKET — caller WAJIB mengirim
+    // kondisi market nyata (BotEngine & AdaptiveStrategyEngine sudah).
+    const marketCond = this.interpretMarketCondition(
+      marketConditions.volatility,
+      marketConditions.trend_strength
+    );
+    if (marketCond === "DEAD_MARKET") return null;
+
     const rankings  = this.rankByMarketConditions(marketConditions);
     const scoreMap  = Object.fromEntries(rankings.map(r => [r.key, r.score]));
 
@@ -250,7 +276,15 @@ class AdaptiveFusionStrategy extends StrategyBase {
       (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore
     ) {
       const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
-      signals.B = this._detectSignalB(rsi, emaFast, emaSlow, emaLong, closesConfirmed);
+      // P8: B butuh series EMA (bukan scalar) untuk deteksi event crossover/pullback
+      signals.B = this._detectSignalB(
+        rsi,
+        indicators.emaFast || [],
+        indicators.emaSlow || [],
+        emaLong,
+        closesConfirmed,
+        lastIdx
+      );
     }
 
     // Component C — only run if balance sufficient AND score meets threshold
@@ -271,10 +305,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         component:   winningComponent,
         votes:       signals,
         scores:      scoreMap,
-        marketCond:  this.interpretMarketCondition(
-          marketConditions.volatility,
-          marketConditions.trend_strength
-        ),
+        marketCond,
       };
     }
 
@@ -349,47 +380,86 @@ class AdaptiveFusionStrategy extends StrategyBase {
     return null;
   }
 
-  // ── Component B — Day Trading (v2.1: 3-EMA Alignment) ───────────────────
+  // ── Component B — Day Trading (v2.2 / P8: EVENT-BASED) ──────────────────
   //
-  // Redesign dari "EMA21 crossover event" (firing 1x saja saat crossing) menjadi
-  // "3-EMA alignment state" (firing setiap candle selama tren terbentuk).
+  // Post-mortem 11–12 Jun: versi v2.1 ("3-EMA alignment state") fire di SETIAP
+  // candle selama tren berlangsung. Karena C juga state-based dengan kondisi
+  // yang hampir identik (alignment + RSI band beririsan 50–65), kuorum voting
+  // 2/3 tercapai terus-menerus → bot entry di titik mana pun dalam tren —
+  // rata-rata sudah +0.2–0.76% di atas EMA9 (chasing) → pullback normal ke
+  // mean langsung menyentuh SL. Hasil: 18/18 loss.
   //
-  // Motivasi: crossover hanya terjadi 1–3x/hari pada 15m chart; setelah crossing
-  // B selalu null, tidak bisa berkontribusi ke voting majority (butuh 2/3).
-  // Dengan 3-EMA alignment B menjadi state-based seperti C, tapi LEBIH KETAT:
-  //   - C  : cukup close & EMA9 di satu sisi EMA21  (2-EMA)
-  //   - B  : butuh EMA9 > EMA21 > EMA50 SEMUA sejajar (3-EMA) + RSI non-ekstrem
+  // v2.2: alignment tetap jadi SYARAT, tapi B hanya fire saat ada EVENT segar
+  // di dalam lookback window:
+  //   Event 1 — fresh crossover : EMA9 baru saja melintasi EMA21
+  //   Event 2 — pullback-resume : harga sempat menyentuh/menembus EMA9 melawan
+  //             arah tren (pullback ke mean) lalu candle sekarang close kembali
+  //             searah tren. Entry terjadi DEKAT mean, bukan di ujung ekstensi.
   //
-  // emaLong (EMA50) kini dipakai — sebelumnya dikonfigurasi tapi tidak diteruskan.
-  //
-  // @param {number}   rsi
-  // @param {number}   emaFast  — EMA9
-  // @param {number}   emaSlow  — EMA21
-  // @param {number|null} emaLong — EMA50 (dari indicators.emaTrend; null = abaikan filter)
-  // @param {number[]} closes
+  // @param {number}        rsi
+  // @param {number[]}      emaFastArr — series EMA9 (index sejajar closes)
+  // @param {number[]}      emaSlowArr — series EMA21
+  // @param {number|null}   emaLong    — EMA50 scalar (null = abaikan filter)
+  // @param {number[]}      closes     — closes terkonfirmasi s/d lastIdx
+  // @param {number}        lastIdx    — index candle confirmed terakhir
 
-  _detectSignalB(rsi, emaFast, emaSlow, emaLong, closes) {
-    if (emaFast == null || emaSlow == null || closes.length < 2) return null;
+  _detectSignalB(rsi, emaFastArr, emaSlowArr, emaLong, closes, lastIdx) {
+    if (!Array.isArray(emaFastArr) || !Array.isArray(emaSlowArr)) return null;
+    if (!Array.isArray(closes) || closes.length < 2) return null;
+    if (lastIdx == null) lastIdx = closes.length - 1;
 
-    const closeCurr = closes[closes.length - 1];
+    const emaFast = emaFastArr[lastIdx];
+    const emaSlow = emaSlowArr[lastIdx];
+    if (emaFast == null || emaSlow == null) return null;
 
-    // LONG: EMA9 > EMA21 > EMA50 (full bullish alignment) + price > EMA21 + RSI 50–70
-    // (RSI cap 70: hindari entry saat overbought, tetap biarkan mid-trend)
+    const closeCurr = closes[lastIdx] ?? closes[closes.length - 1];
+    if (closeCurr == null) return null;
+
+    const LOOKBACK = 3; // event harus terjadi dalam 3 candle confirmed terakhir
+
+    // Event 1: fresh EMA9×EMA21 crossover dalam lookback window
+    const hasFreshCross = (dir) => {
+      for (let i = Math.max(1, lastIdx - LOOKBACK + 1); i <= lastIdx; i++) {
+        const fPrev = emaFastArr[i - 1], sPrev = emaSlowArr[i - 1];
+        const fCurr = emaFastArr[i],     sCurr = emaSlowArr[i];
+        if (fPrev == null || sPrev == null || fCurr == null || sCurr == null) continue;
+        if (dir === "LONG"  && fPrev <= sPrev && fCurr > sCurr) return true;
+        if (dir === "SHORT" && fPrev >= sPrev && fCurr < sCurr) return true;
+      }
+      return false;
+    };
+
+    // Event 2: pullback ke EMA9 lalu resume searah tren pada candle sekarang
+    const hasPullbackResume = (dir) => {
+      if (dir === "LONG"  && closeCurr <= emaFast) return false;
+      if (dir === "SHORT" && closeCurr >= emaFast) return false;
+      for (let i = Math.max(0, lastIdx - LOOKBACK); i < lastIdx; i++) {
+        const c = closes[i], f = emaFastArr[i];
+        if (c == null || f == null) continue;
+        if (dir === "LONG"  && c <= f) return true;  // sempat turun ke/bawah EMA9
+        if (dir === "SHORT" && c >= f) return true;  // sempat naik ke/atas EMA9
+      }
+      return false;
+    };
+
+    // LONG: EMA9 > EMA21 > EMA50 + price > EMA21 + RSI 50–70 + EVENT segar
     if (
       emaFast > emaSlow &&
       (emaLong == null || emaSlow > emaLong) &&
       closeCurr > emaSlow &&
-      rsi > 50 && rsi < 70
+      rsi > 50 && rsi < 70 &&
+      (hasFreshCross("LONG") || hasPullbackResume("LONG"))
     ) {
       return "LONG";
     }
 
-    // SHORT: EMA9 < EMA21 < EMA50 (full bearish alignment) + price < EMA21 + RSI 30–50
+    // SHORT: EMA9 < EMA21 < EMA50 + price < EMA21 + RSI 30–50 + EVENT segar
     if (
       emaFast < emaSlow &&
       (emaLong == null || emaSlow < emaLong) &&
       closeCurr < emaSlow &&
-      rsi < 50 && rsi > 30
+      rsi < 50 && rsi > 30 &&
+      (hasFreshCross("SHORT") || hasPullbackResume("SHORT"))
     ) {
       return "SHORT";
     }
@@ -448,7 +518,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
       maxRiskPerTrade:   0.02,
       maxDailyLossPct:   0.05,
       maxTradesPerDay:   10,
-      cooldownAfterLoss: 3,
+      // P9: 3 → 30 menit. Nilai kecil di sini meng-override balik default 30 mnt
+      // BotEngine (`strat.cooldownAfterLoss || 30`) → re-entry 6 menit setelah SL
+      // pada setup identik (data dry-run 11–12 Jun).
+      cooldownAfterLoss: 30,
       maxConsecLoss:     4,
       leverage:          2,
     };
@@ -465,8 +538,12 @@ class AdaptiveFusionStrategy extends StrategyBase {
   validateEntry(price, atr, volume, volSMA) {
     const atrPct  = (atr / price) * 100;
     const volRatio = volSMA > 0 ? volume / volSMA : 0;
-    if (atrPct < 0.3 || atrPct > 4.0) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (0.3–4.0%)` };
+    // P7: floor 0.3 → 0.5. Semua 18 trade loss dry-run 11–12 Jun lolos di ATR%
+    // 0.30–0.45 — SL 1–2×ATR di regime itu berada di dalam noise normal 15m.
+    // Floor 0.5 = sanity minimum; regime gate utama (vol+trend) ada di
+    // detectSignal via interpretMarketCondition === "DEAD_MARKET".
+    if (atrPct < 0.5 || atrPct > 4.0) {
+      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (0.5–4.0%)` };
     }
     if (volRatio < 0.7) {
       return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× below threshold (0.7×)` };
