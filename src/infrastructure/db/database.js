@@ -786,7 +786,16 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
       openTime:     row.open_time,
       closeTime:    row.close_time,
       result:       row.status === "cancelled" ? "cancelled" : (row.pnl > 0 ? "win" : "loss"),
-      rMultiple:    row.sl && row.entry_price ? parseFloat(((row.exit_price - row.entry_price) / Math.abs(row.entry_price - row.sl)).toFixed(2)) : null,
+      // R-multiple SIDE-AWARE: untuk SHORT, profit = harga turun, jadi selisih
+      // dibalik. Sebelumnya tanpa arah → SHORT loss tampil +1 (tanda terbalik).
+      // Guard risk=0 (entry==SL) mencegah Infinity (QA-002).
+      rMultiple:    (() => {
+        if (!row.sl || !row.entry_price || row.exit_price == null) return null;
+        const risk = Math.abs(row.entry_price - row.sl);
+        if (!(risk > 0)) return null;
+        const dir = row.side === "SHORT" ? -1 : 1;
+        return parseFloat((((row.exit_price - row.entry_price) * dir) / risk).toFixed(2));
+      })(),
     };
   });
 }

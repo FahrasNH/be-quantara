@@ -113,7 +113,10 @@ class BotEngine extends EventEmitter {
       // ── Risk management harian ────────────────────────────────────────────
       maxDailyLossPct:   strat.maxDailyLossPct  || 0.04,
       maxTradesPerDay:   strat.maxTradesPerDay   || 10,
-      cooldownAfterLoss: strat.cooldownAfterLoss || 5,
+      // 30 menit (sebelumnya 5): data dry-run 12 Jun menunjukkan re-entry menit ke-6
+      // pada setup identik setelah SL → loss duplikat beruntun. Strategi bisa
+      // override via strat.cooldownAfterLoss (MR: 15).
+      cooldownAfterLoss: strat.cooldownAfterLoss || 30,
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
       // ── Take-Profit mode ─────────────────────────────────────────────────
@@ -157,6 +160,7 @@ class BotEngine extends EventEmitter {
       lastDayReset:    null,     // Timestamp reset terakhir
       consecLoss:      0,        // Loss berturut-turut
       cooldownUntil:   null,     // Timestamp cooldown selesai
+      lastLossSetup:   null,     // "SIDE@entry" trade loss terakhir — guard anti-churn
 
       // HTF trend state
       htfTrend:        "UNKNOWN", // BULLISH / BEARISH / SIDEWAYS / UNKNOWN
@@ -776,10 +780,16 @@ class BotEngine extends EventEmitter {
   }
 
   /** Panggil setelah trade ditutup untuk update counter risk */
-  _updateRiskAfterClose(pnl) {
+  _updateRiskAfterClose(pnl, pos = null) {
     if (pnl < 0) {
       this.state.dailyLoss   += Math.abs(pnl);
       this.state.consecLoss  += 1;
+      // Anti-churn: rekam signature setup yang baru saja loss (side + harga entry).
+      // Entry berikutnya dengan signature IDENTIK ditolak — mencegah bot membeli
+      // ulang setup yang baru terbukti salah pada candle/sinyal yang sama.
+      if (pos?.side && pos?.entry != null) {
+        this.state.lastLossSetup = `${pos.side}@${pos.entry}`;
+      }
       // Set cooldown
       if (this.config.cooldownAfterLoss > 0) {
         this.state.cooldownUntil = Date.now() + this.config.cooldownAfterLoss * 60 * 1000;
@@ -839,7 +849,10 @@ class BotEngine extends EventEmitter {
             sidewaysThresholdPct: this.config.sidewaysThresholdPct,
           });
         } catch {
-          this.state.htfTrend = "UNKNOWN"; // Tidak bisa fetch HTF → allow trade
+          // Tidak bisa fetch HTF → UNKNOWN. Entry baru DIBLOK (fail-closed) di
+          // STEP 3 — tanpa data regime, jangan ambil posisi baru. Posisi terbuka
+          // tetap dikelola normal (SL/TP jalan terus).
+          this.state.htfTrend = "UNKNOWN";
         }
       }
 
@@ -973,15 +986,32 @@ class BotEngine extends EventEmitter {
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
             // BREAKOUT_RETEST: skip filter HTF — breakout/retest valid di konsolidasi
             let filteredSignal = mrSignal;
-            if (mrSignal && this.config.signalType !== "BREAKOUT_RETEST" && this.state.htfTrend !== "UNKNOWN") {
-              if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
+            if (mrSignal && this.config.signalType !== "BREAKOUT_RETEST") {
+              if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
+                // FAIL-CLOSED: HTF dikonfigurasi tapi trend tak bisa ditentukan
+                // (fetch gagal). Sebelumnya fail-open → 10/14 loss dry-run 11-12 Jun
+                // masuk tanpa konfirmasi regime. Tanpa data regime = tanpa entry.
+                filteredSignal = null;
+                if (this.state.checkCount % 10 === 1) {
+                  this._log("info", `⛔ Entry diblok — HTF ${this.config.higherTf} tidak tersedia (fail-closed)`);
+                }
+              } else if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
                 this._log("info", `🔴 LONG diblok — HTF ${this.config.higherTf} BEARISH`);
-              }
-              if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
+              } else if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
                 filteredSignal = null;
                 this._log("info", `🟢 SHORT diblok — HTF ${this.config.higherTf} BULLISH`);
               }
+            }
+
+            // ── STEP 3b: Anti-churn — tolak setup identik dengan loss terakhir ──
+            // Data dry-run 11-12 Jun: 3 klaster re-entry pada side+harga entry yang
+            // sama persis setelah SL (candle sama, sinyal basi) → loss duplikat.
+            // Signature direkam di _updateRiskAfterClose; candle baru → harga close
+            // berbeda → guard otomatis lolos.
+            if (filteredSignal && this.state.lastLossSetup === `${filteredSignal}@${price}`) {
+              this._log("info", `🔁 Entry diblok — setup identik dengan loss terakhir (${filteredSignal} @ $${price}); tunggu candle baru`);
+              filteredSignal = null;
             }
 
             if (filteredSignal && filteredSignal !== this.state.lastSignal) {
@@ -1936,7 +1966,7 @@ class BotEngine extends EventEmitter {
       closedAt:  Date.now(),
       partial:   true,
     });
-    this._updateRiskAfterClose(pnl);
+    this._updateRiskAfterClose(pnl, pos);
 
     // ── Catat ke DB (insert + langsung close) ────────────────────────────────
     if (this.sessionId) {
@@ -2136,7 +2166,7 @@ class BotEngine extends EventEmitter {
             this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
           }
 
-          this._updateRiskAfterClose(pnl);
+          this._updateRiskAfterClose(pnl, pos);
         }
 
         // Update stats untuk SETIAP sesi yang terlibat
@@ -2217,7 +2247,7 @@ class BotEngine extends EventEmitter {
                   if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
                     this.state.trades.push({ ...pos, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
                   }
-                  this._updateRiskAfterClose(pnl);
+                  this._updateRiskAfterClose(pnl, pos);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
                   this._releaseMarginIfFlat(); // lepas margin di koordinator (#5)
                   if (ownerSid === this.sessionId) this._syncSessionStats();
@@ -2291,7 +2321,7 @@ class BotEngine extends EventEmitter {
         });
 
         this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee, reason, closedAt: closeTime });
-        this._updateRiskAfterClose(pnl);
+        this._updateRiskAfterClose(pnl, pos);
         toClose.push(pos.id);
       }
     }
