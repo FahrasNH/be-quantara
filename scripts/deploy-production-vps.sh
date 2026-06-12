@@ -6,13 +6,13 @@
 #   cd /path/to/be-bot-trading && ./scripts/deploy-production-vps.sh
 #
 # Env:
-#   PM2_APP     — nama proses PM2 (default: be-quantara)
+#   PM2_APP     — nama proses PM2 (default: quantara — selaras ecosystem.config.js)
 #   GIT_BRANCH  — branch yang di-pull (default: main)
 
 set -euo pipefail
 
 BE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PM2_APP="${PM2_APP:-be-quantara-prod}"
+PM2_APP="${PM2_APP:-quantara}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 
 cd "${BE_DIR}"
@@ -57,7 +57,7 @@ if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
   pm2 restart "${PM2_APP}"
 else
   echo "==> pm2 start (app belum ada)..."
-  pm2 start ecosystem.config.js --only be-quantara-prod 2>/dev/null \
+  pm2 start ecosystem.config.js --only "${PM2_APP}" 2>/dev/null \
     || pm2 start index.js --name "${PM2_APP}"
 fi
 
