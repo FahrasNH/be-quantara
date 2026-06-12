@@ -286,6 +286,12 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
   // PUBLIC API
   // ─────────────────────────────────────────────
+  // Session ID aktif (array) — dipakai history.js untuk menandai sesi "ACTIVE".
+  // Engine tunggal = satu sesi.
+  getSessionIds() {
+    return this.sessionId ? [this.sessionId] : [];
+  }
+
   getState() {
     return {
       running:       this.state.running,
