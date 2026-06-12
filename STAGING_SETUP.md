@@ -7,7 +7,7 @@ Production dan staging berjalan berdampingan di VPS `staging.quantara.software`:
 | Lingkungan | URL | BE port | PM2 | BE path | FE path |
 |------------|-----|---------|-----|---------|---------|
 | Production | `https://quantara.software` | 3000 | `quantara` | `/opt/quantara/be` | `/var/www/quantara/fe` |
-| Staging | `http://staging.quantara.software:8080` | 3001 | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
+| Staging | `https://staging.quantara.software` | 3001 | `quantara-staging` | `/opt/quantara-staging/be` | `/var/www/quantara-staging/fe` |
 
 ## First-time setup (sekali saja)
 
