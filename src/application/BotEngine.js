@@ -1288,6 +1288,10 @@ class BotEngine extends EventEmitter {
         sl, tp, slDist, tpDist, atr,
       }),
     };
+    this._log("info",
+      `[TRADE] Fired by: ${enrichedSnapshot.firedByStrategy ?? "UNKNOWN"} | ` +
+      `SL: ${enrichedSnapshot.slMultiplier ?? "?"}xATR | TP: ${enrichedSnapshot.tpMultiplier ?? "?"}xATR`
+    );
 
     // Tentukan modal acuan untuk sizing.
     // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
