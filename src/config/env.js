@@ -140,6 +140,15 @@ const cfg = {
           "production, rotate key lalu re-encrypt semua API key exchange tersimpan."
         );
       }
+      // SEC-002 GAP2: ADMIN_SECRET memproteksi endpoint /api/v1/admin (assign tier
+      // tanpa billing). Tanpa validasi, nilai default lemah ("changeme") berarti
+      // siapa pun bisa self-upgrade tier di production.
+      const adminSecret = process.env.ADMIN_SECRET;
+      if (!adminSecret) {
+        errors.push("ADMIN_SECRET belum diset — endpoint /api/v1/admin tidak boleh aktif tanpa secret di production.");
+      } else if (adminSecret.length < 16 || /^(changeme|admin|secret|password)$/i.test(adminSecret)) {
+        errors.push("ADMIN_SECRET terlalu lemah (min 16 char, bukan nilai default). Generate: openssl rand -hex 24");
+      }
       // Gerbang konsistensi DB↔environment: cegah app production menunjuk ke
       // database staging (akar masalah insiden login 2026-06-10). Override
       // sengaja dengan ALLOW_DB_ENV_MISMATCH=1 jika memang satu DB dipakai bersama.

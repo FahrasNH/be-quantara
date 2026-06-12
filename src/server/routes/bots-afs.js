@@ -23,6 +23,10 @@ module.exports = function createBotsRouter(helpers) {
   const { analyzeStrategyFit } = require("../../domain/strategyAnalysis");
   const { getMarketSnapshot } = require("../services/MarketSnapshotService");
   const { issueConfirmToken, DEFAULT_MAX_AGE_MS } = require("../../infrastructure/security/confirmToken");
+  const { createBotOpLock } = require("../../middleware/botOpLock");
+  // SEC-002 GAP1: satu lock dibagi start+stop agar start & stop untuk bot yang
+  // sama juga saling-eksklusif, bukan hanya start vs start.
+  const botOpLock = createBotOpLock();
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
@@ -275,6 +279,7 @@ module.exports = function createBotsRouter(helpers) {
   router.post(
     "/:symbol/start",
     validateSymbolParam,
+    botOpLock,
     validateBotStartInput,
     strategyGuard,
     asyncHandler(async (req, res) => {
@@ -415,6 +420,7 @@ module.exports = function createBotsRouter(helpers) {
   router.post(
     "/:symbol/stop",
     validateSymbolParam,
+    botOpLock,
     emergencyStopConfirmGuard,
     asyncHandler(async (req, res) => {
       const userId = req.userId;

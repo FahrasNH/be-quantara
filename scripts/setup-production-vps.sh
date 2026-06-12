@@ -14,7 +14,7 @@ PROD_ROOT="/opt/quantara"
 BE_DIR="${PROD_ROOT}/be-bot-trading"
 REPO_URL="${QUANTARA_BE_REPO:-https://github.com/FahrasNH/be-quantara.git}"
 VPS_IP="${VPS_IP:-187.77.135.156}"
-PM2_APP="${PM2_APP:-be-quantara}"
+PM2_APP="${PM2_APP:-quantara}"
 DB_NAME="${PROD_DB_NAME:-bot_trading}"
 
 echo "==> Quantara production BE setup"
