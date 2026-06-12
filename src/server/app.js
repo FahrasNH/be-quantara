@@ -450,20 +450,25 @@ async function resumeRunningBots() {
 
     let resumed = 0, stopped = 0;
     for (const bot of bots) {
-      const creds = await getExchangeCredentials(bot.userId, "bitget");
-      const apiKey     = creds?.apiKey;
-      const apiSecret  = creds?.apiSecret;
-      const passphrase = creds?.apiPassphrase;
-
-      // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
-      if (!bot.dryRun && (!apiKey || !apiSecret)) {
-        await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
-        stopped++;
-        console.warn(`[Startup] Bot LIVE ${bot.symbol} tidak punya API key → stopped`);
-        continue;
-      }
-
+      // Resolusi kredensial DI DALAM try per-bot. Sebelumnya getExchangeCredentials
+      // dipanggil di luar try → bila gagal (mis. kolom DB hilang saat skema drift),
+      // exception naik ke outer catch dan MEMBATALKAN resume SEMUA bot → bot LIVE
+      // tampil mati lalu di-start ulang user dalam mode dry. Kini kegagalan satu bot
+      // hanya melewati bot itu, tidak menjatuhkan loop.
       try {
+        const creds = await getExchangeCredentials(bot.userId, "bitget");
+        const apiKey     = creds?.apiKey;
+        const apiSecret  = creds?.apiSecret;
+        const passphrase = creds?.apiPassphrase;
+
+        // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
+        if (!bot.dryRun && (!apiKey || !apiSecret)) {
+          await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
+          stopped++;
+          console.warn(`[Startup] Bot LIVE ${bot.symbol} tidak punya API key → stopped`);
+          continue;
+        }
+
         // Pilih path resume: multi-strategy jika flag ON.
         // Tanpa pengecekan ini setiap restart server akan selalu menjalankan BotEngine
         // legacy dengan strategyKey=ADAPTIVE_FUSION dari DB → log selalu "[ADAPTIVE_FUSION]".
