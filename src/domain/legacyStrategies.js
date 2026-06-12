@@ -243,7 +243,9 @@ const STRATEGIES = {
     // SL/TP overridden per-component in _handleSignal; these are fallback defaults
     atrMultiplier: 1.5,
     riskReward:    2.0,
-    atrMinMult:    0.2,
+    // 0.2 → 0.5: selaras dengan AdaptiveFusionStrategy.validateEntry (min 0.5%).
+    // Di bawah 0.5% SL 1–2×ATR berada di dalam noise normal candle 15m.
+    atrMinMult:    0.5,
     atrMaxMult:    4.0,
 
     higherTf:      "1h",
@@ -260,7 +262,10 @@ const STRATEGIES = {
     riskPerTrade:      0.015,
     maxDailyLossPct:   0.05,
     maxTradesPerDay:   10,
-    cooldownAfterLoss: 5,
+    // 5 → 30 menit: nilai 5 di sini diam-diam meng-override balik fix cooldown
+    // 30 menit di BotEngine (`strat.cooldownAfterLoss || 30`). Data dry-run
+    // 11–12 Jun: re-entry menit ke-6 setelah SL pada setup identik → loss ganda.
+    cooldownAfterLoss: 30,
     maxConsecLoss:     3,
 
     leverage:      2,
