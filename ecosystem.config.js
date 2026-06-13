@@ -5,7 +5,7 @@
  *   pm2 start ecosystem.config.js --only quantara
  *
  * Staging (dari /opt/quantara-staging/be-bot-trading):
- *   pm2 start ecosystem.config.js --only quantara-staging
+ *   pm2 start ecosystem.config.js --only be-quantara-staging
  *
  * OPS-003 hardening:
  *  - max_restarts + min_uptime: hentikan crash-loop (mis. env invalid) alih-alih
@@ -37,7 +37,7 @@ module.exports = {
       },
     },
     {
-      name:          "quantara-staging",
+      name:          "be-quantara-staging",
       script:        "index.js",
       cwd:           __dirname,
       instances:     1,
