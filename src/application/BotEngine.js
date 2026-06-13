@@ -889,16 +889,33 @@ class BotEngine extends EventEmitter {
       // Harga real-time untuk monitoring SL/TP (#7). `price` di atas = close candle
       // ke-2 terakhir (benar untuk deteksi sinyal, tapi BASI untuk cek SL/TP — pada
       // 15m bisa tertinggal s/d 15 menit). Gunakan ticker.last bila tersedia.
+      //
+      // BUG-TP-INTRABAR: deteksi SL/TP sebelumnya hanya pakai SATU titik harga
+      // (close/last). Wick yang menembus TP lalu retrace di dalam satu candle (atau
+      // di antara dua poll) tidak pernah terdeteksi → posisi yang harusnya kena TP
+      // malah berbalik ke SL. Fix: pakai HIGH/LOW candle berjalan (sudah merekam
+      // wick) sebagai rentang intrabar untuk cek SL/TP, bukan cuma close.
       let monitorPrice = price;
+      const formingBar = candles[candles.length - 1] || candles[lastIdx];
+      let barHigh = formingBar?.high ?? price;
+      let barLow  = formingBar?.low  ?? price;
       if (this.state.openPositions.length > 0 && this.client?.getTicker) {
         try {
           const ticker = await this.client.getTicker(this.config.symbol);
-          if (ticker?.last > 0) monitorPrice = ticker.last;
+          if (ticker?.last > 0) {
+            monitorPrice = ticker.last;
+            // ticker bisa lebih segar dari agregasi candle → perluas rentang.
+            barHigh = Math.max(barHigh, ticker.last);
+            barLow  = Math.min(barLow,  ticker.last);
+          }
         } catch { /* fallback ke close candle */ }
       }
+      // Rentang harus selalu mencakup harga monitor.
+      barHigh = Math.max(barHigh, monitorPrice);
+      barLow  = Math.min(barLow,  monitorPrice);
       this.state.lastPrice = monitorPrice;
 
-      await this._checkOpenPositions(monitorPrice, atr);
+      await this._checkOpenPositions(monitorPrice, atr, barHigh, barLow);
 
       // Lapor risk ke koordinator akun tiap tick (#5) — termasuk saat memegang
       // posisi — agar gate daily-loss agregat lintas-bot selalu pakai data segar.
@@ -2054,8 +2071,12 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
   // CHECK OPEN POSITIONS — tutup trade di DB
   // ─────────────────────────────────────────────
-  async _checkOpenPositions(price, atr) {
+  async _checkOpenPositions(price, atr, barHigh = price, barLow = price) {
     if (this.state.openPositions.length === 0) return;
+    // Rentang intrabar untuk deteksi SL/TP (BUG-TP-INTRABAR). Fallback ke `price`
+    // bila pemanggil lama tidak mengirim high/low (mis. test / jalur internal).
+    if (!Number.isFinite(barHigh)) barHigh = price;
+    if (!Number.isFinite(barLow))  barLow  = price;
 
     if (!this.config.dryRun) {
       try {
@@ -2208,10 +2229,13 @@ class BotEngine extends EventEmitter {
 
           // Jika SL/TP gagal dipasang tadi, monitor manual sekarang
           if (pos.manualSLTP) {
-            const hitSL = pos.side === "LONG" ? price <= pos.sl : price >= pos.sl;
-            const hitTP = pos.side === "LONG" ? price >= pos.tp : price <= pos.tp;
+            // Intrabar (BUG-TP-INTRABAR): TP kena bila high menembus TP, SL kena
+            // bila low menembus SL — bukan cuma satu titik harga.
+            const hitSL = pos.side === "LONG" ? barLow  <= pos.sl : barHigh >= pos.sl;
+            const hitTP = pos.side === "LONG" ? barHigh >= pos.tp : barLow  <= pos.tp;
             if (hitSL || hitTP) {
-              const reason = hitTP ? "TP" : "SL";
+              // Bila satu bar menyentuh dua-duanya → asumsikan SL lebih dulu (konservatif).
+              const reason = hitSL ? "SL" : "TP";
               this._log("warn", `Manual close ${pos.side} — ${reason} (manual monitor) @ $${price.toFixed(2)}`);
               try {
                 await this.client.closePosition(
@@ -2237,15 +2261,15 @@ class BotEngine extends EventEmitter {
                     );
                   }
                   if (!exitPrice) {
-                    // manualSLTP sudah tahu sisi mana yang hit
-                    exitPrice = hitTP ? (pos.tp || price) : (pos.sl || price);
+                    // SL diprioritaskan bila keduanya kena dalam satu bar (konservatif)
+                    exitPrice = hitSL ? (pos.sl || price) : (pos.tp || price);
                   }
                   const pnl = pos.side === "LONG"
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
                   const fee = await this._resolveFee(pos, exitPrice, pos.size);
                   if (pos.dbId) {
-                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitTP ? "TP" : "SL", closeTime: new Date().toISOString() }); } catch {}
+                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitSL ? "SL" : "TP", closeTime: new Date().toISOString() }); } catch {}
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
                   if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
@@ -2274,12 +2298,17 @@ class BotEngine extends EventEmitter {
       // ── SL+ milestone check (dry run) ─────────────────────────────────────
       await this._checkSLPlusMilestones(pos, price);
 
-      // Cek SL / TP dengan harga & SL terkini (pos.sl sudah diperbarui oleh milestone)
-      const hitTP = pos.side === "LONG" ? price >= pos.tp : price <= pos.tp;
-      const hitSL = pos.side === "LONG" ? price <= pos.sl : price >= pos.sl;
+      // Cek SL / TP secara INTRABAR (BUG-TP-INTRABAR): TP kena bila HIGH menembus
+      // TP, SL kena bila LOW menembus SL — bukan cuma close/last (yang melewatkan
+      // wick). pos.sl/pos.tp sudah diperbarui oleh milestone bila aktif.
+      const hitTP = pos.side === "LONG" ? barHigh >= pos.tp : barLow  <= pos.tp;
+      const hitSL = pos.side === "LONG" ? barLow  <= pos.sl : barHigh >= pos.sl;
 
       if (hitTP || hitSL) {
-        const exitPrice = hitTP ? pos.tp : pos.sl;
+        // Bila satu bar menyentuh SL & TP sekaligus → asumsikan SL lebih dulu
+        // (konservatif; urutan intrabar tak bisa dipastikan tanpa data tick).
+        const isTP      = hitTP && !hitSL;
+        const exitPrice = isTP ? pos.tp : pos.sl;
         // Pakai remainingSize (bukan size asli) — partial sudah dicatat terpisah
         const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
         const pnl       = pos.side === "LONG"
@@ -2295,11 +2324,11 @@ class BotEngine extends EventEmitter {
           ? pos.marginReserved
           : pos.entry * remaining * this.config.riskPerTrade;
         this.state.capital += pnl - fee + marginBack;
-        const reason    = hitTP ? "TP" : "SL";
+        const reason    = isTP ? "TP" : "SL";
         const closeTime = Date.now();
 
-        this._sep(`POSISI DITUTUP — ${hitTP ? "TAKE PROFIT" : "STOP LOSS"}`);
-        this._log("trade", `CLOSE ${pos.side} — ${hitTP ? "TAKE PROFIT" : "STOP LOSS"}`);
+        this._sep(`POSISI DITUTUP — ${isTP ? "TAKE PROFIT" : "STOP LOSS"}`);
+        this._log("trade", `CLOSE ${pos.side} — ${isTP ? "TAKE PROFIT" : "STOP LOSS"}`);
         this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
         this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
         if (pos.m1 || pos.m2) {
