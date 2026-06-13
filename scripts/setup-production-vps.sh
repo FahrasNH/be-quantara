@@ -14,7 +14,7 @@ PROD_ROOT="/opt/quantara"
 BE_DIR="${PROD_ROOT}/be-bot-trading"
 REPO_URL="${QUANTARA_BE_REPO:-https://github.com/FahrasNH/be-quantara.git}"
 VPS_IP="${VPS_IP:-187.77.135.156}"
-PM2_APP="${PM2_APP:-quantara}"
+PM2_APP="${PM2_APP:-be-quantara-prod}"
 DB_NAME="${PROD_DB_NAME:-bot_trading}"
 
 echo "==> Quantara production BE setup"
@@ -72,7 +72,7 @@ if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
   pm2 restart "${PM2_APP}"
 else
   echo "==> pm2 start ${PM2_APP}..."
-  pm2 start ecosystem.config.js --only quantara 2>/dev/null \
+  pm2 start ecosystem.config.js --only be-quantara-prod 2>/dev/null \
     || pm2 start index.js --name "${PM2_APP}"
 fi
 pm2 save
