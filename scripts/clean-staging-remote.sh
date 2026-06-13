@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VPS_HOST="${VPS_HOST:-root@187.77.135.156}"
-REMOTE_BE="${REMOTE_BE:-/opt/quantara-staging/be-bot-trading}"
+REMOTE_BE="${REMOTE_BE:-/opt/quantara-staging/be}"
 EXTRA_ARGS=()
 
 for arg in "$@"; do
