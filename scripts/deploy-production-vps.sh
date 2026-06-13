@@ -6,13 +6,13 @@
 #   cd /path/to/be-bot-trading && ./scripts/deploy-production-vps.sh
 #
 # Env:
-#   PM2_APP     — nama proses PM2 (default: quantara — selaras ecosystem.config.js)
+#   PM2_APP     — nama proses PM2 (default: be-quantara-prod — selaras ecosystem.config.js)
 #   GIT_BRANCH  — branch yang di-pull (default: main)
 
 set -euo pipefail
 
 BE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PM2_APP="${PM2_APP:-quantara}"
+PM2_APP="${PM2_APP:-be-quantara-prod}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 
 cd "${BE_DIR}"
