@@ -2,7 +2,7 @@
  * PM2 — production (port 3000) + staging (port 3001)
  *
  * Production (dari folder prod):
- *   pm2 start ecosystem.config.js --only quantara
+ *   pm2 start ecosystem.config.js --only be-quantara-prod
  *
  * Staging (dari /opt/quantara-staging/be-bot-trading):
  *   pm2 start ecosystem.config.js --only be-quantara-staging
@@ -18,7 +18,7 @@
 module.exports = {
   apps: [
     {
-      name:          "quantara",
+      name:          "be-quantara-prod",
       script:        "index.js",
       cwd:           __dirname,
       instances:     1,
@@ -27,8 +27,8 @@ module.exports = {
       min_uptime:    "30s",
       kill_timeout:  30000,
       max_memory_restart: "512M",
-      error_file:    "logs/quantara.err.log",
-      out_file:      "logs/quantara.out.log",
+      error_file:    "logs/be-quantara-prod.err.log",
+      out_file:      "logs/be-quantara-prod.out.log",
       merge_logs:    true,
       time:          true,
       env: {
