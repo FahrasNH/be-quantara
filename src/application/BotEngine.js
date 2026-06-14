@@ -1097,6 +1097,35 @@ class BotEngine extends EventEmitter {
               }
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
+              // ── Diagnostic: log kenapa tidak ada entry (setiap 5 tick) ──────
+              // Bantu debug tanpa spam log. Tampil di Live Bot log panel.
+              if (this.state.checkCount % 5 === 1) {
+                const rsiMin = this.config.rsiLongMin ?? 50;
+                const rsiMax = this.config.rsiLongMax ?? 70;
+                const emaOk  = emaF > emaS;
+                const rsiOk  = rsi != null && rsi >= rsiMin && rsi <= rsiMax;
+                const vol    = indicators.volumes?.[lastIdx] ?? 0;
+                const volAvg = indicators.volSMA?.[lastIdx]  ?? 0;
+                const volOk  = !volAvg || vol >= volAvg * this.config.volSmaMultiplier;
+                const htfOk  = !this.config.higherTf ||
+                               this.state.htfTrend === "BULLISH" ||
+                               this.state.htfTrend === "SIDEWAYS";
+
+                const reasons = [];
+                if (!emaOk)    reasons.push(`EMA${this.config.emaFast}<EMA${this.config.emaSlow} (trend belum bullish)`);
+                if (!htfOk)    reasons.push(`HTF ${this.config.higherTf}=${this.state.htfTrend} (bukan BULLISH)`);
+                if (!rsiOk && rsi != null) {
+                  const tag = rsi > rsiMax ? "overbought—tunggu pullback" : "terlalu rendah";
+                  reasons.push(`RSI=${rsi.toFixed(1)} di luar zona ${rsiMin}–${rsiMax} (${tag})`);
+                }
+                if (!volOk && volAvg > 0) {
+                  reasons.push(`Volume ${(vol / volAvg).toFixed(2)}x SMA (perlu ≥${this.config.volSmaMultiplier}x)`);
+                }
+                if (reasons.length === 0) {
+                  reasons.push(`RSI pullback-bounce pattern belum terpenuhi (RSI=${rsi?.toFixed(1)}, perlu pullback ke ${rsiMin}–${rsiMax} lalu naik)`);
+                }
+                this._log("info", `[WAIT] ${reasons.join(" | ")}`);
+              }
             }
           }
         }
