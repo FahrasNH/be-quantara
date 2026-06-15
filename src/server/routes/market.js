@@ -59,24 +59,12 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
     }
   });
 
-  // Balance dari exchange
-  router.get("/balance", async (req, res) => {
-    try {
-      res.json(await sharedClient.getBalance("USDT"));
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Posisi terbuka
-  router.get("/positions", async (req, res) => {
-    try {
-      const sym = req.query.symbol?.toUpperCase() || SYMBOLS_LIST[0] || "BTCUSDT";
-      res.json(await sharedClient.getPositions(sym));
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // SEC-MKT-1 (removed 2026-06-16): GET /market/balance and GET /market/positions
+  // were backed by `sharedClient` (operator ENV keys), so they returned the
+  // OPERATOR account's balance/positions to any authenticated user — an
+  // information-disclosure smell. Both were dead endpoints (no FE caller; the FE
+  // uses /account/exchange-balance and per-bot WebSocket state for live positions).
+  // Per-user balance/positions are served by /account/* with the user's own creds.
 
   // Candles terkini
   router.get("/candles", async (req, res) => {
