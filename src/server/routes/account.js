@@ -183,6 +183,47 @@ module.exports = function createAccountRouter() {
         });
       }
 
+      // ── Task C: Binance API key permission validation ────────────────────
+      // Reject keys with withdrawal permission or without futures permission.
+      // Validation runs BEFORE storage — a failing key is never persisted (AC-3).
+      // Outcome is written to the audit log either way (AC-4).
+      if (exchangeType?.toLowerCase() === "binance") {
+        const ExchangeService = require("../../services/ExchangeService");
+        try {
+          const detail = await ExchangeService.validateExchangeKey("binance", {
+            apiKey,
+            apiSecret,
+          });
+          await prisma.auditLog.create({
+            data: {
+              userId,
+              action: "EXCHANGE_KEY_VALIDATED",
+              resource: "UserExchange",
+              details: JSON.stringify({ exchange: "binance", result: "passed", ...detail.detail }),
+              ipAddress: req.ip ?? null,
+              userAgent: req.headers["user-agent"] ?? null,
+            },
+          });
+        } catch (err) {
+          await prisma.auditLog.create({
+            data: {
+              userId,
+              action: "EXCHANGE_KEY_REJECTED",
+              resource: "UserExchange",
+              details: JSON.stringify({ exchange: "binance", code: err.code, reason: err.message }),
+              ipAddress: req.ip ?? null,
+              userAgent: req.headers["user-agent"] ?? null,
+            },
+          }).catch(() => {});
+          return res.status(err.statusCode || 400).json({
+            ok: false,
+            statusCode: err.statusCode || 400,
+            code: err.code || "BINANCE_VALIDATION_FAILED",
+            message: err.message,
+          });
+        }
+      }
+
       try {
         const result = await upsertExchange(userId, {
           apiKey,
