@@ -16,7 +16,6 @@ All routes are mounted under `/api/v1/market` behind `authMiddleware` (Bearer JW
 |--------|------|------|--------------|-------------|-------|
 | GET | `/market/symbols` | ✅ | ✅ by `req.userId` | Per-exchange public CCXT `loadMarkets` | **New (Task A).** Returns the user's connected exchange's USDT-M linear perpetual pairs. 5-min cache + stale fallback. Rate-limited 10/min/user. |
 | GET | `/market/tickers` | ✅ | ➖ public data | `sharedClient` (env keys) | Public last-price/24h. No user data. |
-| GET | `/market/positions` | ✅ | ⚠️ shared account | `sharedClient` (env keys) | See audit finding **SEC-MKT-1**. |
 | GET | `/market/candles` | ✅ | partial (`getBot` for interval) | `sharedClient` + cache | Public OHLCV. |
 | GET | `/market/candles/backtest` | ✅ | ➖ public data | `sharedClient` + cache | Public OHLCV (paginated). |
 
@@ -84,25 +83,28 @@ JWT), never to a spoofable param/body.
 | `GET /market/tickers` | No — public prices | n/a | ✅ no user data |
 | `GET /market/candles` | No — public OHLCV (`getBot(req.userId,…)` only for interval default) | `req.userId` (JWT) | ✅ no leak |
 | `GET /market/candles/backtest` | No — public OHLCV | n/a | ✅ no user data |
-| `GET /market/positions` | **Operator's shared account** positions | n/a (env keys) | ⚠️ **SEC-MKT-1** |
 
 **Conclusion (AC-6):** No cross-user IDOR found. `req.userId` always comes from the
 verified JWT payload (`authMiddleware`), never from request params/body. The new
 `/market/symbols` endpoint cannot return another user's data — it only ever reads
 the caller's own `UserExchange` record to pick which *public* list to serve.
 
-### Finding SEC-MKT-1 (pre-existing, not introduced by this work)
+### Finding SEC-MKT-1 — ✅ RESOLVED (2026-06-16)
 
-`GET /market/positions` calls `sharedClient.getPositions(sym)`, where `sharedClient`
-is built from **operator ENV keys** — so any authenticated user receives the
-operator account's open positions. This is **not** cross-user IDOR (no per-user
-private data leaks between users), but it is an information-disclosure smell:
-per-user position data should come from the user's own exchange credentials.
+`GET /market/positions` (and the adjacent `GET /market/balance`) called
+`sharedClient.getPositions/getBalance`, where `sharedClient` is built from
+**operator ENV keys** — so any authenticated user received the *operator* account's
+positions/balance. Not cross-user IDOR (no per-user data leaked between users), but
+an information-disclosure smell.
 
-- **Severity:** P3 (no per-user data leak; exposes shared operator account only).
-- **Recommendation:** scope to the user's own creds (like `/account/exchange-balance`)
-  or remove the endpoint if the FE relies on per-bot WS state instead.
-- **Status:** filed as a separate follow-up task; **not a Binance go-live blocker.**
+- **Severity:** P3.
+- **Resolution:** **both endpoints removed.** They were dead (no FE caller — the
+  only consumer, the FE `usePositions` hook, was unused dead code; live positions
+  come from per-bot WebSocket state, and balance from `/account/exchange-balance`
+  with the user's own creds). Removing them closes the exposure entirely rather than
+  maintaining unused routes. FE `usePositions.js` + `botApi.positions()` also deleted.
+- **Per-user data:** still served by `/account/exchange-balance` (own creds) and
+  per-bot WS `openPositions`.
 
 ### Encryption verification (AC-8)
 
