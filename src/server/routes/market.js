@@ -4,6 +4,8 @@
 
 const { Router } = require("express");
 const db = require("../../infrastructure/db/database");
+const ExchangeService = require("../../services/ExchangeService");
+const { symbolsRateLimiter } = require("../../middleware/marketRateLimiter");
 
 // parseInt yang aman — kembalikan `def` jika nilai tidak finite
 const safeInt = (val, def = 0) => {
@@ -20,6 +22,26 @@ const INTERVAL_MS = {
 
 module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBOLS_LIST }) {
   const router = Router();
+
+  // ── Daftar simbol perpetual dari exchange yang terhubung user ──────────────
+  // IDOR-safe: ExchangeService memakai req.userId (dari JWT) untuk menentukan
+  // exchange milik user sendiri, lalu mengembalikan daftar simbol PUBLIK exchange
+  // itu. Rate-limited 10/menit per user (anti-abuse API exchange).
+  router.get("/symbols", symbolsRateLimiter, async (req, res) => {
+    try {
+      const { exchange, symbols, cached, stale } =
+        await ExchangeService.getPerpetualSymbols(req.userId);
+      res.json({ ok: true, exchange, symbols, cached, stale });
+    } catch (err) {
+      const status = err.statusCode || 500;
+      res.status(status).json({
+        ok: false,
+        statusCode: status,
+        code: err.code || "SYMBOLS_ERROR",
+        message: err.message,
+      });
+    }
+  });
 
   // Ticker harga real-time
   router.get("/tickers", async (req, res) => {
