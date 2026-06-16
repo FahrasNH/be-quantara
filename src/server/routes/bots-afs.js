@@ -374,7 +374,9 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       const { getExchangeCredentials } = require("../../services/userExchange");
-      const creds = await getExchangeCredentials(userId, "bitget");
+      const { getConnectedExchange } = require("../../services/ExchangeService");
+      const connectedExchange = await getConnectedExchange(userId);
+      const creds = await getExchangeCredentials(userId, connectedExchange || "bitget");
 
       const decryptedApiKey     = creds?.apiKey;
       const decryptedApiSecret  = creds?.apiSecret;

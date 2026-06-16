@@ -484,7 +484,9 @@ async function resumeRunningBots() {
       // tampil mati lalu di-start ulang user dalam mode dry. Kini kegagalan satu bot
       // hanya melewati bot itu, tidak menjatuhkan loop.
       try {
-        const creds = await getExchangeCredentials(bot.userId, "bitget");
+        const { getConnectedExchange } = require("../services/ExchangeService");
+        const connectedExchange = await getConnectedExchange(bot.userId);
+        const creds = await getExchangeCredentials(bot.userId, connectedExchange || "bitget");
         const apiKey     = creds?.apiKey;
         const apiSecret  = creds?.apiSecret;
         const passphrase = creds?.apiPassphrase;
