@@ -495,10 +495,15 @@ async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reaso
     pnlGross === 0;
   const status = isZeroFill ? "cancelled" : "closed";
 
-  await pool.query(
+  // IDEMPOTENT (anti double-book): hanya tutup record yang MASIH terbuka
+  // (close_time IS NULL). Bila dua engine/dua proses (mis. resume race lintas
+  // restart, atau akun ber-netting yang dibaca banyak engine) mencoba menutup
+  // trade yang sama, hanya penulis PERTAMA yang berlaku; sisanya no-op.
+  // Mengembalikan { applied } agar pemanggil melewati log/notifikasi/stats ganda.
+  const { rowCount } = await pool.query(
     `UPDATE trades
      SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8, status = $9
-     WHERE id = $1`,
+     WHERE id = $1 AND close_time IS NULL`,
     [
       tradeId,
       exitPrice,
@@ -511,6 +516,7 @@ async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reaso
       status,
     ]
   );
+  return { applied: rowCount === 1 };
 }
 
 async function getTrades({ sessionId = null, symbol = null, limit = 100, userId = null } = {}) {
@@ -804,14 +810,24 @@ async function getInsights({ symbol = null, dryRun = null, limit = 500, userId =
  * Ambil semua posisi terbuka (close_time IS NULL) untuk symbol tertentu,
  * lintas SEMUA sesi — digunakan saat bot restart untuk restore posisi lama.
  */
-async function getOpenTradesBySymbol(symbol) {
+async function getOpenTradesBySymbol(symbol, userId = null) {
+  // FIX IDOR/cross-user: bila userId diberikan, HANYA kembalikan orphan dari sesi
+  // milik user tsb. Tanpa ini, engine user A bisa meng-klaim & menutup posisi
+  // terbuka milik user B pada simbol yang sama (akun terpisah → data bocor + PnL
+  // salah). userId null hanya untuk pemakaian internal/tes tanpa konteks user.
+  const params = [symbol];
+  let ownership = "";
+  if (userId != null) {
+    params.push(userId);
+    ownership = ` AND s.user_id = $${params.length}`;
+  }
   const { rows } = await pool.query(
     `SELECT t.*, s.exchange AS _exchange
      FROM trades t
      JOIN bot_sessions s ON s.id = t.session_id
-     WHERE t.symbol = $1 AND t.close_time IS NULL
+     WHERE t.symbol = $1 AND t.close_time IS NULL${ownership}
      ORDER BY t.open_time ASC`,
-    [symbol]
+    params
   );
   return rows;
 }

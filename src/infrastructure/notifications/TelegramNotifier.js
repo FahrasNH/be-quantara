@@ -153,6 +153,22 @@ function notifyClose(trade) {
   return send(lines);
 }
 
+/**
+ * Alert operasional (mis. gagal tutup trade di DB / posisi tanpa record) —
+ * dipakai untuk memunculkan kegagalan yang sebelumnya tertelan `catch {}` senyap.
+ * @param {string} message
+ */
+function notifyError(message) {
+  const lines = [
+    `🚨 <b>QUANTARA ALERT</b>`,
+    ``,
+    `<code>${String(message).slice(0, 500)}</code>`,
+    ``,
+    `🕐 <i>${nowStr()} WIB</i>`,
+  ].join("\n");
+  return send(lines);
+}
+
 // ── Export ────────────────────────────────────────────────────────────────
 
-module.exports = { send, notifyOpen, notifyClose, enabled: ENABLED };
+module.exports = { send, notifyOpen, notifyClose, notifyError, enabled: ENABLED };
