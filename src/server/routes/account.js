@@ -1,6 +1,7 @@
 const { asyncHandler } = require("../../middleware/errorHandler");
 const { PrismaClient } = require("@prisma/client");
 const BitgetClient = require("../../infrastructure/exchange/BitgetClient");
+const BinanceClient = require("../../infrastructure/exchange/BinanceClient");
 const {
   listExchangesMasked,
   getExchangeCredentials,
@@ -16,6 +17,34 @@ const prisma = new PrismaClient();
 // Cache balance per-user untuk hindari rate-limit Bitget (TTL 60s)
 const balanceCache = new Map(); // userId -> { ts, data }
 const BALANCE_TTL = 60_000;
+
+/** Ambil saldo futures USDT dari exchange yang terhubung. */
+async function fetchLiveExchangeBalance(exchangeType, creds) {
+  const type = (exchangeType || "bitget").toLowerCase();
+  if (type === "bitget") {
+    const client = new BitgetClient(creds.apiKey, creds.apiSecret, creds.apiPassphrase);
+    return client.getBalance("USDT");
+  }
+  if (type === "binance") {
+    const client = new BinanceClient(creds.apiKey, creds.apiSecret);
+    return client.getBalance("USDT");
+  }
+  if (type === "okx") {
+    const ccxt = require("ccxt");
+    const ex = new ccxt.okx({
+      apiKey: creds.apiKey,
+      secret: creds.apiSecret,
+      password: creds.apiPassphrase || "",
+      enableRateLimit: true,
+      options: { defaultType: "swap" },
+    });
+    const balance = await ex.fetchBalance({ type: "swap" });
+    const free = balance?.free?.USDT ?? 0;
+    const total = balance?.total?.USDT ?? free;
+    return { available: free, equity: total, unrealizedPL: 0 };
+  }
+  throw new Error(`Exchange "${type}" tidak didukung untuk balance`);
+}
 
 module.exports = function createAccountRouter(helpers = {}) {
   const { stopAllUserBotsInMemory } = helpers;
@@ -51,7 +80,11 @@ module.exports = function createAccountRouter(helpers = {}) {
     "/exchange-balance",
     asyncHandler(async (req, res) => {
       const userId = req.userId;
-      const exchangeType = req.query.exchangeType || "bitget";
+      const exchangeType = (
+        req.query.exchangeType ||
+        (await ExchangeService.getConnectedExchange(userId)) ||
+        "bitget"
+      ).toLowerCase();
 
       const cached = balanceCache.get(`${userId}:${exchangeType}`);
       if (cached && Date.now() - cached.ts < BALANCE_TTL) {
@@ -74,22 +107,8 @@ module.exports = function createAccountRouter(helpers = {}) {
         return res.json(notConnected);
       }
 
-      if (exchangeType !== "bitget") {
-        return res.json({
-          ok: false,
-          configured: true,
-          exchangeType,
-          message: `Balance untuk ${exchangeType} belum didukung`,
-          currency: "USDT",
-          available: 0,
-          equity: 0,
-          unrealizedPL: 0,
-        });
-      }
-
       try {
-        const client = new BitgetClient(creds.apiKey, creds.apiSecret, creds.apiPassphrase);
-        const balance = await client.getBalance("USDT");
+        const balance = await fetchLiveExchangeBalance(exchangeType, creds);
         const data = {
           ok: true,
           configured: true,
