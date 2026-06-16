@@ -177,6 +177,20 @@ function removeBotInstance(userId, symbol) {
   return true;
 }
 
+/** Hentikan & buang semua BotEngine in-memory user (dipakai saat ganti exchange). */
+function stopAllUserBotsInMemory(userId) {
+  const prefix = `${userId}:`;
+  for (const [key, instance] of Object.entries(botsMap)) {
+    if (!key.startsWith(prefix)) continue;
+    try {
+      if (instance.getState?.().running) instance.stop();
+    } catch { /* abaikan */ }
+    const sym = instance.config?.symbol ?? key.slice(prefix.length);
+    removeBotInstance(userId, sym);
+  }
+  delete coordinatorsMap[userId];
+}
+
 function createBotInstance(userId, symbol, configOverrides = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
@@ -302,7 +316,7 @@ app.use("/api/v1/backtest", authMiddleware, createBacktestRouter({ SYMBOLS_LIST:
 app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_LIST: cfg.symbolsList }));
 
 // Account routes (protected)
-app.use("/api/v1/account", authMiddleware, createAccountRouter());
+app.use("/api/v1/account", authMiddleware, createAccountRouter({ stopAllUserBotsInMemory }));
 app.use("/api/v1/subscription", authMiddleware, createSubscriptionRouter());
 app.use("/api/v1/admin",   createAdminRouter()); // no authMiddleware — protected by ADMIN_SECRET header
 

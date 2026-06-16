@@ -61,8 +61,13 @@ module.exports = function createBotsRouter(helpers) {
         ...live,
         id:          botRecord.id,
         botId:       botRecord.symbol,
-        running:     live.running,
+        // DB adalah sumber kebenaran setelah exchange switch / graceful stop.
+        running:     botRecord.running ? live.running : false,
         strategyKey: botRecord.strategyKey,
+        params: {
+          leverage:     instance.config?.leverage ?? null,
+          riskPerTrade: instance.config?.riskPerTrade ?? null,
+        },
         // Multi-Strategy per Coin: jika instance adalah koordinator, live.multiStrategy
         // + live.strategyGroup + live.engines ikut tersurfacing ke FE (badge per-strategi).
         strategyGroup: live.strategyGroup ?? botRecord.strategyGroup ?? [],
