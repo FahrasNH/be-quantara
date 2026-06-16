@@ -27,6 +27,8 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+bash scripts/ensure-allowed-exchanges.sh .env
+
 echo "==> git pull origin ${GIT_BRANCH}..."
 git pull origin "${GIT_BRANCH}"
 
@@ -54,7 +56,7 @@ fi
 
 if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
   echo "==> pm2 restart ${PM2_APP}..."
-  pm2 restart "${PM2_APP}"
+  pm2 restart "${PM2_APP}" --update-env
 else
   echo "==> pm2 start (app belum ada)..."
   pm2 start ecosystem.config.js --only "${PM2_APP}" 2>/dev/null \

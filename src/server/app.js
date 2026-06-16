@@ -276,12 +276,13 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
 
 // ── Routes ────────────────────────────────────────────────────────────────
 
-// Health check (public)
+# Health check (public)
 const healthHandler = (req, res) => {
   res.json({
     ok: true,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    allowedExchanges: cfg.allowedExchanges,
   });
 };
 

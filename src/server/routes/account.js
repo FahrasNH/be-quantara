@@ -177,7 +177,7 @@ module.exports = function createAccountRouter(helpers = {}) {
       const exchangeType = (req.body.exchangeType || "bitget").toLowerCase();
       const { apiKey, apiSecret, apiPassphrase } = req.body;
 
-      // Validate exchange against allowed list (production: bitget only)
+      // Validate exchange against allowed list
       const allowedExchanges = cfg.allowedExchanges;
       if (allowedExchanges && !allowedExchanges.includes(exchangeType)) {
         return res.status(403).json({
@@ -357,7 +357,8 @@ module.exports = function createAccountRouter(helpers = {}) {
     "/exchange/switch",
     asyncHandler(async (req, res) => {
       const { switchExchange } = require("../../services/exchangeSwitch");
-      const { newExchange, apiKey, secretKey, passphrase } = req.body;
+      const newExchange = (req.body.newExchange || "").toLowerCase();
+      const { apiKey, secretKey, passphrase } = req.body;
       if (!newExchange || !apiKey || !secretKey) {
         return res.status(400).json({
           ok: false,
@@ -365,6 +366,16 @@ module.exports = function createAccountRouter(helpers = {}) {
           message: "newExchange, apiKey, dan secretKey wajib diisi.",
         });
       }
+
+      const allowedExchanges = cfg.allowedExchanges;
+      if (allowedExchanges && !allowedExchanges.includes(newExchange)) {
+        return res.status(403).json({
+          ok: false,
+          statusCode: 403,
+          message: `Exchange "${newExchange}" tidak didukung. Hanya ${allowedExchanges.join(", ")} yang tersedia saat ini.`,
+        });
+      }
+
       if (stopAllUserBotsInMemory) stopAllUserBotsInMemory(req.userId);
 
       const result = await switchExchange(req.userId, {
