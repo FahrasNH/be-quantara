@@ -404,5 +404,56 @@ module.exports = function createAccountRouter(helpers = {}) {
     })
   );
 
+  // ── Telegram notification settings ────────────────────────────────────────
+  // GET  /account/telegram  → { telegramChatId: string|null, enabled: bool }
+  // PUT  /account/telegram  → { telegramChatId } → save per-user chat ID
+  // DELETE /account/telegram → clear / disable notifications
+
+  router.get(
+    "/telegram",
+    asyncHandler(async (req, res) => {
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId },
+        select: { telegramChatId: true },
+      });
+      res.json({
+        ok: true,
+        telegramChatId: user?.telegramChatId ?? null,
+        enabled: !!(user?.telegramChatId),
+        botUsername: "quantara_trading_bot",
+      });
+    })
+  );
+
+  router.put(
+    "/telegram",
+    asyncHandler(async (req, res) => {
+      const { telegramChatId } = req.body;
+      if (!telegramChatId || typeof telegramChatId !== "string" || !telegramChatId.trim()) {
+        return res.status(400).json({ ok: false, message: "telegramChatId wajib diisi dan tidak boleh kosong." });
+      }
+      // Basic validation: Telegram chat IDs are numeric strings (may be negative for groups)
+      if (!/^-?\d+$/.test(telegramChatId.trim())) {
+        return res.status(400).json({ ok: false, message: "Chat ID tidak valid. Harus berupa angka dari Telegram." });
+      }
+      await prisma.user.update({
+        where: { id: req.userId },
+        data: { telegramChatId: telegramChatId.trim() },
+      });
+      res.json({ ok: true, message: "Telegram Chat ID berhasil disimpan. Notifikasi akan dikirim ke akun Anda." });
+    })
+  );
+
+  router.delete(
+    "/telegram",
+    asyncHandler(async (req, res) => {
+      await prisma.user.update({
+        where: { id: req.userId },
+        data: { telegramChatId: null },
+      });
+      res.json({ ok: true, message: "Integrasi Telegram berhasil dinonaktifkan." });
+    })
+  );
+
   return router;
 };

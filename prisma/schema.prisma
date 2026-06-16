@@ -22,6 +22,9 @@ model User {
   // cannot be connected by two different users (prevents bot conflicts).
   apiKeyHash    String?  @unique
 
+  // Telegram integration — user memasukkan chat ID dari @quantara_trading_bot
+  telegramChatId String?
+
   bots       Bot[]
   strategies UserStrategy[]
   auditLogs  AuditLog[]

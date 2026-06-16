@@ -17,26 +17,30 @@
 const cfg = require("../../config/env");
 
 const TG_TOKEN = cfg.TELEGRAM_BOT_TOKEN;
-const TG_CHAT_ID = cfg.TELEGRAM_CHAT_ID;
-const hasCreds = !!(TG_TOKEN && TG_CHAT_ID);
-const ENABLED = hasCreds && cfg.NODE_ENV !== "development";
+// TG_CHAT_ID dari env sekarang hanya sebagai fallback legacy.
+// Per-user chat ID diambil dari DB dan diteruskan saat memanggil notify*.
+const TG_CHAT_ID_FALLBACK = cfg.TELEGRAM_CHAT_ID;
+const hasToken = !!(TG_TOKEN);
+const ENABLED = hasToken && cfg.NODE_ENV !== "development";
 
-if (!hasCreds) {
-  console.log("[Notifier] Notifikasi Telegram NONAKTIF — set TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID di .env");
+if (!hasToken) {
+  console.log("[Notifier] Notifikasi Telegram NONAKTIF — set TELEGRAM_BOT_TOKEN di .env");
 } else if (cfg.NODE_ENV === "development") {
   console.log("[Notifier] Notifikasi Telegram NONAKTIF — dimatikan di development");
 } else {
-  console.log(`[Notifier] ✅ Notifikasi Telegram AKTIF → Chat ID: ${TG_CHAT_ID}`);
+  console.log(`[Notifier] ✅ Notifikasi Telegram AKTIF (bot @quantara_trading_bot). Per-user chat ID dari DB.`);
 }
 
 // ── Core send ke Telegram ──────────────────────────────────────────────────
+// chatId: gunakan user's chat ID jika ada, fallback ke env TELEGRAM_CHAT_ID (legacy)
 
-async function send(text, parseMode = "HTML") {
-  if (!ENABLED) return;
+async function send(text, parseMode = "HTML", chatId = null) {
+  const targetChatId = chatId || TG_CHAT_ID_FALLBACK;
+  if (!ENABLED || !targetChatId) return;
   try {
     const url  = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
     const body = JSON.stringify({
-      chat_id:    TG_CHAT_ID,
+      chat_id:    targetChatId,
       text,
       parse_mode: parseMode,
     });
@@ -83,12 +87,12 @@ function nowStr() {
 // ── Notifikasi Open Posisi ─────────────────────────────────────────────────
 
 /**
- * @param {{ symbol, side, entryPrice, size, sl, tp, leverage, dryRun }} trade
+ * @param {{ symbol, side, entryPrice, size, sl, tp, leverage, dryRun, chatId }} trade
  */
 function notifyOpen(trade) {
   const {
     symbol, side, entryPrice, size,
-    sl, tp, leverage = 1, dryRun = false,
+    sl, tp, leverage = 1, dryRun = false, chatId = null,
   } = trade;
 
   const coin      = symbol.replace("USDT", "");
@@ -109,18 +113,18 @@ function notifyOpen(trade) {
     `📡 <i>Quantara Trading Bot</i>`,
   ].filter(Boolean).join("\n");
 
-  return send(lines);
+  return send(lines, "HTML", chatId);
 }
 
 // ── Notifikasi Close Posisi ────────────────────────────────────────────────
 
 /**
- * @param {{ symbol, side, entryPrice, exitPrice, pnl, pnlPct, reason, dryRun }} trade
+ * @param {{ symbol, side, entryPrice, exitPrice, pnl, pnlPct, reason, dryRun, chatId }} trade
  */
 function notifyClose(trade) {
   const {
     symbol, side, entryPrice, exitPrice,
-    pnl, pnlPct, reason, dryRun = false,
+    pnl, pnlPct, reason, dryRun = false, chatId = null,
   } = trade;
 
   const coin      = symbol.replace("USDT", "");
@@ -150,15 +154,16 @@ function notifyClose(trade) {
     `📡 <i>Quantara Trading Bot</i>`,
   ].filter(Boolean).join("\n");
 
-  return send(lines);
+  return send(lines, "HTML", chatId);
 }
 
 /**
  * Alert operasional (mis. gagal tutup trade di DB / posisi tanpa record) —
  * dipakai untuk memunculkan kegagalan yang sebelumnya tertelan `catch {}` senyap.
  * @param {string} message
+ * @param {string|null} chatId
  */
-function notifyError(message) {
+function notifyError(message, chatId = null) {
   const lines = [
     `🚨 <b>QUANTARA ALERT</b>`,
     ``,
@@ -166,7 +171,7 @@ function notifyError(message) {
     ``,
     `🕐 <i>${nowStr()} WIB</i>`,
   ].join("\n");
-  return send(lines);
+  return send(lines, "HTML", chatId);
 }
 
 // ── Export ────────────────────────────────────────────────────────────────

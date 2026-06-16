@@ -17,6 +17,29 @@ const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
 
+// ── Per-user Telegram chat ID helper ─────────────────────────────────────────
+// Lazy-import Prisma agar tidak circular dengan db module
+let _prisma = null;
+function getPrisma() {
+  if (!_prisma) { const { PrismaClient } = require("@prisma/client"); _prisma = new PrismaClient(); }
+  return _prisma;
+}
+
+// Cache per userId (TTL 5 menit) untuk hindari DB hit per-notifikasi
+const _telegramChatIdCache = new Map();
+const TGCHAT_TTL = 5 * 60 * 1000;
+async function getUserTelegramChatId(userId) {
+  if (!userId) return null;
+  const cached = _telegramChatIdCache.get(userId);
+  if (cached && Date.now() - cached.ts < TGCHAT_TTL) return cached.chatId;
+  try {
+    const user = await getPrisma().user.findUnique({ where: { id: userId }, select: { telegramChatId: true } });
+    const chatId = user?.telegramChatId ?? null;
+    _telegramChatIdCache.set(userId, { chatId, ts: Date.now() });
+    return chatId;
+  } catch { return null; }
+}
+
 class BotEngine extends EventEmitter {
   /**
    * @param {object} configOverrides  — override nilai default dari .env
@@ -254,6 +277,27 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
   // INTERNAL LOGGER — console + WS event + DB
   // ─────────────────────────────────────────────
+  // ── Notifikasi Telegram per-user ─────────────────────────────────────────
+  // Wrapper async yang otomatis ambil chatId user dari DB lalu kirim via notifier.
+  async _notifyOpen(trade) {
+    try {
+      const chatId = await getUserTelegramChatId(this.config.userId);
+      this._notifyOpen({ ...trade, chatId });
+    } catch { /* non-fatal */ }
+  }
+  async _notifyClose(trade) {
+    try {
+      const chatId = await getUserTelegramChatId(this.config.userId);
+      this._notifyClose({ ...trade, chatId });
+    } catch { /* non-fatal */ }
+  }
+  async _notifyError(message) {
+    try {
+      const chatId = await getUserTelegramChatId(this.config.userId);
+      notifier.notifyError(message, chatId);
+    } catch { /* non-fatal */ }
+  }
+
   _log(level, ...args) {
     const msg   = args.map(a => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
     const time  = new Date().toISOString();
@@ -1562,7 +1606,7 @@ class BotEngine extends EventEmitter {
               this._log("warn", `Posisi ${signal} ditutup darurat ✓ — tidak ada order tanpa SL`);
               // Posisi sudah ditutup → lepas reservasi margin di koordinator (#5)
               if (this.config.coordinator) this.config.coordinator.release(botKey);
-              notifier.notifyClose?.({
+              this._notifyClose({
                 symbol: this.config.symbol, side: signal, entryPrice: price,
                 exitPrice: price, pnl: 0, pnlPct: 0, reason: "SL_FAILED_EMERGENCY_CLOSE",
                 dryRun: false,
@@ -1604,7 +1648,7 @@ class BotEngine extends EventEmitter {
         this.state.openPositions.push(pos);
 
         // Notifikasi Telegram — open posisi live
-        notifier.notifyOpen({
+        this._notifyOpen({
           symbol:     this.config.symbol,
           side:       signal,
           entryPrice: price,
@@ -1670,7 +1714,7 @@ class BotEngine extends EventEmitter {
       this.state.openPositions.push(pos);
 
       // Notifikasi Telegram — open posisi dry run
-      notifier.notifyOpen({
+      this._notifyOpen({
         symbol:     this.config.symbol,
         side:       signal,
         entryPrice: price,
@@ -2059,7 +2103,7 @@ class BotEngine extends EventEmitter {
     }
 
     // ── Notifikasi Telegram ──────────────────────────────────────────────────
-    notifier.notifyClose({
+    this._notifyClose({
       symbol:     this.config.symbol,
       side:       pos.side,
       entryPrice: pos.entry,
@@ -2198,13 +2242,13 @@ class BotEngine extends EventEmitter {
               // dari history tanpa jejak. Surface + alert untuk rekonsiliasi.
               applied = false;
               this._log("error", `Gagal tutup trade #${pos.dbId} di DB: ${err.message} — perlu rekonsiliasi manual`);
-              try { notifier.notifyError?.(`closeTrade gagal sym=${this.config.symbol} dbId=${pos.dbId}: ${err.message}`); } catch { /* notifier opsional */ }
+              try { this._notifyError(`closeTrade gagal sym=${this.config.symbol} dbId=${pos.dbId}: ${err.message}`); } catch { /* notifier opsional */ }
             }
           } else {
             // Live tanpa dbId = insert saat OPEN gagal setelah order terkirim →
             // posisi live tanpa record. Proses sekali, tapi alarmkan.
             this._log("error", `Posisi ${pos.side} ${this.config.symbol} ditutup tanpa record DB (insert saat open gagal?) — cek rekonsiliasi`);
-            try { notifier.notifyError?.(`Close tanpa dbId sym=${this.config.symbol} side=${pos.side}`); } catch { /* opsional */ }
+            try { this._notifyError(`Close tanpa dbId sym=${this.config.symbol} side=${pos.side}`); } catch { /* opsional */ }
           }
 
           if (!applied) {
@@ -2225,7 +2269,7 @@ class BotEngine extends EventEmitter {
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
           const pnlPct = pos.entry > 0 ? ((exitPrice - pos.entry) / pos.entry * 100 * (pos.side === "LONG" ? 1 : -1)) : 0;
-          notifier.notifyClose({
+          this._notifyClose({
             symbol:     this.config.symbol,
             side:       pos.side,
             entryPrice: pos.entry,
@@ -2335,7 +2379,7 @@ class BotEngine extends EventEmitter {
                     } catch (dbErr) {
                       applied = false;
                       this._log("error", `Gagal tutup trade #${pos.dbId} di DB: ${dbErr.message} — perlu rekonsiliasi`);
-                      try { notifier.notifyError?.(`closeTrade(manual) gagal sym=${this.config.symbol} dbId=${pos.dbId}: ${dbErr.message}`); } catch { /* opsional */ }
+                      try { this._notifyError(`closeTrade(manual) gagal sym=${this.config.symbol} dbId=${pos.dbId}: ${dbErr.message}`); } catch { /* opsional */ }
                     }
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
@@ -2413,7 +2457,7 @@ class BotEngine extends EventEmitter {
           }
         }
 
-        notifier.notifyClose({
+        this._notifyClose({
           symbol:     this.config.symbol,
           side:       pos.side,
           entryPrice: pos.entry,
