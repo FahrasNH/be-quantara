@@ -15,6 +15,15 @@ const { upsertExchange } = require("./userExchange");
 
 const prisma = new PrismaClient();
 
+// #region agent log
+const _dbgLogPath = "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log";
+function _dbgLog(hypothesisId, location, message, data) {
+  try {
+    require("fs").appendFileSync(_dbgLogPath, JSON.stringify({ sessionId: "3df08f", hypothesisId, location, message, data, timestamp: Date.now() }) + "\n");
+  } catch { /* ignore */ }
+}
+// #endregion
+
 // ─── getExchangeStatus ──────────────────────────────────────────────────────
 /**
  * Returns the current exchange status for a user.
@@ -166,10 +175,20 @@ async function switchExchange(userId, { newExchange, apiKey, secretKey, passphra
   await validateNewExchangeKey(newExchange, apiKey, secretKey, passphrase);
 
   // ── 4. Graceful stop: mark all running bots as stopped ───────────────────
-  await prisma.bot.updateMany({
+  const stopResult = await prisma.bot.updateMany({
     where: { userId, running: true },
     data: { running: false, stoppedAt: new Date() },
   });
+  // #region agent log
+  const dbRunningAfter = await prisma.bot.count({ where: { userId, running: true } });
+  _dbgLog("H1", "exchangeSwitch.js:stopBots", "DB bots stopped on exchange switch", {
+    userId,
+    fromExchange,
+    toExchange: newExchange,
+    stoppedCount: stopResult.count,
+    dbRunningAfter,
+  });
+  // #endregion
 
   // ── 5. Soft-delete old UserExchange records (set deletedAt) ───────────────
   await prisma.userExchange.updateMany({
