@@ -220,6 +220,7 @@ module.exports = function createAccountRouter() {
             statusCode: err.statusCode || 400,
             code: err.code || "BINANCE_VALIDATION_FAILED",
             message: err.message,
+            detail: err.originalMessage || undefined,
           });
         }
       }

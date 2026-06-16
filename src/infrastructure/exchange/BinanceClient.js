@@ -112,11 +112,18 @@ class BinanceClient {
   async validatePermissions() {
     let restrictions;
     try {
-      // CCXT exposes SAPI endpoints as sapiGetAccountApirestrictions()
-      restrictions = await this.exchange.sapiGetAccountApirestrictions();
+      // CCXT v4: camelCase matches endpoint `account/apiRestrictions`.
+      const fetchRestrictions = this.exchange.sapiGetAccountApiRestrictions;
+      if (typeof fetchRestrictions !== "function") {
+        throw new Error("CCXT Binance SAPI apiRestrictions method unavailable");
+      }
+      restrictions = await fetchRestrictions.call(this.exchange);
     } catch (err) {
+      const hint = err.message?.includes("-2015") || /invalid api-key/i.test(err.message || "")
+        ? " Periksa API key/secret dan pastikan IP publik VPS ada di whitelist Binance."
+        : "";
       const e = new Error(
-        "Tidak bisa memverifikasi izin API key Binance. Pastikan key valid dan IP whitelist benar."
+        `Tidak bisa memverifikasi izin API key Binance.${hint} Pastikan key valid, Futures aktif, dan IP whitelist benar.`
       );
       e.statusCode = 400;
       e.code = "BINANCE_VALIDATION_FAILED";
