@@ -171,11 +171,12 @@ module.exports = function createAccountRouter() {
     "/keys",
     asyncHandler(async (req, res) => {
       const userId = req.userId;
-      const { apiKey, apiSecret, apiPassphrase, exchangeType = "bitget" } = req.body;
+      const exchangeType = (req.body.exchangeType || "bitget").toLowerCase();
+      const { apiKey, apiSecret, apiPassphrase } = req.body;
 
       // Validate exchange against allowed list (production: bitget only)
       const allowedExchanges = cfg.allowedExchanges;
-      if (allowedExchanges && !allowedExchanges.includes(exchangeType?.toLowerCase())) {
+      if (allowedExchanges && !allowedExchanges.includes(exchangeType)) {
         return res.status(403).json({
           ok: false,
           statusCode: 403,
@@ -187,7 +188,7 @@ module.exports = function createAccountRouter() {
       // Reject keys with withdrawal permission or without futures permission.
       // Validation runs BEFORE storage — a failing key is never persisted (AC-3).
       // Outcome is written to the audit log either way (AC-4).
-      if (exchangeType?.toLowerCase() === "binance") {
+      if (exchangeType === "binance") {
         const ExchangeService = require("../../services/ExchangeService");
         try {
           const detail = await ExchangeService.validateExchangeKey("binance", {
