@@ -156,21 +156,26 @@ async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchan
     update: { ...data, deletedAt: null },
   });
 
-  // Sinkronkan kolom legacy User (default exchange) agar kode lama tetap jalan
-  const primary = await prisma.userExchange.findFirst({
-    where: { userId, deletedAt: null },
-    orderBy: { createdAt: "asc" },
+  // Policy 1-user-1-exchange: hanya satu exchange aktif — soft-delete sisanya.
+  await prisma.userExchange.updateMany({
+    where: { userId, deletedAt: null, NOT: { exchangeType } },
+    data: { deletedAt: new Date() },
   });
 
-  if (primary) {
+  // Sinkronkan kolom legacy User ke exchange yang BARU disimpan (bukan yang terlama).
+  const active = await prisma.userExchange.findFirst({
+    where: { userId, exchangeType, deletedAt: null },
+  });
+
+  if (active) {
     await prisma.user.update({
       where: { id: userId },
       data: {
-        apiKey: primary.apiKey,
-        apiSecret: primary.apiSecret,
-        apiPassphrase: primary.apiPassphrase,
-        apiKeyHash: primary.apiKeyHash,
-        exchangeType: primary.exchangeType,
+        apiKey: active.apiKey,
+        apiSecret: active.apiSecret,
+        apiPassphrase: active.apiPassphrase,
+        apiKeyHash: active.apiKeyHash,
+        exchangeType: active.exchangeType,
       },
     });
   }
@@ -193,7 +198,7 @@ async function deleteExchange(userId, exchangeType) {
 
   const remaining = await prisma.userExchange.findFirst({
     where: { userId, deletedAt: null },
-    orderBy: { createdAt: "asc" },
+    orderBy: { updatedAt: "desc" },
   });
 
   if (remaining) {

@@ -63,11 +63,24 @@ const ccxtMock = { binance: FakeExchange, bitget: FakeExchange, okx: FakeExchang
 class FakePrismaClient {
   constructor() {
     this.userExchange = {
+      findMany: async () =>
+        control.connectedExchange
+          ? [{
+              id: "ex1",
+              exchangeType: control.connectedExchange,
+              apiKey: "k",
+              apiSecret: "s",
+              apiPassphrase: null,
+              apiKeyHash: "h",
+            }]
+          : [],
       findFirst: async () =>
         control.connectedExchange ? { exchangeType: control.connectedExchange } : null,
+      updateMany: async () => ({ count: 0 }),
     };
     this.user = {
       findUnique: async () => null,
+      update: async () => ({}),
     };
   }
 }
