@@ -27,10 +27,10 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-bash scripts/ensure-allowed-exchanges.sh .env
-
 echo "==> git pull origin ${GIT_BRANCH}..."
 git pull origin "${GIT_BRANCH}"
+
+bash scripts/ensure-allowed-exchanges.sh .env
 
 echo "==> npm ci..."
 npm ci
