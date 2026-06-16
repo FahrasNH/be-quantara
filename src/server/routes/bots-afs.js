@@ -39,6 +39,23 @@ module.exports = function createBotsRouter(helpers) {
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
+      // #region agent log
+      if (live.running !== botRecord.running) {
+        try {
+          require("fs").appendFileSync(
+            "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log",
+            JSON.stringify({
+              sessionId: "3df08f",
+              hypothesisId: "H1",
+              location: "bots-afs.js:mergeBotWithLiveState",
+              message: "DB vs in-memory running mismatch",
+              data: { symbol: botRecord.symbol, dbRunning: botRecord.running, liveRunning: live.running },
+              timestamp: Date.now(),
+            }) + "\n"
+          );
+        } catch { /* ignore */ }
+      }
+      // #endregion
       return {
         ...botRecord,
         ...live,
