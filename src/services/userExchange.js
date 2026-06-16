@@ -31,7 +31,7 @@ async function migrateLegacyIfNeeded(userId) {
       where: { id: userId },
       select: { apiKey: true, apiSecret: true, apiPassphrase: true, exchangeType: true, apiKeyHash: true },
     }),
-    prisma.userExchange.count({ where: { userId } }),
+    prisma.userExchange.count({ where: { userId, deletedAt: null } }),
   ]);
 
   if (existing > 0 || !legacy?.apiKey || !legacy?.apiSecret || !legacy?.apiKeyHash) return;
@@ -58,7 +58,7 @@ async function listExchangesMasked(userId) {
   });
 
   return rows.map((row) => ({
-    exchangeType: row.exchangeType,
+    exchangeType: row.exchangeType.toLowerCase(),
     apiKey: mask(safeDecrypt(row.apiKey)),
     apiSecret: mask(safeDecrypt(row.apiSecret)),
     apiPassphrase: row.apiPassphrase ? "****" : null,
@@ -100,6 +100,8 @@ async function getExchangeCredentials(userId, exchangeType = "bitget") {
 }
 
 async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchangeType = "bitget" }) {
+  exchangeType = (exchangeType || "bitget").toLowerCase();
+
   const existing = await prisma.userExchange.findUnique({
     where: { userId_exchangeType: { userId, exchangeType } },
   });
@@ -147,10 +149,11 @@ async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchan
     apiKeyHash,
   };
 
+  // Re-activate soft-deleted rows (e.g. after exchange switch) on reconnect.
   await prisma.userExchange.upsert({
     where: { userId_exchangeType: { userId, exchangeType } },
-    create: { userId, exchangeType, ...data },
-    update: data,
+    create: { userId, exchangeType, deletedAt: null, ...data },
+    update: { ...data, deletedAt: null },
   });
 
   // Sinkronkan kolom legacy User (default exchange) agar kode lama tetap jalan
