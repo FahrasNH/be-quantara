@@ -420,7 +420,7 @@ class BotEngine extends EventEmitter {
     // ── Restore posisi terbuka dari SEMUA sesi lama (lintas sesi) ─────────
     // Cari trades dengan close_time IS NULL untuk symbol ini di semua sesi
     try {
-      let orphans = await db.getOpenTradesBySymbol(this.config.symbol);
+      let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
       // Multi-Strategy per Coin: bila engine ini bagian dari grup (N strategi pada
       // satu koin), batasi restore HANYA pada trade strategi ini — agar tiap engine
       // tidak meng-klaim posisi milik strategi lain pada simbol yang sama.
@@ -2051,7 +2051,7 @@ class BotEngine extends EventEmitter {
           reason,
           closeTime: new Date().toISOString(),
         });
-      } catch { /* jangan crash */ }
+      } catch (e) { this._log("warn", `Gagal catat partial-close di DB: ${e.message}`); }
     }
 
     // ── Notifikasi Telegram ──────────────────────────────────────────────────
@@ -2179,6 +2179,37 @@ class BotEngine extends EventEmitter {
             : (pos.entry - exitPrice) * remaining;
           const fee = await this._resolveFee(pos, exitPrice, remaining);
 
+          // ── Tutup record di DB DULU (idempotent — penulis pertama menang) ──────
+          // Akun ber-netting dibaca banyak engine + resume race lintas restart bisa
+          // membuat posisi yang sama diproses >1x. closeTrade hanya berlaku bila
+          // record masih terbuka; applied=false → LEWATI semua efek samping (log,
+          // notifikasi, stats) agar tidak ada PnL double-book / log ganda.
+          let applied = true;
+          if (pos.dbId) {
+            try {
+              const res = await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() });
+              applied = res?.applied !== false;
+            } catch (err) {
+              // Jangan telan diam-diam: posisi yang gagal ditutup di DB akan "hilang"
+              // dari history tanpa jejak. Surface + alert untuk rekonsiliasi.
+              applied = false;
+              this._log("error", `Gagal tutup trade #${pos.dbId} di DB: ${err.message} — perlu rekonsiliasi manual`);
+              try { notifier.notifyError?.(`closeTrade gagal sym=${this.config.symbol} dbId=${pos.dbId}: ${err.message}`); } catch { /* notifier opsional */ }
+            }
+          } else {
+            // Live tanpa dbId = insert saat OPEN gagal setelah order terkirim →
+            // posisi live tanpa record. Proses sekali, tapi alarmkan.
+            this._log("error", `Posisi ${pos.side} ${this.config.symbol} ditutup tanpa record DB (insert saat open gagal?) — cek rekonsiliasi`);
+            try { notifier.notifyError?.(`Close tanpa dbId sym=${this.config.symbol} side=${pos.side}`); } catch { /* opsional */ }
+          }
+
+          if (!applied) {
+            // Sudah dibukukan engine/proses lain → buang dari state tanpa log/stat ganda.
+            // (state.openPositions dibersihkan oleh filter liveByKey setelah loop.)
+            this._log("info", `Close ${pos.side} ${this.config.symbol} sudah dibukukan di tempat lain — skip duplikat`);
+            continue;
+          }
+
           this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
           this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
           this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} [${priceSource}] | Size sisa: ${remaining.toFixed(4)}`);
@@ -2186,11 +2217,6 @@ class BotEngine extends EventEmitter {
           if (pos.m1 || pos.m2) {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
             this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
-          }
-
-          // Tutup trade record di DB
-          if (pos.dbId) {
-            try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() }); } catch {}
           }
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
@@ -2297,14 +2323,23 @@ class BotEngine extends EventEmitter {
                     ? (exitPrice - pos.entry) * pos.size
                     : (pos.entry - exitPrice) * pos.size;
                   const fee = await this._resolveFee(pos, exitPrice, pos.size);
+                  let applied = true;
                   if (pos.dbId) {
-                    try { await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitSL ? "SL" : "TP", closeTime: new Date().toISOString() }); } catch {}
+                    try {
+                      const res = await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitSL ? "SL" : "TP", closeTime: new Date().toISOString() });
+                      applied = res?.applied !== false;
+                    } catch (dbErr) {
+                      applied = false;
+                      this._log("error", `Gagal tutup trade #${pos.dbId} di DB: ${dbErr.message} — perlu rekonsiliasi`);
+                      try { notifier.notifyError?.(`closeTrade(manual) gagal sym=${this.config.symbol} dbId=${pos.dbId}: ${dbErr.message}`); } catch { /* opsional */ }
+                    }
                   }
                   const ownerSid = pos.restoredFrom || this.sessionId;
-                  if (!pos.restoredFrom || pos.restoredFrom === this.sessionId) {
+                  // Hanya bukukan stats/trade bila DB-close benar-benar berlaku (anti double-book).
+                  if (applied && (!pos.restoredFrom || pos.restoredFrom === this.sessionId)) {
                     this.state.trades.push({ ...pos, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
                   }
-                  this._updateRiskAfterClose(pnl, pos);
+                  if (applied) this._updateRiskAfterClose(pnl, pos);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
                   this._releaseMarginIfFlat(); // lepas margin di koordinator (#5)
                   if (ownerSid === this.sessionId) this._syncSessionStats();
@@ -2368,7 +2403,10 @@ class BotEngine extends EventEmitter {
         if (this.sessionId && pos.dbId) {
           try {
             await db.closeTrade(pos.dbId, { exitPrice, pnl, pnlPct, fee, reason, closeTime: new Date(closeTime).toISOString() });
-          } catch { /* jangan crash */ }
+          } catch (dbErr) {
+            // Dry-run: tidak fatal, tapi jangan ditelan diam-diam (audit trail).
+            this._log("warn", `Gagal tutup trade #${pos.dbId} (dry-run) di DB: ${dbErr.message}`);
+          }
         }
 
         notifier.notifyClose({
