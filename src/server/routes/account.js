@@ -8,6 +8,8 @@ const {
   deleteExchange,
 } = require("../../services/userExchange");
 const cfg = require("../../config/env");
+const { deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
+const ExchangeService = require("../../services/ExchangeService");
 
 const prisma = new PrismaClient();
 
@@ -15,7 +17,8 @@ const prisma = new PrismaClient();
 const balanceCache = new Map(); // userId -> { ts, data }
 const BALANCE_TTL = 60_000;
 
-module.exports = function createAccountRouter() {
+module.exports = function createAccountRouter(helpers = {}) {
+  const { stopAllUserBotsInMemory } = helpers;
   const express = require("express");
   const router = express.Router();
 
@@ -360,6 +363,8 @@ module.exports = function createAccountRouter() {
           message: "newExchange, apiKey, dan secretKey wajib diisi.",
         });
       }
+      if (stopAllUserBotsInMemory) stopAllUserBotsInMemory(req.userId);
+
       const result = await switchExchange(req.userId, {
         newExchange,
         apiKey,
@@ -368,6 +373,10 @@ module.exports = function createAccountRouter() {
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"],
       });
+
+      await deleteUserBotLogs(req.userId).catch(() => {});
+      ExchangeService._clearCaches();
+
       res.json(result);
     })
   );
