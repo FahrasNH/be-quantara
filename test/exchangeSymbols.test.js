@@ -49,8 +49,12 @@ class FakeExchange {
     if (control.loadMarketsImpl) return control.loadMarketsImpl();
     return fakeMarkets();
   }
-  async sapiGetAccountApirestrictions() {
+  async sapiGetAccountApiRestrictions() {
     return control.apiRestrictions;
+  }
+  // Legacy alias kept for older mocks
+  async sapiGetAccountApirestrictions() {
+    return this.sapiGetAccountApiRestrictions();
   }
 }
 const ccxtMock = { binance: FakeExchange, bitget: FakeExchange, okx: FakeExchange };
