@@ -27,8 +27,6 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-bash scripts/ensure-allowed-exchanges.sh .env
-
 echo "==> git fetch origin ${GIT_BRANCH}..."
 git fetch origin "${GIT_BRANCH}"
 
@@ -36,6 +34,8 @@ git fetch origin "${GIT_BRANCH}"
 echo "==> git reset --hard origin/${GIT_BRANCH}..."
 git merge --abort 2>/dev/null || true
 git reset --hard "origin/${GIT_BRANCH}"
+
+bash scripts/ensure-allowed-exchanges.sh .env
 
 echo "==> npm ci..."
 npm ci
