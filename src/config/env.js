@@ -47,7 +47,7 @@ const cfg = {
   //   empty / unset = semua tier (FOUNDRY, MINT, VAULT) diizinkan  ← default production
   //   "FOUNDRY"     = hanya tier dasar (mode staging/closed-beta)
   // ALLOWED_EXCHANGES: comma-separated exchange ids accepted.
-  //   empty / unset = semua exchange  |  "bitget" = hanya Bitget  ← production default
+  //   empty / unset = semua exchange  |  "bitget,okx,binance" = production
   ALLOWED_TIERS_RAW:     process.env.ALLOWED_TIERS     || "",
   ALLOWED_EXCHANGES_RAW: process.env.ALLOWED_EXCHANGES || "",
 
