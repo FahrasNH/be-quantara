@@ -1,0 +1,354 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// CcxtFuturesClient.js — Unified USDT-M perpetual trading via CCXT
+// Dipakai oleh BinanceClient dan OkxClient; interface selaras dengan BitgetClient.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ccxt = require("ccxt");
+const { toRawSymbol, toCcxtSymbol } = require("./ccxtSymbol");
+
+const BALANCE_TYPE = {
+  binance: "future",
+  okx: "swap",
+};
+
+class CcxtFuturesClient {
+  /**
+   * @param {"binance"|"okx"} exchangeId
+   * @param {string} apiKey
+   * @param {string} secretKey
+   * @param {string} [passphrase]
+   * @param {object} [ccxtOptions]
+   */
+  constructor(exchangeId, apiKey, secretKey, passphrase = "", ccxtOptions = {}) {
+    const ctor = ccxt[exchangeId];
+    if (!ctor) throw new Error(`Exchange "${exchangeId}" tidak didukung oleh CCXT.`);
+
+    this.exchangeId = exchangeId;
+    const config = {
+      apiKey,
+      secret: secretKey,
+      enableRateLimit: true,
+      options: ccxtOptions,
+    };
+    if (passphrase) config.password = passphrase;
+
+    this.exchange = new ctor(config);
+    this.symbol = null;
+  }
+
+  _marketSymbol(symbol) {
+    return toCcxtSymbol(symbol);
+  }
+
+  _orderParams(extra = {}) {
+    const params = { ...extra };
+    if (this.exchangeId === "okx") params.tdMode = params.tdMode || "cross";
+    return params;
+  }
+
+  // ── MARKET DATA ───────────────────────────────────────────────────────────
+
+  async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
+    try {
+      const marketSymbol = this._marketSymbol(symbol);
+      const candles = await this.exchange.fetchOHLCV(
+        marketSymbol,
+        timeframe,
+        since,
+        Math.min(limit, 500)
+      );
+      if (!Array.isArray(candles) || candles.length === 0) {
+        throw new Error("No candles data received");
+      }
+      return candles.map((c) => ({
+        timestamp: c[0],
+        date: new Date(c[0]).toISOString(),
+        open: parseFloat(c[1]),
+        high: parseFloat(c[2]),
+        low: parseFloat(c[3]),
+        close: parseFloat(c[4]),
+        volume: parseFloat(c[5]),
+      }));
+    } catch (err) {
+      throw new Error(`getCandles error: ${err.message}`);
+    }
+  }
+
+  async getTicker(symbol) {
+    try {
+      const t = await this.exchange.fetchTicker(this._marketSymbol(symbol));
+      return {
+        symbol: toRawSymbol(symbol),
+        last: t.last,
+        bestBid: t.bid,
+        bestAsk: t.ask,
+        change24h: t.percentage || 0,
+      };
+    } catch (err) {
+      throw new Error(`getTicker error: ${err.message}`);
+    }
+  }
+
+  // ── ACCOUNT ───────────────────────────────────────────────────────────────
+
+  async getBalance(marginCoin = "USDT") {
+    try {
+      const balanceType = BALANCE_TYPE[this.exchangeId] || "swap";
+      const balance = await this.exchange.fetchBalance({ type: balanceType });
+      const free = balance?.free?.[marginCoin] ?? 0;
+      const used = balance?.used?.[marginCoin] ?? 0;
+      const total = balance?.total?.[marginCoin] ?? free + used;
+
+      let unrealizedPL = 0;
+      const coin = balance[marginCoin];
+      if (coin?.unrealizedPnl != null) unrealizedPL = Number(coin.unrealizedPnl) || 0;
+
+      return { available: free, equity: total, unrealizedPL };
+    } catch (err) {
+      throw new Error(`getBalance error: ${err.message}`);
+    }
+  }
+
+  async getPositions(symbol) {
+    try {
+      const marketSymbol = this._marketSymbol(symbol);
+      const positions = await this.exchange.fetchPositions([marketSymbol]);
+
+      if (!Array.isArray(positions) || positions.length === 0) return [];
+
+      return positions
+        .filter((p) => p.contracts && Math.abs(parseFloat(p.contracts)) > 0)
+        .map((p) => ({
+          symbol: p.symbol,
+          side: p.side === "long" ? "LONG" : "SHORT",
+          size: Math.abs(parseFloat(p.contracts) || 0),
+          entryPrice: parseFloat(p.entryPrice || p.info?.avgPx || 0),
+          markPrice: parseFloat(p.markPrice || 0),
+          unrealizedPL: parseFloat(p.unrealizedPnl || 0),
+          leverage: parseFloat(p.leverage || 1),
+          liquidationPrice: parseFloat(p.liquidationPrice || 0),
+          percentage: parseFloat(p.percentage || 0),
+        }));
+    } catch (err) {
+      throw new Error(`getPositions error: ${err.message}`);
+    }
+  }
+
+  async getOrderHistory(symbol, limit = 20) {
+    try {
+      const orders = await this.exchange.fetchClosedOrders(
+        this._marketSymbol(symbol),
+        undefined,
+        limit
+      );
+      return Array.isArray(orders) ? orders : [];
+    } catch (err) {
+      throw new Error(`getOrderHistory error: ${err.message}`);
+    }
+  }
+
+  async getRecentFillPrice(symbol, side, openedAt = 0) {
+    try {
+      const marketSymbol = this._marketSymbol(symbol);
+      let fills = [];
+      try {
+        fills = await this.exchange.fetchMyTrades(marketSymbol, openedAt || undefined, 10);
+      } catch {
+        const orders = await this.exchange.fetchClosedOrders(marketSymbol, openedAt || undefined, 10);
+        fills = orders
+          .filter((o) => o.filled > 0 && o.average)
+          .map((o) => ({ price: o.average, timestamp: o.timestamp, side: o.side }));
+      }
+
+      if (!Array.isArray(fills) || fills.length === 0) return null;
+
+      const closingSide = side === "LONG" ? "sell" : "buy";
+      const relevant = fills
+        .filter((f) => {
+          const fSide = (f.side || "").toLowerCase();
+          const fTs = f.timestamp || 0;
+          return fSide === closingSide && fTs >= (openedAt || 0);
+        })
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+      if (relevant.length === 0) return null;
+
+      const fillPrice = parseFloat(relevant[0].price || relevant[0].cost / relevant[0].amount || 0);
+      return fillPrice > 0 ? fillPrice : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getRecentFillFee(symbol, openedAt = 0) {
+    try {
+      const marketSymbol = this._marketSymbol(symbol);
+      let fills = [];
+      try {
+        fills = await this.exchange.fetchMyTrades(marketSymbol, openedAt || undefined, 50);
+      } catch {
+        return null;
+      }
+      if (!Array.isArray(fills) || fills.length === 0) return null;
+
+      const relevant = fills.filter((f) => (f.timestamp || 0) >= (openedAt || 0));
+      if (relevant.length === 0) return null;
+
+      let total = 0;
+      let found = false;
+      for (const f of relevant) {
+        const single = f.fee && Number.isFinite(f.fee.cost) ? Math.abs(f.fee.cost) : 0;
+        const multi = Array.isArray(f.fees)
+          ? f.fees.reduce((s, x) => s + (Number.isFinite(x?.cost) ? Math.abs(x.cost) : 0), 0)
+          : 0;
+        const fee = single || multi;
+        if (fee > 0) { total += fee; found = true; }
+      }
+      return found ? total : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── TRADING ───────────────────────────────────────────────────────────────
+
+  async setLeverage(symbol, leverage) {
+    try {
+      return await this.exchange.setLeverage(leverage, this._marketSymbol(symbol));
+    } catch (err) {
+      throw new Error(`setLeverage error: ${err.message}`);
+    }
+  }
+
+  async setMarginMode(symbol, mode = "crossed") {
+    const marketSymbol = this._marketSymbol(symbol);
+    const ccxtMode = mode === "crossed" ? "cross" : mode;
+
+    try {
+      await this.exchange.setMarginMode(ccxtMode, marketSymbol, this._orderParams());
+      return { success: true, mode: ccxtMode };
+    } catch (err) {
+      const msg = (err.message || "").toLowerCase();
+      const benign =
+        msg.includes("no need") || msg.includes("not change") ||
+        msg.includes("same") || msg.includes("already") ||
+        msg.includes("position") || msg.includes("margin type");
+      if (benign) {
+        return { success: true, mode: ccxtMode, note: "unchanged_or_has_position" };
+      }
+      console.warn(`setMarginMode gagal: ${err.message}`);
+      return { success: false, mode: ccxtMode, error: err.message };
+    }
+  }
+
+  async openPosition(symbol, side, size, _marginCoin = "USDT", slPrice = undefined, tpPrice = undefined) {
+    try {
+      const marketSymbol = this._marketSymbol(symbol);
+      const isBuy = side.includes("long");
+      const direction = isBuy ? "buy" : "sell";
+
+      const params = this._orderParams();
+      if (slPrice) params.stopLoss = { triggerPrice: parseFloat(slPrice) };
+      if (tpPrice) params.takeProfit = { triggerPrice: parseFloat(tpPrice) };
+
+      const order = await this.exchange.createMarketOrder(
+        marketSymbol,
+        direction,
+        size,
+        undefined,
+        params
+      );
+
+      return { orderId: order.id, presetSLTP: !!(slPrice && tpPrice), ...order };
+    } catch (err) {
+      throw new Error(`openPosition error: ${err.message}`);
+    }
+  }
+
+  async closePosition(symbol, side, size) {
+    try {
+      const marketSymbol = this._marketSymbol(symbol);
+      const direction = side.includes("long") ? "sell" : "buy";
+      const order = await this.exchange.createMarketOrder(
+        marketSymbol,
+        direction,
+        size,
+        undefined,
+        this._orderParams({ reduceOnly: true })
+      );
+      return { orderId: order.id, ...order };
+    } catch (err) {
+      throw new Error(`closePosition error: ${err.message}`);
+    }
+  }
+
+  async setTPSL(symbol, planType, triggerPrice, holdSide, size) {
+    const isTP = planType === "profit_plan";
+    const isLong = holdSide === "long";
+    const closeSide = isLong ? "sell" : "buy";
+    const trigPrice = parseFloat(triggerPrice);
+    const marketSymbol = this._marketSymbol(symbol);
+    const errors = [];
+
+    try {
+      const priceKey = isTP ? "takeProfitPrice" : "stopLossPrice";
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        "market",
+        closeSide,
+        size,
+        undefined,
+        this._orderParams({ [priceKey]: trigPrice, reduceOnly: true })
+      );
+      return { success: true, method: "ccxtV2TPSL", orderId: order.id };
+    } catch (e1) {
+      errors.push(`ccxtV2TPSL: ${e1.message}`);
+    }
+
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        isTP ? "takeProfitMarket" : "stopMarket",
+        closeSide,
+        size,
+        trigPrice,
+        this._orderParams({ triggerPrice: trigPrice, reduceOnly: true })
+      );
+      return { success: true, method: "ccxtStopMarket", orderId: order.id };
+    } catch (e2) {
+      errors.push(`ccxtStopMarket: ${e2.message}`);
+    }
+
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        isTP ? "takeProfit" : "stop",
+        closeSide,
+        size,
+        trigPrice,
+        this._orderParams({ stopPrice: trigPrice, reduceOnly: true })
+      );
+      return { success: true, method: "ccxtStop", orderId: order.id };
+    } catch (e3) {
+      errors.push(`ccxtStop: ${e3.message}`);
+    }
+
+    const detail = errors.join(" | ");
+    console.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
+    return { success: false, message: detail };
+  }
+
+  async cancelAllPlanOrders(symbol) {
+    try {
+      return await this.exchange.cancelAllOrders(this._marketSymbol(symbol));
+    } catch (err) {
+      const msg = (err.message || "").toLowerCase();
+      if (msg.includes("no order") || msg.includes("not found")) {
+        return { success: true, skipped: true };
+      }
+      throw new Error(`cancelAllPlanOrders error: ${err.message}`);
+    }
+  }
+}
+
+module.exports = CcxtFuturesClient;

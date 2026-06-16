@@ -390,6 +390,15 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+      const exchangeType = (connectedExchange || "bitget").toLowerCase();
+      if (exchangeType === "okx" && !decryptedPassphrase) {
+        return res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: "OKX memerlukan passphrase API key. Tambahkan di Settings → API Keys.",
+        });
+      }
+
       // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
       const instance = useMulti
         ? createMultiStrategyInstance(userId, symbol, {
@@ -398,6 +407,7 @@ module.exports = function createBotsRouter(helpers) {
             dryRun:     bot.dryRun,
             tpMode:     bot.tpMode ?? "full",
             botId:      bot.id,
+            exchangeType,
             apiKey:     decryptedApiKey,
             apiSecret:  decryptedApiSecret,
             passphrase: decryptedPassphrase,
@@ -409,6 +419,7 @@ module.exports = function createBotsRouter(helpers) {
             tpMode:      bot.tpMode ?? "full",
             botId:       bot.id,
             userId,                // diteruskan ke openSession → user_id di bot_sessions
+            exchangeType,
             apiKey:      decryptedApiKey,
             apiSecret:   decryptedApiSecret,
             passphrase:  decryptedPassphrase,

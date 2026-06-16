@@ -246,6 +246,7 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
     new AdaptiveStrategyEngine({
       ...cfg2,
       coordinator: accountCoordinator,
+      exchangeType: opts.exchangeType || "bitget",
       apiKey:      opts.apiKey,
       apiSecret:   opts.apiSecret,
       passphrase:  opts.passphrase,
@@ -499,6 +500,14 @@ async function resumeRunningBots() {
           continue;
         }
 
+        const exchangeType = (connectedExchange || "bitget").toLowerCase();
+        if (!bot.dryRun && exchangeType === "okx" && !passphrase) {
+          await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
+          stopped++;
+          console.warn(`[Startup] Bot LIVE ${bot.symbol} OKX tanpa passphrase → stopped`);
+          continue;
+        }
+
         // Pilih path resume: multi-strategy jika flag ON.
         // Tanpa pengecekan ini setiap restart server akan selalu menjalankan BotEngine
         // legacy dengan strategyKey=ADAPTIVE_FUSION dari DB → log selalu "[ADAPTIVE_FUSION]".
@@ -530,6 +539,7 @@ async function resumeRunningBots() {
             dryRun:      bot.dryRun,
             tpMode:      bot.tpMode ?? "full",
             botId:       bot.id,
+            exchangeType,
             apiKey, apiSecret, passphrase,
           });
           console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
@@ -541,6 +551,7 @@ async function resumeRunningBots() {
             tpMode:      bot.tpMode ?? "full",
             botId:       bot.id,
             userId:      bot.userId,
+            exchangeType,
             apiKey, apiSecret, passphrase,
           });
           console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);

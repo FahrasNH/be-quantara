@@ -10,8 +10,8 @@
 //   • New keys validated against exchange before revoking old
 
 const { PrismaClient } = require("@prisma/client");
-const BitgetClient = require("../infrastructure/exchange/BitgetClient");
 const { upsertExchange } = require("./userExchange");
+const { validateExchangeKey } = require("./ExchangeService");
 
 const prisma = new PrismaClient();
 
@@ -95,19 +95,17 @@ async function getExchangeStatus(userId) {
  * @throws {{ statusCode: 422, message: string }}
  */
 async function validateNewExchangeKey(exchangeType, apiKey, secretKey, passphrase) {
-  if (exchangeType !== "bitget") {
-    // Non-bitget exchanges: skip validation, save as-is
-    return true;
-  }
-
   try {
-    const client = new BitgetClient(apiKey, secretKey, passphrase);
-    await client.getBalance("USDT");
+    await validateExchangeKey(exchangeType, {
+      apiKey,
+      apiSecret: secretKey,
+      apiPassphrase: passphrase,
+    });
     return true;
   } catch (err) {
-    const error = new Error("API key tidak valid, periksa kembali");
-    error.statusCode = 422;
-    error.originalMessage = err.message;
+    const error = new Error(err.message || "API key tidak valid, periksa kembali");
+    error.statusCode = err.statusCode || 422;
+    error.originalMessage = err.originalMessage || err.message;
     throw error;
   }
 }

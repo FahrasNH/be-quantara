@@ -1,34 +1,72 @@
 // ─── src/infrastructure/exchange/index.js ────────────────────────────────────
-// Bitget-only exchange factory.
-// Menggantikan exchange-factory.js yang sebelumnya mendukung OKX.
-// ─────────────────────────────────────────────────────────────────────────────
+// Multi-exchange factory: Bitget, Binance, OKX
 
 const BitgetClient = require("./BitgetClient");
-const cfg          = require("../../config/env");
+const BinanceClient = require("./BinanceClient");
+const OkxClient = require("./OkxClient");
+const cfg = require("../../config/env");
+
+const EXCHANGE_META = {
+  bitget: {
+    name: "Bitget",
+    id: "bitget",
+    label: "Bitget Futures",
+  },
+  binance: {
+    name: "Binance",
+    id: "binance",
+    label: "Binance USDT-M Futures",
+  },
+  okx: {
+    name: "OKX",
+    id: "okx",
+    label: "OKX Perpetual Swap",
+  },
+};
 
 /**
- * Buat instance BitgetCCXTClient dengan kredensial dari env.
- * @returns {BitgetClient}
+ * Buat exchange client untuk trading / market data.
+ * @param {string} [exchangeType] — "bitget" | "binance" | "okx"
+ * @param {{apiKey?,apiSecret?,apiPassphrase?,passphrase?}} [creds]
+ * @returns {BitgetClient|BinanceClient|OkxClient}
  */
-function createExchangeClient() {
+function createExchangeClient(exchangeType, creds = {}) {
+  const type = (exchangeType || "bitget").toLowerCase();
+  const apiKey = creds.apiKey ?? "";
+  const apiSecret = creds.apiSecret ?? "";
+  const passphrase = creds.apiPassphrase || creds.passphrase || "";
+
+  if (type === "binance") {
+    return new BinanceClient(apiKey, apiSecret);
+  }
+
+  if (type === "okx") {
+    return new OkxClient(
+      apiKey || "",
+      apiSecret || "",
+      passphrase
+    );
+  }
+
   return new BitgetClient(
-    cfg.BITGET_API_KEY,
-    cfg.BITGET_SECRET_KEY,
-    cfg.BITGET_PASSPHRASE
+    apiKey || cfg.BITGET_API_KEY,
+    apiSecret || cfg.BITGET_SECRET_KEY,
+    passphrase || cfg.BITGET_PASSPHRASE
   );
 }
 
 /**
  * Info exchange untuk logging / UI.
+ * @param {string} [exchangeType]
  */
-function getExchangeInfo() {
+function getExchangeInfo(exchangeType) {
+  const type = (exchangeType || "bitget").toLowerCase();
+  const meta = EXCHANGE_META[type] || EXCHANGE_META.bitget;
   return {
-    name:   "Bitget",
-    id:     "bitget",
-    demo:   false,
+    ...meta,
+    demo: false,
     symbol: cfg.SYMBOL,
-    label:  "Bitget Futures",
   };
 }
 
-module.exports = { createExchangeClient, getExchangeInfo };
+module.exports = { createExchangeClient, getExchangeInfo, EXCHANGE_META };
