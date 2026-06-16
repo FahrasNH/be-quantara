@@ -282,13 +282,13 @@ class BotEngine extends EventEmitter {
   async _notifyOpen(trade) {
     try {
       const chatId = await getUserTelegramChatId(this.config.userId);
-      this._notifyOpen({ ...trade, chatId });
+      notifier.notifyOpen({ ...trade, chatId });
     } catch { /* non-fatal */ }
   }
   async _notifyClose(trade) {
     try {
       const chatId = await getUserTelegramChatId(this.config.userId);
-      this._notifyClose({ ...trade, chatId });
+      notifier.notifyClose({ ...trade, chatId });
     } catch { /* non-fatal */ }
   }
   async _notifyError(message) {
