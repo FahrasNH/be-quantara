@@ -5,8 +5,7 @@
 // ─────────────────────────────────────────────
 
 const EventEmitter = require("events");
-const { getExchangeInfo } = require("../infrastructure/exchange");
-const BitgetClient = require("../infrastructure/exchange/BitgetClient");
+const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exchange");
 const cfg = require("../config/env");
 const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
@@ -26,7 +25,8 @@ class BotEngine extends EventEmitter {
    */
   constructor(configOverrides = {}) {
     super();
-    const ei   = getExchangeInfo();
+    const exchangeType = (configOverrides.exchangeType || "bitget").toLowerCase();
+    const ei   = getExchangeInfo(exchangeType);
     // Strategi dari DB (configOverrides.strategyKey/strategy); getStrategy fallback ke "B"
     const strat = getStrategy(configOverrides.strategyKey || configOverrides.strategy);
 
@@ -37,14 +37,14 @@ class BotEngine extends EventEmitter {
     const resolvedPassphrase = configOverrides.passphrase || cfg.BITGET_PASSPHRASE  || "";
 
     // Hapus dari configOverrides agar tidak bocor ke this.config (keamanan)
-    const { apiKey: _k, apiSecret: _s, passphrase: _p, ...safeOverrides } = configOverrides;
+    const { apiKey: _k, apiSecret: _s, passphrase: _p, exchangeType: _et, ...safeOverrides } = configOverrides;
 
     // ── Sumber kebenaran config (prioritas: DB > strategy default) ────────────
     // process.env TIDAK digunakan untuk config bot — semua dari strategy atau DB.
     // Satu-satunya env yang masih relevan adalah server-level config (PORT, DATABASE_URL, dll).
     this.config = {
       // ── Exchange (server config, tidak berubah per user) ──────────────────
-      exchange:      ei.id,
+      exchange:      exchangeType,
       exchangeLabel: ei.label,
       marginCoin:    "USDT",
 
@@ -172,7 +172,11 @@ class BotEngine extends EventEmitter {
     this.logs      = [];   // circular buffer max 1000 (WS streaming)
     this.sessionId = null; // DB session ID saat ini
     // Buat exchange client dengan key yang sudah di-resolve (DB > env)
-    this.client    = new BitgetClient(resolvedApiKey, resolvedApiSecret, resolvedPassphrase);
+    this.client    = createExchangeClient(exchangeType, {
+      apiKey: resolvedApiKey,
+      apiSecret: resolvedApiSecret,
+      apiPassphrase: resolvedPassphrase,
+    });
     this._interval = null;
     this._reportInterval = null;
   }

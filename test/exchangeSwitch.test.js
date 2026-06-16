@@ -105,14 +105,19 @@ class FakePrismaClient {
   }
 }
 
-// ─── Fake BitgetClient ───────────────────────────────────────────────────────
-class FakeBitgetClient {
-  constructor() {}
-  async getBalance() {
-    if (!scenario.bitgetValid) throw new Error('signature error / invalid key');
-    return { available: '1000' };
-  }
-}
+// ─── Fake ExchangeService.validateExchangeKey ────────────────────────────────
+const fakeExchangeService = {
+  validateExchangeKey: async (exchangeType, _creds) => {
+    const type = (exchangeType || "").toLowerCase();
+    if (type === "bybit") return { ok: true, checked: false };
+    if (type === "bitget" && !scenario.bitgetValid) {
+      const e = new Error("API key Bitget tidak valid, periksa kembali.");
+      e.statusCode = 422;
+      throw e;
+    }
+    return { ok: true, checked: true };
+  },
+};
 
 // ─── Fake userExchange.upsertExchange ────────────────────────────────────────
 const fakeUserExchange = {
@@ -123,7 +128,9 @@ const fakeUserExchange = {
 const _origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   if (request === '@prisma/client') return { PrismaClient: FakePrismaClient };
-  if (request.endsWith('infrastructure/exchange/BitgetClient')) return FakeBitgetClient;
+  if (request === './ExchangeService' || request.endsWith('/services/ExchangeService')) {
+    return fakeExchangeService;
+  }
   if (request === './userExchange' || request.endsWith('/services/userExchange')) return fakeUserExchange;
   return _origLoad.apply(this, arguments);
 };

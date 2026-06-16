@@ -2,6 +2,7 @@ const { asyncHandler } = require("../../middleware/errorHandler");
 const { PrismaClient } = require("@prisma/client");
 const BitgetClient = require("../../infrastructure/exchange/BitgetClient");
 const BinanceClient = require("../../infrastructure/exchange/BinanceClient");
+const OkxClient = require("../../infrastructure/exchange/OkxClient");
 const {
   listExchangesMasked,
   getExchangeCredentials,
@@ -30,18 +31,8 @@ async function fetchLiveExchangeBalance(exchangeType, creds) {
     return client.getBalance("USDT");
   }
   if (type === "okx") {
-    const ccxt = require("ccxt");
-    const ex = new ccxt.okx({
-      apiKey: creds.apiKey,
-      secret: creds.apiSecret,
-      password: creds.apiPassphrase || "",
-      enableRateLimit: true,
-      options: { defaultType: "swap" },
-    });
-    const balance = await ex.fetchBalance({ type: "swap" });
-    const free = balance?.free?.USDT ?? 0;
-    const total = balance?.total?.USDT ?? free;
-    return { available: free, equity: total, unrealizedPL: 0 };
+    const client = new OkxClient(creds.apiKey, creds.apiSecret, creds.apiPassphrase || "");
+    return client.getBalance("USDT");
   }
   throw new Error(`Exchange "${type}" tidak didukung untuk balance`);
 }

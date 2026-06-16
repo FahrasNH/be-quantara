@@ -217,6 +217,13 @@ async function validateExchangeKey(exchangeType, { apiKey, apiSecret, apiPassphr
     }
   }
 
+  if (type === "okx") {
+    const OkxClient = require("../infrastructure/exchange/OkxClient");
+    const client = new OkxClient(apiKey, apiSecret, apiPassphrase);
+    const detail = await client.validatePermissions();
+    return { ok: true, checked: true, detail };
+  }
+
   // Other exchanges: not validated here (trusted as-is).
   return { ok: true, checked: false };
 }
