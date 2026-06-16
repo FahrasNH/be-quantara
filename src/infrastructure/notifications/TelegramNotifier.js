@@ -28,7 +28,7 @@ if (!hasToken) {
 } else if (cfg.NODE_ENV === "development") {
   console.log("[Notifier] Notifikasi Telegram NONAKTIF — dimatikan di development");
 } else {
-  console.log(`[Notifier] ✅ Notifikasi Telegram AKTIF (bot @quantara_trading_bot). Per-user chat ID dari DB.`);
+  console.log(`[Notifier] Notifikasi Telegram AKTIF (bot @quantara_trading_bot). Per-user chat ID dari DB.`);
 }
 
 // ── Core send ke Telegram ──────────────────────────────────────────────────
@@ -95,22 +95,21 @@ function notifyOpen(trade) {
     sl, tp, leverage = 1, dryRun = false, chatId = null,
   } = trade;
 
-  const coin      = symbol.replace("USDT", "");
-  const sideEmoji = side === "LONG" ? "🟢" : "🔴";
-  const modeTag   = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
+  const coin    = symbol.replace("USDT", "");
+  const modeTag = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
 
   const lines = [
-    `${sideEmoji} <b>OPEN POSISI${modeTag}</b>`,
+    `<b>OPEN POSISI${modeTag}</b>`,
     `<b>${coin}/USDT</b> — ${side}`,
     ``,
-    `📍 Entry     : <code>$${fmtPrice(entryPrice)}</code>`,
-    size  != null ? `📦 Size      : <code>${Number(size).toFixed(4)} ${coin}</code>` : null,
-    sl    != null ? `🛡️ Stop Loss  : <code>$${fmtPrice(sl)}</code>` : null,
-    tp    != null ? `🎯 Take Profit: <code>$${fmtPrice(tp)}</code>` : null,
-    leverage > 1  ? `⚡ Leverage   : <code>${leverage}x</code>` : null,
+    `Entry      : <code>$${fmtPrice(entryPrice)}</code>`,
+    size  != null ? `Size       : <code>${Number(size).toFixed(4)} ${coin}</code>` : null,
+    sl    != null ? `Stop Loss  : <code>$${fmtPrice(sl)}</code>` : null,
+    tp    != null ? `Take Profit: <code>$${fmtPrice(tp)}</code>` : null,
+    leverage > 1  ? `Leverage   : <code>${leverage}x</code>` : null,
     ``,
-    `🕐 <i>${nowStr()} WIB</i>`,
-    `📡 <i>Quantara Trading Bot</i>`,
+    `<i>${nowStr()} WIB</i>`,
+    `<i>Quantara Trading Bot</i>`,
   ].filter(Boolean).join("\n");
 
   return send(lines, "HTML", chatId);
@@ -127,31 +126,31 @@ function notifyClose(trade) {
     pnl, pnlPct, reason, dryRun = false, chatId = null,
   } = trade;
 
-  const coin      = symbol.replace("USDT", "");
-  const isWin     = (pnl ?? 0) >= 0;
-  const resultIco = isWin ? "✅" : "❌";
-  const modeTag   = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
+  const coin        = symbol.replace("USDT", "");
+  const isWin       = (pnl ?? 0) >= 0;
+  const resultLabel = isWin ? "WIN" : "LOSS";
+  const modeTag     = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
 
   const reasonMap = {
-    TP:       "Take Profit 🎯",
-    SL:       "Stop Loss 🛡️",
-    Reversal: "Reversal ↩️",
+    TP:       "Take Profit",
+    SL:       "Stop Loss",
+    Reversal: "Reversal",
     Exchange: "Ditutup Exchange",
   };
   const reasonStr = reasonMap[reason] ?? reason ?? "—";
 
   const lines = [
-    `${resultIco} <b>CLOSE POSISI${modeTag}</b>`,
+    `<b>CLOSE POSISI [${resultLabel}]${modeTag}</b>`,
     `<b>${coin}/USDT</b> — ${side}`,
     ``,
-    `📍 Entry  : <code>$${fmtPrice(entryPrice)}</code>`,
-    `📤 Exit   : <code>$${fmtPrice(exitPrice)}</code>`,
-    pnl    != null ? `💰 PnL    : <b>${fmtPnl(pnl)}</b>` : null,
-    pnlPct != null ? `📈 ROI    : <code>${fmtPct(pnlPct)}</code>` : null,
-    `📋 Alasan : ${reasonStr}`,
+    `Entry  : <code>$${fmtPrice(entryPrice)}</code>`,
+    `Exit   : <code>$${fmtPrice(exitPrice)}</code>`,
+    pnl    != null ? `PnL    : <b>${fmtPnl(pnl)}</b>` : null,
+    pnlPct != null ? `ROI    : <code>${fmtPct(pnlPct)}</code>` : null,
+    `Alasan : ${reasonStr}`,
     ``,
-    `🕐 <i>${nowStr()} WIB</i>`,
-    `📡 <i>Quantara Trading Bot</i>`,
+    `<i>${nowStr()} WIB</i>`,
+    `<i>Quantara Trading Bot</i>`,
   ].filter(Boolean).join("\n");
 
   return send(lines, "HTML", chatId);
@@ -165,11 +164,11 @@ function notifyClose(trade) {
  */
 function notifyError(message, chatId = null) {
   const lines = [
-    `🚨 <b>QUANTARA ALERT</b>`,
+    `<b>QUANTARA ALERT</b>`,
     ``,
     `<code>${String(message).slice(0, 500)}</code>`,
     ``,
-    `🕐 <i>${nowStr()} WIB</i>`,
+    `<i>${nowStr()} WIB</i>`,
   ].join("\n");
   return send(lines, "HTML", chatId);
 }
