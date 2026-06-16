@@ -195,6 +195,11 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     botKey:      key,
     coordinator: getCoordinator(userId), // koordinasi margin lintas-bot (#5)
     ...configOverrides,
+    // SELALU set userId (defense-in-depth): tanpa ini, openSession membuat
+    // bot_sessions.user_id NULL → getTrades (INNER JOIN s.user_id) menyembunyikan
+    // trade dari History. Bug ini muncul di jalur auto-resume yang lupa meneruskan
+    // userId. Di-set TERAKHIR agar tak bisa ter-override configOverrides.
+    userId,
   });
   botsMap[key] = bot;
   return bot;
