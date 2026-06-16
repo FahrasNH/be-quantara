@@ -74,20 +74,65 @@ function normalizeMarkets(markets) {
  * Resolve the exchange the user currently has connected (active record).
  * @returns {Promise<string|null>} exchangeType or null if none connected.
  */
+/**
+ * Resolve the exchange the user currently has connected (active record).
+ * Enforces 1-user-1-exchange: jika ada >1 aktif, simpan yang terbaru saja.
+ * @returns {Promise<string|null>} exchangeType or null if none connected.
+ */
 async function getConnectedExchange(userId) {
-  const row = await prisma.userExchange.findFirst({
+  const actives = await prisma.userExchange.findMany({
     where: { userId, deletedAt: null },
-    orderBy: { createdAt: "asc" },
-    select: { exchangeType: true },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, exchangeType: true, apiKey: true, apiSecret: true, apiPassphrase: true, apiKeyHash: true },
   });
-  if (row?.exchangeType) return row.exchangeType.toLowerCase();
 
-  // Legacy fallback: User.exchangeType column
+  if (actives.length > 1) {
+    const keeper = actives[0];
+    await prisma.userExchange.updateMany({
+      where: { userId, deletedAt: null, NOT: { id: keeper.id } },
+      data: { deletedAt: new Date() },
+    });
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        apiKey: keeper.apiKey,
+        apiSecret: keeper.apiSecret,
+        apiPassphrase: keeper.apiPassphrase,
+        apiKeyHash: keeper.apiKeyHash,
+        exchangeType: keeper.exchangeType,
+      },
+    });
+    // #region agent log
+    try {
+      require("fs").appendFileSync(
+        "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log",
+        JSON.stringify({ sessionId: "3df08f", hypothesisId: "H6", location: "ExchangeService.js:getConnectedExchange", message: "healed multi-active exchanges", data: { userId, kept: keeper.exchangeType, deactivated: actives.slice(1).map((r) => r.exchangeType) }, timestamp: Date.now() }) + "\n"
+      );
+    } catch { /* ignore */ }
+    // #endregion
+    return keeper.exchangeType.toLowerCase();
+  }
+
+  if (actives.length === 1) {
+    const type = actives[0].exchangeType.toLowerCase();
+    // #region agent log
+    try {
+      require("fs").appendFileSync(
+        "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log",
+        JSON.stringify({ sessionId: "3df08f", hypothesisId: "H6", location: "ExchangeService.js:getConnectedExchange", message: "single active exchange", data: { userId, exchange: type }, timestamp: Date.now() }) + "\n"
+      );
+    } catch { /* ignore */ }
+    // #endregion
+    return type;
+  }
+
   const legacy = await prisma.user.findUnique({
     where: { id: userId },
     select: { exchangeType: true, apiKey: true },
   });
-  if (legacy?.apiKey && legacy?.exchangeType) return legacy.exchangeType.toLowerCase();
+  if (legacy?.apiKey && legacy?.exchangeType) {
+    return legacy.exchangeType.toLowerCase();
+  }
   return null;
 }
 

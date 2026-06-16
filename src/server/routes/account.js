@@ -238,6 +238,7 @@ module.exports = function createAccountRouter(helpers = {}) {
         });
 
         balanceCache.delete(`${userId}:${exchangeType}`);
+        ExchangeService._clearCaches();
 
         res.json({
           ok: true,
@@ -272,6 +273,7 @@ module.exports = function createAccountRouter(helpers = {}) {
       try {
         await deleteExchange(userId, exchangeType);
         balanceCache.delete(`${userId}:${exchangeType}`);
+        ExchangeService._clearCaches();
 
         res.json({
           ok: true,
