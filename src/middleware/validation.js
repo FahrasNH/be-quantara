@@ -2,12 +2,17 @@
  * Validation middleware using simple schema validation
  */
 
+// RFC-5321-safe email: rejects quotes, semicolons, HTML special chars
+const EMAIL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+// Username: alphanumeric + _ . - only, 3-30 chars (no HTML/script injection)
+const USERNAME_RE = /^[a-zA-Z0-9_.\-]{3,30}$/;
+
 function validateLoginInput(req, res, next) {
   const { email, password } = req.body;
 
   const errors = [];
 
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
+  if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
     errors.push('Valid email required');
   }
 
@@ -31,12 +36,12 @@ function validateRegisterInput(req, res, next) {
   const { email, username, password } = req.body;
   const errors = [];
 
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
+  if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
     errors.push('Valid email required');
   }
 
-  if (!username || typeof username !== 'string' || username.length < 3) {
-    errors.push('Username must be at least 3 characters');
+  if (!username || typeof username !== 'string' || !USERNAME_RE.test(username)) {
+    errors.push('Username must be 3-30 characters (letters, numbers, _ . - only)');
   }
 
   if (!password || typeof password !== 'string' || password.length < 8) {
@@ -109,7 +114,7 @@ function validateSymbolParam(req, res, next) {
 
 function validateForgotPasswordInput(req, res, next) {
   const { email } = req.body;
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
+  if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
     return res.status(400).json({
       ok: false, statusCode: 400, message: 'Valid email required', errors: ['Valid email required'],
     });
