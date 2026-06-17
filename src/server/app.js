@@ -16,6 +16,7 @@ const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinato
 const AccountCoordinator = require("../domain/AccountCoordinator");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
+const telegramBot = require("../infrastructure/notifications/TelegramBotPoller");
 const { createExchangeClient } = require("../infrastructure/exchange");
 
 // Middleware
@@ -581,6 +582,7 @@ db.init()
     });
     // Backup otomatis tiap 24 jam — berjalan di dalam proses Node.js, tanpa cron
     backup.start();
+    telegramBot.start();
     // Purge soft-deleted exchange keys older than 7 days (every 6h)
     const { scheduleKeyPurge } = require("../services/exchangeKeyPurge");
     scheduleKeyPurge();
@@ -595,6 +597,7 @@ db.init()
 // Graceful shutdown
 process.on("SIGTERM", async () => {
   console.log("[SHUTDOWN] SIGTERM received, shutting down gracefully...");
+  telegramBot.stop();
   backup.stop();
   server.close(async () => {
     await db.close();

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
@@ -205,6 +206,85 @@ class AuthService {
     await prisma.session.deleteMany({
       where: { userId },
     });
+  }
+
+  /**
+   * Initiate password reset — generates token, stores hash, returns { token, user }.
+   * Caller is responsible for sending the email (keeps service testable without SMTP).
+   * Returns null when email not found — caller must NOT reveal this to the client
+   * (enumeration-safe: always respond 200 regardless).
+   */
+  static async forgotPassword(email) {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return null;
+
+    // Invalidate all previous unused reset tokens for this user
+    await prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data:  { usedAt: new Date() },
+    });
+
+    // 32-byte cryptographically random token (hex string, 64 chars)
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = await bcrypt.hash(rawToken, 10);
+
+    await prisma.passwordResetToken.create({
+      data: {
+        userId:    user.id,
+        tokenHash,
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 min TTL
+      },
+    });
+
+    return { token: rawToken, user };
+  }
+
+  /**
+   * Consume a reset token and update the password.
+   * Deletes ALL sessions so the user is forced to log in again on every device.
+   */
+  static async resetPassword(rawToken, newPassword) {
+    if (!rawToken || typeof rawToken !== 'string' || rawToken.length < 32) {
+      throw new Error('Invalid or missing reset token');
+    }
+    if (!newPassword || newPassword.length < 8) {
+      throw new Error('Password must be at least 8 characters');
+    }
+
+    // Find all non-expired, non-used tokens and test each one
+    const candidates = await prisma.passwordResetToken.findMany({
+      where: { usedAt: null, expiresAt: { gt: new Date() } },
+    });
+
+    let matched = null;
+    for (const candidate of candidates) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await bcrypt.compare(rawToken, candidate.tokenHash)) {
+        matched = candidate;
+        break;
+      }
+    }
+
+    if (!matched) {
+      throw new Error('Reset token is invalid or has expired');
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+
+    // Atomic: update password + mark token used + delete all sessions
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: matched.userId },
+        data:  { password: newHash },
+      }),
+      prisma.passwordResetToken.update({
+        where: { id: matched.id },
+        data:  { usedAt: new Date() },
+      }),
+      prisma.session.deleteMany({ where: { userId: matched.userId } }),
+    ]);
+
+    await this.logAction(matched.userId, 'PASSWORD_RESET', 'user', matched.userId, null, null);
   }
 
   /**
