@@ -107,9 +107,39 @@ function validateSymbolParam(req, res, next) {
   next();
 }
 
+function validateForgotPasswordInput(req, res, next) {
+  const { email } = req.body;
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    return res.status(400).json({
+      ok: false, statusCode: 400, message: 'Valid email required', errors: ['Valid email required'],
+    });
+  }
+  next();
+}
+
+function validateResetPasswordInput(req, res, next) {
+  const { newPassword } = req.body;
+  const { token } = req.query;
+  const errors = [];
+
+  if (!token || typeof token !== 'string' || token.length < 32) {
+    errors.push('Valid reset token required');
+  }
+  if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+    errors.push('New password must be at least 8 characters');
+  }
+
+  if (errors.length > 0) {
+    return res.status(400).json({ ok: false, statusCode: 400, message: 'Validation failed', errors });
+  }
+  next();
+}
+
 module.exports = {
   validateLoginInput,
   validateRegisterInput,
   validateBotStartInput,
   validateSymbolParam,
+  validateForgotPasswordInput,
+  validateResetPasswordInput,
 };

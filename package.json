@@ -1,7 +1,7 @@
 {
   "name": "quantara-bot",
   "version": "2.0.0",
-  "description": "Quantara \u2014 Automated Trading Bot for Bitget",
+  "description": "Quantara — Automated Trading Bot for Bitget",
   "main": "index.js",
   "scripts": {
     "postinstall": "prisma generate",
@@ -40,6 +40,7 @@
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^9.0.0",
     "pg": "^8.21.0",
     "prisma": "^6.19.3",
     "ws": "^8.16.0"
