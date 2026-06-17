@@ -1,11 +1,15 @@
 const AuthService = require('../../services/AuthService');
+const { sendPasswordReset } = require('../../services/EmailService');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { authMiddleware } = require('../../middleware/auth');
 const {
   validateLoginInput,
   validateRegisterInput,
+  validateForgotPasswordInput,
+  validateResetPasswordInput,
 } = require('../../middleware/validation');
 const rateLimit = require('express-rate-limit');
+const cfg = require('../../config/env.js');
 
 module.exports = function createAuthRoutes() {
   const express = require('express');
@@ -205,6 +209,86 @@ module.exports = function createAuthRoutes() {
         ok: true,
         message: 'Logged out successfully',
       });
+    })
+  );
+
+  // Rate limiter for forgot-password (3 req/15min per IP — prevents email flooding)
+  const forgotLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 3,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+      res.status(429).json({
+        ok: false,
+        statusCode: 429,
+        message: 'Too many requests. Please wait 15 minutes before trying again.',
+      });
+    },
+  });
+
+  /**
+   * POST /api/v1/auth/forgot-password
+   * Initiate password reset — enumeration-safe (always 200 regardless of email existence).
+   */
+  router.post(
+    '/forgot-password',
+    forgotLimiter,
+    validateForgotPasswordInput,
+    asyncHandler(async (req, res) => {
+      const { email } = req.body;
+
+      // Fire-and-forget: don't await — attacker cannot time the response
+      // to infer whether the email exists in the DB.
+      AuthService.forgotPassword(email)
+        .then(async (result) => {
+          if (!result) return; // email not found — stay silent
+          const resetUrl = `${cfg.APP_URL}/reset-password?token=${result.token}`;
+          try {
+            await sendPasswordReset(result.user.email, resetUrl);
+          } catch (emailErr) {
+            // Log but don't crash — email misconfiguration shouldn't break the response
+            console.error('[forgot-password] email send failed:', emailErr.message);
+          }
+        })
+        .catch((err) => {
+          console.error('[forgot-password] unexpected error:', err.message);
+        });
+
+      // Always respond 200 immediately — enumeration-safe
+      res.json({
+        ok: true,
+        message: 'If that email is registered, a reset link has been sent.',
+      });
+    })
+  );
+
+  /**
+   * POST /api/v1/auth/reset-password?token=<rawToken>
+   * Consume reset token and set new password. Invalidates all sessions.
+   */
+  router.post(
+    '/reset-password',
+    validateResetPasswordInput,
+    asyncHandler(async (req, res) => {
+      const { token } = req.query;
+      const { newPassword } = req.body;
+
+      try {
+        await AuthService.resetPassword(token, newPassword);
+
+        res.json({
+          ok: true,
+          message: 'Password updated successfully. Please log in with your new password.',
+        });
+      } catch (err) {
+        res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: err.message,
+          errors: [err.message],
+        });
+      }
     })
   );
 

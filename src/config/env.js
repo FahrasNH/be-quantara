@@ -31,6 +31,17 @@ const cfg = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || "",
   TELEGRAM_CHAT_ID:   process.env.TELEGRAM_CHAT_ID   || "",
 
+  // ── Email (password reset) ──────────────────────────────────────────────────
+  // Gmail: EMAIL_HOST=smtp.gmail.com EMAIL_PORT=587 EMAIL_USER=you@gmail.com
+  //        EMAIL_PASS=<App Password from Google Account → Security → App passwords>
+  EMAIL_HOST: process.env.EMAIL_HOST || "",
+  EMAIL_PORT: parseInt(process.env.EMAIL_PORT) || 587,
+  EMAIL_USER: process.env.EMAIL_USER || "",
+  EMAIL_PASS: process.env.EMAIL_PASS || "",
+  // Public URL of the frontend — used to construct reset links.
+  // e.g. https://quantara.example.com or http://187.77.135.156
+  APP_URL:    process.env.APP_URL    || "http://localhost:5173",
+
   // ── Secrets (dipakai AuthService & crypto) ──────────────────────────────────
   JWT_SECRET:         process.env.JWT_SECRET         || "",
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || "",
