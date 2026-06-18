@@ -247,19 +247,17 @@ class CcxtFuturesClient {
       const isBuy = side.includes("long");
       const direction = isBuy ? "buy" : "sell";
 
-      const params = this._orderParams();
-      if (slPrice) params.stopLoss = { triggerPrice: parseFloat(slPrice) };
-      if (tpPrice) params.takeProfit = { triggerPrice: parseFloat(tpPrice) };
-
+      // Binance/OKX Futures do not support embedded SL/TP in a single createMarketOrder.
+      // Return presetSLTP: false so BotEngine always uses the setTPSL fallback path.
       const order = await this.exchange.createMarketOrder(
         marketSymbol,
         direction,
         size,
         undefined,
-        params
+        this._orderParams()
       );
 
-      return { orderId: order.id, presetSLTP: !!(slPrice && tpPrice), ...order };
+      return { orderId: order.id, presetSLTP: false, ...order };
     } catch (err) {
       throw new Error(`openPosition error: ${err.message}`);
     }
