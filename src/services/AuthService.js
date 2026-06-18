@@ -1,9 +1,8 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require('../infrastructure/db/prismaClient');
 
 class AuthService {
   /**

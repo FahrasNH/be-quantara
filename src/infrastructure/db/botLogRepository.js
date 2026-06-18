@@ -1,8 +1,7 @@
 // Persistensi log bot ke PostgreSQL (Prisma BotLog)
 
-const { PrismaClient } = require("@prisma/client");
-
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require("./prismaClient");
 
 /**
  * Simpan satu entri log ke DB (fire-and-forget dari BotEngine).

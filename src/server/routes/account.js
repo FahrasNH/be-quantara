@@ -1,5 +1,4 @@
 const { asyncHandler } = require("../../middleware/errorHandler");
-const { PrismaClient } = require("@prisma/client");
 const BitgetClient = require("../../infrastructure/exchange/BitgetClient");
 const BinanceClient = require("../../infrastructure/exchange/BinanceClient");
 const OkxClient = require("../../infrastructure/exchange/OkxClient");
@@ -13,7 +12,8 @@ const cfg = require("../../config/env");
 const { deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
 const ExchangeService = require("../../services/ExchangeService");
 
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require("../../infrastructure/db/prismaClient");
 
 // Cache balance per-user untuk hindari rate-limit Bitget (TTL 60s)
 const balanceCache = new Map(); // userId -> { ts, data }

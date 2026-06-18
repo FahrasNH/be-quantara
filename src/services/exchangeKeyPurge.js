@@ -5,9 +5,8 @@
 // purposes, then permanently removed by this job. The job runs every 6 hours
 // inside the Node.js process — no external cron required.
 
-const { PrismaClient } = require("@prisma/client");
-
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require("../infrastructure/db/prismaClient");
 
 /**
  * Deletes UserExchange records that were soft-deleted more than 7 days ago.

@@ -18,10 +18,10 @@ const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
 
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
-// Lazy-import Prisma agar tidak circular dengan db module
+// Lazy-import Prisma (singleton bersama) agar tidak circular dengan db module
 let _prisma = null;
 function getPrisma() {
-  if (!_prisma) { const { PrismaClient } = require("@prisma/client"); _prisma = new PrismaClient(); }
+  if (!_prisma) { _prisma = require("../infrastructure/db/prismaClient"); }
   return _prisma;
 }
 

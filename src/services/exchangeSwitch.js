@@ -9,20 +9,15 @@
 //   • Old UserExchange is soft-deleted (deletedAt=now), NOT physically removed
 //   • New keys validated against exchange before revoking old
 
-const { PrismaClient } = require("@prisma/client");
 const { upsertExchange } = require("./userExchange");
 const { validateExchangeKey } = require("./ExchangeService");
 
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require("../infrastructure/db/prismaClient");
 
-// #region agent log
-const _dbgLogPath = "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log";
-function _dbgLog(hypothesisId, location, message, data) {
-  try {
-    require("fs").appendFileSync(_dbgLogPath, JSON.stringify({ sessionId: "3df08f", hypothesisId, location, message, data, timestamp: Date.now() }) + "\n");
-  } catch { /* ignore */ }
-}
-// #endregion
+// Debug logger dinonaktifkan (sebelumnya appendFileSync sinkron ke path lokal
+// hardcoded → blocking event loop di lokal, throw/syscall sia-sia di VPS).
+function _dbgLog() { /* no-op */ }
 
 // ─── getExchangeStatus ──────────────────────────────────────────────────────
 /**
