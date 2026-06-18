@@ -196,13 +196,14 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
   if (existing) {
-    // Jika bot sedang running, kembalikan instance yang ada (tidak bisa recreate saat live)
-    if (existing.getState().running) {
+    // Kembalikan instance yang ada bila sedang running atau dalam proses start
+    const st = existing.getState();
+    if (st.running || st.starting) {
       if (configOverrides.botId) existing.config.botId = configOverrides.botId;
       return existing;
     }
 
-    // Jika bot berhenti, recreate dengan kredensial terbaru (user bisa ganti API key)
+    // Bot berhenti → recreate dengan kredensial terbaru (user bisa ganti API key)
     delete botsMap[key];
   }
   const bot = new BotEngine({
@@ -234,7 +235,8 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
   if (existing) {
-    if (existing.getState().running) return existing;
+    const st = existing.getState();
+    if (st.running || st.starting) return existing;
     delete botsMap[key];
   }
 
@@ -263,7 +265,16 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
     accountCoordinator,
     dryRun:       opts.dryRun,
     conflictMode: process.env.MULTI_STRATEGY_CONFLICT_MODE || "skip",
-    engineConfig: { botId: opts.botId },
+    engineConfig: {
+      botId:        opts.botId,
+      // Exchange creds in engineConfig so coordinator can make a single pre-flight
+      // balance + leverage call instead of N calls (one per engine).
+      exchangeType: opts.exchangeType || "bitget",
+      apiKey:       opts.apiKey,
+      apiSecret:    opts.apiSecret,
+      passphrase:   opts.passphrase,
+      leverage:     20, // default; engines read their own strategy config in _startup
+    },
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
     maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 2,
