@@ -6,8 +6,8 @@ module.exports = function createBotsRouter(helpers) {
   const router = express.Router();
   const { asyncHandler } = require("../../middleware/errorHandler");
   const { validateBotStartInput, validateSymbolParam } = require("../../middleware/validation");
-  const { PrismaClient } = require("@prisma/client");
-  const prisma = new PrismaClient();
+  // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+  const prisma = require("../../infrastructure/db/prismaClient");
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
@@ -35,28 +35,16 @@ module.exports = function createBotsRouter(helpers) {
     return isEncrypted(value) ? decrypt(value) : value;
   }
 
-  /** Gabungkan record DB dengan state live (BotEngine ATAU MultiStrategyCoordinator). */
-  async function mergeBotWithLiveState(userId, botRecord) {
+  /**
+   * Gabungkan record DB dengan state live (BotEngine ATAU MultiStrategyCoordinator).
+   * `openTradesMap` (opsional): Map symbol→trades hasil 1 query getOpenTradesByUser,
+   * agar GET /bots tidak fan-out N query ke pool (1 per bot). Bila tidak diberikan,
+   * fallback query per-symbol (dipakai endpoint single-bot).
+   */
+  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null) {
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
-      // #region agent log
-      if (live.running !== botRecord.running) {
-        try {
-          require("fs").appendFileSync(
-            "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log",
-            JSON.stringify({
-              sessionId: "3df08f",
-              hypothesisId: "H1",
-              location: "bots-afs.js:mergeBotWithLiveState",
-              message: "DB vs in-memory running mismatch",
-              data: { symbol: botRecord.symbol, dbRunning: botRecord.running, liveRunning: live.running },
-              timestamp: Date.now(),
-            }) + "\n"
-          );
-        } catch { /* ignore */ }
-      }
-      // #endregion
       return {
         ...botRecord,
         ...live,
@@ -78,7 +66,9 @@ module.exports = function createBotsRouter(helpers) {
     // Recent Trades and Bot Card stay in sync.
     let openPositions = [];
     try {
-      const dbTrades = await db.getOpenTradesBySymbol(botRecord.symbol, userId);
+      const dbTrades = openTradesMap
+        ? (openTradesMap.get(botRecord.symbol) || [])
+        : await db.getOpenTradesBySymbol(botRecord.symbol, userId);
       openPositions = dbTrades.map(t => ({
         id:          t.order_id || `db_${t.id}`,
         dbId:        t.id,
@@ -130,10 +120,16 @@ module.exports = function createBotsRouter(helpers) {
         },
       });
 
+      // Satu query untuk SEMUA posisi terbuka user → hindari N query (1 per bot)
+      // yang bisa menyedot pool koneksi saat banyak bot & start serentak.
+      let openTradesMap = new Map();
+      try { openTradesMap = await db.getOpenTradesByUser(userId); }
+      catch { /* non-critical — mergeBot fallback ke array kosong */ }
+
       res.json({
         ok: true,
         count: bots.length,
-        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b))),
+        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap))),
       });
     })
   );

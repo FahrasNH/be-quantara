@@ -6,11 +6,11 @@
 module.exports = function createAdminRouter() {
   const express    = require("express");
   const router     = express.Router();
-  const { PrismaClient } = require("@prisma/client");
   const { asyncHandler }  = require("../../middleware/errorHandler");
   const { TIER_ORDER }    = require("../../domain/tierConfig");
 
-  const prisma = new PrismaClient();
+  // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+  const prisma = require("../../infrastructure/db/prismaClient");
 
   // Simple admin secret check (set ADMIN_SECRET in .env)
   function requireAdminSecret(req, res, next) {

@@ -9,14 +9,14 @@
 module.exports = function createSubscriptionRouter() {
   const express = require("express");
   const router  = express.Router();
-  const { PrismaClient } = require("@prisma/client");
   const { asyncHandler } = require("../../middleware/errorHandler");
   const { listTiers, getTierConfig, TIER_ORDER } = require("../../domain/tierConfig");
   const { getUserTier } = require("../../services/entitlement");
   const AuthService = require("../../services/AuthService");
   const cfg = require("../../config/env");
 
-  const prisma = new PrismaClient();
+  // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+  const prisma = require("../../infrastructure/db/prismaClient");
 
   const FREE_TIER = "FOUNDRY"; // lowest tier — unsubscribe drops here
 

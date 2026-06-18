@@ -1,7 +1,7 @@
-const { PrismaClient } = require("@prisma/client");
 const { encrypt, decrypt, isEncrypted, fingerprint } = require("../infrastructure/security/crypto");
 
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require("../infrastructure/db/prismaClient");
 
 function assertUserExchangeModel() {
   if (!prisma.userExchange) {

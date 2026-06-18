@@ -15,9 +15,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ccxt = require("ccxt");
-const { PrismaClient } = require("@prisma/client");
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 
-const prisma = new PrismaClient();
+const prisma = require("../infrastructure/db/prismaClient");
 
 // Supported exchanges for symbol listing (public, keyless CCXT).
 const SUPPORTED = new Set(["bitget", "okx", "binance"]);
@@ -102,27 +102,11 @@ async function getConnectedExchange(userId) {
         exchangeType: keeper.exchangeType,
       },
     });
-    // #region agent log
-    try {
-      require("fs").appendFileSync(
-        "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log",
-        JSON.stringify({ sessionId: "3df08f", hypothesisId: "H6", location: "ExchangeService.js:getConnectedExchange", message: "healed multi-active exchanges", data: { userId, kept: keeper.exchangeType, deactivated: actives.slice(1).map((r) => r.exchangeType) }, timestamp: Date.now() }) + "\n"
-      );
-    } catch { /* ignore */ }
-    // #endregion
     return keeper.exchangeType.toLowerCase();
   }
 
   if (actives.length === 1) {
     const type = actives[0].exchangeType.toLowerCase();
-    // #region agent log
-    try {
-      require("fs").appendFileSync(
-        "/Users/fahras/Documents/Homework/Bot Trading/.cursor/debug-3df08f.log",
-        JSON.stringify({ sessionId: "3df08f", hypothesisId: "H6", location: "ExchangeService.js:getConnectedExchange", message: "single active exchange", data: { userId, exchange: type }, timestamp: Date.now() }) + "\n"
-      );
-    } catch { /* ignore */ }
-    // #endregion
     return type;
   }
 
