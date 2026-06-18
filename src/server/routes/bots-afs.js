@@ -12,6 +12,7 @@ module.exports = function createBotsRouter(helpers) {
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
   const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies } = require("../../services/entitlement");
+  const db = require("../../infrastructure/db/database");
 
   // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
   // dry-run (TASK 4.3), OFF di production via MULTI_STRATEGY_ENABLED=false.
@@ -35,7 +36,7 @@ module.exports = function createBotsRouter(helpers) {
   }
 
   /** Gabungkan record DB dengan state live (BotEngine ATAU MultiStrategyCoordinator). */
-  function mergeBotWithLiveState(userId, botRecord) {
+  async function mergeBotWithLiveState(userId, botRecord) {
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
@@ -73,12 +74,30 @@ module.exports = function createBotsRouter(helpers) {
         strategyGroup: live.strategyGroup ?? botRecord.strategyGroup ?? [],
       };
     }
+    // BUG-01: stopped bot may still have open trades in DB — surface them so
+    // Recent Trades and Bot Card stay in sync.
+    let openPositions = [];
+    try {
+      const dbTrades = await db.getOpenTradesBySymbol(botRecord.symbol, userId);
+      openPositions = dbTrades.map(t => ({
+        id:          t.order_id || `db_${t.id}`,
+        dbId:        t.id,
+        side:        t.side,
+        entry:       t.entry_price,
+        sl:          t.sl,
+        tp:          t.tp,
+        size:        t.size ?? 0,
+        openTime:    new Date(t.open_time).getTime(),
+        atr:         t.atr,
+        restoredFrom: t.session_id,
+      }));
+    } catch { /* non-critical — fall back to empty */ }
     return {
       ...botRecord,
       botId:          botRecord.symbol,
       startCapital:   botRecord.capital,
-      openPositions:  [],
-      openTradeCount: 0,
+      openPositions,
+      openTradeCount: openPositions.length,
       closedTrades:   botRecord.totalTrades ?? 0,
       totalPnL:       0,
       unrealizedPnL:  0,
@@ -114,7 +133,7 @@ module.exports = function createBotsRouter(helpers) {
       res.json({
         ok: true,
         count: bots.length,
-        bots: bots.map(b => mergeBotWithLiveState(userId, b)),
+        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b))),
       });
     })
   );
@@ -282,7 +301,7 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       const instance = getBot(userId, symbol);
-      const merged   = mergeBotWithLiveState(userId, bot);
+      const merged   = await mergeBotWithLiveState(userId, bot);
 
       res.json({
         ok: true,
