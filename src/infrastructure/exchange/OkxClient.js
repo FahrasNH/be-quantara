@@ -28,6 +28,73 @@ class OkxClient extends CcxtFuturesClient {
   }
 
   /**
+   * Override setTPSL for OKX USDT perpetual swap.
+   *
+   * CcxtFuturesClient.setTPSL method 1 (MARKET + stopLossPrice) fails for OKX
+   * because OKX algo orders use a separate endpoint. Method 2 would work but
+   * defaults to "last" price trigger (manipulation risk). This override uses:
+   *   - triggerPriceType: "mark"  → trigger on mark price (OKX: triggerPxType)
+   *     safer than last price — avoids flash-spike from firing SL/TP early
+   *   - tdMode: "cross"           → already in _orderParams() for OKX but
+   *     explicitly set here for clarity
+   *   - reduceOnly: true          → ensure order only reduces position, no flip
+   *
+   * Falls back to last-price trigger if mark-price trigger is rejected.
+   */
+  async setTPSL(symbol, planType, triggerPrice, holdSide, size) {
+    const isTP      = planType === "profit_plan";
+    const isLong    = holdSide === "long";
+    const closeSide = isLong ? "sell" : "buy";
+    const trigPrice = parseFloat(triggerPrice);
+    const marketSymbol = this._marketSymbol(symbol);
+    const orderType    = isTP ? "takeProfitMarket" : "stopMarket";
+    const errors = [];
+
+    // ── Pendekatan 1: mark price trigger (anti-manipulation) ──────────────────
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        orderType,
+        closeSide,
+        size,
+        trigPrice,
+        {
+          tdMode:           "cross",
+          triggerPrice:     trigPrice,
+          triggerPriceType: "mark",  // CCXT unified → OKX triggerPxType: mark
+          reduceOnly:       true,
+        }
+      );
+      return { success: true, method: "okxMarkPrice", orderId: order.id };
+    } catch (e1) {
+      errors.push(`okxMarkPrice: ${e1.message}`);
+    }
+
+    // ── Pendekatan 2: last price trigger (fallback) ───────────────────────────
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        orderType,
+        closeSide,
+        size,
+        trigPrice,
+        {
+          tdMode:       "cross",
+          triggerPrice: trigPrice,
+          reduceOnly:   true,
+        }
+      );
+      return { success: true, method: "okxLastPrice", orderId: order.id };
+    } catch (e2) {
+      errors.push(`okxLastPrice: ${e2.message}`);
+    }
+
+    const detail = errors.join(" | ");
+    console.warn(`[setTPSL OKX] Semua pendekatan gagal (${planType}): ${detail}`);
+    return { success: false, message: detail };
+  }
+
+  /**
    * Validasi kredensial OKX: wajib passphrase + balance swap dapat diakses.
    */
   async validatePermissions() {
