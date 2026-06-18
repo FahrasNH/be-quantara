@@ -373,6 +373,30 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+      // BUG-03: Pre-flight margin budget check — reject early if live mode and
+      // available margin is clearly insufficient (avoids bot starting then hanging).
+      if (!bot.dryRun) {
+        const coordinator = getCoordinator(userId);
+        const snap = coordinator.snapshot();
+        if (snap.accountEquity > 0) {
+          const remaining = snap.budget - snap.committedMargin;
+          // Conservative estimate: assume minimum 5× leverage so margin = capital / 5.
+          // Real leverage check happens at entry time via canOpen(). This guards
+          // obvious over-allocation (e.g. $500 capital, only $5 budget left).
+          const DEFAULT_LEVERAGE = 5;
+          const estimatedMargin = bot.capital / DEFAULT_LEVERAGE;
+          if (estimatedMargin > remaining) {
+            return res.status(400).json({
+              ok: false,
+              statusCode: 400,
+              message: `Margin akun tidak cukup untuk start bot ${symbol}. Tersedia: $${remaining.toFixed(2)}, dibutuhkan: ≈$${estimatedMargin.toFixed(2)} (estimasi leverage ${DEFAULT_LEVERAGE}×). Kurangi capital, stop bot lain, atau top up balance.`,
+              available: remaining,
+              required: estimatedMargin,
+            });
+          }
+        }
+      }
+
       const { getExchangeCredentials } = require("../../services/userExchange");
       const { getConnectedExchange } = require("../../services/ExchangeService");
       const connectedExchange = await getConnectedExchange(userId);
