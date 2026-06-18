@@ -28,6 +28,73 @@ class BinanceClient extends CcxtFuturesClient {
     return out;
   }
 
+  /**
+   * Override setTPSL for Binance USDT-M Futures.
+   *
+   * CcxtFuturesClient.setTPSL uses generic CCXT params that Binance rejects or
+   * misinterprets (unknown triggerPrice param, lot-size precision issues with
+   * size+reduceOnly). Binance-native approach:
+   *   - closePosition: "true"  → exchange closes the full position when triggered
+   *                              (no quantity needed, no lot-size mismatch)
+   *   - workingType: MARK_PRICE → triggers on mark price (anti-manipulation)
+   *   - priceProtect: "true"   → rejects orders whose trigger is far from mark price
+   *
+   * Falls back to explicit size+reduceOnly if closePosition is rejected (e.g.
+   * position partially filled before SL is placed).
+   */
+  async setTPSL(symbol, planType, triggerPrice, holdSide, size) {
+    const isTP     = planType === "profit_plan";
+    const isLong   = holdSide === "long";
+    const closeSide = isLong ? "sell" : "buy";
+    const trigPrice = parseFloat(triggerPrice);
+    const marketSymbol = this._marketSymbol(symbol);
+    const orderType    = isTP ? "takeProfitMarket" : "stopMarket";
+    const errors = [];
+
+    // ── Pendekatan 1: closePosition (tidak perlu size — paling robust) ────────
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        orderType,
+        closeSide,
+        undefined,  // no quantity when closePosition=true
+        trigPrice,
+        {
+          stopPrice:    trigPrice,
+          closePosition: "true",
+          workingType:  "MARK_PRICE",
+          priceProtect: "true",
+        }
+      );
+      return { success: true, method: "binanceClosePosition", orderId: order.id };
+    } catch (e1) {
+      errors.push(`binanceClosePosition: ${e1.message}`);
+    }
+
+    // ── Pendekatan 2: size + reduceOnly (fallback jika closePosition ditolak) ─
+    try {
+      const order = await this.exchange.createOrder(
+        marketSymbol,
+        orderType,
+        closeSide,
+        size,
+        trigPrice,
+        {
+          stopPrice:   trigPrice,
+          reduceOnly:  true,
+          workingType: "MARK_PRICE",
+        }
+      );
+      return { success: true, method: "binanceReduceOnly", orderId: order.id };
+    } catch (e2) {
+      errors.push(`binanceReduceOnly: ${e2.message}`);
+    }
+
+    const detail = errors.join(" | ");
+    console.warn(`[setTPSL Binance] Semua pendekatan gagal (${planType}): ${detail}`);
+    return { success: false, message: detail };
+  }
+
   async validatePermissions() {
     let restrictions;
     try {
