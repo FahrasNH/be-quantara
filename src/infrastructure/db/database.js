@@ -11,7 +11,22 @@ const { Pool, types } = require("pg");
 // JS safe integer, jadi paksa parseInt agar konsisten dgn perilaku SQLite.
 types.setTypeParser(20, (v) => parseInt(v, 10));
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Pool RAW pg untuk query engine (trades/sessions/equity). Dibatasi eksplisit
+// agar: (1) total koneksi (pool ini + PrismaClient bersama) tetap jauh di bawah
+// max_connections Postgres saat banyak bot start serentak; (2) request TIDAK
+// menggantung selamanya menunggu koneksi — bila pool penuh > timeout, query
+// gagal cepat (caller menangani) alih-alih membuat server "seakan mati".
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: parseInt(process.env.PG_POOL_MAX, 10) || 10,
+  connectionTimeoutMillis: 10000, // tunggu maks 10s ambil koneksi, lalu error
+  idleTimeoutMillis: 30000,       // lepas koneksi idle setelah 30s
+});
+
+// Jangan biarkan error koneksi idle men-crash proses (mis. Postgres restart).
+pool.on("error", (err) => {
+  console.error("[pg pool] idle client error:", err.message);
+});
 
 // ─────────────────────────────────────────────
 // INISIALISASI TABEL (dipanggil eksplisit via init())
@@ -833,6 +848,30 @@ async function getOpenTradesBySymbol(symbol, userId = null) {
 }
 
 /**
+ * Ambil SEMUA posisi terbuka milik satu user lintas semua simbol dalam SATU query.
+ * Dipakai GET /bots agar tidak fan-out N query (1 per bot) ke pool — penting saat
+ * banyak bot sehingga poll tidak menyedot seluruh koneksi pool saat start serentak.
+ * @returns {Promise<Map<string, Array>>} symbol → array trade terbuka
+ */
+async function getOpenTradesByUser(userId) {
+  if (userId == null) return new Map();
+  const { rows } = await pool.query(
+    `SELECT t.*, s.exchange AS _exchange
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE t.close_time IS NULL AND s.user_id = $1
+     ORDER BY t.open_time ASC`,
+    [userId]
+  );
+  const bySymbol = new Map();
+  for (const r of rows) {
+    if (!bySymbol.has(r.symbol)) bySymbol.set(r.symbol, []);
+    bySymbol.get(r.symbol).push(r);
+  }
+  return bySymbol;
+}
+
+/**
  * Hitung posisi TERBUKA (close_time IS NULL) untuk satu user+symbol+mode.
  * Sumber kebenaran tunggal untuk gate cap-per-koin (canEnter) — agar cap
  * menghormati SEMUA posisi terbuka di DB, bukan hanya yang ada di memori engine
@@ -1097,6 +1136,7 @@ module.exports = {
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
+  getOpenTradesByUser,
   getOpenPositionsForGate,
   getInsights,
   getTradesExport,

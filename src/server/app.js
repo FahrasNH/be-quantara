@@ -467,8 +467,8 @@ const PORT = process.env.PORT || 3000;
 // openSession) sehingga tidak membuat sesi duplikat.
 async function resumeRunningBots() {
   try {
-    const { PrismaClient } = require("@prisma/client");
-    const prisma = new PrismaClient();
+    // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+    const prisma = require("../infrastructure/db/prismaClient");
     const { getExchangeCredentials } = require("../services/userExchange");
 
     const bots = await prisma.bot.findMany({

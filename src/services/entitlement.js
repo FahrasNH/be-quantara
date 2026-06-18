@@ -5,12 +5,12 @@
 // Import canUseStrategy() wherever strategy access must be verified.
 // ─────────────────────────────────────────────
 
-const { PrismaClient } = require("@prisma/client");
 const { canUseStrategy, getTierConfig, migrateLegacyTier } = require("../domain/tierConfig");
 // Sumber kebenaran strategi yang belum boleh live (single source of truth).
 const { DRY_RUN_ONLY_STRATEGIES } = require("../middleware/strategyGuard");
 
-const prisma = new PrismaClient();
+// PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
+const prisma = require("../infrastructure/db/prismaClient");
 
 /**
  * Apakah strategi sudah siap untuk LIVE trading (bukan dry-run-only)?
