@@ -93,7 +93,8 @@ class MultiStrategyCoordinator extends EventEmitter {
 
     /** @type {Map<string, object>} strategyKey -> engine */
     this.engines = new Map();
-    this.running = false;
+    this.running  = false;
+    this.starting = false; // set synchronously in start() before first await
     this.lastDecision = null; // hasil resolveConflicts terakhir (untuk getState/UI)
     this._poll = null;
 
@@ -121,13 +122,39 @@ class MultiStrategyCoordinator extends EventEmitter {
 
   /** Spawn satu engine per strategi (capital equal-weight) lalu start semuanya. */
   async start() {
-    if (this.running) throw new Error("MultiStrategyCoordinator sudah berjalan");
+    if (this.running)  throw new Error("MultiStrategyCoordinator sudah berjalan");
+    if (this.starting) throw new Error("MultiStrategyCoordinator sedang dalam proses start");
+    this.starting = true; // SYNC — set before first await; prevents concurrent start race
 
+    try {
     // Pesan margin sebagai satu grup (anti over-allocate lintas-strategi).
     if (this.accountCoordinator?.reserveGroup) {
       this.accountCoordinator.reserveGroup(
         this.userId, this.symbol, this.strategies, this.totalCapital
       );
+    }
+
+    // ── Pre-flight: 1 balance + leverage + marginMode call shared across all engines ──
+    // Replaces N×3 redundant exchange calls (N = strategy count) with 1×3 calls.
+    // Result is passed to each engine via config so _startup() skips those calls.
+    let sharedBalance = null;
+    let sharedLeverageSet = false;
+    const { exchangeType, apiKey, apiSecret, passphrase } = this.engineConfig;
+    if (apiKey && apiSecret) {
+      try {
+        const { createExchangeClient } = require("../infrastructure/exchange");
+        const client = createExchangeClient(exchangeType, { apiKey, apiSecret, passphrase });
+        sharedBalance = await client.getBalance("USDT");
+        if (!this.dryRun) {
+          const leverage = this.engineConfig.leverage || 20;
+          await client.setLeverage(this.symbol, leverage);
+          await client.setMarginMode(this.symbol, "crossed");
+          sharedLeverageSet = true;
+        }
+        this._log("info", `Pre-flight ✓ balance $${(sharedBalance.equity || sharedBalance.available || 0).toFixed(2)} USDT${sharedLeverageSet ? ` | leverage ${this.engineConfig.leverage || 20}x diset` : ""}`);
+      } catch (err) {
+        this._log("warn", `Pre-flight exchange call gagal: ${err.message} — tiap engine retry sendiri`);
+      }
     }
 
     for (let i = 0; i < this.strategies.length; i++) {
@@ -152,6 +179,9 @@ class MultiStrategyCoordinator extends EventEmitter {
         // Referensi balik ke koordinator grup → engine memanggil canEnter() sebagai
         // gate sebelum membuka posisi (cap per-koin + proteksi hedge lintas-strategi).
         groupCoordinator: this,
+        // Pre-fetched balance + leverage flag so engines skip redundant exchange calls
+        sharedBalance,
+        sharedLeverageSet,
       });
 
       // Relay event engine → konsumen koordinator (WS streaming, dll.)
@@ -175,6 +205,10 @@ class MultiStrategyCoordinator extends EventEmitter {
     }
 
     this.emit("status", this.getState());
+
+    } finally {
+      this.starting = false;
+    }
   }
 
   /** Stop semua engine dan lepas reservasi margin grup. */
@@ -400,7 +434,8 @@ class MultiStrategyCoordinator extends EventEmitter {
     const winRate   = trades.length > 0 ? Math.round((wins / trades.length) * 100) : 0;
 
     return {
-      running: this.running,
+      running:  this.running,
+      starting: this.starting,
       symbol: this.symbol,
       dryRun: this.dryRun,
       multiStrategy: true,
