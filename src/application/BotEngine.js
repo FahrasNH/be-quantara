@@ -166,6 +166,7 @@ class BotEngine extends EventEmitter {
 
     this.state = {
       running:       false,
+      starting:      false, // set synchronously in start() before first await — prevents double-start race
       openPositions: [],
       trades:        [],
       capital:       0,
@@ -347,6 +348,7 @@ class BotEngine extends EventEmitter {
   getState() {
     return {
       running:       this.state.running,
+      starting:      this.state.starting,
       sessionId:     this.sessionId,
       symbol:        this.config.symbol,
       exchange:      this.config.exchange,
@@ -442,7 +444,9 @@ class BotEngine extends EventEmitter {
   }
 
   async start() {
-    if (this.state.running) throw new Error("Bot sudah berjalan");
+    if (this.state.running)  throw new Error("Bot sudah berjalan");
+    if (this.state.starting) throw new Error("Bot sedang dalam proses start");
+    this.state.starting = true; // SYNC — set before first await; prevents concurrent start race
 
     // Reset in-memory state
     this.state.trades        = [];
@@ -451,6 +455,7 @@ class BotEngine extends EventEmitter {
     this.state.checkCount    = 0;
     this.state.errors        = 0;
 
+    try {
     await this._startup();
     this.state.running = true;
 
@@ -618,6 +623,10 @@ class BotEngine extends EventEmitter {
     this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
 
     this._log("info", `Bot berjalan — cek setiap ${this.config.checkInterval / 1000}s`);
+
+    } finally {
+      this.state.starting = false;
+    }
   }
 
   async stop() {
@@ -689,7 +698,11 @@ class BotEngine extends EventEmitter {
       this.state.capital = this.state.startCapital = this.config.capital || 500;
     } else {
       try {
-        const bal = await this.client.getBalance(this.config.marginCoin);
+        // Use pre-fetched balance from MultiStrategyCoordinator if available (avoids
+        // N redundant getBalance() calls when N engines share the same coin/account).
+        const bal = this.config.sharedBalance
+          ? this.config.sharedBalance
+          : await this.client.getBalance(this.config.marginCoin);
         const totalEquity = (bal.equity > 0 ? bal.equity : bal.available);
 
         if (this.config.dryRun) {
@@ -706,9 +719,14 @@ class BotEngine extends EventEmitter {
           this.state.capital      = totalEquity;
           this.state.startCapital = totalEquity;
           this._log("info", `Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
-          await this.client.setLeverage(this.config.symbol, this.config.leverage);
-          await this.client.setMarginMode(this.config.symbol, "crossed");
-          this._log("info", `Leverage   : ${this.config.leverage}x diset ✓`);
+          if (this.config.sharedLeverageSet) {
+            // Leverage + margin mode already set once by coordinator for this symbol.
+            this._log("info", `Leverage   : ${this.config.leverage}x diset ✓ (koordinator)`);
+          } else {
+            await this.client.setLeverage(this.config.symbol, this.config.leverage);
+            await this.client.setMarginMode(this.config.symbol, "crossed");
+            this._log("info", `Leverage   : ${this.config.leverage}x diset ✓`);
+          }
         }
       } catch (err) {
         this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${err.message}`);

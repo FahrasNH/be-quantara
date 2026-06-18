@@ -464,20 +464,40 @@ module.exports = function createBotsRouter(helpers) {
             passphrase:  decryptedPassphrase,
           });
 
-      if (!instance.getState().running) {
-        await instance.start();
+      const instState = instance.getState();
+
+      if (!instState.running && !instState.starting) {
+        // Fire startup in background — respond 202 immediately so FE is never blocked
+        // by exchange network calls (getBalance × N + setLeverage × N).
+        // instance.start() sets state.starting = true synchronously before its first
+        // await, so concurrent requests for the same symbol see it immediately.
+        const startPromise = instance.start();
+
+        res.status(202).json({
+          ok: true,
+          message: `Bot ${symbol} starting...`,
+          symbol,
+          config: bot,
+        });
+
+        startPromise
+          .then(() =>
+            AuthService.logAction(userId, "BOT_START", "bot", bot.id, req.ip, req.headers["user-agent"]).catch(() => {})
+          )
+          .catch(async (err) => {
+            console.error(`[bot-start:${symbol}] startup gagal: ${err.message}`);
+            try {
+              await prisma.bot.update({
+                where: { userId_symbol: { userId, symbol } },
+                data:  { running: false },
+              });
+            } catch { /* ignore rollback failure */ }
+          });
+
+        return;
       }
 
-      // Log action
-      await AuthService.logAction(
-        userId,
-        "BOT_START",
-        "bot",
-        bot.id,
-        req.ip,
-        req.headers["user-agent"]
-      );
-
+      // Already running or starting — acknowledge without re-starting
       res.json({
         ok: true,
         message: `Bot ${symbol} started`,
