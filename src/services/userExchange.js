@@ -124,8 +124,8 @@ async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchan
     throw err;
   }
 
-  if (exchangeType === "bitget" && !resolvedPass) {
-    const err = new Error("Passphrase is required for Bitget");
+  if ((exchangeType === "bitget" || exchangeType === "okx") && !resolvedPass) {
+    const err = new Error(`Passphrase wajib diisi untuk ${exchangeType === "bitget" ? "Bitget" : "OKX"}.`);
     err.statusCode = 400;
     throw err;
   }

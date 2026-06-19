@@ -26,7 +26,7 @@ const TIER_CONFIG = {
 
   FORGE: {
     label: "Forge",
-    price: 29,
+    price: 24,
     strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"],
     maxPositions: 2,
     capitalAllocation: { equal: true },
@@ -40,7 +40,7 @@ const TIER_CONFIG = {
 
   MINT: {
     label: "Mint",
-    price: 79,
+    price: 54,
     strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"],
     maxPositions: 3,
     capitalAllocation: { equal: true },
@@ -53,7 +53,7 @@ const TIER_CONFIG = {
 
   VAULT: {
     label: "Vault",
-    price: 299,
+    price: 99,
     strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     maxPositions: 4,
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
