@@ -41,29 +41,31 @@ module.exports = function createBotsRouter(helpers) {
    * agar GET /bots tidak fan-out N query ke pool (1 per bot). Bila tidak diberikan,
    * fallback query per-symbol (dipakai endpoint single-bot).
    */
-  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null) {
+  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null, tierStrategies = []) {
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
+      // Running instance: use live strategyGroup. If single-strategy engine (no multiStrategy),
+      // fall back to tierStrategies so the card shows the tier count even if the in-memory
+      // instance is a legacy BotEngine (will be upgraded on next restart).
+      const liveSg = live.strategyGroup ?? botRecord.strategyGroup ?? [];
+      const effectiveSg = liveSg.length > 0 ? liveSg : tierStrategies;
       return {
         ...botRecord,
         ...live,
         id:          botRecord.id,
         botId:       botRecord.symbol,
-        // DB adalah sumber kebenaran setelah exchange switch / graceful stop.
         running:     botRecord.running ? live.running : false,
         strategyKey: botRecord.strategyKey,
         params: {
           leverage:     instance.config?.leverage ?? null,
           riskPerTrade: instance.config?.riskPerTrade ?? null,
         },
-        // Multi-Strategy per Coin: jika instance adalah koordinator, live.multiStrategy
-        // + live.strategyGroup + live.engines ikut tersurfacing ke FE (badge per-strategi).
-        strategyGroup: live.strategyGroup ?? botRecord.strategyGroup ?? [],
+        strategyGroup: effectiveSg,
+        multiStrategy: live.multiStrategy || effectiveSg.length > 1,
       };
     }
-    // BUG-01: stopped bot may still have open trades in DB — surface them so
-    // Recent Trades and Bot Card stay in sync.
+    // Stopped bot path: use DB strategyGroup, fall back to tier strategies for legacy bots.
     let openPositions = [];
     try {
       const dbTrades = openTradesMap
@@ -82,7 +84,9 @@ module.exports = function createBotsRouter(helpers) {
         restoredFrom: t.session_id,
       }));
     } catch { /* non-critical — fall back to empty */ }
-    const sg = Array.isArray(botRecord.strategyGroup) ? botRecord.strategyGroup : [];
+    const dbSg = Array.isArray(botRecord.strategyGroup) && botRecord.strategyGroup.length > 0
+      ? botRecord.strategyGroup
+      : tierStrategies;  // legacy bots with strategyGroup=[] show tier count
     return {
       ...botRecord,
       botId:          botRecord.symbol,
@@ -92,8 +96,8 @@ module.exports = function createBotsRouter(helpers) {
       closedTrades:   botRecord.totalTrades ?? 0,
       totalPnL:       0,
       unrealizedPnL:  0,
-      strategyGroup:  sg,
-      multiStrategy:  sg.length > 1,
+      strategyGroup:  dbSg,
+      multiStrategy:  dbSg.length > 1,
     };
   }
 
@@ -130,10 +134,17 @@ module.exports = function createBotsRouter(helpers) {
       try { openTradesMap = await db.getOpenTradesByUser(userId); }
       catch { /* non-critical — mergeBot fallback ke array kosong */ }
 
+      // Fetch tier strategies ONCE for this user (for stopped bots with empty strategyGroup).
+      // This ensures legacy bots with strategyGroup=[] display the correct tier count.
+      let tierStrategies = [];
+      if (MULTI_STRATEGY_ENABLED) {
+        try { tierStrategies = await getTierStrategies(userId, "dry"); } catch (_) {}
+      }
+
       res.json({
         ok: true,
         count: bots.length,
-        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap))),
+        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap, tierStrategies))),
       });
     })
   );
@@ -819,6 +830,10 @@ module.exports = function createBotsRouter(helpers) {
         const cap = Number(capital);
         if (!Number.isFinite(cap) || cap <= 0) {
           return res.status(400).json({ ok: false, statusCode: 400, message: "capital harus angka lebih dari 0" });
+        }
+        // Hard upper limit: $1,000,000 per bot to catch fat-finger inputs
+        if (cap > 1_000_000) {
+          return res.status(400).json({ ok: false, statusCode: 400, message: "capital melebihi batas maksimum $1,000,000" });
         }
         data.capital = cap;
       }
