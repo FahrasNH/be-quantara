@@ -82,6 +82,7 @@ module.exports = function createBotsRouter(helpers) {
         restoredFrom: t.session_id,
       }));
     } catch { /* non-critical — fall back to empty */ }
+    const sg = Array.isArray(botRecord.strategyGroup) ? botRecord.strategyGroup : [];
     return {
       ...botRecord,
       botId:          botRecord.symbol,
@@ -91,6 +92,8 @@ module.exports = function createBotsRouter(helpers) {
       closedTrades:   botRecord.totalTrades ?? 0,
       totalPnL:       0,
       unrealizedPnL:  0,
+      strategyGroup:  sg,
+      multiStrategy:  sg.length > 1,
     };
   }
 
@@ -110,6 +113,7 @@ module.exports = function createBotsRouter(helpers) {
           symbol: true,
           capital: true,
           strategyKey: true,
+          strategyGroup: true,
           dryRun: true,
           tpMode: true,
           running: true,
