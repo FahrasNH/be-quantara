@@ -619,6 +619,12 @@ class BotEngine extends EventEmitter {
 
     await this._tick();
 
+    // Jitter: sebarkan start-time interval tiap engine secara acak (0–30s) agar
+    // 300+ engines yang start hampir bersamaan tidak semua tick di t=N, N+60s, N+120s…
+    // Tanpa ini, "Start All" → spike event-loop tiap 60s + exchange 429 berulang.
+    const jitterMs = Math.floor(Math.random() * Math.min(this.config.checkInterval, 30_000));
+    if (jitterMs > 0) await new Promise(r => setTimeout(r, jitterMs));
+
     this._interval       = setInterval(() => this._tick(), this.config.checkInterval);
     this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
 
