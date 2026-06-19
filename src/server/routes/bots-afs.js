@@ -614,10 +614,19 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // Stop instance if running
+      // Stop instance if running OR still starting.
+      // CRITICAL: a bot started via the 202 background path is `starting` (not yet
+      // `running`) for the duration of warm-up. If we only stopped `running` bots, a
+      // Stop All issued during warm-up would skip instance.stop() entirely — the
+      // coordinator would finish starting in the background and keep ticking (zombie)
+      // while DB says stopped, then push running=true back to the FE over WS. Stopping
+      // on `starting` too guarantees stop() actually halts the engine/coordinator.
       const instance = getBot(userId, symbol);
-      if (instance && instance.getState().running) {
-        await instance.stop();
+      if (instance) {
+        const st = instance.getState();
+        if (st.running || st.starting) {
+          await instance.stop();
+        }
       }
 
       // Update DB
