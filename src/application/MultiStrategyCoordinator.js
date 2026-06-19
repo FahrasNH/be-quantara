@@ -95,6 +95,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.engines = new Map();
     this.running  = false;
     this.starting = false; // set synchronously in start() before first await
+    this._stopRequested = false; // di-set stop() agar start() yang sedang warm-up bisa batal
     this.lastDecision = null; // hasil resolveConflicts terakhir (untuk getState/UI)
     this._poll = null;
 
@@ -125,6 +126,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     if (this.running)  throw new Error("MultiStrategyCoordinator sudah berjalan");
     if (this.starting) throw new Error("MultiStrategyCoordinator sedang dalam proses start");
     this.starting = true; // SYNC — set before first await; prevents concurrent start race
+    this._stopRequested = false; // reset di tiap start baru
 
     try {
     // Pesan margin sebagai satu grup (anti over-allocate lintas-strategi).
@@ -158,6 +160,13 @@ class MultiStrategyCoordinator extends EventEmitter {
     }
 
     for (let i = 0; i < this.strategies.length; i++) {
+      // stop() dipanggil selama warm-up → hentikan spawn engine berikutnya.
+      // Tanpa ini, loop terus membuat & start engine SETELAH stop() membersihkan
+      // this.engines → engine yatim yang tetap ticking (zombie) walau bot di-stop.
+      if (this._stopRequested) {
+        this._log("warn", "Spawn engine dibatalkan — stop diminta saat warm-up");
+        break;
+      }
       const strategyKey = this.strategies[i];
       const engine = this.engineFactory(strategyKey, {
         ...this.engineConfig,
@@ -195,6 +204,22 @@ class MultiStrategyCoordinator extends EventEmitter {
       this._log("info", `Engine [${strategyKey}] start — capital $${this.capitalPerStrategy.toFixed(2)}`);
     }
 
+    // stop() mendarat selama warm-up → batalkan: hentikan engine yang terlanjur start,
+    // lepas margin grup, JANGAN set running=true (cegah koordinator zombie).
+    if (this._stopRequested) {
+      for (const [k, eng] of this.engines) {
+        try { await eng.stop(); } catch (e) { this._log("error", `Cleanup stop [${k}] gagal: ${e.message}`); }
+      }
+      this.engines.clear();
+      if (this.accountCoordinator?.releaseGroup) {
+        this.accountCoordinator.releaseGroup(this.userId, this.symbol);
+      }
+      this.running = false;
+      this._log("warn", "Start dibatalkan — stop diminta saat warm-up; koordinator tidak diaktifkan");
+      this.emit("status", this.getState());
+      return;
+    }
+
     this.running = true;
     this._log("info", `${this.strategies.length} strategi aktif: ${this.strategies.join(", ")}`);
 
@@ -213,6 +238,9 @@ class MultiStrategyCoordinator extends EventEmitter {
 
   /** Stop semua engine dan lepas reservasi margin grup. */
   async stop() {
+    // Sinyalkan ke start() yang mungkin masih warm-up agar membatalkan spawn engine
+    // berikutnya (anti-zombie). Di-set SYNC sebelum await apa pun.
+    this._stopRequested = true;
     if (this._poll) { clearInterval(this._poll); this._poll = null; }
 
     for (const [strategyKey, engine] of this.engines) {

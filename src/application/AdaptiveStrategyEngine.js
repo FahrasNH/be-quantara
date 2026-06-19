@@ -123,6 +123,13 @@ class AdaptiveStrategyEngine extends BotEngine {
    *  5. _handleSignal dipanggil dengan (signal,candle,indicators) → (signal,price,atr,snap,opts)
    */
   async _tick() {
+    // Guard stop: engine sudah dihentikan / diminta stop → jangan proses tick.
+    // _tick di-override di sini, jadi guard parent BotEngine._tick tidak berlaku;
+    // tanpa ini, tick zombie yang ter-antri sebelum clearInterval tetap bisa membuka
+    // posisi setelah bot di-stop (langgar aturan: stop harus benar-benar berhenti).
+    if (this._stopRequested || !this.state.running) {
+      return;
+    }
     try {
       // 1. Ambil data candle — method BotEngine yang benar
       const candles = await this._fetchCandles();

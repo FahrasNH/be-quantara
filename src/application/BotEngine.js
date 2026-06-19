@@ -447,6 +447,7 @@ class BotEngine extends EventEmitter {
     if (this.state.running)  throw new Error("Bot sudah berjalan");
     if (this.state.starting) throw new Error("Bot sedang dalam proses start");
     this.state.starting = true; // SYNC — set before first await; prevents concurrent start race
+    this._stopRequested = false; // di-set stop(); start() membatalkan diri jika true
 
     // Reset in-memory state
     this.state.trades        = [];
@@ -457,6 +458,12 @@ class BotEngine extends EventEmitter {
 
     try {
     await this._startup();
+    // stop() dipanggil selama _startup() (mis. Stop All saat warm-up) → batalkan
+    // sebelum membuka sesi & menandai running, agar tidak ada engine zombie.
+    if (this._stopRequested) {
+      this._log("warn", "Start dibatalkan — stop diminta saat warm-up");
+      return;
+    }
     this.state.running = true;
 
     // ── Selalu buat sesi BARU (1 token bisa punya banyak sesi) ────────────
@@ -619,13 +626,31 @@ class BotEngine extends EventEmitter {
 
     await this._tick();
 
+    // stop() mendarat selama open-session/restore/tick → jangan pasang interval apa pun.
+    if (this._stopRequested || !this.state.running) {
+      this._log("warn", "Warm-up dibatalkan — stop diminta; interval tidak dipasang");
+      return;
+    }
+
     // Jitter: sebarkan start-time interval tiap engine secara acak (0–30s) agar
     // 300+ engines yang start hampir bersamaan tidak semua tick di t=N, N+60s, N+120s…
     // Tanpa ini, "Start All" → spike event-loop tiap 60s + exchange 429 berulang.
+    //
+    // PENTING (anti-zombie): pemasangan setInterval DITUNDA via setTimeout yang
+    // handle-nya disimpan (this._startTimer), BUKAN `await new Promise(setTimeout)`.
+    // Dengan await, bila stop() dipanggil selama jendela jitter, stop() membersihkan
+    // this._interval (yang masih null) lalu jitter selesai & memasang interval SETELAH
+    // stop → ticker zombie jalan selamanya walau bot sudah di-stop. Pola deferred
+    // setTimeout membuat stop() bisa membatalkan pemasangan lewat clearTimeout, dan
+    // guard di dalam timer mencegah pemasangan bila stop sudah terjadi.
     const jitterMs = Math.floor(Math.random() * Math.min(this.config.checkInterval, 30_000));
-    if (jitterMs > 0) await new Promise(r => setTimeout(r, jitterMs));
+    this._startTimer = setTimeout(() => {
+      this._startTimer = null;
+      // Bot sudah di-stop selama warm-up → jangan pasang interval (cegah zombie ticker)
+      if (!this.state.running || this._stopRequested) return;
+      this._interval = setInterval(() => this._tick(), this.config.checkInterval);
+    }, jitterMs);
 
-    this._interval       = setInterval(() => this._tick(), this.config.checkInterval);
     this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
 
     this._log("info", `Bot berjalan — cek setiap ${this.config.checkInterval / 1000}s`);
@@ -636,6 +661,12 @@ class BotEngine extends EventEmitter {
   }
 
   async stop() {
+    // Sinyalkan ke start() yang mungkin masih warm-up agar membatalkan diri. Di-set
+    // SYNC sebelum await apa pun, sehingga guard di start() melihatnya.
+    this._stopRequested = true;
+    // Batalkan timer warm-up jitter jika start() masih dalam jendela jitter — tanpa
+    // ini setInterval akan terpasang SETELAH stop() → ticker zombie (lihat start()).
+    if (this._startTimer)     { clearTimeout(this._startTimer); this._startTimer = null; }
     if (this._interval)       clearInterval(this._interval);
     if (this._reportInterval) clearInterval(this._reportInterval);
     this._interval       = null;
@@ -876,6 +907,12 @@ class BotEngine extends EventEmitter {
   // MAIN TICK
   // ─────────────────────────────────────────────
   async _tick() {
+    // Guard stop: bot sudah dihentikan (atau diminta stop) → jangan proses tick.
+    // Mencegah tick zombie yang sempat ter-antri sebelum clearInterval tetap menaruh
+    // order setelah bot "stopped" (langgar aturan: bot dihentikan harus benar berhenti).
+    if (this._stopRequested || !this.state.running) {
+      return;
+    }
     // Guard re-entrancy (#6): _tick async & bisa lebih lama dari checkInterval
     // (ada sleep retry SL 3s + backoff 120s). Tanpa guard, setInterval memicu
     // tick paralel → entry ganda & race pada openPositions.
