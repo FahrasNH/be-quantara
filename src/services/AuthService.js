@@ -136,15 +136,6 @@ class AuthService {
       throw new Error('Invalid credentials');
     }
 
-    // Email must be verified before login is allowed
-    if (!user.emailVerifiedAt) {
-      const err = new Error('Email belum diverifikasi. Cek inbox kamu dan klik link verifikasi, atau minta kirim ulang.');
-      err.statusCode = 403;
-      err.code = 'EMAIL_NOT_VERIFIED';
-      err.email = user.email;
-      throw err;
-    }
-
     // Generate tokens
     const tokens = this.generateTokens(user.id);
 
@@ -166,6 +157,7 @@ class AuthService {
         email: user.email,
         username: user.username,
         balance: user.balance,
+        emailVerified: !!user.emailVerifiedAt,
       },
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -259,6 +251,7 @@ class AuthService {
         email: true,
         username: true,
         balance: true,
+        emailVerifiedAt: true,
         createdAt: true,
       },
     });

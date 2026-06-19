@@ -240,7 +240,11 @@ module.exports = function createAuthRoutes() {
 
       res.json({
         ok: true,
-        user,
+        user: {
+          ...user,
+          emailVerified: !!user.emailVerifiedAt,
+          emailVerifiedAt: undefined,
+        },
       });
     })
   );
