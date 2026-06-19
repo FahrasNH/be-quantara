@@ -54,6 +54,12 @@ function toRawSymbol(symbol) {
 
 class BitgetCCXTClient {
   constructor(apiKey, secretKey, passphrase) {
+    // Trim kredensial — spasi/newline tersembunyi saat paste = signature gagal.
+    const trim = (v) => (typeof v === "string" ? v.trim() : v);
+    apiKey     = trim(apiKey);
+    secretKey  = trim(secretKey);
+    passphrase = trim(passphrase);
+
     this.exchange = new ccxt.bitget({
       apiKey,
       secret: secretKey,
@@ -67,6 +73,20 @@ class BitgetCCXTClient {
       },
     });
     this.symbol = null;
+  }
+
+  /**
+   * Format harga ke presisi tick-size market. Fallback ke angka mentah bila
+   * market belum dimuat — jangan paksa 2 desimal (merusak SL/TP koin murah).
+   */
+  _fmtPrice(marketSymbol, price) {
+    const n = parseFloat(price);
+    if (!Number.isFinite(n)) return n;
+    try {
+      return parseFloat(this.exchange.priceToPrecision(marketSymbol, n));
+    } catch {
+      return n;
+    }
   }
 
   /** Public market data via Bitget Mix API — hindari CCXT loadMarkets (spot/coins). */
@@ -468,12 +488,13 @@ class BitgetCCXTClient {
       const extraParams = { tradeSide: "open" };
 
       // Embed SL/TP atomik dalam order entry (CCXT v4.5 Bitget V2 support)
-      // presetStopLossPrice & presetStopSurplusPrice dikirim bersamaan order masuk
+      // presetStopLossPrice & presetStopSurplusPrice dikirim bersamaan order masuk.
+      // Pakai presisi tick-size, bukan parseFloat mentah, agar koin murah valid.
       if (slPrice) {
-        extraParams.stopLoss = { triggerPrice: parseFloat(slPrice) };
+        extraParams.stopLoss = { triggerPrice: this._fmtPrice(marketSymbol, slPrice) };
       }
       if (tpPrice) {
-        extraParams.takeProfit = { triggerPrice: parseFloat(tpPrice) };
+        extraParams.takeProfit = { triggerPrice: this._fmtPrice(marketSymbol, tpPrice) };
       }
 
       const order = await this.exchange.createMarketOrder(
@@ -522,7 +543,6 @@ class BitgetCCXTClient {
     const isTP      = planType === "profit_plan";
     const isLong    = holdSide === "long";
     const closeSide = isLong ? "sell" : "buy";
-    const trigPrice = parseFloat(triggerPrice);
 
     // Format symbol
     let marketSymbol = symbol;
@@ -533,6 +553,9 @@ class BitgetCCXTClient {
     } else {
       rawSymbol = symbol.replace("/", "").replace(":USDT", "");
     }
+
+    // Presisi tick-size, bukan 2-desimal paksa (rusak utk koin murah).
+    const trigPrice = this._fmtPrice(marketSymbol, triggerPrice);
 
     const errors = [];
 
