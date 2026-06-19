@@ -22,6 +22,10 @@ model User {
   // cannot be connected by two different users (prevents bot conflicts).
   apiKeyHash    String?  @unique
 
+  // Email verification — null = belum terverifikasi
+  emailVerifiedAt         DateTime?
+  emailVerificationToken  String?   @unique
+
   // Telegram integration — user memasukkan chat ID dari @quantara_trading_bot
   telegramChatId String?
 

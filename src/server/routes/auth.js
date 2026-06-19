@@ -1,5 +1,5 @@
 const AuthService = require('../../services/AuthService');
-const { sendPasswordReset } = require('../../services/EmailService');
+const { sendPasswordReset, sendEmailVerification } = require('../../services/EmailService');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { authMiddleware } = require('../../middleware/auth');
 const {
@@ -52,10 +52,16 @@ module.exports = function createAuthRoutes() {
           req.headers['user-agent']
         );
 
+        // Send verification email (best-effort — don't fail registration if SMTP is down)
+        const verifyUrl = `${cfg.APP_URL}/verify-email?token=${user.emailVerificationToken}`;
+        sendEmailVerification(user.email, verifyUrl).catch((emailErr) => {
+          console.error('[Register] Gagal kirim email verifikasi:', emailErr.message);
+        });
+
         res.status(201).json({
           ok: true,
-          message: 'User registered successfully',
-          user,
+          requiresVerification: true,
+          message: 'Registrasi berhasil! Cek email kamu dan klik link verifikasi sebelum login.',
         });
       } catch (err) {
         // Return validation errors with proper format
@@ -97,13 +103,74 @@ module.exports = function createAuthRoutes() {
           ...result,
         });
       } catch (err) {
-        // Return auth errors with proper format
-        res.status(401).json({
+        const status = err.statusCode || 401;
+        res.status(status).json({
           ok: false,
-          statusCode: 401,
+          statusCode: status,
+          code: err.code || undefined,
+          email: err.email || undefined,
           message: err.message,
           errors: [err.message],
         });
+      }
+    })
+  );
+
+  /**
+   * GET /api/v1/auth/verify-email?token=xxx
+   * Verify email from link in verification email.
+   */
+  router.get(
+    '/verify-email',
+    asyncHandler(async (req, res) => {
+      const { token } = req.query;
+      try {
+        const result = await AuthService.verifyEmail(token);
+        res.json({
+          ok: true,
+          alreadyVerified: result.alreadyVerified || false,
+          message: result.alreadyVerified
+            ? 'Email sudah diverifikasi sebelumnya. Silakan login.'
+            : 'Email berhasil diverifikasi! Silakan login.',
+        });
+      } catch (err) {
+        res.status(err.statusCode || 400).json({
+          ok: false,
+          statusCode: err.statusCode || 400,
+          code: err.code,
+          message: err.message,
+        });
+      }
+    })
+  );
+
+  /**
+   * POST /api/v1/auth/resend-verification
+   * Resend verification email (rate-limited by auth limiter).
+   */
+  router.post(
+    '/resend-verification',
+    asyncHandler(async (req, res) => {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ ok: false, message: 'Email diperlukan.' });
+      }
+      try {
+        const result = await AuthService.regenerateVerificationToken(email);
+        if (result) {
+          const verifyUrl = `${cfg.APP_URL}/verify-email?token=${result.token}`;
+          sendEmailVerification(result.email, verifyUrl).catch((e) => {
+            console.error('[ResendVerif] Gagal kirim email:', e.message);
+          });
+        }
+        // Always return 200 — don't reveal if email exists
+        res.json({
+          ok: true,
+          message: 'Jika email terdaftar dan belum diverifikasi, link baru sudah dikirim.',
+        });
+      } catch (err) {
+        const status = err.statusCode || 400;
+        res.status(status).json({ ok: false, statusCode: status, code: err.code, message: err.message });
       }
     })
   );

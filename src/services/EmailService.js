@@ -71,4 +71,50 @@ async function sendPasswordReset(toEmail, resetUrl) {
   });
 }
 
-module.exports = { sendPasswordReset };
+async function sendEmailVerification(toEmail, verifyUrl) {
+  const transporter = getTransporter();
+
+  await transporter.sendMail({
+    from: `"Quantara" <${cfg.EMAIL_USER}>`,
+    to: toEmail,
+    subject: 'Verifikasi email akun Quantara kamu',
+    text: [
+      'Terima kasih sudah mendaftar di Quantara!',
+      '',
+      'Klik link berikut untuk memverifikasi email kamu (berlaku 24 jam):',
+      verifyUrl,
+      '',
+      'Jika kamu tidak mendaftar, abaikan email ini.',
+      '',
+      '— Tim Quantara',
+    ].join('\n'),
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:sans-serif;background:#f2f2fa;padding:32px">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:linear-gradient(135deg,#171430,#241a52);padding:32px;text-align:center">
+      <div style="font-size:28px;font-weight:800;color:#fff;letter-spacing:-1px">⚡ Quantara</div>
+      <div style="color:#a29bd4;margin-top:6px;font-size:13px">Personal Trading Bot</div>
+    </div>
+    <div style="padding:32px">
+      <h2 style="margin:0 0 12px;color:#1a1040;font-size:20px">Verifikasi email kamu</h2>
+      <p style="color:#555;line-height:1.6;margin:0 0 24px">
+        Terima kasih sudah mendaftar di Quantara! Klik tombol di bawah untuk mengaktifkan akun kamu.
+        Link ini berlaku selama <strong>24 jam</strong>.
+      </p>
+      <a href="${verifyUrl}" style="display:inline-block;background:#6c5ce7;color:#fff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:600;font-size:15px">Verifikasi Email</a>
+      <p style="color:#888;font-size:12px;margin:24px 0 0;line-height:1.6">
+        Jika kamu tidak mendaftar, abaikan email ini.
+        <br>Jika tombol tidak berfungsi, salin link ini: <br>
+        <a href="${verifyUrl}" style="color:#6c5ce7;word-break:break-all">${verifyUrl}</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+module.exports = { sendPasswordReset, sendEmailVerification };

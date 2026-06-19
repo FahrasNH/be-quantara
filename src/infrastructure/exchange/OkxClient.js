@@ -178,21 +178,26 @@ class OkxClient extends CcxtFuturesClient {
         "50110": "IP Anda tidak di-whitelist pada API key OKX. Hapus IP whitelist di pengaturan API key OKX, ATAU whitelist IP server tempat bot berjalan (187.77.135.156).",
       };
 
-      // 50110 = IP whitelist (PermissionDenied) → JANGAN block; key valid, hanya
-      // IP yang perlu disesuaikan. Surface alasannya, izinkan koneksi tersimpan.
-      if (code === "50110" || err instanceof ccxt.PermissionDenied) {
+      // 50110 = IP whitelist ONLY → key valid, IP saja yang perlu disesuaikan.
+      // Jangan gunakan `instanceof PermissionDenied` secara luas — API key dari
+      // exchange lain (Bitget/Binance) juga bisa menimbulkan PermissionDenied
+      // dengan kode bukan 50110, dan harus ditolak.
+      if (code === "50110") {
         return { ok: true, checked: false, warning: HINTS["50110"] || msg };
       }
 
       const isAuthError =
         err instanceof ccxt.AuthenticationError ||
-        (code && HINTS[code]) ||
+        err instanceof ccxt.PermissionDenied ||
+        (code && /^5[01]\d{3}$/.test(code)) ||  // semua kode OKX 50xxx/51xxx
         /invalid\s*(ok-?access-?)?key|invalid\s*sign|passphrase/i.test(msg);
 
       if (isAuthError) {
         const e = new Error(
           (code && HINTS[code]) ||
-          "API key OKX tidak valid atau API passphrase salah. API passphrase = kata sandi yang Anda BUAT saat membuat API key (bukan password login). Jika lupa, buat API key baru."
+          (code
+            ? `Kredensial OKX ditolak (kode: ${code}). Pastikan API key, secret, dan passphrase berasal dari akun OKX — bukan exchange lain (Bitget/Binance). Buat ulang API key di OKX jika perlu.`
+            : "API key OKX tidak valid atau API passphrase salah. API passphrase = kata sandi yang Anda BUAT saat membuat API key (bukan password login). Jika lupa, buat API key baru.")
         );
         e.statusCode = 422;
         e.code = code ? `OKX_${code}` : "OKX_VALIDATION_FAILED";
@@ -200,8 +205,7 @@ class OkxClient extends CcxtFuturesClient {
         throw e;
       }
 
-      // Non-auth failure (account mode / dana di Funding / network): izinkan
-      // koneksi, alasan asli muncul di balance card.
+      // Hanya error TANPA kode OKX (network timeout, dsb.) yang boleh lolos.
       return { ok: true, checked: false, warning: msg };
     }
   }

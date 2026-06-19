@@ -32,12 +32,16 @@ class AuthService {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create user
+    // Generate email verification token
+    const emailVerificationToken = crypto.randomBytes(32).toString('hex');
+
+    // Create user (not yet verified)
     const user = await prisma.user.create({
       data: {
         email,
         username,
         password: hashedPassword,
+        emailVerificationToken,
       },
     });
 
@@ -53,7 +57,61 @@ class AuthService {
       id: user.id,
       email: user.email,
       username: user.username,
+      emailVerificationToken,
     };
+  }
+
+  /**
+   * Verify email using token from link.
+   * Clears the token after successful verification (one-time use).
+   */
+  static async verifyEmail(token) {
+    if (!token) throw new Error('Token verifikasi diperlukan.');
+
+    const user = await prisma.user.findFirst({
+      where: { emailVerificationToken: token },
+    });
+
+    if (!user) {
+      const err = new Error('Link verifikasi tidak valid atau sudah kedaluwarsa.');
+      err.statusCode = 400;
+      err.code = 'INVALID_VERIFICATION_TOKEN';
+      throw err;
+    }
+
+    if (user.emailVerifiedAt) {
+      return { alreadyVerified: true };
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerifiedAt: new Date(),
+        emailVerificationToken: null,
+      },
+    });
+
+    return { success: true, userId: user.id };
+  }
+
+  /**
+   * Generate a new email verification token (for resend).
+   */
+  static async regenerateVerificationToken(email) {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return null; // don't reveal existence
+    if (user.emailVerifiedAt) {
+      const err = new Error('Email sudah terverifikasi.');
+      err.statusCode = 400;
+      err.code = 'ALREADY_VERIFIED';
+      throw err;
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerificationToken: token },
+    });
+    return { email: user.email, token };
   }
 
   /**
@@ -76,6 +134,15 @@ class AuthService {
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       throw new Error('Invalid credentials');
+    }
+
+    // Email must be verified before login is allowed
+    if (!user.emailVerifiedAt) {
+      const err = new Error('Email belum diverifikasi. Cek inbox kamu dan klik link verifikasi, atau minta kirim ulang.');
+      err.statusCode = 403;
+      err.code = 'EMAIL_NOT_VERIFIED';
+      err.email = user.email;
+      throw err;
     }
 
     // Generate tokens
