@@ -784,7 +784,13 @@ class BotEngine extends EventEmitter {
           }
         }
       } catch (err) {
-        this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${err.message}`);
+        const _em = err.message || "";
+        const _okxIpCode = _em.match(/"?code"?\s*:\s*"?50110"?/i);
+        const _okxIpAddr = _em.match(/IP\s+([\da-f:.]+)/i)?.[1];
+        const _displayMsg = _okxIpCode
+          ? `IP server tidak di-whitelist OKX${_okxIpAddr ? ` (IP: ${_okxIpAddr})` : ""}. Solusi: buka OKX → Profile → API → Edit API key → hapus semua isian IP whitelist (biarkan kosong), atau tambahkan IP server ke whitelist, lalu simpan.`
+          : _em;
+        this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${_displayMsg}`);
         if (!this.config.dryRun) throw err;
         this.state.capital = this.state.startCapital = this.config.capital || 500;
         this._log("warn", `Fallback DRY RUN dengan modal $${this.state.capital.toFixed(2)}`);
