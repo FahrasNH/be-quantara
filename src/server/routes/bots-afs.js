@@ -310,6 +310,88 @@ module.exports = function createBotsRouter(helpers) {
   );
 
   /**
+   * POST /api/v1/bots/:symbol
+   * Create (or reconfigure) a bot without starting it.
+   * Bot appears as Stopped in the card list. Use POST /:symbol/start to start it.
+   */
+  router.post(
+    "/:symbol",
+    validateSymbolParam,
+    asyncHandler(async (req, res) => {
+      const userId = req.userId;
+      const { symbol } = req.params;
+      const {
+        capital,
+        dryRun,
+        tpMode: tpModeRaw,
+        strategyKey: explicitStrategyKey,
+      } = req.body;
+
+      const cap = Number(capital);
+      if (!Number.isFinite(cap) || cap <= 0) {
+        return res.status(400).json({ ok: false, message: "capital must be a positive number" });
+      }
+
+      const tpMode = tpModeRaw === "partial" ? "partial" : "full";
+      const isLive = dryRun === false;
+      const mode   = isLive ? "live" : "dry";
+      const useMulti = MULTI_STRATEGY_ENABLED && !explicitStrategyKey;
+
+      let strategies;
+      if (useMulti) {
+        strategies = await getTierStrategies(userId, mode);
+        if (!strategies.length) {
+          return res.status(400).json({
+            ok: false,
+            message: `Tier kamu belum punya strategi yang siap untuk mode ${mode}.`,
+          });
+        }
+      } else {
+        const strategyKey = explicitStrategyKey || "ADAPTIVE_FUSION";
+        try {
+          await assertStrategyAllowed(userId, strategyKey);
+        } catch (e) {
+          return res.status(e.status || 403).json(e.body || { ok: false, message: e.message });
+        }
+        strategies = [strategyKey];
+      }
+
+      // Don't overwrite a running bot's config from this endpoint.
+      const existing = await prisma.bot.findUnique({
+        where: { userId_symbol: { userId, symbol } },
+      });
+      if (existing?.running) {
+        return res.status(409).json({
+          ok: false,
+          message: `Bot ${symbol} sedang berjalan. Hentikan dulu sebelum mengubah konfigurasi.`,
+        });
+      }
+
+      const botData = {
+        strategyKey:        strategies[0],
+        strategyGroup:      useMulti ? strategies : [],
+        capitalPerStrategy: useMulti ? cap / strategies.length : 0,
+        capital:            cap,
+        dryRun:             !isLive,
+        tpMode,
+        running:            false,
+      };
+
+      const bot = await prisma.bot.upsert({
+        where:  { userId_symbol: { userId, symbol } },
+        update: botData,
+        create: { userId, symbol, ...botData },
+      });
+
+      await AuthService.logAction(
+        userId, "BOT_CREATED", "bot", bot.id, req.ip, req.headers["user-agent"]
+      ).catch(() => {});
+
+      res.status(201).json({ ok: true, message: `Bot ${symbol} created`, bot });
+    })
+  );
+
+  /**
    * POST /api/v1/bots/:symbol/start
    * Start a bot
    */
