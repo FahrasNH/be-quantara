@@ -542,23 +542,33 @@ async function resumeRunningBots() {
         }
 
         // Pilih path resume: multi-strategy jika flag ON.
-        // Tanpa pengecekan ini setiap restart server akan selalu menjalankan BotEngine
-        // legacy dengan strategyKey=ADAPTIVE_FUSION dari DB → log selalu "[ADAPTIVE_FUSION]".
-        //
-        // Prioritas strategyGroup:
-        //   1. Pakai bot.strategyGroup dari DB jika sudah terisi (bot pernah di-start multi-strategy)
-        //   2. Fallback: ambil dari tier user via getTierStrategies() — auto-upgrade bots legacy
-        //      yang punya strategyGroup=[] tapi seharusnya jalan multi-strategy (VAULT/MINT/FORGE)
-        let strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
-          ? bot.strategyGroup
-          : null;
+        // Selalu ambil tier strategies terkini agar upgrade tier langsung berlaku
+        // tanpa perlu stop+start manual. DB strategyGroup dipakai sebagai fallback.
+        let strategies = null;
 
-        if (MULTI_STRATEGY_ENABLED && !strategies) {
+        if (MULTI_STRATEGY_ENABLED) {
           try {
             const mode = bot.dryRun ? "dry" : "live";
-            strategies = await getTierStrategies(bot.userId, mode);
+            const tierStrategies = await getTierStrategies(bot.userId, mode);
+            const dbStrategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
+              ? bot.strategyGroup
+              : [];
+            // Pakai tier strategies jika lebih banyak dari yang tersimpan di DB
+            // (tier upgrade), atau tier strategies jika DB kosong.
+            strategies = tierStrategies.length >= dbStrategies.length
+              ? tierStrategies
+              : dbStrategies;
+            // Sync DB jika tier strategies berbeda dari yang tersimpan
+            if (JSON.stringify(strategies) !== JSON.stringify(dbStrategies)) {
+              await prisma.bot.update({
+                where: { id: bot.id },
+                data: { strategyGroup: strategies, strategyKey: strategies[0] },
+              }).catch(() => {});
+            }
           } catch (_) {
-            strategies = null; // fallback ke legacy jika gagal ambil tier
+            strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
+              ? bot.strategyGroup
+              : null;
           }
         }
 
