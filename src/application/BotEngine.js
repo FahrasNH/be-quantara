@@ -17,6 +17,24 @@ const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
 
+// ── Price formatter for logs ─────────────────────────────────────────────────
+// Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
+// ambigu "$0.09" di log. Ini HANYA untuk tampilan log — harga order yang dikirim
+// ke exchange diformat ke tick-size oleh masing-masing client (_fmtPrice).
+function fmtPx(price) {
+  const n = Number(price);
+  if (!Number.isFinite(n)) return String(price);
+  const abs = Math.abs(n);
+  let max;
+  if (abs >= 1)        max = 2;
+  else if (abs >= 0.1) max = 4;
+  else if (abs >= 0.01) max = 5;
+  else if (abs >= 0.001) max = 6;
+  else if (abs > 0)    max = 8;
+  else                 max = 2;
+  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: max });
+}
+
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
 // Lazy-import Prisma (singleton bersama) agar tidak circular dengan db module
 let _prisma = null;
@@ -1581,7 +1599,7 @@ class BotEngine extends EventEmitter {
 
     this._sep(`SINYAL ${signal}`);
     this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
-    this._log("trade", `Entry: $${price.toLocaleString()} | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
+    this._log("trade", `Entry: $${fmtPx(price)} | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
     this._log("info",  `[STATS] Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
 
     const openTime = Date.now();
@@ -1592,8 +1610,10 @@ class BotEngine extends EventEmitter {
         const holdSide = signal === "LONG" ? "long" : "short";
 
         // ── Buka posisi + embed preset SL/TP atomik (CCXT v4.5 Bitget V2) ──────
+        // Kirim harga SL/TP MENTAH — client yang format ke tick-size. toFixed(2)
+        // lama merusak trigger price koin murah (mis. XPL → SL/TP jadi $0.09).
         const order = await this.client.openPosition(
-          this.config.symbol, side, finalSize, "USDT", sl.toFixed(2), tp.toFixed(2)
+          this.config.symbol, side, finalSize, "USDT", sl, tp
         );
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
@@ -1625,7 +1645,7 @@ class BotEngine extends EventEmitter {
 
         // Verifikasi apakah preset SL/TP berhasil di-embed
         if (order?.presetSLTP) {
-          this._log("trade", `SL/TP di-embed dalam order ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
+          this._log("trade", `SL/TP di-embed dalam order ✓ | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)}`);
         } else {
           // Fallback: pasang SL/TP terpisah jika preset tidak tersupport / gagal
           this._log("info", `Preset SL/TP tidak terkonfirmasi, pasang terpisah via plan order...`);
@@ -1636,12 +1656,12 @@ class BotEngine extends EventEmitter {
 
           for (let attempt = 1; attempt <= 3; attempt++) {
             if (!slOk) {
-              const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl.toFixed(2), holdSide, finalSize);
+              const r = await this.client.setTPSL(this.config.symbol, "loss_plan",   sl, holdSide, finalSize);
               slOk = r.success;
               if (!slOk) slErr = r.message || "unknown";
             }
             if (!tpOk) {
-              const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp.toFixed(2), holdSide, finalSize);
+              const r = await this.client.setTPSL(this.config.symbol, "profit_plan", tp, holdSide, finalSize);
               tpOk = r.success;
               if (!tpOk) tpErr = r.message || "unknown";
             }
@@ -1653,7 +1673,7 @@ class BotEngine extends EventEmitter {
           }
 
           if (slOk && tpOk) {
-            this._log("trade", `SL/TP dipasang ✓ | SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}`);
+            this._log("trade", `SL/TP dipasang ✓ | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)}`);
           } else if (!slOk) {
             // SL TIDAK terkonfirmasi = posisi telanjang (kerugian tak terbatas).
             // Perlakukan sebagai kondisi fatal: TUTUP posisi segera, jangan andalkan

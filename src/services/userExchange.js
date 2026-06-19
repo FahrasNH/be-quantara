@@ -102,6 +102,12 @@ async function getExchangeCredentials(userId, exchangeType = "bitget") {
 async function upsertExchange(userId, { apiKey, apiSecret, apiPassphrase, exchangeType = "bitget" }) {
   exchangeType = (exchangeType || "bitget").toLowerCase();
 
+  // Trim kredensial sebelum disimpan — spasi/newline saat paste menyebabkan
+  // "Invalid Sign / Invalid Key" yang sulit didiagnosis. Simpan versi bersih.
+  if (typeof apiKey === "string")        apiKey        = apiKey.trim();
+  if (typeof apiSecret === "string")     apiSecret     = apiSecret.trim();
+  if (typeof apiPassphrase === "string") apiPassphrase = apiPassphrase.trim();
+
   const existing = await prisma.userExchange.findUnique({
     where: { userId_exchangeType: { userId, exchangeType } },
   });

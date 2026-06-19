@@ -81,8 +81,8 @@ class OkxClient extends CcxtFuturesClient {
     const isTP      = planType === "profit_plan";
     const isLong    = holdSide === "long";
     const closeSide = isLong ? "sell" : "buy";
-    const trigPrice = parseFloat(triggerPrice);
     const marketSymbol = this._marketSymbol(symbol);
+    const trigPrice = this._fmtPrice(marketSymbol, triggerPrice);
     const orderType    = isTP ? "takeProfitMarket" : "stopMarket";
     const errors = [];
 
@@ -131,12 +131,25 @@ class OkxClient extends CcxtFuturesClient {
   }
 
   /**
+   * Extract the 5-digit OKX error code from a CCXT error message.
+   * CCXT surfaces the raw OKX payload e.g. `okx {"code":"50111","msg":"..."}`.
+   */
+  static _okxCode(message) {
+    const m = String(message || "");
+    const byJson = m.match(/"s?code"\s*:\s*"?(\d{4,5})"?/i);
+    if (byJson) return byJson[1];
+    const byBare = m.match(/\b(50\d{3}|51\d{3})\b/);
+    return byBare ? byBare[1] : null;
+  }
+
+  /**
    * Validasi kredensial OKX: wajib passphrase + balance swap dapat diakses.
+   * Memberi pesan SPESIFIK per kode error OKX agar user tahu persis penyebabnya.
    */
   async validatePermissions() {
     if (!this.exchange.password) {
       const e = new Error(
-        "OKX memerlukan passphrase API key. Tambahkan passphrase saat menghubungkan exchange."
+        "OKX memerlukan API passphrase. Tambahkan passphrase saat menghubungkan exchange."
       );
       e.statusCode = 400;
       e.code = "OKX_PASSPHRASE_REQUIRED";
@@ -147,30 +160,48 @@ class OkxClient extends CcxtFuturesClient {
       await this.getBalance("USDT");
       return { ok: true, checked: true };
     } catch (err) {
-      // Only HARD-BLOCK on a genuine credential failure. CCXT maps a wrong
-      // API key / secret / signature / API-passphrase to AuthenticationError.
-      // Everything else (IP whitelist mismatch → PermissionDenied, account
-      // mode, funds sitting in the Funding account, transient network errors)
-      // must NOT prevent connecting — the key is valid, the user just needs to
-      // see the real reason, which the balance card now surfaces.
-      const msg = err.message || "";
+      const msg  = err.message || "";
+      const code = OkxClient._okxCode(msg);
+
+      // Pesan actionable per kode OKX. Inilah yang sebenarnya user butuhkan:
+      // tahu PERSIS apa yang salah, bukan tebakan "passphrase salah".
+      const HINTS = {
+        "50101": "API key ini dibuat di akun DEMO/Demo Trading OKX. Bot trading LIVE butuh API key dari akun LIVE — matikan mode Demo di OKX lalu buat API key baru.",
+        "50102": "Jam server tidak sinkron (timestamp expired). Coba lagi; jika berulang, periksa waktu server.",
+        "50103": "Header autentikasi kosong — API key tidak terkirim dengan benar.",
+        "50104": "API passphrase kosong. Isi passphrase yang Anda buat saat membuat API key OKX.",
+        "50105": "API passphrase SALAH. Ini passphrase yang Anda buat SAAT membuat API key OKX — bukan password login, bukan passphrase 'View details'. Jika lupa, buat API key baru.",
+        "50111": "API Key salah atau ada spasi/karakter tersembunyi saat paste. Copy ulang API Key dari OKX tanpa spasi.",
+        "50112": "API key tidak valid untuk operasi ini.",
+        "50113": "Secret Key salah atau ada spasi tersembunyi saat paste (signature gagal). Copy ulang Secret Key dari OKX tanpa spasi.",
+        "50114": "Autorisasi tidak valid — periksa kembali API key, secret, dan passphrase.",
+        "50110": "IP Anda tidak di-whitelist pada API key OKX. Hapus IP whitelist di pengaturan API key OKX, ATAU whitelist IP server tempat bot berjalan (187.77.135.156).",
+      };
+
+      // 50110 = IP whitelist (PermissionDenied) → JANGAN block; key valid, hanya
+      // IP yang perlu disesuaikan. Surface alasannya, izinkan koneksi tersimpan.
+      if (code === "50110" || err instanceof ccxt.PermissionDenied) {
+        return { ok: true, checked: false, warning: HINTS["50110"] || msg };
+      }
+
       const isAuthError =
         err instanceof ccxt.AuthenticationError ||
-        /invalid\s*(ok-?access-?)?key|invalid\s*sign|passphrase\s*(incorrect|error)|50113|50111|50105/i.test(msg);
+        (code && HINTS[code]) ||
+        /invalid\s*(ok-?access-?)?key|invalid\s*sign|passphrase/i.test(msg);
 
       if (isAuthError) {
         const e = new Error(
-          "API key OKX tidak valid atau API passphrase salah. " +
-          "Catatan: API passphrase adalah kata sandi yang Anda BUAT saat membuat API key di OKX — " +
-          "BUKAN password login dan BUKAN passphrase 'View Detail'. Jika lupa, buat API key baru."
+          (code && HINTS[code]) ||
+          "API key OKX tidak valid atau API passphrase salah. API passphrase = kata sandi yang Anda BUAT saat membuat API key (bukan password login). Jika lupa, buat API key baru."
         );
         e.statusCode = 422;
-        e.code = "OKX_VALIDATION_FAILED";
+        e.code = code ? `OKX_${code}` : "OKX_VALIDATION_FAILED";
         e.originalMessage = msg;
         throw e;
       }
 
-      // Non-auth failure: allow the connection, surface a soft warning.
+      // Non-auth failure (account mode / dana di Funding / network): izinkan
+      // koneksi, alasan asli muncul di balance card.
       return { ok: true, checked: false, warning: msg };
     }
   }
