@@ -100,12 +100,22 @@ function validateBotStartInput(req, res, next) {
 function validateSymbolParam(req, res, next) {
   const { symbol } = req.params;
 
-  if (!symbol || typeof symbol !== 'string' || !symbol.match(/^[A-Z]+USDT$/)) {
+  // Allow A-Z dan 0-9 sebelum suffix USDT. Banyak pair perp punya prefix angka —
+  // 1000PEPEUSDT, 1000BONKUSDT, 1000SHIBUSDT, 1000FLOKIUSDT, dst. Regex lama
+  // (^[A-Z]+USDT$) menolak digit → "Invalid symbol format" padahal simbol valid
+  // dari API exchange. Tetap wajib diakhiri USDT (platform USDT-only) dan dibatasi
+  // panjangnya untuk mencegah input abusif di URL param.
+  if (
+    !symbol ||
+    typeof symbol !== 'string' ||
+    symbol.length > 24 ||
+    !/^[A-Z0-9]{1,20}USDT$/.test(symbol)
+  ) {
     return res.status(400).json({
       ok: false,
       statusCode: 400,
       message: 'Invalid symbol format',
-      errors: ['Symbol must be in format: BTCUSDT, ETHUSDT, etc.'],
+      errors: ['Symbol must be in format: BTCUSDT, ETHUSDT, 1000PEPEUSDT, etc.'],
     });
   }
 
