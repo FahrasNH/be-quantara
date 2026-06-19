@@ -429,37 +429,58 @@ wss.on("connection", (ws, req) => {
 
 // Broadcast bot logs + status ke WebSocket clients.
 // FIX: hanya kirim ke client yang userId-nya cocok dengan pemilik bot.
+//
+// PERF (300+ bots): status events di-debounce 1s per-symbol agar 900 engines
+// yang ticking serentak tidak membanjiri WS client dengan 15 frames/detik.
+// Log events tidak di-debounce — tiap entry langsung dikirim.
+const _wsStatusDebounce = new Map(); // symbol → { timer, payload }
+
+function _broadcastToClients(botUserId, symbol, payload) {
+  wss.clients.forEach((client) => {
+    if (
+      client.readyState === 1 &&
+      client.userId === botUserId &&
+      (!client.botSymbol || client.botSymbol === symbol)
+    ) {
+      try {
+        client.send(JSON.stringify(payload));
+      } catch { /* client mungkin sudah disconnect */ }
+    }
+  });
+}
+
 const originalEmit = BotEngine.prototype.emit;
 BotEngine.prototype.emit = function (event, ...args) {
-  const symbol = this.config?.symbol;
+  const symbol    = this.config?.symbol;
   const botUserId = this.config?.userId;
   if (!symbol) return originalEmit.call(this, event, ...args);
 
-  if (event === "log" || event === "status") {
+  if (event === "log") {
+    _broadcastToClients(botUserId, symbol, { type: "log", symbol, data: args[0] });
+  } else if (event === "status") {
     // Engine bagian dari MultiStrategyCoordinator → siarkan STATE TERAGREGASI
     // koordinator (modal/PnL/posisi gabungan 4 strategi), bukan state parsial 1
     // engine. Tanpa ini, status teragregasi hanya muncul saat poll 60s → kartu FE
     // tampak "tidak update" walau bot ticking tiap 30s–5m.
     const coord = this.config?.groupCoordinator;
-    const statusData = (event === "status" && coord && typeof coord.getState === "function")
+    const statusData = (coord && typeof coord.getState === "function")
       ? coord.getState()
       : args[0];
-    const payload = event === "log"
-      ? { type: "log", symbol, data: args[0] }
-      : { type: "status", symbol, data: statusData };
 
-    wss.clients.forEach((client) => {
-      if (
-        client.readyState === 1 &&
-        client.userId === botUserId &&
-        (!client.botSymbol || client.botSymbol === symbol)
-      ) {
-        try {
-          client.send(JSON.stringify(payload));
-        } catch { /* client mungkin sudah disconnect */ }
-      }
-    });
+    // Debounce: batalkan timer sebelumnya, set ulang dengan payload terbaru.
+    // Ini memastikan hanya 1 status frame/detik per symbol yang dikirim ke FE
+    // walau banyak engine emit status dalam waktu bersamaan.
+    const existing = _wsStatusDebounce.get(symbol);
+    if (existing) clearTimeout(existing.timer);
+
+    const payload = { type: "status", symbol, data: statusData };
+    const timer = setTimeout(() => {
+      _wsStatusDebounce.delete(symbol);
+      _broadcastToClients(botUserId, symbol, payload);
+    }, 1000);
+    _wsStatusDebounce.set(symbol, { timer, payload });
   }
+
   return originalEmit.call(this, event, ...args);
 };
 
@@ -490,12 +511,12 @@ async function resumeRunningBots() {
     console.log(`[Startup] 🔁 Auto-resume: ${bots.length} bot dengan running=true ditemukan`);
 
     let resumed = 0, stopped = 0;
-    for (const bot of bots) {
-      // Resolusi kredensial DI DALAM try per-bot. Sebelumnya getExchangeCredentials
-      // dipanggil di luar try → bila gagal (mis. kolom DB hilang saat skema drift),
-      // exception naik ke outer catch dan MEMBATALKAN resume SEMUA bot → bot LIVE
-      // tampil mati lalu di-start ulang user dalam mode dry. Kini kegagalan satu bot
-      // hanya melewati bot itu, tidak menjatuhkan loop.
+
+    // PERF (300+ bots): throttle resume ke 3 bot serentak + 300ms antar-start.
+    // Sequential for...of di sini berarti bot ke-300 baru start setelah 299 selesai
+    // (~5 menit untuk 300 bot × 1s startup). 3-worker pool + 300ms delay memberi
+    // trade-off antara kecepatan recovery dan tekanan exchange/event-loop.
+    async function resumeOneBot(bot) {
       try {
         const { getConnectedExchange } = require("../services/ExchangeService");
         const connectedExchange = await getConnectedExchange(bot.userId);
@@ -509,7 +530,7 @@ async function resumeRunningBots() {
           await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
           stopped++;
           console.warn(`[Startup] Bot LIVE ${bot.symbol} tidak punya API key → stopped`);
-          continue;
+          return;
         }
 
         const exchangeType = (connectedExchange || "bitget").toLowerCase();
@@ -517,7 +538,7 @@ async function resumeRunningBots() {
           await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
           stopped++;
           console.warn(`[Startup] Bot LIVE ${bot.symbol} OKX tanpa passphrase → stopped`);
-          continue;
+          return;
         }
 
         // Pilih path resume: multi-strategy jika flag ON.
@@ -575,6 +596,18 @@ async function resumeRunningBots() {
         console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
       }
     }
+
+    const resumeQueue = [...bots];
+    async function resumeWorker() {
+      while (resumeQueue.length) {
+        const bot = resumeQueue.shift();
+        await resumeOneBot(bot);
+        // 300ms inter-start breathing room untuk exchange rate-limiter
+        if (resumeQueue.length > 0) await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(3, bots.length) }, resumeWorker));
+
     console.log(`[Startup] ✅ Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan`);
     await prisma.$disconnect();
   } catch (err) {
