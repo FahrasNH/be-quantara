@@ -112,11 +112,12 @@ module.exports = function createAccountRouter(helpers = {}) {
         balanceCache.set(`${userId}:${exchangeType}`, { ts: Date.now(), data });
         res.json(data);
       } catch (err) {
-        res.status(400).json({
+        // Return 200 ok:false so FE can read and display the message instead of throwing.
+        res.json({
           ok: false,
           configured: true,
           exchangeType,
-          message: "Gagal mengambil balance dari exchange. Periksa kembali API key Anda.",
+          message: "Gagal mengambil balance dari exchange. Periksa API key dan passphrase Anda.",
           error: err.message,
           currency: "USDT",
           available: 0,
@@ -195,6 +196,45 @@ module.exports = function createAccountRouter(helpers = {}) {
           statusCode: 403,
           message: `Exchange "${exchangeType}" tidak didukung. Hanya ${allowedExchanges.join(", ")} yang tersedia saat ini.`,
         });
+      }
+
+      // ── OKX API key validation ───────────────────────────────────────────
+      if (exchangeType === "okx") {
+        try {
+          await ExchangeService.validateExchangeKey("okx", {
+            apiKey,
+            apiSecret,
+            apiPassphrase,
+          });
+          await prisma.auditLog.create({
+            data: {
+              userId,
+              action: "EXCHANGE_KEY_VALIDATED",
+              resource: "UserExchange",
+              details: JSON.stringify({ exchange: "okx", result: "passed" }),
+              ipAddress: req.ip ?? null,
+              userAgent: req.headers["user-agent"] ?? null,
+            },
+          }).catch(() => {});
+        } catch (err) {
+          await prisma.auditLog.create({
+            data: {
+              userId,
+              action: "EXCHANGE_KEY_REJECTED",
+              resource: "UserExchange",
+              details: JSON.stringify({ exchange: "okx", code: err.code, reason: err.message }),
+              ipAddress: req.ip ?? null,
+              userAgent: req.headers["user-agent"] ?? null,
+            },
+          }).catch(() => {});
+          return res.status(err.statusCode || 400).json({
+            ok: false,
+            statusCode: err.statusCode || 400,
+            code: err.code || "OKX_VALIDATION_FAILED",
+            message: err.message,
+            detail: err.originalMessage || undefined,
+          });
+        }
       }
 
       // ── Task C: Binance API key permission validation ────────────────────
