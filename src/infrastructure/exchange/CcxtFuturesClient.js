@@ -23,6 +23,13 @@ class CcxtFuturesClient {
     const ctor = ccxt[exchangeId];
     if (!ctor) throw new Error(`Exchange "${exchangeId}" tidak didukung oleh CCXT.`);
 
+    // Trim kredensial — penyebab paling umum "Invalid Sign / Invalid Key" adalah
+    // spasi/newline tersembunyi saat copy-paste API key, secret, atau passphrase.
+    const trim = (v) => (typeof v === "string" ? v.trim() : v);
+    apiKey     = trim(apiKey);
+    secretKey  = trim(secretKey);
+    passphrase = trim(passphrase);
+
     this.exchangeId = exchangeId;
     const config = {
       apiKey,
@@ -38,6 +45,21 @@ class CcxtFuturesClient {
 
   _marketSymbol(symbol) {
     return toCcxtSymbol(symbol);
+  }
+
+  /**
+   * Format a price to the market's tick-size precision. Falls back to the raw
+   * number if markets aren't loaded — never forces a fixed 2-decimal count,
+   * which would corrupt SL/TP for low-priced coins (e.g. XPL @ $0.094 → $0.09).
+   */
+  _fmtPrice(marketSymbol, price) {
+    const n = parseFloat(price);
+    if (!Number.isFinite(n)) return n;
+    try {
+      return parseFloat(this.exchange.priceToPrecision(marketSymbol, n));
+    } catch {
+      return n;
+    }
   }
 
   _orderParams(extra = {}) {
@@ -284,8 +306,8 @@ class CcxtFuturesClient {
     const isTP = planType === "profit_plan";
     const isLong = holdSide === "long";
     const closeSide = isLong ? "sell" : "buy";
-    const trigPrice = parseFloat(triggerPrice);
     const marketSymbol = this._marketSymbol(symbol);
+    const trigPrice = this._fmtPrice(marketSymbol, triggerPrice);
     const errors = [];
 
     try {
