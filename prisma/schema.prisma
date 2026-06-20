@@ -7,12 +7,24 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   username  String   @unique
   password  String
-  
+
+  // Role-based access control (ADMIN-BE-01). Gate /admin/* via adminGuard.
+  role      UserRole @default(USER)
+
+  // Admin suspension (ADMIN-BE-03). Non-null = suspended; login is blocked.
+  suspendedAt DateTime?
+
   balance      Float    @default(0)
   apiKey       String?
   apiSecret    String?
@@ -21,6 +33,10 @@ model User {
   // HMAC fingerprint of apiKey — unique so the same exchange account
   // cannot be connected by two different users (prevents bot conflicts).
   apiKeyHash    String?  @unique
+
+  // Email verification — null = belum terverifikasi
+  emailVerifiedAt         DateTime?
+  emailVerificationToken  String?   @unique
 
   // Telegram integration — user memasukkan chat ID dari @quantara_trading_bot
   telegramChatId String?
