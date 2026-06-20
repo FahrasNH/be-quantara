@@ -136,6 +136,14 @@ class AuthService {
       throw new Error('Invalid credentials');
     }
 
+    // Suspended accounts cannot log in (ADMIN-BE-03 — admin suspend action).
+    if (user.suspendedAt) {
+      const err = new Error('Akun Anda telah ditangguhkan. Hubungi administrator.');
+      err.statusCode = 403;
+      err.code = 'ACCOUNT_SUSPENDED';
+      throw err;
+    }
+
     // Generate tokens
     const tokens = this.generateTokens(user.id);
 
@@ -156,6 +164,7 @@ class AuthService {
         id: user.id,
         email: user.email,
         username: user.username,
+        role: user.role,
         balance: user.balance,
         emailVerified: !!user.emailVerifiedAt,
       },
@@ -250,6 +259,7 @@ class AuthService {
         id: true,
         email: true,
         username: true,
+        role: true,
         balance: true,
         emailVerifiedAt: true,
         createdAt: true,
