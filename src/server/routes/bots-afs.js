@@ -57,8 +57,14 @@ module.exports = function createBotsRouter(helpers) {
         botId:       botRecord.symbol,
         running:     botRecord.running ? live.running : false,
         strategyKey: botRecord.strategyKey,
+        // getState() melaporkan `capital` (total modal) tetapi BUKAN `startCapital`,
+        // sehingga FE menghitung ROI / Net PnL% terhadap 0 → selalu "0.00%".
+        // Samakan dengan path bot-stopped: modal awal = capital DB.
+        startCapital: botRecord.capital,
         params: {
-          leverage:     instance.config?.leverage ?? null,
+          // Single-strategy engine punya `instance.config`; MultiStrategyCoordinator
+          // tidak (config-nya per-engine) → pakai leverage efektif dari getState (`live`).
+          leverage:     instance.config?.leverage ?? live.leverage ?? null,
           riskPerTrade: instance.config?.riskPerTrade ?? null,
         },
         strategyGroup: effectiveSg,
@@ -537,7 +543,7 @@ module.exports = function createBotsRouter(helpers) {
 
       // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
       const instance = useMulti
-        ? createMultiStrategyInstance(userId, symbol, {
+        ? await createMultiStrategyInstance(userId, symbol, {
             strategies,
             capital:    bot.capital,
             dryRun:     bot.dryRun,

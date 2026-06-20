@@ -14,10 +14,11 @@ const BotEngine = require("../application/BotEngine");
 const AdaptiveStrategyEngine = require("../application/AdaptiveStrategyEngine");
 const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinator");
 const AccountCoordinator = require("../domain/AccountCoordinator");
+const { getStrategy } = require("../domain/legacyStrategies");
+const { createExchangeClient } = require("../infrastructure/exchange");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
 const telegramBot = require("../infrastructure/notifications/TelegramBotPoller");
-const { createExchangeClient } = require("../infrastructure/exchange");
 
 // Middleware
 const { authMiddleware } = require("../middleware/auth");
@@ -222,6 +223,41 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
 }
 
 /**
+ * Hitung leverage adaptif berdasarkan equity akun — user tidak perlu pikirkan,
+ * bot auto-scale leverage agar lolos min-notional untuk akun kecil & aman untuk akun besar.
+ * @param {boolean} dryRun
+ * @param {string} exchangeType
+ * @param {string} apiKey
+ * @param {string} apiSecret
+ * @param {string} passphrase
+ * @returns {Promise<number>} leverage tier (1–5)
+ */
+async function getAdaptiveLeverage(dryRun, exchangeType, apiKey, apiSecret, passphrase) {
+  let equity = 0;
+
+  if (dryRun) {
+    // Dry run: gunakan virtual balance dari env (default $1000)
+    equity = parseFloat(process.env.DRY_RUN_VIRTUAL_BALANCE) || 1000;
+  } else {
+    // Live: fetch real equity dari exchange
+    try {
+      const client = createExchangeClient(exchangeType, { apiKey, apiSecret, passphrase });
+      const balance = await client.getBalance("USDT");
+      equity = balance?.equity || balance?.available || 0;
+    } catch (err) {
+      // Fallback jika exchange error: gunakan modal minimum (konservatif)
+      equity = 100;
+    }
+  }
+
+  // Tier leverage berdasarkan equity — lolos min-notional kecil, safe untuk besar
+  if (equity < 100)      return 5;  // Akun sangat kecil: max leverage
+  if (equity < 1000)     return 3;  // Akun kecil: moderate leverage
+  if (equity < 10000)    return 2;  // Akun menengah: low leverage
+  return 1;                          // Akun besar: no leverage (capital preservation)
+}
+
+/**
  * Buat instance MultiStrategyCoordinator untuk satu koin (fitur Auto Multi-Strategy
  * Execution per Coin). Koordinator ini disimpan di botsMap pada slot yang sama
  * dengan BotEngine sehingga route/WS memperlakukannya identik (getState/start/stop).
@@ -229,9 +265,9 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
  * @param {string} userId
  * @param {string} symbol
  * @param {Object} opts  — { strategies[], capital, dryRun, apiKey, apiSecret, passphrase, botId }
- * @returns {MultiStrategyCoordinator}
+ * @returns {Promise<MultiStrategyCoordinator>}
  */
-function createMultiStrategyInstance(userId, symbol, opts = {}) {
+async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
   if (existing) {
@@ -256,6 +292,19 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
       botId:       opts.botId,
     });
 
+  // Leverage adaptif berdasarkan equity akun — user tinggal pilih koin & running,
+  // leverage otomatis adjust (akun kecil 5×, besar 1×). Lolos min-notional untuk
+  // akun kecil (BTC min-size 0.001 butuh leverage jika equity < $100), aman untuk
+  // akun besar (leverage rendah = jarak likuidasi jauh dari SL). Position size tetap
+  // dibatasi riskPerTrade per-strategi; risk tidak berubah, hanya notional yang scale.
+  const sharedLeverage = await getAdaptiveLeverage(
+    opts.dryRun,
+    opts.exchangeType || "bitget",
+    opts.apiKey,
+    opts.apiSecret,
+    opts.passphrase
+  );
+
   const coordinator = new MultiStrategyCoordinator({
     userId,
     symbol,
@@ -273,7 +322,8 @@ function createMultiStrategyInstance(userId, symbol, opts = {}) {
       apiKey:       opts.apiKey,
       apiSecret:    opts.apiSecret,
       passphrase:   opts.passphrase,
-      leverage:     20, // default; engines read their own strategy config in _startup
+      // Leverage konservatif (min lintas-strategi) yang di-set sekali per-symbol.
+      leverage:     sharedLeverage,
     },
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
@@ -576,7 +626,7 @@ async function resumeRunningBots() {
 
         let instance;
         if (useMulti) {
-          instance = createMultiStrategyInstance(bot.userId, bot.symbol, {
+          instance = await createMultiStrategyInstance(bot.userId, bot.symbol, {
             strategies,
             capital:     bot.capital,
             dryRun:      bot.dryRun,

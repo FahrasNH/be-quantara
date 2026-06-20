@@ -148,12 +148,12 @@ class MultiStrategyCoordinator extends EventEmitter {
         const client = createExchangeClient(exchangeType, { apiKey, apiSecret, passphrase });
         sharedBalance = await client.getBalance("USDT");
         if (!this.dryRun) {
-          const leverage = this.engineConfig.leverage || 20;
+          const leverage = this.engineConfig.leverage || 2;
           await client.setLeverage(this.symbol, leverage);
           await client.setMarginMode(this.symbol, "crossed");
           sharedLeverageSet = true;
         }
-        this._log("info", `Pre-flight ✓ balance $${(sharedBalance.equity || sharedBalance.available || 0).toFixed(2)} USDT${sharedLeverageSet ? ` | leverage ${this.engineConfig.leverage || 20}x diset` : ""}`);
+        this._log("info", `Pre-flight ✓ balance $${(sharedBalance.equity || sharedBalance.available || 0).toFixed(2)} USDT${sharedLeverageSet ? ` | leverage ${this.engineConfig.leverage || 2}x diset` : ""}`);
       } catch (err) {
         this._log("warn", `Pre-flight exchange call gagal: ${err.message} — tiap engine retry sendiri`);
       }
@@ -471,6 +471,9 @@ class MultiStrategyCoordinator extends EventEmitter {
       capitalPerStrategy: this.capitalPerStrategy,
       capital: this.totalCapital,
       conflictMode: this.conflictMode,
+      // Leverage efektif per-symbol (min lintas-strategi, di-set oleh app.js). Di-expose
+      // agar FE menampilkan angka SEBENARNYA, bukan fallback hardcoded 2×.
+      leverage: this.engineConfig?.leverage ?? null,
       engines,
       signals: this.lastDecision,
       openPositions,
