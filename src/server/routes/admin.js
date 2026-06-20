@@ -317,6 +317,152 @@ module.exports = function createAdminRouter() {
   );
 
   /**
+   * GET /api/v1/admin/trades — recent trades across all users, with KPI summary
+   * (AC-04). Query: limit (≤200). Trade has no userId, so we join via Bot.
+   * → { ok, trades: [{ id, user, symbol, side, strategy, entry, exit, netPnl, opened, status }], kpis, total }
+   */
+  router.get(
+    "/trades",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+
+      const [rows, total, agg, closed] = await Promise.all([
+        prisma.trade.findMany({
+          take: limit,
+          orderBy: { enteredAt: "desc" },
+          select: {
+            id: true, symbol: true, side: true, entry: true, exit: true,
+            pnl: true, status: true, enteredAt: true, firedByStrategy: true,
+            bot: { select: { strategyKey: true, user: { select: { username: true } } } },
+          },
+        }),
+        prisma.trade.count(),
+        prisma.trade.aggregate({ _sum: { pnl: true } }),
+        prisma.trade.findMany({
+          where: { status: "CLOSED" },
+          select: { pnl: true },
+        }),
+      ]);
+
+      const fmtPrice = n => (n === null || n === undefined ? "—" : n.toLocaleString("en-US"));
+      const trades = rows.map(t => ({
+        id:       t.id.slice(-6).toUpperCase(),
+        user:     t.bot?.user?.username || "—",
+        symbol:   t.symbol,
+        side:     t.side,
+        strategy: abbrevStrategy(t.firedByStrategy || t.bot?.strategyKey),
+        entry:    fmtPrice(t.entry),
+        exit:     t.exit === null || t.exit === undefined ? "—" : fmtPrice(t.exit),
+        netPnl:   Number((t.pnl || 0).toFixed(2)),
+        opened:   fmtShort(t.enteredAt),
+        status:   t.status === "OPEN" ? "Open" : "Closed",
+      }));
+
+      const wins      = closed.filter(t => (t.pnl || 0) > 0).length;
+      const winRate   = closed.length ? ((wins / closed.length) * 100).toFixed(1) : "0.0";
+      const netPnl    = agg._sum.pnl || 0;
+      const netPnlStr = netPnl >= 0 ? `+$${netPnl.toFixed(2)}` : `-$${Math.abs(netPnl).toFixed(2)}`;
+
+      res.json({
+        ok: true,
+        trades,
+        total,
+        kpis: [
+          { label: "Total Trades (filtered)", value: total.toLocaleString("en-US") },
+          { label: "Win Rate (closed)",       value: `${winRate}%`, color: wins ? "green" : undefined },
+          { label: "Platform Net PnL",        value: netPnlStr, color: netPnl >= 0 ? "green" : "red" },
+          { label: "Closed Trades",           value: closed.length.toLocaleString("en-US") },
+        ],
+      });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/activity — recent platform activity from the audit log.
+   * → { ok, activity: [{ tone, time, who, text }] }
+   */
+  router.get(
+    "/activity",
+    requireAdmin,
+    asyncHandler(async (_req, res) => {
+      const logs = await prisma.auditLog.findMany({
+        take: 12,
+        orderBy: { createdAt: "desc" },
+        select: {
+          action: true, resource: true, resourceId: true, createdAt: true,
+          user: { select: { username: true } },
+        },
+      });
+
+      // Map action → tone + human-readable verb. Unknown actions get a neutral tone.
+      const TONE_BY_ACTION = {
+        LOGIN: "purple", LOGOUT: "gray", REGISTER: "purple",
+        BOT_START: "green", BOT_STOP: "amber",
+        STRATEGY_CHANGE: "blue", TRADE_OPEN: "green", TRADE_CLOSE: "blue",
+        USER_SUSPEND: "red", USER_ACTIVATE: "green",
+        ROLE_CHANGE: "purple", ADMIN_CREATE: "purple", ADMIN_DELETE: "red",
+        EMERGENCY_STOP: "red",
+      };
+      const VERB = {
+        LOGIN: "signed in", LOGOUT: "signed out", REGISTER: "registered",
+        BOT_START: "started a bot", BOT_STOP: "stopped a bot",
+        STRATEGY_CHANGE: "changed strategy", TRADE_OPEN: "opened a trade",
+        TRADE_CLOSE: "closed a trade", USER_SUSPEND: "suspended a user",
+        USER_ACTIVATE: "activated a user", ROLE_CHANGE: "changed a role",
+        ADMIN_CREATE: "created an admin", ADMIN_DELETE: "deleted an admin",
+        EMERGENCY_STOP: "triggered emergency stop",
+      };
+      const p = n => String(n).padStart(2, "0");
+
+      const activity = logs.map(l => {
+        const verb = VERB[l.action] || (l.action || "did something").toLowerCase().replace(/_/g, " ");
+        const resInfo = l.resource ? ` (${l.resource}${l.resourceId ? ` ${l.resourceId.slice(-6)}` : ""})` : "";
+        const d = new Date(l.createdAt);
+        return {
+          tone: TONE_BY_ACTION[l.action] || "gray",
+          time: `${p(d.getHours())}:${p(d.getMinutes())}`,
+          who:  l.user?.username || "System",
+          text: `${verb}${resInfo}`,
+        };
+      });
+
+      res.json({ ok: true, activity });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/subscriptions — tier breakdown with MRR estimate.
+   * → { ok, subscriptions: [{ tier, users, mrr, pct, color }] }
+   */
+  router.get(
+    "/subscriptions",
+    requireAdmin,
+    asyncHandler(async (_req, res) => {
+      const rows  = await prisma.userStrategy.groupBy({ by: ["tier"], _count: { _all: true } });
+      const total = rows.reduce((s, r) => s + r._count._all, 0) || 1;
+
+      const TIER_COLOR = { FOUNDRY: "green", FORGE: "purple", MINT: "blue", VAULT: "amber" };
+
+      const subscriptions = rows
+        .map(r => {
+          const users = r._count._all;
+          const price = TIER_CONFIG[r.tier]?.price ?? 0;
+          return {
+            tier:  r.tier,
+            users,
+            mrr:   `$${(price * users).toLocaleString("en-US")}/mo`,
+            pct:   Math.round((users / total) * 100),
+            color: TIER_COLOR[r.tier] || "purple",
+          };
+        })
+        .sort((a, b) => b.users - a.users);
+
+      res.json({ ok: true, subscriptions });
+    })
+  );
+
+  /**
    * GET /api/v1/admin/trades/export — streaming CSV of all trades, all users
    * (ADMIN-BE-04). Cursor-paginated so memory stays flat on large tables.
    */
