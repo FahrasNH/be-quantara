@@ -560,6 +560,40 @@ async function getTrades({ sessionId = null, symbol = null, limit = 100, userId 
   return rows;
 }
 
+// ── Admin: platform-wide trades (across ALL users) ───────────────────────────
+// The admin dashboard previously queried the unused Prisma `Trade` table, which
+// is never written to — real trades live in this `trades` table (written by the
+// engine via insertTrade). These helpers read the real store, joined to
+// bot_sessions → "User" so each row carries the owner's username.
+async function getAdminTrades({ limit = 50 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT t.id, t.symbol, t.side, t.entry_price, t.exit_price, t.pnl,
+            t.status, t.open_time, t.close_time, t.strategy_name, t.dry_run,
+            u.username AS username
+       FROM trades t
+       LEFT JOIN bot_sessions s ON s.id = t.session_id
+       LEFT JOIN "User" u       ON u.id = s.user_id
+      ORDER BY t.open_time DESC
+      LIMIT $1`,
+    [Math.min(limit, 200)]
+  );
+  return rows;
+}
+
+// Platform-wide trade KPIs for the admin dashboard + stat cards.
+async function getAdminTradeStats() {
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*)::int                                                              AS total,
+       COUNT(*) FILTER (WHERE t.open_time >= date_trunc('day', now()))::int       AS today,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl IS NOT NULL)::int AS closed,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int         AS wins,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float      AS net_pnl
+     FROM trades t`
+  );
+  return rows[0] || { total: 0, today: 0, closed: 0, wins: 0, net_pnl: 0 };
+}
+
 async function getTradeStats(sessionId, userId = null) {
   // FIX IDOR: stats hanya untuk sesi milik userId (strict).
   const params = [sessionId];
@@ -1133,6 +1167,8 @@ module.exports = {
   closeTrade,
   getTrades,
   getTradeStats,
+  getAdminTrades,
+  getAdminTradeStats,
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,

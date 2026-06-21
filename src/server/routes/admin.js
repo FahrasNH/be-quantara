@@ -14,6 +14,9 @@ module.exports = function createAdminRouter() {
 
   // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
   const prisma = require("../../infrastructure/db/prismaClient");
+  // Real trade store (engine writes here via insertTrade). The Prisma `Trade`
+  // model is unused/empty, so trade-derived admin data must read from this layer.
+  const db = require("../../infrastructure/db/database");
 
   // JWT + role-based protection for the Admin Dashboard endpoints (ADMIN-BE-02/03).
   const requireAdmin      = [authMiddleware, adminGuard];      // any admin
@@ -148,17 +151,18 @@ module.exports = function createAdminRouter() {
     asyncHandler(async (_req, res) => {
       const now      = new Date();
       const weekAgo  = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
 
-      const [totalUsers, newUsersWeek, activeBots, totalTrades, tradesToday, tierRows] =
+      const [totalUsers, newUsersWeek, activeBots, tradeStats, tierRows] =
         await Promise.all([
           prisma.user.count(),
           prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
           prisma.bot.count({ where: { running: true } }),
-          prisma.trade.count(),
-          prisma.trade.count({ where: { enteredAt: { gte: dayStart } } }),
+          // Real trades live in the db-layer `trades` table, not Prisma `Trade`.
+          db.getAdminTradeStats(),
           prisma.userStrategy.groupBy({ by: ["tier"], _count: { _all: true } }),
         ]);
+      const totalTrades = tradeStats.total || 0;
+      const tradesToday = tradeStats.today || 0;
 
       // MRR estimate = Σ (tier price × subscribers on that tier).
       const monthlyRevenue = tierRows.reduce(
@@ -327,41 +331,31 @@ module.exports = function createAdminRouter() {
     asyncHandler(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
 
-      const [rows, total, agg, closed] = await Promise.all([
-        prisma.trade.findMany({
-          take: limit,
-          orderBy: { enteredAt: "desc" },
-          select: {
-            id: true, symbol: true, side: true, entry: true, exit: true,
-            pnl: true, status: true, enteredAt: true, firedByStrategy: true,
-            bot: { select: { strategyKey: true, user: { select: { username: true } } } },
-          },
-        }),
-        prisma.trade.count(),
-        prisma.trade.aggregate({ _sum: { pnl: true } }),
-        prisma.trade.findMany({
-          where: { status: "CLOSED" },
-          select: { pnl: true },
-        }),
+      // Read from the REAL trades store (db layer), not the unused Prisma table.
+      const [rows, stats] = await Promise.all([
+        db.getAdminTrades({ limit }),
+        db.getAdminTradeStats(),
       ]);
 
-      const fmtPrice = n => (n === null || n === undefined ? "—" : n.toLocaleString("en-US"));
+      const fmtPrice = n => (n === null || n === undefined ? "—" : Number(n).toLocaleString("en-US"));
       const trades = rows.map(t => ({
-        id:       t.id.slice(-6).toUpperCase(),
-        user:     t.bot?.user?.username || "—",
+        id:       String(t.id).slice(-6).toUpperCase(),
+        user:     t.username || "—",
         symbol:   t.symbol,
         side:     t.side,
-        strategy: abbrevStrategy(t.firedByStrategy || t.bot?.strategyKey),
-        entry:    fmtPrice(t.entry),
-        exit:     t.exit === null || t.exit === undefined ? "—" : fmtPrice(t.exit),
+        strategy: abbrevStrategy(t.strategy_name),
+        entry:    fmtPrice(t.entry_price),
+        exit:     t.exit_price === null || t.exit_price === undefined ? "—" : fmtPrice(t.exit_price),
         netPnl:   Number((t.pnl || 0).toFixed(2)),
-        opened:   fmtShort(t.enteredAt),
-        status:   t.status === "OPEN" ? "Open" : "Closed",
+        opened:   fmtShort(t.open_time),
+        status:   t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
       }));
 
-      const wins      = closed.filter(t => (t.pnl || 0) > 0).length;
-      const winRate   = closed.length ? ((wins / closed.length) * 100).toFixed(1) : "0.0";
-      const netPnl    = agg._sum.pnl || 0;
+      const total     = stats.total || 0;
+      const closed    = stats.closed || 0;
+      const wins      = stats.wins || 0;
+      const winRate   = closed ? ((wins / closed) * 100).toFixed(1) : "0.0";
+      const netPnl    = stats.net_pnl || 0;
       const netPnlStr = netPnl >= 0 ? `+$${netPnl.toFixed(2)}` : `-$${Math.abs(netPnl).toFixed(2)}`;
 
       res.json({
@@ -369,10 +363,10 @@ module.exports = function createAdminRouter() {
         trades,
         total,
         kpis: [
-          { label: "Total Trades (filtered)", value: total.toLocaleString("en-US") },
-          { label: "Win Rate (closed)",       value: `${winRate}%`, color: wins ? "green" : undefined },
-          { label: "Platform Net PnL",        value: netPnlStr, color: netPnl >= 0 ? "green" : "red" },
-          { label: "Closed Trades",           value: closed.length.toLocaleString("en-US") },
+          { label: "Total Trades",       value: total.toLocaleString("en-US") },
+          { label: "Win Rate (closed)",  value: `${winRate}%`, color: wins ? "green" : undefined },
+          { label: "Platform Net PnL",   value: netPnlStr, color: netPnl >= 0 ? "green" : "red" },
+          { label: "Closed Trades",      value: closed.toLocaleString("en-US") },
         ],
       });
     })
