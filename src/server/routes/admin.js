@@ -200,9 +200,10 @@ module.exports = function createAdminRouter() {
           take: limit,
           orderBy: { createdAt: "desc" },
           select: {
-            id: true, email: true, username: true, exchangeType: true, createdAt: true,
+            id: true, email: true, username: true, exchangeType: true, apiKeyHash: true, createdAt: true,
             strategies: { select: { tier: true } },
             bots:       { select: { running: true } },
+            exchanges:  { where: { deletedAt: null }, select: { exchangeType: true } },
           },
         }),
         // One pass for trade counts + realized PnL per user (Trade has no userId).
@@ -221,13 +222,19 @@ module.exports = function createAdminRouter() {
       let users = rows.map(u => {
         const agg        = pnlMap.get(u.id) || { trades: 0, netPnl: 0 };
         const hasRunning = u.bots.some(b => b.running);
+        // Only show an exchange when the user has ACTUALLY connected one — an
+        // active UserExchange record or a stored key fingerprint. The User
+        // exchangeType column defaults to "bitget" even when nothing is linked,
+        // so it must not be used as the connection signal.
+        const activeExchange = u.exchanges?.[0]?.exchangeType;
+        const connected      = !!activeExchange || !!u.apiKeyHash;
         return {
           id:       u.id,
           name:     u.username,
           email:    u.email,
           joined:   u.createdAt.toISOString().slice(0, 10),
           tier:     u.strategies[0]?.tier || "FOUNDRY",
-          exchange: exchangeLabel(u.exchangeType),
+          exchange: connected ? exchangeLabel(activeExchange || u.exchangeType) : "—",
           bots:     u.bots.length,
           trades:   agg.trades,
           netPnl:   Number(agg.netPnl.toFixed(2)),
@@ -348,6 +355,7 @@ module.exports = function createAdminRouter() {
         exit:     t.exit_price === null || t.exit_price === undefined ? "—" : fmtPrice(t.exit_price),
         netPnl:   Number((t.pnl || 0).toFixed(2)),
         opened:   fmtShort(t.open_time),
+        ts:       t.open_time ? new Date(t.open_time).toISOString() : null,
         status:   t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
       }));
 
@@ -460,52 +468,51 @@ module.exports = function createAdminRouter() {
    * GET /api/v1/admin/trades/export — streaming CSV of all trades, all users
    * (ADMIN-BE-04). Cursor-paginated so memory stays flat on large tables.
    */
+  // Same per-row fields as the user-facing insight export (history.js
+  // TRADE_COLUMNS), with a leading "User" column since admin spans all users.
+  const ADMIN_EXPORT_COLUMNS = [
+    ["user",       "User"],
+    ["id",         "ID"],
+    ["sessionId",  "Session ID"],
+    ["symbol",     "Symbol"],
+    ["side",       "Side"],
+    ["strategy",   "Strategy"],
+    ["status",     "Status"],
+    ["entryPrice", "Entry Price"],
+    ["exitPrice",  "Exit Price"],
+    ["sl",         "SL"],
+    ["tp",         "TP"],
+    ["size",       "Size"],
+    ["pnl",        "PnL Gross"],
+    ["fee",        "Fee"],
+    ["funding",    "Funding"],
+    ["pnlNet",     "PnL Net"],
+    ["pnlPct",     "PnL %"],
+    ["plannedRR",  "Planned R:R"],
+    ["actualRR",   "Actual R:R"],
+    ["duration",   "Duration"],
+    ["reason",     "Reason"],
+    ["dryRun",     "DryRun"],
+    ["mode",       "Mode"],
+    ["exchange",   "Exchange"],
+    ["openTime",   "Open Time"],
+    ["closeTime",  "Close Time"],
+    ["isPartial",  "Is Partial"],
+    ["result",     "Result"],
+  ];
+
   router.get("/trades/export", ...requireAdmin, async (req, res) => {
     try {
       const stamp = new Date().toISOString().slice(0, 10);
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="quantara_admin_trades_${stamp}.csv"`);
-      res.write([
-        "Trade ID", "User", "Symbol", "Side", "Strategy",
-        "Entry", "Exit", "Quantity", "PnL", "PnL %", "Status", "Entered At", "Exited At",
-      ].join(",") + "\n");
+      res.write(ADMIN_EXPORT_COLUMNS.map(c => c[1]).join(",") + "\n");
 
-      const BATCH = 500;
-      let cursor = null;
-      for (;;) {
-        const batch = await prisma.trade.findMany({
-          take: BATCH,
-          ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-          orderBy: { id: "asc" },
-          select: {
-            id: true, symbol: true, side: true, entry: true, exit: true, quantity: true,
-            pnl: true, pnlPercent: true, status: true, enteredAt: true, exitedAt: true,
-            firedByStrategy: true,
-            bot: { select: { user: { select: { username: true } } } },
-          },
-        });
-        if (batch.length === 0) break;
-
-        for (const t of batch) {
-          res.write([
-            t.id,
-            t.bot?.user?.username || "",
-            t.symbol,
-            t.side,
-            abbrevStrategy(t.firedByStrategy),
-            t.entry,
-            t.exit ?? "",
-            t.quantity,
-            t.pnl ?? "",
-            t.pnlPercent ?? "",
-            t.status,
-            t.enteredAt ? t.enteredAt.toISOString() : "",
-            t.exitedAt ? t.exitedAt.toISOString() : "",
-          ].map(csvCell).join(",") + "\n");
-        }
-
-        cursor = batch[batch.length - 1].id;
-        if (batch.length < BATCH) break;
+      // Read the REAL trade store (the Prisma Trade table is empty), with the
+      // same enriched fields as the user export so admin & user CSVs align.
+      const rows = await db.getAdminTradesExport({ limit: 5000 });
+      for (const r of rows) {
+        res.write(ADMIN_EXPORT_COLUMNS.map(([key]) => csvCell(r[key])).join(",") + "\n");
       }
       res.end();
     } catch (err) {

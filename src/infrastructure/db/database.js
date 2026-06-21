@@ -580,6 +580,22 @@ async function getAdminTrades({ limit = 50 } = {}) {
   return rows;
 }
 
+// Admin CSV export: ALL users' trades with the SAME rich fields as the
+// user-facing insight export (mapExportRow), plus the owner's username. Reads
+// the real `trades` store (the Prisma Trade table is unused/empty).
+async function getAdminTradesExport({ limit = 5000 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT t.*, s.mode, s.exchange AS session_exchange, u.username AS username
+       FROM trades t
+       LEFT JOIN bot_sessions s ON s.id = t.session_id
+       LEFT JOIN "User" u       ON u.id = s.user_id
+      ORDER BY t.open_time DESC
+      LIMIT $1`,
+    [Math.min(limit, 5000)]
+  );
+  return rows.map(r => ({ ...mapExportRow(r), user: r.username || "" }));
+}
+
 // Platform-wide trade KPIs for the admin dashboard + stat cards.
 async function getAdminTradeStats() {
   const { rows } = await pool.query(
@@ -1169,6 +1185,7 @@ module.exports = {
   getTradeStats,
   getAdminTrades,
   getAdminTradeStats,
+  getAdminTradesExport,
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
