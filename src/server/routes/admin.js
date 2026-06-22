@@ -285,16 +285,20 @@ module.exports = function createAdminRouter(helpers = {}) {
         select: {
           userId: true, symbol: true, dryRun: true, strategyKey: true, strategyGroup: true,
           capital: true, startedAt: true,
-          user:   { select: { username: true } },
-          trades: { select: { status: true, side: true, pnl: true } },
+          user: { select: { username: true } },
         },
       });
 
+      // Fetch real open-position counts + realised PnL from pg trade store.
+      // Prisma Trade model is always empty (engine writes to raw pg layer).
+      const userIds = [...new Set(bots.map(b => b.userId).filter(Boolean))];
+      let botsStats = new Map();
+      try { botsStats = await db.getBotsStats(userIds); } catch (_) {}
+
       const result = bots.map(b => {
-        const open     = b.trades.filter(t => t.status === "OPEN");
-        const realized = b.trades.reduce((s, t) => s + (t.pnl || 0), 0);
-        const roi      = b.capital > 0 ? Number(((realized / b.capital) * 100).toFixed(2)) : 0;
-        const multi    = Array.isArray(b.strategyGroup) && b.strategyGroup.length > 1;
+        const stats  = botsStats.get(`${b.userId}:${b.symbol}`) || { openCount: 0, openSide: null, netPnl: 0 };
+        const roi    = b.capital > 0 ? Number(((stats.netPnl / b.capital) * 100).toFixed(2)) : 0;
+        const multi  = Array.isArray(b.strategyGroup) && b.strategyGroup.length > 1;
         return {
           userId:   b.userId,
           user:     b.user?.username || "—",
@@ -302,7 +306,7 @@ module.exports = function createAdminRouter(helpers = {}) {
           mode:     b.dryRun ? "Dry Run" : "Live",
           strategy: multi ? "MULTI" : abbrevStrategy(b.strategyKey),
           capital:  `$${b.capital.toLocaleString("en-US")}`,
-          openPos:  open.length === 0 ? "None" : `${open.length} ${open[0].side}`,
+          openPos:  stats.openCount === 0 ? "None" : `${stats.openCount} ${stats.openSide || ""}`.trim(),
           roi,
           since:    b.startedAt,
           status:   "Running",

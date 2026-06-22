@@ -949,6 +949,39 @@ async function getOpenTradesByUser(userId) {
 }
 
 /**
+ * Batch-fetch open position count + realised net PnL per (userId, symbol)
+ * for the admin bots table. Returns real data from the pg trade store, not
+ * the unused Prisma Trade model. One query over all provided userIds.
+ * @param {string[]} userIds
+ * @returns {Promise<Map<string, {openCount:number, openSide:string|null, netPnl:number}>>}
+ *   key = "userId:symbol"
+ */
+async function getBotsStats(userIds) {
+  if (!userIds || userIds.length === 0) return new Map();
+  const { rows } = await pool.query(
+    `SELECT s.user_id, s.symbol,
+     COUNT(*) FILTER (WHERE t.close_time IS NULL)::int                      AS open_count,
+     MAX(t.side) FILTER (WHERE t.close_time IS NULL)                        AS open_side,
+     COALESCE(SUM((COALESCE(t.pnl,0) - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL), 0)                   AS net_pnl
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE s.user_id = ANY($1)
+     GROUP BY s.user_id, s.symbol`,
+    [userIds]
+  );
+  const map = new Map();
+  for (const r of rows) {
+    map.set(`${r.user_id}:${r.symbol}`, {
+      openCount: r.open_count  || 0,
+      openSide:  r.open_side   || null,
+      netPnl:    parseFloat(r.net_pnl) || 0,
+    });
+  }
+  return map;
+}
+
+/**
  * Batch-fetch net PnL per symbol for all closed trades of a user.
  * Used by GET /bots to show accurate ROI on stopped bots without N queries.
  * @returns {Promise<Map<string, number>>} symbol → net PnL (pnl - fee - funding)
@@ -1239,6 +1272,7 @@ module.exports = {
   getOpenTrades,
   getOpenTradesBySymbol,
   getOpenTradesByUser,
+  getBotsStats,
   getClosedPnlByUser,
   getOpenPositionsForGate,
   getInsights,
