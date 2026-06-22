@@ -193,6 +193,25 @@ function stopAllUserBotsInMemory(userId) {
   delete coordinatorsMap[userId];
 }
 
+/**
+ * EMERGENCY: stop & drop EVERY in-memory BotEngine across ALL users (admin
+ * Stop-All — ADMIN-BE-05). Mirrors stopAllUserBotsInMemory but platform-wide.
+ * Returns { stopped, failed } counts. Engine.stop() handles position close-out.
+ */
+function stopAllBotsInMemory() {
+  let stopped = 0, failed = 0;
+  const userIds = new Set();
+  for (const [key, instance] of Object.entries(botsMap)) {
+    userIds.add(key.split(":")[0]);
+    try {
+      if (instance.getState?.().running) { instance.stop(); stopped++; }
+    } catch { failed++; }
+  }
+  for (const key of Object.keys(botsMap)) delete botsMap[key];
+  for (const uid of userIds) delete coordinatorsMap[uid];
+  return { stopped, failed };
+}
+
 function createBotInstance(userId, symbol, configOverrides = {}) {
   const key = makeKey(userId, symbol);
   const existing = botsMap[key];
@@ -382,7 +401,7 @@ app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_L
 // Account routes (protected)
 app.use("/api/v1/account", authMiddleware, createAccountRouter({ stopAllUserBotsInMemory }));
 app.use("/api/v1/subscription", authMiddleware, createSubscriptionRouter());
-app.use("/api/v1/admin",   createAdminRouter()); // no authMiddleware — protected by ADMIN_SECRET header
+app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory })); // routes self-guard (JWT+role); ADMIN_SECRET only for the legacy billing stub
 
 // 404 handler
 app.use((req, res) => {

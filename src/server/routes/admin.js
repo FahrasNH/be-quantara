@@ -3,11 +3,12 @@
 // BILLING STUB — replaces payment gateway until billing system is built.
 // Protect this router with an admin secret header check, not just authMiddleware.
 
-module.exports = function createAdminRouter() {
+module.exports = function createAdminRouter(helpers = {}) {
   const express    = require("express");
   const router     = express.Router();
   const { asyncHandler }  = require("../../middleware/errorHandler");
   const { TIER_ORDER, TIER_CONFIG } = require("../../domain/tierConfig");
+  const cfg = require("../../config/env");
   const { authMiddleware }              = require("../../middleware/auth");
   const { adminGuard, superAdminGuard } = require("../../middleware/adminGuard");
   const bcrypt    = require("bcryptjs");
@@ -17,6 +18,14 @@ module.exports = function createAdminRouter() {
   // Real trade store (engine writes here via insertTrade). The Prisma `Trade`
   // model is unused/empty, so trade-derived admin data must read from this layer.
   const db = require("../../infrastructure/db/database");
+  // File-backed platform state (maintenance/flags + flagged users) — no Prisma
+  // model needed. See platformStore.js.
+  const platformStore = require("../../infrastructure/store/platformStore");
+  // Best-effort Telegram notifier for the emergency Stop-All broadcast.
+  const telegram = require("../../infrastructure/notifications/TelegramNotifier");
+
+  // Injected from app.js — halts every in-memory BotEngine (Stop-All).
+  const { stopAllBotsInMemory } = helpers;
 
   // JWT + role-based protection for the Admin Dashboard endpoints (ADMIN-BE-02/03).
   const requireAdmin      = [authMiddleware, adminGuard];      // any admin
@@ -66,6 +75,10 @@ module.exports = function createAdminRouter() {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
+
+  // SECURITY: masked fingerprint for API keys — never the raw key/secret
+  // (ADMIN-FE-07 AC-02). Lives in a shared util so it can be unit-tested.
+  const { maskKey } = require("../../infrastructure/security/maskKey");
 
   // Simple admin secret check (set ADMIN_SECRET in .env) — kept for the
   // server-to-server billing stub below, which has no JWT.
@@ -239,6 +252,7 @@ module.exports = function createAdminRouter() {
           trades:   agg.trades,
           netPnl:   Number(agg.netPnl.toFixed(2)),
           status:   hasRunning ? "Active" : "Inactive",
+          flagged:  platformStore.isFlagged(u.id),
         };
       });
 
@@ -248,7 +262,10 @@ module.exports = function createAdminRouter() {
         u.email.toLowerCase().includes(search) ||
         u.id.toLowerCase().includes(search));
       if (tier)   users = users.filter(u => u.tier === tier);
-      if (status) users = users.filter(u => u.status === status);
+      // "Flagged" is a platform-store signal, not a derived activity status —
+      // it filters on the flag rather than the Active/Inactive column.
+      if (status === "Flagged") users = users.filter(u => u.flagged);
+      else if (status)          users = users.filter(u => u.status === status);
 
       res.json({ ok: true, users, total, filtered: users.length });
     })
@@ -815,6 +832,287 @@ module.exports = function createAdminRouter() {
       await prisma.user.delete({ where: { id } });
       await audit(req, "ADMIN_DELETE_ADMIN", "admin", id, { username: target.username });
       res.json({ ok: true, deletedId: id });
+    })
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ADMIN v2 — supporting endpoints (ADMIN-BE-05 / ADMIN-BE-08)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * POST /api/v1/admin/bots/stop-all — EMERGENCY stop every running bot across
+   * ALL users/exchanges (ADMIN-BE-05, AC-ADMIN-08). SUPER_ADMIN only; the FE
+   * gates this behind a typed "STOP ALL" double-confirmation.
+   */
+  router.post(
+    "/bots/stop-all",
+    requireSuperAdmin,
+    asyncHandler(async (req, res) => {
+      const dbRunning = await prisma.bot.count({ where: { running: true } });
+      // 1) Halt in-memory engines (Engine.stop() closes live positions).
+      const mem = typeof stopAllBotsInMemory === "function"
+        ? stopAllBotsInMemory()
+        : { stopped: 0, failed: 0 };
+      // 2) Flip DB flags so persisted state is consistent even for bots that
+      //    were not resident in this process's memory.
+      const flip = await prisma.bot.updateMany({ where: { running: true }, data: { running: false } });
+      await audit(req, "EMERGENCY_STOP", "platform", null, {
+        dbRunning, memStopped: mem.stopped, memFailed: mem.failed, dbFlipped: flip.count,
+      });
+      // 3) Best-effort Telegram broadcast — never blocks/breaks the response.
+      const who = req.adminUser?.email || req.adminUser?.username || req.adminUser?.id;
+      telegram.send(`⛔ <b>EMERGENCY STOP ALL BOTS</b>\nBy: ${who}\nHalted: ${flip.count} bot(s)`, "HTML").catch(() => {});
+      res.json({ ok: true, stopped: flip.count, memStopped: mem.stopped, failed: mem.failed });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/audit — full AuditLog viewer, paginated + filterable
+   * (ADMIN-FE-12, AC-ADMIN-14). Query: page, limit (≤100), action, actor
+   * (username/email substring), from, to (ISO dates).
+   */
+  router.get(
+    "/audit",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const page   = Math.max(parseInt(req.query.page, 10) || 1, 1);
+      const limit  = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+      const action = (req.query.action || "").toString().trim();
+      const actor  = (req.query.actor  || "").toString().trim();
+      const from   = req.query.from ? new Date(req.query.from) : null;
+      const to     = req.query.to   ? new Date(req.query.to)   : null;
+
+      const where = {};
+      if (action) where.action = action;
+      if (from && !isNaN(from.getTime())) where.createdAt = { ...(where.createdAt || {}), gte: from };
+      if (to   && !isNaN(to.getTime()))   where.createdAt = { ...(where.createdAt || {}), lte: to };
+      if (actor) where.user = { OR: [
+        { username: { contains: actor, mode: "insensitive" } },
+        { email:    { contains: actor, mode: "insensitive" } },
+      ] };
+
+      const [total, rows, actionGroups] = await Promise.all([
+        prisma.auditLog.count({ where }),
+        prisma.auditLog.findMany({
+          where, orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit, take: limit,
+          select: {
+            id: true, action: true, resource: true, resourceId: true,
+            details: true, ipAddress: true, userAgent: true, createdAt: true,
+            user: { select: { username: true, email: true } },
+          },
+        }),
+        prisma.auditLog.groupBy({ by: ["action"], orderBy: { action: "asc" } }),
+      ]);
+
+      const entries = rows.map(l => ({
+        id:         l.id,
+        action:     l.action,
+        actor:      l.user?.username || "System",
+        actorEmail: l.user?.email || null,
+        resource:   l.resource || null,
+        resourceId: l.resourceId || null,
+        details:    l.details || null,
+        ip:         l.ipAddress || null,
+        userAgent:  l.userAgent || null,
+        at:         l.createdAt.toISOString(),
+        time:       fmtShort(l.createdAt),
+      }));
+
+      res.json({
+        ok: true, entries, total, page, limit,
+        pages:   Math.ceil(total / limit) || 1,
+        actions: actionGroups.map(g => g.action),
+      });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/settings — platform settings (ADMIN-FE-11, AC-ADMIN-13).
+   * Returns env-derived flags (read-only) + store-backed maintenance/flags.
+   * SUPER_ADMIN only.
+   */
+  router.get(
+    "/settings",
+    requireSuperAdmin,
+    asyncHandler(async (_req, res) => {
+      const s = platformStore.getSettings();
+      res.json({
+        ok: true,
+        settings: {
+          maintenanceMode:  s.maintenanceMode,
+          featureFlags:     s.featureFlags,
+          // Env-derived — read-only here (set via deploy/.env). null = "all".
+          allowedTiers:     cfg.allowedTiers     || TIER_ORDER,
+          allowedExchanges: cfg.allowedExchanges || ["bitget", "okx", "binance"],
+          tiersLocked:      !!cfg.allowedTiers,
+          exchangesLocked:  !!cfg.allowedExchanges,
+          env:              cfg.NODE_ENV,
+        },
+      });
+    })
+  );
+
+  /**
+   * PATCH /api/v1/admin/settings — toggle maintenance / feature flags.
+   * Body: { maintenanceMode?: bool, featureFlags?: object }. Audited. SUPER_ADMIN.
+   */
+  router.patch(
+    "/settings",
+    requireSuperAdmin,
+    asyncHandler(async (req, res) => {
+      const { maintenanceMode, featureFlags } = req.body || {};
+      if (maintenanceMode === undefined && featureFlags === undefined) {
+        return res.status(400).json({ ok: false, statusCode: 400, message: "Tidak ada perubahan settings" });
+      }
+      if (maintenanceMode !== undefined && typeof maintenanceMode !== "boolean") {
+        return res.status(400).json({ ok: false, statusCode: 400, message: "maintenanceMode harus boolean" });
+      }
+      const { before, after } = platformStore.patchSettings({ maintenanceMode, featureFlags });
+      await audit(req, "ADMIN_SETTINGS_CHANGE", "settings", null, { before, after });
+      res.json({ ok: true, settings: after });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/strategy-stats — aggregate performance per strategy across
+   * all users (ADMIN-FE-08, AC-ADMIN-16). Query: days (trailing window).
+   */
+  router.get(
+    "/strategy-stats",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const days      = parseInt(req.query.days, 10);
+      const sinceDays = Number.isFinite(days) && days > 0 ? days : null;
+      const rows = await db.getAdminStrategyStats({ sinceDays });
+
+      const strategies = rows.map(r => ({
+        key:     r.strategy,
+        label:   abbrevStrategy(r.strategy),
+        name:    r.strategy,
+        total:   r.total,
+        closed:  r.closed,
+        wins:    r.wins,
+        winRate: r.closed ? Number(((r.wins / r.closed) * 100).toFixed(1)) : 0,
+        netPnl:  Number((r.net_pnl || 0).toFixed(2)),
+        avgPnl:  Number((r.avg_pnl || 0).toFixed(2)),
+      }));
+
+      res.json({ ok: true, strategies, window: sinceDays ? `${sinceDays}d` : "all" });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/alerts — operational alert feed (ADMIN-FE-10, AC-ADMIN-18).
+   * Derived from REAL signals only: DB health, flagged users, and recent
+   * high-severity audit events. No fabricated alerts.
+   */
+  router.get(
+    "/alerts",
+    requireAdmin,
+    asyncHandler(async (_req, res) => {
+      const now = new Date().toISOString();
+      const alerts = [];
+
+      let dbOk = true;
+      try { await prisma.$queryRaw`SELECT 1`; } catch { dbOk = false; }
+      if (!dbOk) {
+        alerts.push({ id: "db-down", severity: "critical", title: "Database unreachable",
+          detail: "Primary database failed its health check.", at: now });
+      }
+
+      const flagged = platformStore.listFlagged();
+      if (flagged.length) {
+        alerts.push({ id: "flagged-users", severity: "warning",
+          title: `${flagged.length} flagged user${flagged.length > 1 ? "s" : ""}`,
+          detail: "Accounts under manual review — see Flagged Users.", at: now });
+      }
+
+      // Recent high-severity admin/audit events become alert items.
+      const SEV = { EMERGENCY_STOP: "critical", ADMIN_DELETE_ADMIN: "warning", ADMIN_USER_STATUS: "info" };
+      const recent = await prisma.auditLog.findMany({
+        where: { action: { in: Object.keys(SEV) } },
+        orderBy: { createdAt: "desc" }, take: 10,
+        select: { id: true, action: true, resourceId: true, createdAt: true, user: { select: { username: true } } },
+      });
+      for (const l of recent) {
+        const verb = l.action === "EMERGENCY_STOP" ? "Emergency stop triggered"
+                   : l.action === "ADMIN_DELETE_ADMIN" ? "Admin account deleted"
+                   : "User status changed";
+        alerts.push({
+          id: `audit-${l.id}`, severity: SEV[l.action] || "info",
+          title: verb, detail: `by ${l.user?.username || "System"}`,
+          at: l.createdAt.toISOString(), time: fmtShort(l.createdAt),
+        });
+      }
+
+      const RANK = { critical: 0, warning: 1, info: 2 };
+      alerts.sort((a, b) => (RANK[a.severity] - RANK[b.severity]) || (a.at < b.at ? 1 : -1));
+
+      res.json({ ok: true, alerts, count: alerts.length });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/apikeys — audit of users' exchange connections
+   * (ADMIN-FE-07, AC-ADMIN-12). SUPER_ADMIN only.
+   * SECURITY: returns ONLY masked metadata — never apiKey/apiSecret plaintext.
+   */
+  router.get(
+    "/apikeys",
+    requireSuperAdmin,
+    asyncHandler(async (_req, res) => {
+      const rows = await prisma.userExchange.findMany({
+        where: { deletedAt: null },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, exchangeType: true, apiKey: true, label: true,
+          createdAt: true, updatedAt: true,
+          user: { select: { id: true, username: true, email: true } },
+        },
+      });
+      const connections = rows.map(x => ({
+        id:          x.id,
+        userId:      x.user?.id || null,
+        user:        x.user?.username || "—",
+        email:       x.user?.email || null,
+        exchange:    exchangeLabel(x.exchangeType),
+        fingerprint: maskKey(x.apiKey), // masked only — raw key never leaves here
+        label:       x.label || null,
+        status:      "Connected",
+        connectedAt: x.createdAt.toISOString().slice(0, 10),
+        lastUpdated: fmtShort(x.updatedAt),
+      }));
+      res.json({ ok: true, connections, total: connections.length });
+    })
+  );
+
+  /**
+   * POST /api/v1/admin/users/:id/flag — flag a user for review (ADMIN-FE-05).
+   * Body: { reason? }. DELETE clears the flag. Both audited.
+   */
+  router.post(
+    "/users/:id/flag",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const { id }     = req.params;
+      const { reason } = req.body || {};
+      const target = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+      if (!target) return res.status(404).json({ ok: false, statusCode: 404, message: "User not found" });
+      const meta = platformStore.flagUser(id, reason, req.adminUser?.id);
+      await audit(req, "ADMIN_USER_FLAG", "user", id, { reason: meta.reason });
+      res.json({ ok: true, flagged: { userId: id, ...meta } });
+    })
+  );
+
+  router.delete(
+    "/users/:id/flag",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      const existed = platformStore.clearFlag(id);
+      if (existed) await audit(req, "ADMIN_USER_CLEAR_FLAG", "user", id, null);
+      res.json({ ok: true, cleared: existed });
     })
   );
 

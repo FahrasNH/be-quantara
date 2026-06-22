@@ -71,8 +71,9 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 
 ### 3.6 Admin Endpoints — `routes/admin.js`
 
-The Admin Dashboard backend (Tasks ADMIN-BE-01..07). All routes are mounted under
-`/api/v1/admin`. Source: `src/server/routes/admin.js`.
+The Admin Dashboard backend (Tasks ADMIN-BE-01..08, incl. the Admin v2 pages
+ADMIN-FE-05..13). All routes are mounted under `/api/v1/admin`. Source:
+`src/server/routes/admin.js`.
 
 #### Auth model
 
@@ -115,23 +116,50 @@ reads `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` from
 
 #### Endpoint surface
 
-| Method | Path | Guard | Purpose |
-|--------|------|-------|---------|
-| GET | `/admin/stats` | adminGuard | Headline KPI cards (ADMIN-BE-03 AC-02). |
-| GET | `/admin/users` | adminGuard | User list + derived trading stats. |
-| GET | `/admin/users/:id` | adminGuard | One user + aggregated trade stats. |
-| PATCH | `/admin/users/:id/status` | adminGuard | Suspend / activate a user. |
-| PATCH | `/admin/users/:id/role` | superAdminGuard | Change a user's role. |
-| GET | `/admin/bots` | adminGuard | Running bots across all users. |
-| GET | `/admin/health` | adminGuard | Platform health snapshot. |
-| GET | `/admin/trades/export` | adminGuard | Streaming CSV of all trades (ADMIN-BE-04). |
-| GET | `/admin/backtest/export` | adminGuard | 501 — backtests not persisted yet. |
-| GET | `/admin/admins` | superAdminGuard | List ADMIN + SUPER_ADMIN accounts (ADMIN-BE-07). |
-| POST | `/admin/admins` | superAdminGuard | Create a new admin. |
-| PATCH | `/admin/admins/:id` | superAdminGuard | Edit username / email. |
-| PATCH | `/admin/admins/:id/role` | superAdminGuard | Change an admin's role. |
-| POST | `/admin/admins/:id/reset-password` | superAdminGuard | Set a new password. |
-| DELETE | `/admin/admins/:id` | superAdminGuard | Remove an admin. |
+| Method | Path | Guard | Purpose | FE consumer |
+|--------|------|-------|---------|-------------|
+| GET | `/admin/stats` | adminGuard | Headline KPI cards (ADMIN-BE-03 AC-02). | `useAdminStats` → stat cards |
+| GET | `/admin/users` | adminGuard | User list + derived trading stats; `?status=Flagged` filters store-flagged users. | `useAdminUsers` → Users / Flagged |
+| GET | `/admin/users/:id` | adminGuard | One user + aggregated trade stats. | `useAdminUserDetail` → UserDetail |
+| PATCH | `/admin/users/:id/status` | adminGuard | Suspend / activate a user. | UserDetail / FlaggedUsers |
+| PATCH | `/admin/users/:id/role` | superAdminGuard | Change a user's role. | UserDetail |
+| POST | `/admin/users/:id/flag` | adminGuard | Flag a user for review (ADMIN-FE-05). | FlaggedUsers |
+| DELETE | `/admin/users/:id/flag` | adminGuard | Clear a user's review flag. | FlaggedUsers |
+| GET | `/admin/bots` | adminGuard | Running bots across all users. | `useAdminBots` → BotsPage |
+| POST | `/admin/bots/stop-all` | superAdminGuard | **Emergency** stop every running bot + AuditLog + Telegram (ADMIN-BE-05). | BotsPage danger zone |
+| GET | `/admin/health` | adminGuard | Platform health snapshot. | `useAdminHealth` |
+| GET | `/admin/trades` | adminGuard | Recent trades across users + KPI summary. | `useAdminTrades` → Trades |
+| GET | `/admin/activity` | adminGuard | Latest 12 audit events (dashboard feed). | `useAdminActivity` |
+| GET | `/admin/audit` | adminGuard | Paginated + filterable AuditLog viewer (ADMIN-FE-12). | `useAdminAudit` → AuditLogPage |
+| GET | `/admin/subscriptions` | adminGuard | Tier breakdown + MRR estimate. | `useAdminSubscriptions` → Subscriptions / Revenue |
+| GET | `/admin/strategy-stats` | adminGuard | Aggregate performance per strategy (`?days=`) (ADMIN-FE-08). | `useAdminStrategyStats` → StrategyStats |
+| GET | `/admin/alerts` | adminGuard | Operational alert feed from real signals (ADMIN-FE-10). | `useAdminAlerts` → AlertsPage |
+| GET | `/admin/settings` | superAdminGuard | Env flags (read-only) + maintenance/feature flags (ADMIN-FE-11). | `useAdminSettings` → SettingsPage |
+| PATCH | `/admin/settings` | superAdminGuard | Toggle maintenance / feature flags (audited). | SettingsPage |
+| GET | `/admin/apikeys` | superAdminGuard | Masked exchange-connection audit — never secrets (ADMIN-FE-07). | `useAdminApiKeys` → APIKeysPage |
+| GET | `/admin/trades/export` | adminGuard | Streaming CSV of all trades (ADMIN-BE-04). | ExportButton |
+| GET | `/admin/backtest/export` | adminGuard | 501 — backtests not persisted yet. | ExportButton |
+| GET | `/admin/admins` | superAdminGuard | List ADMIN + SUPER_ADMIN accounts (ADMIN-BE-07). | `useAdmins` → AdminManagement |
+| POST | `/admin/admins` | superAdminGuard | Create a new admin. | AdminManagement |
+| PATCH | `/admin/admins/:id` | superAdminGuard | Edit username / email. | AdminManagement |
+| PATCH | `/admin/admins/:id/role` | superAdminGuard | Change an admin's role. | AdminManagement |
+| POST | `/admin/admins/:id/reset-password` | superAdminGuard | Set a new password. | AdminManagement |
+| DELETE | `/admin/admins/:id` | superAdminGuard | Remove an admin. | AdminManagement |
+
+#### Platform state store (`src/infrastructure/store/platformStore.js`)
+
+The Admin v2 endpoints need two pieces of platform state that don't warrant a
+Prisma model + migration (the schema has no `Settings` table and `migrate dev`
+is broken here): **maintenance mode / feature flags** and the **flagged-users
+set**. Both live in a file-backed JSON store (`data/platform-store.json`, which
+is git-ignored). `GET/PATCH /admin/settings` and the `/admin/users/:id/flag`
+routes read/write it; `GET /admin/users` annotates each user with `flagged`.
+`ALLOWED_TIERS` / `ALLOWED_EXCHANGES` remain **env-derived and read-only** in the
+Settings page — they are set at deploy, not via the API.
+
+> **Security.** `/admin/apikeys` returns only a masked fingerprint
+> (`maskKey`, last 4 chars) + metadata — it never selects or transmits
+> `apiKey`/`apiSecret`. Covered by `test/admin-v2.test.js`.
 
 #### `GET /api/v1/admin/stats` — adminGuard
 

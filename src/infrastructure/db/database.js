@@ -596,6 +596,33 @@ async function getAdminTradesExport({ limit = 5000 } = {}) {
   return rows.map(r => ({ ...mapExportRow(r), user: r.username || "" }));
 }
 
+// Admin: aggregate performance per strategy across ALL users (ADMIN-BE-08 /
+// strategy-stats). Reads the REAL trades store. `sinceDays` optionally limits
+// to the trailing window (null = all time). Untracked trades (no strategy_name)
+// are grouped under "Untracked" so the totals always reconcile.
+async function getAdminStrategyStats({ sinceDays = null } = {}) {
+  const params = [];
+  let timeFilter = "";
+  if (sinceDays && Number.isFinite(sinceDays)) {
+    params.push(sinceDays);
+    timeFilter = `WHERE t.open_time >= now() - ($${params.length} || ' days')::interval`;
+  }
+  const { rows } = await pool.query(
+    `SELECT COALESCE(t.strategy_name, 'Untracked')                                AS strategy,
+            COUNT(*)::int                                                          AS total,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL)::int                  AS closed,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int    AS wins,
+            COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float AS net_pnl,
+            COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float AS avg_pnl
+       FROM trades t
+       ${timeFilter}
+      GROUP BY COALESCE(t.strategy_name, 'Untracked')
+      ORDER BY total DESC`,
+    params
+  );
+  return rows;
+}
+
 // Platform-wide trade KPIs for the admin dashboard + stat cards.
 async function getAdminTradeStats() {
   const { rows } = await pool.query(
@@ -1185,6 +1212,7 @@ module.exports = {
   getTradeStats,
   getAdminTrades,
   getAdminTradeStats,
+  getAdminStrategyStats,
   getAdminTradesExport,
   getTodayRiskStats,
   getOpenTrades,
