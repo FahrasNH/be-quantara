@@ -401,7 +401,7 @@ app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_L
 // Account routes (protected)
 app.use("/api/v1/account", authMiddleware, createAccountRouter({ stopAllUserBotsInMemory }));
 app.use("/api/v1/subscription", authMiddleware, createSubscriptionRouter());
-app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory })); // routes self-guard (JWT+role); ADMIN_SECRET only for the legacy billing stub
+app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory, getBot })); // routes self-guard (JWT+role); ADMIN_SECRET only for the legacy billing stub
 
 // 404 handler
 app.use((req, res) => {

@@ -24,8 +24,8 @@ module.exports = function createAdminRouter(helpers = {}) {
   // Best-effort Telegram notifier for the emergency Stop-All broadcast.
   const telegram = require("../../infrastructure/notifications/TelegramNotifier");
 
-  // Injected from app.js — halts every in-memory BotEngine (Stop-All).
-  const { stopAllBotsInMemory } = helpers;
+  // Injected from app.js — halts every in-memory BotEngine (Stop-All / per-bot).
+  const { stopAllBotsInMemory, getBot } = helpers;
 
   // JWT + role-based protection for the Admin Dashboard endpoints (ADMIN-BE-02/03).
   const requireAdmin      = [authMiddleware, adminGuard];      // any admin
@@ -283,7 +283,7 @@ module.exports = function createAdminRouter(helpers = {}) {
         where: { running: true },
         orderBy: { startedAt: "desc" },
         select: {
-          symbol: true, dryRun: true, strategyKey: true, strategyGroup: true,
+          userId: true, symbol: true, dryRun: true, strategyKey: true, strategyGroup: true,
           capital: true, startedAt: true,
           user:   { select: { username: true } },
           trades: { select: { status: true, side: true, pnl: true } },
@@ -296,6 +296,7 @@ module.exports = function createAdminRouter(helpers = {}) {
         const roi      = b.capital > 0 ? Number(((realized / b.capital) * 100).toFixed(2)) : 0;
         const multi    = Array.isArray(b.strategyGroup) && b.strategyGroup.length > 1;
         return {
+          userId:   b.userId,
           user:     b.user?.username || "—",
           symbol:   b.symbol,
           mode:     b.dryRun ? "Dry Run" : "Live",
@@ -303,7 +304,7 @@ module.exports = function createAdminRouter(helpers = {}) {
           capital:  `$${b.capital.toLocaleString("en-US")}`,
           openPos:  open.length === 0 ? "None" : `${open.length} ${open[0].side}`,
           roi,
-          since:    fmtShort(b.startedAt),
+          since:    b.startedAt,
           status:   "Running",
         };
       });
@@ -863,6 +864,40 @@ module.exports = function createAdminRouter(helpers = {}) {
       const who = req.adminUser?.email || req.adminUser?.username || req.adminUser?.id;
       telegram.send(`⛔ <b>EMERGENCY STOP ALL BOTS</b>\nBy: ${who}\nHalted: ${flip.count} bot(s)`, "HTML").catch(() => {});
       res.json({ ok: true, stopped: flip.count, memStopped: mem.stopped, failed: mem.failed });
+    })
+  );
+
+  /**
+   * POST /api/v1/admin/bots/:userId/:symbol/stop — stop a single bot (ADMIN).
+   * Calls in-memory engine stop if the instance is resident, then flips DB flag.
+   */
+  router.post(
+    "/bots/:userId/:symbol/stop",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const { userId, symbol } = req.params;
+
+      const bot = await prisma.bot.findUnique({
+        where: { userId_symbol: { userId, symbol } },
+      });
+      if (!bot) return res.status(404).json({ ok: false, message: "Bot not found" });
+
+      const instance = typeof getBot === "function" ? getBot(userId, symbol) : null;
+      if (instance) {
+        const st = instance.getState?.() ?? {};
+        if (st.running || st.starting) {
+          try { await instance.stop(); } catch (_) {}
+        }
+      }
+
+      await prisma.bot.update({
+        where: { userId_symbol: { userId, symbol } },
+        data: { running: false, stoppedAt: new Date() },
+      });
+
+      await audit(req, "ADMIN_BOT_STOP", "bot", bot.id, { userId, symbol });
+
+      res.json({ ok: true, symbol, stopped: true });
     })
   );
 

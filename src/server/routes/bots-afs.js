@@ -43,7 +43,7 @@ module.exports = function createBotsRouter(helpers) {
    * agar GET /bots tidak fan-out N query ke pool (1 per bot). Bila tidak diberikan,
    * fallback query per-symbol (dipakai endpoint single-bot).
    */
-  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null, tierStrategies = []) {
+  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null, tierStrategies = [], closedPnlMap = null) {
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
@@ -95,6 +95,7 @@ module.exports = function createBotsRouter(helpers) {
     const dbSg = Array.isArray(botRecord.strategyGroup) && botRecord.strategyGroup.length > 0
       ? botRecord.strategyGroup
       : tierStrategies;  // legacy bots with strategyGroup=[] show tier count
+    const historicalPnL = closedPnlMap ? (closedPnlMap.get(botRecord.symbol) ?? 0) : 0;
     return {
       ...botRecord,
       botId:          botRecord.symbol,
@@ -102,7 +103,7 @@ module.exports = function createBotsRouter(helpers) {
       openPositions,
       openTradeCount: openPositions.length,
       closedTrades:   botRecord.totalTrades ?? 0,
-      totalPnL:       0,
+      totalPnL:       historicalPnL,
       unrealizedPnL:  0,
       strategyGroup:  dbSg,
       multiStrategy:  dbSg.length > 1,
@@ -142,6 +143,11 @@ module.exports = function createBotsRouter(helpers) {
       try { openTradesMap = await db.getOpenTradesByUser(userId); }
       catch { /* non-critical — mergeBot fallback ke array kosong */ }
 
+      // Batch-fetch historical closed PnL per symbol so stopped bots show real ROI.
+      let closedPnlMap = new Map();
+      try { closedPnlMap = await db.getClosedPnlByUser(userId); }
+      catch { /* non-critical — stopped bots show 0 pnl as fallback */ }
+
       // Fetch tier strategies ONCE for this user (for stopped bots with empty strategyGroup).
       // This ensures legacy bots with strategyGroup=[] display the correct tier count.
       let tierStrategies = [];
@@ -152,7 +158,7 @@ module.exports = function createBotsRouter(helpers) {
       res.json({
         ok: true,
         count: bots.length,
-        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap, tierStrategies))),
+        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap, tierStrategies, closedPnlMap))),
       });
     })
   );

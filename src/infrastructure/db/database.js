@@ -949,6 +949,27 @@ async function getOpenTradesByUser(userId) {
 }
 
 /**
+ * Batch-fetch net PnL per symbol for all closed trades of a user.
+ * Used by GET /bots to show accurate ROI on stopped bots without N queries.
+ * @returns {Promise<Map<string, number>>} symbol → net PnL (pnl - fee - funding)
+ */
+async function getClosedPnlByUser(userId) {
+  if (userId == null) return new Map();
+  const { rows } = await pool.query(
+    `SELECT s.symbol,
+     SUM(COALESCE(t.pnl,0) - COALESCE(t.fee,0) - COALESCE(t.funding,0)) AS net_pnl
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE s.user_id = $1 AND t.close_time IS NOT NULL
+     GROUP BY s.symbol`,
+    [userId]
+  );
+  const map = new Map();
+  for (const r of rows) map.set(r.symbol, parseFloat(r.net_pnl) || 0);
+  return map;
+}
+
+/**
  * Hitung posisi TERBUKA (close_time IS NULL) untuk satu user+symbol+mode.
  * Sumber kebenaran tunggal untuk gate cap-per-koin (canEnter) — agar cap
  * menghormati SEMUA posisi terbuka di DB, bukan hanya yang ada di memori engine
@@ -1218,6 +1239,7 @@ module.exports = {
   getOpenTrades,
   getOpenTradesBySymbol,
   getOpenTradesByUser,
+  getClosedPnlByUser,
   getOpenPositionsForGate,
   getInsights,
   getTradesExport,
