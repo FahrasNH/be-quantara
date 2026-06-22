@@ -295,7 +295,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
       signals.C = this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed);
     }
 
-    const resolved = this._resolveSignalConflict(signals);
+    // PAIR-TIER-07: respect votingThresholdOverride from pair tier (e.g. 0.65 for VOLATILE)
+    const votingThresholdOverride = config.tierOverrides?.votingThresholdOverride ?? null;
+    const resolved = this._resolveSignalConflict(signals, votingThresholdOverride);
 
     if (resolved) {
       // P6: Store which component(s) fired for SL/TP selection
@@ -493,17 +495,29 @@ class AdaptiveFusionStrategy extends StrategyBase {
   // ── Conflict Resolution ───────────────────────────────────────────────────
 
   /**
-   * Voting rules:
+   * Voting rules (default):
    *   3/3 agree → execute (highest confidence)
    *   2/3 agree → execute (high confidence)
    *   1/3      → skip (safety first)
+   *
+   * With votingThresholdOverride (PAIR-TIER-07):
+   *   Require votes/total >= threshold fraction before executing.
+   *   STABLE = 0.55 (same effective bar as default for 3 signals)
+   *   VOLATILE = 0.65 (3/3 = 100% required — single dissent blocks entry)
    */
-  _resolveSignalConflict(signals) {
+  _resolveSignalConflict(signals, votingThresholdOverride = null) {
     const votes = Object.values(signals).filter(Boolean);
     if (votes.length === 0) return null;
 
     const longs  = votes.filter(v => v === "LONG").length;
     const shorts = votes.filter(v => v === "SHORT").length;
+    const total  = votes.length;
+
+    if (votingThresholdOverride !== null) {
+      if (longs / total  >= votingThresholdOverride) return "LONG";
+      if (shorts / total >= votingThresholdOverride) return "SHORT";
+      return null;
+    }
 
     if (longs >= 2)  return "LONG";
     if (shorts >= 2) return "SHORT";

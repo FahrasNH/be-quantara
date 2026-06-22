@@ -28,6 +28,8 @@ module.exports = function createBotsRouter(helpers) {
   // SEC-002 GAP1: satu lock dibagi start+stop agar start & stop untuk bot yang
   // sama juga saling-eksklusif, bukan hanya start vs start.
   const botOpLock = createBotOpLock();
+  // PAIR-TIER-05: pair classification for strategy override + VOLATILE guard
+  const { pairClassifier } = require("../../infrastructure/classification/PairClassifier");
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
@@ -458,6 +460,36 @@ module.exports = function createBotsRouter(helpers) {
         strategies = [strategyKey];
       }
 
+      // ── PAIR-TIER-05: classify pair → filter + merge tier overrides ──────────
+      const pairClass = pairClassifier.classify(symbol);
+      const tierOverrides = pairClass.paramOverrides;
+
+      // Block non-MR strategies on VOLATILE pairs (AC-PAIR-04)
+      if (pairClass.tier === "VOLATILE") {
+        const blockedStrategies = strategies.filter(s => pairClass.blockedStrategies.includes(s));
+        if (blockedStrategies.length) {
+          // Allow if user explicitly chose a strategy (legacy path) and it's MR
+          if (!useMulti || blockedStrategies.length === strategies.length) {
+            return res.status(400).json({
+              ok: false,
+              statusCode: 400,
+              message: `${symbol} adalah pair VOLATILE. Strategi ${blockedStrategies.join(", ")} diblokir — hanya MEAN_REVERSION yang diizinkan untuk pasangan berisiko tinggi ini.`,
+              pairTier: pairClass.tier,
+              blockedStrategies,
+              allowedStrategies: pairClass.recommendedStrategies,
+            });
+          }
+          // Filter out blocked strategies for multi mode
+          strategies = strategies.filter(s => !pairClass.blockedStrategies.includes(s));
+          if (!strategies.length) strategies = ["MEAN_REVERSION"];
+        }
+      }
+
+      // Build strategy warning if pair tier is not LIQUID
+      const strategyWarning = pairClass.tier !== "LIQUID"
+        ? `${symbol} adalah pair ${pairClass.tier} (risiko ${pairClass.riskLevel}). SL diperlebar ${tierOverrides.slMultiplier}×, ukuran posisi dikurangi ke ${Math.round(tierOverrides.positionSizeAdjustment * 100)}%.`
+        : null;
+
       const capitalPerStrategy = (capital || 500) / strategies.length;
 
       // Check if bot exists for this user
@@ -581,6 +613,12 @@ module.exports = function createBotsRouter(helpers) {
           message: `Bot ${symbol} starting...`,
           symbol,
           config: bot,
+          appliedTierAdjustments: {
+            pairTier:    pairClass.tier,
+            riskLevel:   pairClass.riskLevel,
+            ...tierOverrides,
+          },
+          strategyWarning,
         });
 
         startPromise
@@ -606,6 +644,12 @@ module.exports = function createBotsRouter(helpers) {
         message: `Bot ${symbol} started`,
         symbol,
         config: bot,
+        appliedTierAdjustments: {
+          pairTier:    pairClass.tier,
+          riskLevel:   pairClass.riskLevel,
+          ...tierOverrides,
+        },
+        strategyWarning,
       });
     })
   );

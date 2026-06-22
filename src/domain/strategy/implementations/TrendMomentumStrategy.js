@@ -36,6 +36,8 @@
 
 const StrategyBase = require("../base/StrategyBase");
 const { calcMACD } = require("../../indicators");
+// PAIR-TIER-07: triple-EMA regime check for STABLE/VOLATILE pairs
+const { checkHTFRegime } = require("../../htfRegimeFilter");
 
 class TrendMomentumStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -440,7 +442,22 @@ class TrendMomentumStrategy extends StrategyBase {
       htfTrend, macdMTF, signalMTF, histogramMTF, rsiMTF, rsiSlopeMTF
     );
 
-    if (longCheck.valid) return "LONG";
+    if (longCheck.valid) {
+      // PAIR-TIER-07: apply triple-EMA regime filter for STABLE/VOLATILE pairs
+      if (config.tierOverrides?.regimeFilterRequired) {
+        const regimeCheck = checkHTFRegime({
+          direction: 'LONG',
+          htfData: {
+            ema9:   htfEmaFast,
+            ema50:  htfEmaSlow,
+            ema200: indicators.ema200HTF?.[idxHTF] ?? null,
+          },
+          required: true,
+        });
+        if (!regimeCheck.allowed) return null;
+      }
+      return "LONG";
+    }
 
     const shortCheck = this.checkShortEntry(
       closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
@@ -448,7 +465,22 @@ class TrendMomentumStrategy extends StrategyBase {
       htfTrend, macdMTF, signalMTF, histogramMTF, rsiMTF, rsiSlopeMTF
     );
 
-    if (shortCheck.valid) return "SHORT";
+    if (shortCheck.valid) {
+      // PAIR-TIER-07: apply triple-EMA regime filter for STABLE/VOLATILE pairs
+      if (config.tierOverrides?.regimeFilterRequired) {
+        const regimeCheck = checkHTFRegime({
+          direction: 'SHORT',
+          htfData: {
+            ema9:   htfEmaFast,
+            ema50:  htfEmaSlow,
+            ema200: indicators.ema200HTF?.[idxHTF] ?? null,
+          },
+          required: true,
+        });
+        if (!regimeCheck.allowed) return null;
+      }
+      return "SHORT";
+    }
 
     return null;
   }

@@ -6,6 +6,7 @@ const { Router } = require("express");
 const db = require("../../infrastructure/db/database");
 const ExchangeService = require("../../services/ExchangeService");
 const { symbolsRateLimiter } = require("../../middleware/marketRateLimiter");
+const { pairClassifier } = require("../../infrastructure/classification/PairClassifier");
 
 // parseInt yang aman — kembalikan `def` jika nilai tidak finite
 const safeInt = (val, def = 0) => {
@@ -138,6 +139,33 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
         if (stale?.length >= 50) return res.json(stale);
       } catch { /* noop */ }
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── PAIR-TIER-03: GET /market/pair-classification/:symbol ─────────────────
+  // Returns pair volatility tier + recommended strategies + param overrides.
+  // Auth-required (authMiddleware already applied at app level for /api/v1/*).
+  // Response is safe to cache on client (classification is deterministic &
+  // stable intra-day; no per-user data exposed).
+  router.get("/pair-classification/:symbol", (req, res) => {
+    try {
+      const symbol = (req.params.symbol || "").toUpperCase().trim();
+      if (!symbol) {
+        return res.status(400).json({ ok: false, message: "symbol param required" });
+      }
+      const result = pairClassifier.classify(symbol);
+      res.json({
+        ok: true,
+        symbol,
+        tier:                  result.tier,
+        riskLevel:             result.riskLevel,
+        recommendedStrategies: result.recommendedStrategies,
+        cautiousStrategies:    result.cautiousStrategies,
+        blockedStrategies:     result.blockedStrategies,
+        paramOverrides:        result.paramOverrides,
+      });
+    } catch (err) {
+      res.status(500).json({ ok: false, message: err.message });
     }
   });
 
