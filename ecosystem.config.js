@@ -26,7 +26,13 @@ module.exports = {
       max_restarts:  10,
       min_uptime:    "30s",
       kill_timeout:  30000,
-      max_memory_restart: "512M",
+      // 512M terlalu kecil untuk multi-strategy: tiap bot menjalankan N engine
+      // (mis. 9 bot × 4 strategi = 36 BotEngine) + buffer candle/indikator + Prisma
+      // + pg pool. Saat lewat batas, PM2 me-restart proses → SEMUA engine in-memory
+      // hilang → jendela cold-resume baru → ROI/PnL & posisi "kedip" sampai resume
+      // selesai. Naikkan ke 1024M agar siklus OOM-restart ini berhenti. Pastikan VPS
+      // punya RAM cukup (≥2GB direkomendasikan untuk prod+staging berdampingan).
+      max_memory_restart: "1024M",
       error_file:    "logs/be-quantara-prod.err.log",
       out_file:      "logs/be-quantara-prod.out.log",
       merge_logs:    true,
@@ -45,7 +51,9 @@ module.exports = {
       max_restarts:  10,
       min_uptime:    "30s",
       kill_timeout:  30000,
-      max_memory_restart: "512M",
+      // Lihat catatan pada app prod: 512M memicu siklus OOM-restart yang membuat
+      // ROI/PnL & open-position kedip antar refresh. Naikkan ke 1024M.
+      max_memory_restart: "1024M",
       error_file:    "logs/quantara-staging.err.log",
       out_file:      "logs/quantara-staging.out.log",
       merge_logs:    true,

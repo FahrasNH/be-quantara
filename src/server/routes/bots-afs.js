@@ -44,6 +44,32 @@ module.exports = function createBotsRouter(helpers) {
    * fallback query per-symbol (dipakai endpoint single-bot).
    */
   async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null, tierStrategies = [], closedPnlMap = null) {
+    // Posisi terbuka dari DB = sumber kebenaran yang BERTAHAN lintas restart proses
+    // & warm-up engine. Dipakai sebagai fallback agar sebuah posisi terbuka TIDAK
+    // pernah menghilang dari kartu hanya karena instance in-memory belum sempat
+    // dipulihkan (auto-resume) atau masih warm-up. Inilah akar bug "open posisi
+    // muncul/hilang antar hard-refresh": sebelumnya posisi 100% bergantung pada
+    // keberadaan instance live yang tidak stabil saat server habis restart.
+    async function readDbOpenPositions() {
+      try {
+        const dbTrades = openTradesMap
+          ? (openTradesMap.get(botRecord.symbol) || [])
+          : await db.getOpenTradesBySymbol(botRecord.symbol, userId);
+        return dbTrades.map(t => ({
+          id:          t.order_id || `db_${t.id}`,
+          dbId:        t.id,
+          side:        t.side,
+          entry:       t.entry_price,
+          sl:          t.sl,
+          tp:          t.tp,
+          size:        t.size ?? 0,
+          openTime:    new Date(t.open_time).getTime(),
+          atr:         t.atr,
+          restoredFrom: t.session_id,
+        }));
+      } catch { return []; /* non-critical — fall back to empty */ }
+    }
+
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
@@ -52,6 +78,10 @@ module.exports = function createBotsRouter(helpers) {
       // instance is a legacy BotEngine (will be upgraded on next restart).
       const liveSg = live.strategyGroup ?? botRecord.strategyGroup ?? [];
       const effectiveSg = liveSg.length > 0 ? liveSg : tierStrategies;
+      // Posisi: utamakan live (sudah di-enrich unrealizedPL/mark). Bila engine baru
+      // warm-up & belum memuat posisinya, fallback ke DB → posisi tetap tampil.
+      const livePositions = Array.isArray(live.openPositions) ? live.openPositions : [];
+      const openPositions = livePositions.length > 0 ? livePositions : await readDbOpenPositions();
       return {
         ...botRecord,
         ...live,
@@ -59,10 +89,15 @@ module.exports = function createBotsRouter(helpers) {
         botId:       botRecord.symbol,
         running:     botRecord.running ? live.running : false,
         strategyKey: botRecord.strategyKey,
-        // getState() melaporkan `capital` (total modal) tetapi BUKAN `startCapital`,
-        // sehingga FE menghitung ROI / Net PnL% terhadap 0 → selalu "0.00%".
-        // Samakan dengan path bot-stopped: modal awal = capital DB.
+        // Modal SELALU dari DB (yang dikonfigurasi user). getState() melaporkan
+        // `capital` versi engine (mis. per-strategi / agregat) yang bisa BERBEDA
+        // antar warm-up vs cold → menimpa nilai DB & menimbulkan kedip $250 ↔ $1000
+        // antar refresh. Kunci ke `botRecord.capital` agar Modal & denominator ROI
+        // stabil dan identik di semua tampilan (dashboard, kartu bot, risk panel).
+        capital:      botRecord.capital,
         startCapital: botRecord.capital,
+        openPositions,
+        openTradeCount: openPositions.length,
         params: {
           // Single-strategy engine punya `instance.config`; MultiStrategyCoordinator
           // tidak (config-nya per-engine) → pakai leverage efektif dari getState (`live`).
@@ -73,25 +108,9 @@ module.exports = function createBotsRouter(helpers) {
         multiStrategy: live.multiStrategy || effectiveSg.length > 1,
       };
     }
-    // Stopped bot path: use DB strategyGroup, fall back to tier strategies for legacy bots.
-    let openPositions = [];
-    try {
-      const dbTrades = openTradesMap
-        ? (openTradesMap.get(botRecord.symbol) || [])
-        : await db.getOpenTradesBySymbol(botRecord.symbol, userId);
-      openPositions = dbTrades.map(t => ({
-        id:          t.order_id || `db_${t.id}`,
-        dbId:        t.id,
-        side:        t.side,
-        entry:       t.entry_price,
-        sl:          t.sl,
-        tp:          t.tp,
-        size:        t.size ?? 0,
-        openTime:    new Date(t.open_time).getTime(),
-        atr:         t.atr,
-        restoredFrom: t.session_id,
-      }));
-    } catch { /* non-critical — fall back to empty */ }
+    // Stopped / belum-resume: DB authoritative. Posisi terbuka tetap diambil dari DB
+    // agar bot yang running=true (menunggu auto-resume) tetap menampilkan posisinya.
+    const openPositions = await readDbOpenPositions();
     const dbSg = Array.isArray(botRecord.strategyGroup) && botRecord.strategyGroup.length > 0
       ? botRecord.strategyGroup
       : tierStrategies;  // legacy bots with strategyGroup=[] show tier count
@@ -99,6 +118,7 @@ module.exports = function createBotsRouter(helpers) {
     return {
       ...botRecord,
       botId:          botRecord.symbol,
+      capital:        botRecord.capital,
       startCapital:   botRecord.capital,
       openPositions,
       openTradeCount: openPositions.length,
