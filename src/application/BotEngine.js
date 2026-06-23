@@ -2616,14 +2616,22 @@ class BotEngine extends EventEmitter {
         const reason    = isTP ? "TP" : "SL";
         const closeTime = Date.now();
 
-        this._sep(`POSISI DITUTUP — ${isTP ? "TAKE PROFIT" : "STOP LOSS"}`);
-        this._log("trade", `CLOSE ${pos.side} — ${isTP ? "TAKE PROFIT" : "STOP LOSS"}`);
-        this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
-        this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
+        // ── Close banner terpadu (dry-run SL/TP) — SATU kartu ──
+        const net      = pnl - fee;
+        const openMs   = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+        const holdStr  = fmtHoldingMs(closeTime - openMs);
+        const closeLines = [
+          `══ POSISI DITUTUP — ${isTP ? "TAKE PROFIT" : "STOP LOSS"} ══`,
+          `${pos.side} ${this.config.symbol} · ${stratLabel(pos.strategyName ?? this.config.strategyKey)}`,
+          `Entry → Exit : $${pos.entry} → $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`,
+          `Holding time : ${holdStr}`,
+          `Net P&L      : ${net > 0 ? "+" : ""}$${net.toFixed(2)}  (gross ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} · fee -$${fee.toFixed(4)})`,
+        ];
         if (pos.m1 || pos.m2) {
           const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
-          this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
+          closeLines.push(`Total (partial+sisa) : ${partialPnL + net > 0 ? "+" : ""}$${(partialPnL + net).toFixed(2)}`);
         }
+        this._logBlock("trade", closeLines);
 
         if (this.sessionId && pos.dbId) {
           try {
