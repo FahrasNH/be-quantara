@@ -449,35 +449,33 @@ wss.on("connection", (ws, req) => {
   ws.userId = wsUserId;
   console.log(`[WS] Client connected: ${clientIp} (user: ${wsUserId})`);
 
-  // Replay buffer in-memory (100 entri terakhir per bot) + snapshot status live.
-  // FIX: hanya replay bot milik userId yang terautentikasi.
-  const WS_REPLAY_PER_BOT = 100;
+  // Snapshot status live per bot saat koneksi WS dibuka. HANYA status (bukan log).
+  //
+  // PENTING: log TIDAK lagi di-replay di sini. Sebelumnya tiap reconnect membanjiri
+  // client dengan ≤100 log × N bot (mis. 9 bot = ~900 frame) — itulah penyebab
+  // "logs muncul tiap 2 detik" & kartu "loncat-loncat": tiap kali server restart
+  // (OOM) → WS putus → reconnect → replay storm → re-render massal. Log sudah
+  // di-hydrate FE dari DB (GET /bots/logs) + localStorage, jadi replay WS redundan.
+  // FIX: hanya kirim snapshot status milik userId yang terautentikasi.
   getAllBots(wsUserId).forEach((instance) => {
     const symbol = instance.config?.symbol;
     if (!symbol) return;
-
     if (ws.readyState === 1) {
       try {
         ws.send(JSON.stringify({ type: "status", symbol, data: instance.getState() }));
       } catch { /* client mungkin sudah disconnect */ }
     }
-
-    // MultiStrategyCoordinator tidak punya getLogs — guard sebelum panggil
-    const logs = typeof instance.getLogs === "function"
-      ? instance.getLogs(WS_REPLAY_PER_BOT)
-      : [];
-    logs.forEach((entry) => {
-      if (ws.readyState === 1) {
-        try {
-          ws.send(JSON.stringify({ type: "log", symbol, data: entry }));
-        } catch { /* client mungkin sudah disconnect */ }
-      }
-    });
   });
 
   ws.on("message", (raw) => {
     try {
       const msg = JSON.parse(raw);
+      // Heartbeat: FE kirim {type:"ping"} tiap 30s. Balas pong agar koneksi
+      // dianggap hidup oleh client & proxy (cegah putus saat idle).
+      if (msg.type === "ping") {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: "pong" }));
+        return;
+      }
       // Handle WebSocket messages (bot logs, real-time data, etc.)
       if (msg.type === "subscribe" && msg.botSymbol) {
         ws.botSymbol = msg.botSymbol;

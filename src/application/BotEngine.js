@@ -345,6 +345,20 @@ class BotEngine extends EventEmitter {
     console.log(`${ts} ${C[level] || "\x1b[37m"}[${prefix[level] || level.toUpperCase()}] ${msg}\x1b[0m`);
   }
 
+  // Throttle untuk log diagnostik "kenapa belum/tidak entry". Bot tick tiap 5–15
+  // menit, tapi sebelumnya log dibatasi per-jumlah-tick (% 5 / % 10) sehingga
+  // reasoning jarang terlihat. Gate berbasis WAKTU ini memastikan user melihat
+  // ringkasan keputusan paling cepat tiap 3 menit per bot — informatif tapi tidak
+  // membanjiri panel log.
+  _shouldLogDecision() {
+    const now = Date.now();
+    if (!this._lastDecisionLogAt || now - this._lastDecisionLogAt >= 180_000) {
+      this._lastDecisionLogAt = now;
+      return true;
+    }
+    return false;
+  }
+
   _sep(label = "") {
     const line = "─".repeat(50);
     const sep  = label
@@ -1065,8 +1079,8 @@ class BotEngine extends EventEmitter {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
         const gate = this._checkRiskGates(atr, price);
         if (!gate.ok) {
-          if (this.state.checkCount % 10 === 1) {
-            this._log("info", `[SKIP] ${gate.reason}`);
+          if (this._shouldLogDecision()) {
+            this._log("info", `⏸ Belum entry — ${gate.reason}`);
           }
         } else {
           // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
@@ -1142,8 +1156,8 @@ class BotEngine extends EventEmitter {
                 // (fetch gagal). Sebelumnya fail-open → 10/14 loss dry-run 11-12 Jun
                 // masuk tanpa konfirmasi regime. Tanpa data regime = tanpa entry.
                 filteredSignal = null;
-                if (this.state.checkCount % 10 === 1) {
-                  this._log("info", `[BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed)`);
+                if (this._shouldLogDecision()) {
+                  this._log("info", `⛔ Sinyal dibatalkan — data tren ${this.config.higherTf} tidak tersedia (fail-closed demi keamanan)`);
                 }
               } else if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
@@ -1230,9 +1244,9 @@ class BotEngine extends EventEmitter {
               }
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
-              // ── Diagnostic: log kenapa tidak ada entry (setiap 5 tick) ──────
-              // Bantu debug tanpa spam log. Tampil di Live Bot log panel.
-              if (this.state.checkCount % 5 === 1) {
+              // ── Diagnostic: log kenapa belum ada entry (throttle 3 menit) ──────
+              // Bantu user paham kondisi bot tanpa spam log. Tampil di Live Bot panel.
+              if (this._shouldLogDecision()) {
                 const rsiMin = this.config.rsiLongMin ?? 50;
                 const rsiMax = this.config.rsiLongMax ?? 70;
                 const emaOk  = emaF > emaS;
@@ -1257,7 +1271,7 @@ class BotEngine extends EventEmitter {
                 if (reasons.length === 0) {
                   reasons.push(`RSI pullback-bounce pattern belum terpenuhi (RSI=${rsi?.toFixed(1)}, perlu pullback ke ${rsiMin}–${rsiMax} lalu naik)`);
                 }
-                this._log("info", `[WAIT] ${reasons.join(" | ")}`);
+                this._log("info", `⏳ Belum entry — menunggu: ${reasons.join(" | ")}`);
               }
             }
           }
@@ -1605,6 +1619,17 @@ class BotEngine extends EventEmitter {
 
     this._sep(`SINYAL ${signal}`);
     this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
+    // Alasan entry (apa yang memicu posisi dibuka) — informatif untuk user.
+    if (indicatorSnapshot) {
+      const s = indicatorSnapshot;
+      const why = [];
+      if (s.emaTrendBias)      why.push(`tren ${s.emaTrendBias}`);
+      if (s.htfTrend)          why.push(`HTF ${s.htfTrend}`);
+      if (s.rsi != null)       why.push(`RSI ${s.rsi}`);
+      if (s.volumeRatio != null) why.push(`volume ${s.volumeRatio}× SMA`);
+      if (s.afComponent)       why.push(`komponen ${s.afComponent}`);
+      if (why.length) this._log("trade", `🟢 Entry ${signal} dipicu — ${why.join(" · ")} [${s.strategy ?? this.config.strategyKey}]`);
+    }
     this._log("trade", `Entry: $${fmtPx(price)} | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
     this._log("info",  `[STATS] Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
 
