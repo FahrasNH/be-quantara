@@ -70,6 +70,12 @@ module.exports = function createBotsRouter(helpers) {
       } catch { return []; /* non-critical — fall back to empty */ }
     }
 
+    // Tier pair (LIQUID/STABLE/VOLATILE) — di-expose agar FE bisa menampilkan
+    // klasifikasi NYATA dari bot user (bukan cache FE yang ephemeral).
+    const pc = pairClassifier.classify(botRecord.symbol);
+    const pairTier = pc.tier;
+    const pairRiskLevel = pc.riskLevel;
+
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
@@ -96,6 +102,8 @@ module.exports = function createBotsRouter(helpers) {
         // stabil dan identik di semua tampilan (dashboard, kartu bot, risk panel).
         capital:      botRecord.capital,
         startCapital: botRecord.capital,
+        pairTier,
+        pairRiskLevel,
         openPositions,
         openTradeCount: openPositions.length,
         params: {
@@ -120,6 +128,8 @@ module.exports = function createBotsRouter(helpers) {
       botId:          botRecord.symbol,
       capital:        botRecord.capital,
       startCapital:   botRecord.capital,
+      pairTier,
+      pairRiskLevel,
       openPositions,
       openTradeCount: openPositions.length,
       closedTrades:   botRecord.totalTrades ?? 0,

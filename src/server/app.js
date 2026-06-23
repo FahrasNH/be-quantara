@@ -44,6 +44,10 @@ const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
 
 // Entitlement service (dipakai resumeRunningBots untuk fallback tier-strategies)
 const { getTierStrategies } = require("../services/entitlement");
+// PAIR-TIER: klasifikasi pair (LIQUID/STABLE/VOLATILE) untuk override SL/posisi
+// + filter strategi. Dipakai di createBot*/resume agar override SELALU diterapkan,
+// tidak peduli bot dibuat lewat start manual atau auto-resume.
+const { pairClassifier } = require("../infrastructure/classification/PairClassifier");
 
 // ── CORS & Security ────────────────────────────────────────────────────────
 // Domain produksi dibaca dari env (cfg.corsOrigins). Localhost ditangani terpisah.
@@ -226,10 +230,15 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     // Bot berhenti → recreate dengan kredensial terbaru (user bisa ganti API key)
     delete botsMap[key];
   }
+  // PAIR-TIER override juga untuk engine tunggal (legacy/non-multi).
+  const _singlePair = pairClassifier.classify(symbol);
   const bot = new BotEngine({
     symbol,
     botKey:      key,
     coordinator: getCoordinator(userId), // koordinasi margin lintas-bot (#5)
+    pairTier:                   _singlePair.tier,
+    pairSlMultiplier:           _singlePair.paramOverrides.slMultiplier,
+    pairPositionSizeAdjustment: _singlePair.paramOverrides.positionSizeAdjustment,
     ...configOverrides,
     // SELALU set userId (defense-in-depth): tanpa ini, openSession membuat
     // bot_sessions.user_id NULL → getTrades (INNER JOIN s.user_id) menyembunyikan
@@ -297,6 +306,14 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
 
   const accountCoordinator = getCoordinator(userId);
 
+  // Klasifikasi tier pair → ambil override SL & ukuran posisi (lihat engineConfig).
+  const _pairClass = pairClassifier.classify(symbol);
+  const _pairOverrides = {
+    tier:                   _pairClass.tier,
+    slMultiplier:           _pairClass.paramOverrides.slMultiplier,
+    positionSizeAdjustment: _pairClass.paramOverrides.positionSizeAdjustment,
+  };
+
   // engineFactory di-INJECT ke koordinator → satu AdaptiveStrategyEngine per strategi,
   // berbagi AccountCoordinator + kredensial user. cfg dari koordinator sudah berisi
   // strategyKey/capital/dryRun/botKey/groupKey.
@@ -343,6 +360,13 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       passphrase:   opts.passphrase,
       // Leverage konservatif (min lintas-strategi) yang di-set sekali per-symbol.
       leverage:     sharedLeverage,
+      // PAIR-TIER override: SL/posisi disesuaikan tier pair (VOLATILE 1.5×SL/0.6×size,
+      // STABLE 1.1×/0.9×, LIQUID 1×/1×). Diklasifikasi di sini agar SELALU aktif baik
+      // dari start manual maupun auto-resume (sebelumnya hanya dihitung di route start
+      // lalu dibuang → override tidak pernah benar-benar diterapkan ke trade).
+      pairTier:                   _pairOverrides.tier,
+      pairSlMultiplier:           _pairOverrides.slMultiplier,
+      pairPositionSizeAdjustment: _pairOverrides.positionSizeAdjustment,
     },
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
@@ -636,6 +660,26 @@ async function resumeRunningBots() {
             strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
               ? bot.strategyGroup
               : null;
+          }
+        }
+
+        // PAIR-TIER: terapkan filter strategi VOLATILE SAAT RESUME juga (sebelumnya
+        // hanya di route start). Tanpa ini, tiap restart server me-resume bot VOLATILE
+        // dengan SEMUA 4 strategi tier → aturan "MR only" pada pair berisiko tinggi
+        // dilanggar diam-diam. Sinkronkan juga ke DB agar kartu menampilkan jumlah benar.
+        if (Array.isArray(strategies) && strategies.length > 0) {
+          const pc = pairClassifier.classify(bot.symbol);
+          if (pc.tier === "VOLATILE") {
+            const filtered = strategies.filter(s => !pc.blockedStrategies.includes(s));
+            const volStrategies = filtered.length > 0 ? filtered : ["MEAN_REVERSION"];
+            if (JSON.stringify(volStrategies) !== JSON.stringify(strategies)) {
+              strategies = volStrategies;
+              await prisma.bot.update({
+                where: { id: bot.id },
+                data: { strategyGroup: strategies, strategyKey: strategies[0] },
+              }).catch(() => {});
+              console.log(`[Startup] ${bot.symbol} VOLATILE → resume hanya [${strategies.join(",")}] (filter MR-only)`);
+            }
           }
         }
 

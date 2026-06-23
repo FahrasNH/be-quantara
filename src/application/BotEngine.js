@@ -1441,9 +1441,14 @@ class BotEngine extends EventEmitter {
     }
     this._lastOpenAt[dedupKey] = now0;
 
-    const slDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
+    // Pair-tier SL override: VOLATILE 1.5× / STABLE 1.1× / LIQUID 1.0×. Memperlebar
+    // SL agar tidak ter-stop oleh noise di koin volatil; sizing berbasis-risk otomatis
+    // memperkecil posisi saat SL lebih lebar (risk $ tetap). Default 1 bila tak diset.
+    const pairSlMult = this.config.pairSlMultiplier || 1;
+    const baseSlDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
+    const slDist = baseSlDist * pairSlMult;
     // tpDist can be overridden independently (used by ADAPTIVE_FUSION per-component RR)
-    const tpDist = options.tpDist != null ? options.tpDist : slDist * this.config.riskReward;
+    const tpDist = options.tpDist != null ? options.tpDist * pairSlMult : slDist * this.config.riskReward;
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
@@ -1511,7 +1516,10 @@ class BotEngine extends EventEmitter {
       }
     }
 
-    const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
+    // Pair-tier position adjustment: VOLATILE 0.6× / STABLE 0.9× / LIQUID 1.0×.
+    // Mengecilkan posisi (manajemen risiko) di koin berisiko tinggi. Default 1.
+    const pairPosAdj = this.config.pairPositionSizeAdjustment || 1;
+    const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl) * pairPosAdj;
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
 
     // ── Minimum lot size Bitget — flexible leverage guard ─────────────────────
