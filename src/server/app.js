@@ -761,6 +761,9 @@ db.init()
     // Purge soft-deleted exchange keys older than 7 days (every 6h)
     const { scheduleKeyPurge } = require("../services/exchangeKeyPurge");
     scheduleKeyPurge();
+    // Dynamic pair classification dari CoinGecko (refresh tiap 4 jam, non-blocking)
+    pairClassifier.refreshDynamic().catch(() => {});
+    setInterval(() => pairClassifier.refreshDynamic().catch(() => {}), 4 * 60 * 60 * 1000);
     // Pulihkan bot yang sedang berjalan (async, tidak memblok startup)
     resumeRunningBots();
   })

@@ -15,6 +15,8 @@
 
 'use strict';
 
+const https = require("https");
+
 // ─── Pair Tier Constants ──────────────────────────────────────────────────────
 const PAIR_TIER = Object.freeze({
   LIQUID:   'LIQUID',
@@ -95,16 +97,94 @@ const RISK_LEVEL = Object.freeze({
   VOLATILE: 'HIGH',
 });
 
+// ─── Stablecoins to skip during dynamic classification ────────────────────────
+const STABLECOINS = new Set(["USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "PYUSD", "FDUSD"]);
+
 // ─── PairClassifier ───────────────────────────────────────────────────────────
 class PairClassifier {
+  constructor() {
+    // Dynamic sets populated from CoinGecko — empty means "use static fallback"
+    this._dynamicLiquid   = new Set();
+    this._dynamicVolatile = new Set();
+    this._dynamicLastAt   = null;
+    // 4-hour refresh interval (don't hammer CoinGecko free tier: ~6 calls/day)
+    this._CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Fetch coin market data from CoinGecko and update dynamic tier sets.
+   * Rank ≤ 15 (non-stablecoin) → LIQUID
+   * Rank 16–100  → STABLE
+   * Rank > 100   → VOLATILE
+   * Falls back to static tables silently on error.
+   */
+  async refreshDynamic() {
+    return new Promise((resolve) => {
+      const url = "https://api.coingecko.com/api/v3/coins/markets"
+        + "?vs_currency=usd&order=market_cap_desc&per_page=250&page=1";
+      const req = https.get(url, { headers: { "Accept": "application/json", "User-Agent": "Quantara-Bot/1.0" } }, (res) => {
+        let body = "";
+        res.on("data", (chunk) => body += chunk);
+        res.on("end", () => {
+          try {
+            if (res.statusCode !== 200) {
+              console.warn(`[PairClassifier] CoinGecko returned ${res.statusCode} — using static tables`);
+              return resolve(false);
+            }
+            const coins = JSON.parse(body);
+            const newLiquid   = new Set();
+            const newVolatile = new Set();
+            for (const coin of coins) {
+              const sym = (coin.symbol || "").toUpperCase();
+              if (STABLECOINS.has(sym)) continue;
+              const rank = coin.market_cap_rank ?? 9999;
+              const binanceSym = `${sym}USDT`;
+              if (rank <= 15)       newLiquid.add(binanceSym);
+              else if (rank > 100)  newVolatile.add(binanceSym);
+              // rank 16-100 → STABLE (default, no set needed)
+            }
+            this._dynamicLiquid   = newLiquid;
+            this._dynamicVolatile = newVolatile;
+            this._dynamicLastAt   = Date.now();
+            console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID, ${newVolatile.size} VOLATILE (CoinGecko top-250)`);
+            resolve(true);
+          } catch (e) {
+            console.warn("[PairClassifier] CoinGecko parse error:", e.message, "— using static tables");
+            resolve(false);
+          }
+        });
+      });
+      req.on("error", (e) => {
+        console.warn("[PairClassifier] CoinGecko fetch error:", e.message, "— using static tables");
+        resolve(false);
+      });
+      req.setTimeout(10_000, () => {
+        req.destroy();
+        console.warn("[PairClassifier] CoinGecko timeout — using static tables");
+        resolve(false);
+      });
+    });
+  }
+
   /**
    * Classify a symbol into LIQUID | STABLE | VOLATILE.
+   * Uses dynamic CoinGecko data if available, otherwise static fallback.
    * Falls back to STABLE for unknown symbols (safe default).
    * @param {string} symbol  e.g. "BTCUSDT", "WLDUSDT"
    * @returns {'LIQUID' | 'STABLE' | 'VOLATILE'}
    */
   determineTier(symbol) {
     const sym = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    // Use dynamic data if populated (CoinGecko refresh succeeded)
+    if (this._dynamicLiquid.size > 0) {
+      if (this._dynamicLiquid.has(sym))   return PAIR_TIER.LIQUID;
+      if (this._dynamicVolatile.has(sym)) return PAIR_TIER.VOLATILE;
+      // If dynamic data loaded but sym not in either set → STABLE (rank 16-100)
+      // BUT: fall back to static for explicitly known VOLATILE (safety net while dynamic warms up)
+      if (VOLATILE_PAIRS.has(sym)) return PAIR_TIER.VOLATILE;
+      return PAIR_TIER.STABLE;
+    }
+    // Static fallback
     if (LIQUID_PAIRS.has(sym))   return PAIR_TIER.LIQUID;
     if (VOLATILE_PAIRS.has(sym)) return PAIR_TIER.VOLATILE;
     return PAIR_TIER.STABLE;
