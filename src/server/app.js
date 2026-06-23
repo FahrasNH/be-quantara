@@ -669,6 +669,16 @@ async function resumeRunningBots() {
           console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
         }
 
+        // Re-check DB sebelum start: jika user sudah Stop All selagi kita warm-up
+        // (set running=false via HTTP), batal — jangan re-start bot yang sudah
+        // distop. Tanpa re-check ini ada race: stop endpoint tidak menemukan
+        // instance (belum di-create), set DB running=false, tapi resumeOneBot lanjut
+        // membuat instance baru & start → bot jalan lagi padahal DB=false.
+        const fresh = await prisma.bot.findUnique({ where: { id: bot.id }, select: { running: true } });
+        if (!fresh?.running) {
+          console.log(`[Startup] Skip resume ${bot.symbol} — sudah di-stop selagi warm-up`);
+          return;
+        }
         if (!instance.getState().running) await instance.start();
         resumed++;
       } catch (e) {
