@@ -43,14 +43,17 @@ npm ci
 echo "==> prisma migrate deploy..."
 npx prisma migrate deploy
 
-if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
-  echo "==> pm2 restart ${PM2_APP}..."
-  pm2 restart "${PM2_APP}" --update-env
-else
-  echo "==> pm2 start (app belum ada)..."
-  pm2 start ecosystem.config.js --only be-quantara-staging 2>/dev/null \
-    || pm2 start index.js --name "${PM2_APP}"
-fi
+# PENTING (OOM-loop fix): `pm2 restart <nama>` TIDAK membaca ulang
+# max_memory_restart dari ecosystem.config.js — opsi PM2-level itu hanya
+# diterapkan saat proses dibuat DARI file ecosystem. Akibatnya fix 512M→1024M
+# tidak pernah aktif & proses tetap OOM-restart ~tiap 30s. `startOrReload` dengan
+# FILE ecosystem memaksa PM2 membaca ulang seluruh opsi runtime (termasuk limit
+# memori). Bersihkan dulu proses bernama lama `quantara-staging` (pra-rename)
+# agar tidak ada zombie yang menahan port 3001.
+pm2 delete quantara-staging 2>/dev/null || true
+echo "==> pm2 startOrReload ecosystem.config.js --only ${PM2_APP}..."
+pm2 startOrReload ecosystem.config.js --only "${PM2_APP}" --update-env \
+  || pm2 start ecosystem.config.js --only "${PM2_APP}"
 
 pm2 save
 

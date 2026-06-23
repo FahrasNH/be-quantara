@@ -54,14 +54,15 @@ if ! npx prisma migrate status | grep -q "Database schema is up to date"; then
   exit 1
 fi
 
-if pm2 describe "${PM2_APP}" >/dev/null 2>&1; then
-  echo "==> pm2 restart ${PM2_APP}..."
-  pm2 restart "${PM2_APP}" --update-env
-else
-  echo "==> pm2 start (app belum ada)..."
-  pm2 start ecosystem.config.js --only "${PM2_APP}" 2>/dev/null \
-    || pm2 start index.js --name "${PM2_APP}"
-fi
+# PENTING (OOM-loop fix): `pm2 restart <nama>` TIDAK membaca ulang
+# max_memory_restart dari ecosystem.config.js — opsi PM2-level itu hanya
+# diterapkan saat proses dibuat DARI file ecosystem. Pakai `startOrReload` dengan
+# FILE ecosystem agar limit memori (1024M) & opsi runtime lain terbaca ulang.
+# Bersihkan dulu proses bernama lama `quantara-prod` (pra-rename) bila ada.
+pm2 delete quantara-prod 2>/dev/null || true
+echo "==> pm2 startOrReload ecosystem.config.js --only ${PM2_APP}..."
+pm2 startOrReload ecosystem.config.js --only "${PM2_APP}" --update-env \
+  || pm2 start ecosystem.config.js --only "${PM2_APP}"
 
 pm2 save
 
