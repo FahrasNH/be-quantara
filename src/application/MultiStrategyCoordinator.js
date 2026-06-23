@@ -249,7 +249,7 @@ class MultiStrategyCoordinator extends EventEmitter {
 
       this.engines.set(strategyKey, engine);
       await engine.start();
-      this._log("info", `Engine [${strategyKey}] start — capital $${this.capitalPerStrategy.toFixed(2)}`);
+      this._log("info", `Engine ${this._titleCase(strategyKey)} start — capital $${this.capitalPerStrategy.toFixed(2)}`);
     }
 
     // stop() mendarat selama warm-up → batalkan: hentikan engine yang terlanjur start,
@@ -297,9 +297,9 @@ class MultiStrategyCoordinator extends EventEmitter {
     for (const [strategyKey, engine] of this.engines) {
       try {
         await engine.stop();
-        this._log("info", `Engine [${strategyKey}] dihentikan`);
+        this._log("info", `Engine ${this._titleCase(strategyKey)} dihentikan`);
       } catch (e) {
-        this._log("error", `Gagal stop engine [${strategyKey}]: ${e.message}`);
+        this._log("error", `Gagal stop engine ${this._titleCase(strategyKey)}: ${e.message}`);
       }
     }
     this.engines.clear();
@@ -326,7 +326,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     for (const [strategyKey, engine] of this.engines) {
       if (allowed.has(strategyKey)) continue;
       try { await engine.stop(); }
-      catch (e) { this._log("error", `reconcile stop [${strategyKey}] gagal: ${e.message}`); }
+      catch (e) { this._log("error", `reconcile stop ${this._titleCase(strategyKey)} gagal: ${e.message}`); }
       this.engines.delete(strategyKey);
       stopped.push(strategyKey);
     }

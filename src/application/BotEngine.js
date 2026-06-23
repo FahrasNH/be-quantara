@@ -21,6 +21,13 @@ const notifier = require("../infrastructure/notifications/TelegramNotifier");
 // Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
 // ambigu "$0.09" di log. Ini HANYA untuk tampilan log — harga order yang dikirim
 // ke exchange diformat ke tick-size oleh masing-masing client (_fmtPrice).
+// ADAPTIVE_FUSION → "Adaptive Fusion". Dipakai di semua log yang tampil di UI —
+// snake_case strategy key tidak boleh muncul di panel log (selalu Title Case).
+function stratLabel(key) {
+  if (!key) return "—";
+  return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
 function fmtPx(price) {
   const n = Number(price);
   if (!Number.isFinite(n)) return String(price);
@@ -778,7 +785,7 @@ class BotEngine extends EventEmitter {
     banner.push(`Exchange   : ${this.config.exchangeLabel}`);
     banner.push(`Symbol     : ${this.config.symbol}`);
     banner.push(`Interval   : ${this.config.interval}`);
-    banner.push(`Strategi   : [${this.config.strategyKey}] ${this.config.strategyLabel}`);
+    banner.push(`Strategi   : ${stratLabel(this.config.strategyKey)}`);
     banner.push(`EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
     banner.push(`RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
     banner.push(`Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
@@ -1055,7 +1062,7 @@ class BotEngine extends EventEmitter {
           `EMA${this.config.emaFast}=${emaF?.toFixed(2)} EMA${this.config.emaSlow}=${emaS?.toFixed(2)}` +
           (emaTrend ? ` EMA${this.config.emaTrend}=${emaTrend?.toFixed(2)}` : "") + ` | ` +
           `RSI=${rsi?.toFixed(1)} ATR=${atr?.toFixed(2)} | ` +
-          `Trend: ${trendLabel}${htfLabel} | Strat: [${this.config.strategyKey}]`
+          `Trend: ${trendLabel}${htfLabel} | Strat: ${stratLabel(this.config.strategyKey)}`
         );
       }
 
@@ -1662,7 +1669,7 @@ class BotEngine extends EventEmitter {
       if (s.rsi != null)       why.push(`RSI ${s.rsi}`);
       if (s.volumeRatio != null) why.push(`volume ${s.volumeRatio}× SMA`);
       if (s.afComponent)       why.push(`komponen ${s.afComponent}`);
-      if (why.length) this._log("trade", `🟢 Entry ${signal} dipicu — ${why.join(" · ")} [${s.strategy ?? this.config.strategyKey}]`);
+      if (why.length) this._log("trade", `🟢 Entry ${signal} dipicu — ${why.join(" · ")} · ${stratLabel(s.strategy ?? this.config.strategyKey)}`);
     }
     this._log("trade", `Entry: $${fmtPx(price)} | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
     this._log("info",  `[STATS] Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
