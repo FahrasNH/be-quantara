@@ -368,6 +368,17 @@ class BotEngine extends EventEmitter {
     if (label) this._log("info", `══ ${label} ══`);
   }
 
+  /**
+   * Emit BANYAK baris sebagai SATU entry log (dipisah newline) — supaya panel log
+   * menampilkannya sebagai 1 kartu, bukan belasan kartu terpisah. Dipakai untuk
+   * banner startup ("══ QUANTARA BOT ══ … ══ BOT BERJALAN ══") yang sebelumnya
+   * memenuhi panel dengan ~13 baris terpisah.
+   */
+  _logBlock(level, lines) {
+    const msg = lines.filter(l => l != null).join("\n");
+    this._log(level, msg);
+  }
+
   // ─────────────────────────────────────────────
   // PUBLIC API
   // ─────────────────────────────────────────────
@@ -489,7 +500,7 @@ class BotEngine extends EventEmitter {
     this.state.errors        = 0;
 
     try {
-    await this._startup();
+    const banner = await this._startup();
     // stop() dipanggil selama _startup() (mis. Stop All saat warm-up) → batalkan
     // sebelum membuka sesi & menandai running, agar tidak ada engine zombie.
     if (this._stopRequested) {
@@ -507,7 +518,7 @@ class BotEngine extends EventEmitter {
       config:         this.config,
       userId:         this.config.userId ?? null,  // isolasi data per user
     });
-    this._log("info", `Session DB #${this.sessionId} dibuat`);
+    banner.push(`Session    : DB #${this.sessionId} dibuat`);
 
     // ── Restore posisi terbuka dari SEMUA sesi lama (lintas sesi) ─────────
     // Cari trades dengan close_time IS NULL untuk symbol ini di semua sesi
@@ -685,7 +696,11 @@ class BotEngine extends EventEmitter {
 
     this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
 
-    this._log("info", `Bot berjalan — cek setiap ${this.config.checkInterval / 1000}s`);
+    // ══ BOT BERJALAN ══ + ringkasan boot lengkap → emit SATU kartu log.
+    banner.push("");
+    banner.push("══ BOT BERJALAN ══");
+    banner.push(`Bot aktif  : cek setiap ${this.config.checkInterval / 1000}s`);
+    this._logBlock("info", banner);
 
     } finally {
       this.state.starting = false;
@@ -747,23 +762,27 @@ class BotEngine extends EventEmitter {
   // STARTUP
   // ─────────────────────────────────────────────
   async _startup() {
-    this._sep(`QUANTARA BOT — ${this.config.exchangeLabel.toUpperCase()}`);
-    this._log("info", `Exchange   : ${this.config.exchangeLabel}`);
-    this._log("info", `Mode       : ${this.config.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING"}`);
-    this._log("info", `Strategi   : [${this.config.strategyKey}] ${this.config.strategyLabel}`);
-    this._log("info", `Symbol     : ${this.config.symbol}`);
-    this._log("info", `Interval   : ${this.config.interval}`);
-    this._log("info", `EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
-    this._log("info", `RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
-    this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
-    this._sep();
+    // Kumpulkan SEMUA baris konfigurasi ke dalam satu array, lalu emit sebagai
+    // SATU kartu log di akhir start() — bukan ~13 kartu terpisah. Mengembalikan
+    // array ini agar start() bisa menambah baris "Session DB" / "cek tiap Ns"
+    // sebelum emit, sehingga seluruh ringkasan boot tampil dalam 1 grup.
+    const banner = [];
+    banner.push(`══ QUANTARA BOT — ${this.config.exchangeLabel.toUpperCase()} ══`);
+    banner.push(`Mode       : ${this.config.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING"}`);
+    banner.push(`Exchange   : ${this.config.exchangeLabel}`);
+    banner.push(`Symbol     : ${this.config.symbol}`);
+    banner.push(`Interval   : ${this.config.interval}`);
+    banner.push(`Strategi   : [${this.config.strategyKey}] ${this.config.strategyLabel}`);
+    banner.push(`EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
+    banner.push(`RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
+    banner.push(`Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
 
     // Gunakan kredensial yang sudah di-resolve (DB key dari Settings > env var)
     const noKey = !this.config._hasCredentials;
 
     if (noKey) {
       if (!this.config.dryRun) throw new Error("API Key exchange belum dikonfigurasi. Tambahkan di menu Settings → API Keys.");
-      this._log("warn", "API Key tidak ditemukan — DRY RUN tanpa koneksi exchange (simulasi)");
+      banner.push("API Key    : tidak ditemukan — DRY RUN tanpa koneksi exchange (simulasi)");
       this.state.capital = this.state.startCapital = this.config.capital || 500;
     } else {
       try {
@@ -780,21 +799,21 @@ class BotEngine extends EventEmitter {
           // Jika engine adalah bagian dari grup multi-strategy, tampilkan modal
           // per-engine DAN total grup agar tidak membingungkan.
           const modalLog = this.config.groupTotalCapital && this.config.groupTotalCapital !== this.state.capital
-            ? `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT per strategi (total bot: $${this.config.groupTotalCapital.toFixed(2)}) (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`
-            : `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`;
-          this._log("info", modalLog);
+            ? `Modal      : DRY RUN $${this.state.capital.toFixed(2)} USDT per strategi (total bot: $${this.config.groupTotalCapital.toFixed(2)}) (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`
+            : `Modal      : DRY RUN $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`;
+          banner.push(modalLog);
         } else {
           // Live: gunakan equity total (available + margin terkunci).
           this.state.capital      = totalEquity;
           this.state.startCapital = totalEquity;
-          this._log("info", `Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
+          banner.push(`Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
           if (this.config.sharedLeverageSet) {
             // Leverage + margin mode already set once by coordinator for this symbol.
-            this._log("info", `Leverage   : ${this.config.leverage}x diset ✓ (koordinator)`);
+            banner.push(`Leverage   : ${this.config.leverage}x diset ✓ (koordinator)`);
           } else {
             await this.client.setLeverage(this.config.symbol, this.config.leverage);
             await this.client.setMarginMode(this.config.symbol, "crossed");
-            this._log("info", `Leverage   : ${this.config.leverage}x diset ✓`);
+            banner.push(`Leverage   : ${this.config.leverage}x diset ✓`);
           }
         }
       } catch (err) {
@@ -804,10 +823,11 @@ class BotEngine extends EventEmitter {
         const _displayMsg = _okxIpCode
           ? `IP server tidak di-whitelist OKX${_okxIpAddr ? ` (IP: ${_okxIpAddr})` : ""}. Solusi: buka OKX → Profile → API → Edit API key → hapus semua isian IP whitelist (biarkan kosong), atau tambahkan IP server ke whitelist, lalu simpan.`
           : _em;
+        // Error koneksi tetap kartu terpisah (level error → merah, mudah terlihat).
         this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${_displayMsg}`);
         if (!this.config.dryRun) throw err;
         this.state.capital = this.state.startCapital = this.config.capital || 500;
-        this._log("warn", `Fallback DRY RUN dengan modal $${this.state.capital.toFixed(2)}`);
+        banner.push(`Modal      : Fallback DRY RUN $${this.state.capital.toFixed(2)} (koneksi exchange gagal)`);
       }
     }
 
@@ -829,16 +849,16 @@ class BotEngine extends EventEmitter {
       // dailyStartCapital ≈ modal saat ini + loss hari ini (perkiraan modal awal hari).
       this.state.dailyStartCapital = this.state.capital + risk.dailyLoss;
       if (risk.dailyTradeCount > 0) {
-        this._log("info",
-          `🛡️ Risk dipulihkan dari DB — trade hari ini: ${risk.dailyTradeCount}, ` +
-          `daily loss: $${risk.dailyLoss.toFixed(2)}, loss beruntun: ${risk.consecLoss}`
+        banner.push(
+          `🛡️ Risk      : dipulihkan dari DB — trade hari ini ${risk.dailyTradeCount}, ` +
+          `daily loss $${risk.dailyLoss.toFixed(2)}, loss beruntun ${risk.consecLoss}`
         );
       }
     } catch (e) {
-      this._log("warn", `Gagal memulihkan risk state dari DB: ${e.message} — mulai dari 0`);
+      banner.push(`Risk       : gagal dipulihkan dari DB (${e.message}) — mulai dari 0`);
     }
 
-    this._sep("BOT BERJALAN");
+    return banner;
   }
 
   // ─────────────────────────────────────────────
