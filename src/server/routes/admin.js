@@ -445,7 +445,10 @@ module.exports = function createAdminRouter(helpers = {}) {
         const d = new Date(l.createdAt);
         return {
           tone: TONE_BY_ACTION[l.action] || "gray",
-          time: `${p(d.getHours())}:${p(d.getMinutes())}`,
+          // ISO timestamp — the FE formats it in the viewer's local timezone.
+          // (server-side getHours() rendered UTC, so WIB users saw a 7h offset.)
+          iso:  d.toISOString(),
+          time: `${p(d.getHours())}:${p(d.getMinutes())}`, // legacy fallback
           who:  l.user?.username || "System",
           text: `${verb}${resInfo}`,
         };

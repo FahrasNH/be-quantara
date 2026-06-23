@@ -28,6 +28,15 @@ function stratLabel(key) {
   return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
+// Holding duration of a position → "22H 6M" (or "6M" under an hour).
+function fmtHoldingMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}H ${m}M` : `${m}M`;
+}
+
 function fmtPx(price) {
   const n = Number(price);
   if (!Number.isFinite(n)) return String(price);
@@ -1519,10 +1528,8 @@ class BotEngine extends EventEmitter {
         sl, tp, slDist, tpDist, atr,
       }),
     };
-    this._log("info",
-      `[TRADE] Fired by: ${enrichedSnapshot.firedByStrategy ?? "UNKNOWN"} | ` +
-      `SL: ${enrichedSnapshot.slMultiplier ?? "?"}xATR | TP: ${enrichedSnapshot.tpMultiplier ?? "?"}xATR`
-    );
+    // NOTE: "Fired by" attribution folded into the consolidated entry banner below
+    // (one card per entry instead of six). enrichedSnapshot still persisted to DB.
 
     // Tentukan modal acuan untuk sizing.
     // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
@@ -1658,21 +1665,30 @@ class BotEngine extends EventEmitter {
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
 
-    this._sep(`SINYAL ${signal}`);
-    this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
-    // Alasan entry (apa yang memicu posisi dibuka) — informatif untuk user.
+    // ── Entry banner terpadu — SATU kartu, bukan 6 log terpisah ──────────────
+    // Sebelumnya: SINYAL + alasan + Entry detail + STATS + Fired-by + DRY RUN
+    // masing-masing emit sendiri → panel log penuh kartu kembar di satu detik.
+    const why = [];
     if (indicatorSnapshot) {
       const s = indicatorSnapshot;
-      const why = [];
-      if (s.emaTrendBias)      why.push(`tren ${s.emaTrendBias}`);
-      if (s.htfTrend)          why.push(`HTF ${s.htfTrend}`);
-      if (s.rsi != null)       why.push(`RSI ${s.rsi}`);
+      if (s.emaTrendBias)        why.push(`tren ${s.emaTrendBias}`);
+      if (s.htfTrend)            why.push(`HTF ${s.htfTrend}`);
+      if (s.rsi != null)         why.push(`RSI ${s.rsi}`);
       if (s.volumeRatio != null) why.push(`volume ${s.volumeRatio}× SMA`);
-      if (s.afComponent)       why.push(`komponen ${s.afComponent}`);
-      if (why.length) this._log("trade", `🟢 Entry ${signal} dipicu — ${why.join(" · ")} · ${stratLabel(s.strategy ?? this.config.strategyKey)}`);
+      if (s.afComponent)         why.push(`komponen ${s.afComponent}`);
     }
-    this._log("trade", `Entry: $${fmtPx(price)} | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
-    this._log("info",  `[STATS] Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
+    const slMult = enrichedSnapshot.slMultiplier;
+    const tpMult = enrichedSnapshot.tpMultiplier;
+    const entryLines = [
+      `══ ENTRY ${signal} — ${this.config.symbol} · ${stratLabel(this.config.strategyKey)} ══`,
+    ];
+    if (why.length) entryLines.push(`Sinyal     : ${why.join(" · ")}`);
+    entryLines.push(`Entry      : $${fmtPx(price)}`);
+    entryLines.push(`SL / TP    : $${fmtPx(sl)} / $${fmtPx(tp)}${slMult ? `  (${slMult}×/${tpMult}× ATR)` : ""}`);
+    entryLines.push(`Size       : ${finalSize} · Risk ${(actualRiskPct * 100).toFixed(2)}%`);
+    entryLines.push(`Stats      : Trade ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} · Loss beruntun ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
+    entryLines.push(`Mode       : ${this.config.dryRun ? "DRY RUN (order tidak dikirim)" : "LIVE"}`);
+    this._logBlock("trade", entryLines);
 
     const openTime = Date.now();
 
@@ -1814,7 +1830,7 @@ class BotEngine extends EventEmitter {
         this._log("error", `Gagal buka posisi: ${err.message}`);
       }
     } else {
-      this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
+      // (mode "DRY RUN" sudah tertera di entry banner — tak perlu log terpisah)
       // Margin yang "dikunci" disimpan persis di posisi (#9) agar saat close
       // dikembalikan dalam jumlah yang sama — sebelumnya open & close memakai
       // rumus berbeda → equity simulasi drift.
@@ -2411,14 +2427,22 @@ class BotEngine extends EventEmitter {
             continue;
           }
 
-          this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
-          this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
-          this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} [${priceSource}] | Size sisa: ${remaining.toFixed(4)}`);
-          this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} — balance dari exchange`);
+          // ── Close banner terpadu — SATU kartu dengan Holding time + Net P&L ──
+          const net      = pnl - fee;
+          const openMs   = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+          const holdStr  = fmtHoldingMs(Date.now() - openMs);
+          const closeLines = [
+            `══ POSISI DITUTUP — ${exitReason || "SL/TP"} ══`,
+            `${pos.side} ${this.config.symbol} · ${stratLabel(pos.strategyName ?? this.config.strategyKey)}`,
+            `Entry → Exit : $${pos.entry} → $${exitPrice.toFixed(2)} [${priceSource}]`,
+            `Holding time : ${holdStr}`,
+            `Net P&L      : ${net > 0 ? "+" : ""}$${net.toFixed(2)}  (gross ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} · fee -$${fee.toFixed(4)})`,
+          ];
           if (pos.m1 || pos.m2) {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
-            this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
+            closeLines.push(`Total (partial+sisa) : ${partialPnL + net > 0 ? "+" : ""}$${(partialPnL + net).toFixed(2)}`);
           }
+          this._logBlock("trade", closeLines);
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
           const pnlPct = pos.entry > 0 ? ((exitPrice - pos.entry) / pos.entry * 100 * (pos.side === "LONG" ? 1 : -1)) : 0;

@@ -122,6 +122,12 @@ class MultiStrategyCoordinator extends EventEmitter {
     return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }
 
+  /** ADAPTIVE_FUSION → "AF" (initials) — keeps the startup banner on one line. */
+  _abbrev(key) {
+    const map = { ADAPTIVE_FUSION: "AF", TREND_MOMENTUM: "TM", MEAN_REVERSION: "MR", BREAKOUT_RETEST: "BR" };
+    return map[key] || this._titleCase(key).split(" ").map(w => w[0]).join("").toUpperCase();
+  }
+
   /**
    * Emit SATU banner startup terpadu untuk seluruh grup multi-strategi.
    *
@@ -146,7 +152,9 @@ class MultiStrategyCoordinator extends EventEmitter {
     // Detail risk/RR per strategi tetap tersedia di config; yang relevan bagi user
     // saat ada posisi (strategi mana, holding time, Net P&L) ditampilkan di panel
     // detail koin, bukan diulang tiap startup.
-    const names = this.strategies.map(k => this._titleCase(k)).join(" · ");
+    // Strategi disingkat ke inisial (AF · TM · MR · BR) agar muat satu baris —
+    // nama lengkap ditampilkan di log entry tiap kali strategi memfire posisi.
+    const names = this.strategies.map(k => this._abbrev(k)).join(" · ");
     const lines = [];
     lines.push(`══ QUANTARA BOT — ${coin}/USDT (multi-strategi) ══`);
     lines.push(`Exchange   : ${c0.exchangeLabel}`);
