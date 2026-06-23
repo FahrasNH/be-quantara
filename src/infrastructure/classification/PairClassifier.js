@@ -103,12 +103,26 @@ const STABLECOINS = new Set(["USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "GUS
 // ─── PairClassifier ───────────────────────────────────────────────────────────
 class PairClassifier {
   constructor() {
-    // Dynamic sets populated from CoinGecko — empty means "use static fallback"
-    this._dynamicLiquid   = new Set();
-    this._dynamicVolatile = new Set();
-    this._dynamicLastAt   = null;
+    // Dynamic sets populated from CoinGecko — empty means "use static fallback".
+    // Stored as BASE tickers (BTC, ETH, …), not BTCUSDT, so we can match exchange
+    // symbols that carry leverage-token prefixes (1000BONK, 1000000BOB → BONK, BOB).
+    this._dynamicLiquid = new Set();  // market_cap_rank ≤ 15
+    this._dynamicStable = new Set();  // market_cap_rank 16–100
+    this._dynamicLastAt = null;
     // 4-hour refresh interval (don't hammer CoinGecko free tier: ~6 calls/day)
     this._CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Extract the underlying asset from an exchange symbol — strips the quote
+   * (USDT/USDC/BUSD) and Binance leverage-token multipliers so the result lines
+   * up with CoinGecko base tickers. "1000BONKUSDT" → "BONK", "BTCUSDT" → "BTC".
+   */
+  _baseOf(symbol) {
+    let s = String(symbol || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    s = s.replace(/(USDT|USDC|BUSD)$/, "");
+    s = s.replace(/^(1000000|100000|10000|1000|1M)/, "");
+    return s;
   }
 
   /**
@@ -132,21 +146,20 @@ class PairClassifier {
               return resolve(false);
             }
             const coins = JSON.parse(body);
-            const newLiquid   = new Set();
-            const newVolatile = new Set();
+            const newLiquid = new Set();
+            const newStable = new Set();
             for (const coin of coins) {
               const sym = (coin.symbol || "").toUpperCase();
-              if (STABLECOINS.has(sym)) continue;
+              if (!sym || STABLECOINS.has(sym)) continue;
               const rank = coin.market_cap_rank ?? 9999;
-              const binanceSym = `${sym}USDT`;
-              if (rank <= 15)       newLiquid.add(binanceSym);
-              else if (rank > 100)  newVolatile.add(binanceSym);
-              // rank 16-100 → STABLE (default, no set needed)
+              if (rank <= 15)       newLiquid.add(sym);   // blue-chip
+              else if (rank <= 100) newStable.add(sym);   // mid-cap
+              // rank > 100 (and the whole long tail not returned) → VOLATILE by default
             }
-            this._dynamicLiquid   = newLiquid;
-            this._dynamicVolatile = newVolatile;
-            this._dynamicLastAt   = Date.now();
-            console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID, ${newVolatile.size} VOLATILE (CoinGecko top-250)`);
+            this._dynamicLiquid = newLiquid;
+            this._dynamicStable = newStable;
+            this._dynamicLastAt = Date.now();
+            console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID, ${newStable.size} STABLE (rank ≤100); all other pairs → VOLATILE (CoinGecko market cap)`);
             resolve(true);
           } catch (e) {
             console.warn("[PairClassifier] CoinGecko parse error:", e.message, "— using static tables");
@@ -175,16 +188,19 @@ class PairClassifier {
    */
   determineTier(symbol) {
     const sym = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    // Use dynamic data if populated (CoinGecko refresh succeeded)
-    if (this._dynamicLiquid.size > 0) {
-      if (this._dynamicLiquid.has(sym))   return PAIR_TIER.LIQUID;
-      if (this._dynamicVolatile.has(sym)) return PAIR_TIER.VOLATILE;
-      // If dynamic data loaded but sym not in either set → STABLE (rank 16-100)
-      // BUT: fall back to static for explicitly known VOLATILE (safety net while dynamic warms up)
-      if (VOLATILE_PAIRS.has(sym)) return PAIR_TIER.VOLATILE;
-      return PAIR_TIER.STABLE;
+    // Dynamic path — authoritative CoinGecko market-cap data is loaded.
+    // Only the top-100 are LIQUID (≤15) or STABLE (16–100); EVERYTHING else —
+    // the long tail of small/new alts an exchange lists (0G, fresh memecoins,
+    // anything off CoinGecko's top-100) — is treated as a high-risk microcap →
+    // VOLATILE. This is the safe default the old code got backwards (it defaulted
+    // unknowns to STABLE, so microcaps wrongly got loose risk + all strategies).
+    if (this._dynamicLiquid.size > 0 || this._dynamicStable.size > 0) {
+      const base = this._baseOf(sym);
+      if (this._dynamicLiquid.has(base)) return PAIR_TIER.LIQUID;
+      if (this._dynamicStable.has(base)) return PAIR_TIER.STABLE;
+      return PAIR_TIER.VOLATILE;
     }
-    // Static fallback
+    // Static fallback (CoinGecko unreachable) — curated lists, conservative STABLE default.
     if (LIQUID_PAIRS.has(sym))   return PAIR_TIER.LIQUID;
     if (VOLATILE_PAIRS.has(sym)) return PAIR_TIER.VOLATILE;
     return PAIR_TIER.STABLE;

@@ -14,13 +14,6 @@ const safeInt = (val, def = 0) => {
   return Number.isFinite(n) ? n : def;
 };
 
-const INTERVAL_MS = {
-  "1m":  60_000,      "3m":  180_000,    "5m":  300_000,
-  "15m": 900_000,     "30m": 1_800_000,  "1h":  3_600_000,
-  "2h":  7_200_000,   "4h":  14_400_000, "6h":  21_600_000,
-  "12h": 43_200_000,  "1d":  86_400_000, "1w":  604_800_000,
-};
-
 module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBOLS_LIST }) {
   const router = Router();
 
@@ -89,56 +82,48 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
     }
   });
 
-  // Candles historis untuk backtest (pagination)
+  // Candles historis untuk backtest — dari exchange yang DICONNECT user (bukan
+  // hardcoded Bitget). Candle adalah data publik → ExchangeService memakai CCXT
+  // public client tanpa API key. Cache di-key per-exchange agar Binance/OKX/Bitget
+  // tidak saling tabrak. Memperbaiki "fail to fetch" saat user di Binance tapi
+  // backtest dulu selalu menembak Bitget.
   router.get("/candles/backtest", async (req, res) => {
+    const symbol    = (req.query.symbol || SYMBOLS_LIST[0] || "BTCUSDT").toUpperCase();
+    const timeframe = req.query.interval || "1d";
+    const total     = Math.min(safeInt(req.query.limit, 500), 1000);
+    let exchange = null;
+
     try {
-      const symbol    = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
-      const timeframe = req.query.interval || "1d";
-      const total     = Math.min(safeInt(req.query.limit, 500), 1000);
+      exchange = await ExchangeService.getConnectedExchange(req.userId);
 
-      // Cache fresh 1 jam — hindari banyak request ke Bitget saat jaringan lambat
-      const cached = await db.getCachedCandles("bitget", symbol, timeframe, 3600);
-      if (cached && cached.length >= Math.min(total, 50)) {
-        return res.json(cached.slice(-total));
+      // Cache fresh 1 jam — keyed by the user's ACTUAL exchange.
+      if (exchange) {
+        const cached = await db.getCachedCandles(exchange, symbol, timeframe, 3600);
+        if (cached && cached.length >= Math.min(total, 50)) {
+          return res.json(cached.slice(-total));
+        }
       }
 
-      const PAGE      = 200;
-      const msPerBar  = INTERVAL_MS[timeframe] || 86_400_000;
-      const allCandles = [];
-      let since = Date.now() - total * msPerBar;
+      const { exchange: ex, candles } =
+        await ExchangeService.getCandlesForUser(req.userId, symbol, timeframe, total);
 
-      while (allCandles.length < total) {
-        const remaining = total - allCandles.length;
-        const batch = await sharedClient.getCandles(symbol, timeframe, Math.min(remaining, PAGE), since);
-        if (!batch || batch.length === 0) break;
-        allCandles.push(...batch);
-        since = batch[batch.length - 1].timestamp + msPerBar;
-        if (batch.length < Math.min(remaining, PAGE)) break;
+      if (candles.length >= 50) {
+        db.cacheCandles(ex, symbol, timeframe, candles).catch(() => {});
+        return res.json(candles.slice(-total));
       }
 
-      const seen   = new Set();
-      const unique = allCandles
-        .filter(c => { if (seen.has(c.timestamp)) return false; seen.add(c.timestamp); return true; })
-        .sort((a, b) => a.timestamp - b.timestamp);
-
-      if (unique.length >= 50) {
-        db.cacheCandles("bitget", symbol, timeframe, unique).catch(() => {});
-        return res.json(unique);
-      }
-
-      // Fallback cache stale (24 jam) bila live fetch gagal sebagian
-      const stale = await db.getCachedCandles("bitget", symbol, timeframe, 86_400);
+      // Not enough fresh → stale fallback (24 jam) before giving up.
+      const stale = await db.getCachedCandles(ex, symbol, timeframe, 86_400);
       if (stale?.length >= 50) return res.json(stale.slice(-total));
-
-      res.json(unique);
+      return res.json(candles);
     } catch (err) {
       try {
-        const symbol    = (req.query.symbol || SYMBOLS_LIST[0]).toUpperCase();
-        const timeframe = req.query.interval || "1d";
-        const stale = await db.getCachedCandles("bitget", symbol, timeframe, 86_400);
-        if (stale?.length >= 50) return res.json(stale);
+        if (exchange) {
+          const stale = await db.getCachedCandles(exchange, symbol, timeframe, 86_400);
+          if (stale?.length >= 50) return res.json(stale.slice(-total));
+        }
       } catch { /* noop */ }
-      res.status(500).json({ error: err.message });
+      res.status(err.statusCode || 500).json({ error: err.message, code: err.code });
     }
   });
 

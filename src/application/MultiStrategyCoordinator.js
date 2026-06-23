@@ -141,24 +141,19 @@ class MultiStrategyCoordinator extends EventEmitter {
     const coin = String(this.symbol).replace(/USDT$/i, "");
     const modeStr = this.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING";
 
+    // Banner startup ringkas — hanya konteks penting. Tabel per-strategi (interval/
+    // risk/RR/cek-tiap) DIHAPUS: kurang berguna saat startup & bikin log panjang.
+    // Detail risk/RR per strategi tetap tersedia di config; yang relevan bagi user
+    // saat ada posisi (strategi mana, holding time, Net P&L) ditampilkan di panel
+    // detail koin, bukan diulang tiap startup.
+    const names = this.strategies.map(k => this._titleCase(k)).join(" · ");
     const lines = [];
     lines.push(`══ QUANTARA BOT — ${coin}/USDT (multi-strategi) ══`);
     lines.push(`Exchange   : ${c0.exchangeLabel}`);
     lines.push(`Mode       : ${modeStr}`);
     lines.push(`Symbol     : ${this.symbol}`);
     lines.push(`Modal      : $${this.totalCapital.toFixed(2)} total · $${this.capitalPerStrategy.toFixed(2)} / strategi`);
-    lines.push("");
-    lines.push(`══ ${this.strategies.length} STRATEGI AKTIF ══`);
-    for (const key of this.strategies) {
-      const eng = this.engines.get(key);
-      if (!eng) continue;
-      const c = eng.config;
-      const label = this._titleCase(key);
-      const risk  = (c.riskPerTrade * 100).toFixed(1);
-      const chk   = Math.round((c.checkInterval || 0) / 1000);
-      // "Adaptive Fusion : 15m · Risk 1.5% · Lev 2x · RR 1:2 · cek tiap 900s"
-      lines.push(`${label.padEnd(16)}: ${c.interval} · Risk ${risk}% · Lev ${c.leverage}x · RR 1:${c.riskReward} · cek tiap ${chk}s`);
-    }
+    lines.push(`Strategi   : ${names}`);
     leader._logBlock("info", lines);
   }
 
