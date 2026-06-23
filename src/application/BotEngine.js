@@ -697,10 +697,16 @@ class BotEngine extends EventEmitter {
     this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
 
     // ══ BOT BERJALAN ══ + ringkasan boot lengkap → emit SATU kartu log.
-    banner.push("");
-    banner.push("══ BOT BERJALAN ══");
-    banner.push(`Bot aktif  : cek setiap ${this.config.checkInterval / 1000}s`);
-    this._logBlock("info", banner);
+    // quietStartup: engine ini bagian dari grup multi-strategi → JANGAN emit banner
+    // per-engine. Koordinator akan emit SATU banner terpadu untuk seluruh grup
+    // (lihat MultiStrategyCoordinator._emitUnifiedBanner) agar config tiap strategi
+    // jelas atribusinya — tidak ambigu "cek 60s itu strategi mana".
+    if (!this.config.quietStartup) {
+      banner.push("");
+      banner.push("══ BOT BERJALAN ══");
+      banner.push(`Bot aktif  : cek setiap ${this.config.checkInterval / 1000}s`);
+      this._logBlock("info", banner);
+    }
 
     } finally {
       this.state.starting = false;

@@ -117,6 +117,51 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.emit("log", entry);
   }
 
+  /** ADAPTIVE_FUSION → "Adaptive Fusion" */
+  _titleCase(key) {
+    return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  /**
+   * Emit SATU banner startup terpadu untuk seluruh grup multi-strategi.
+   *
+   * Masalah yang diperbaiki: tiap engine sebelumnya emit banner sendiri →
+   * tergabung jadi blob ambigu di panel log ("cek 60s itu strategi mana?").
+   * Solusi: shared config (Exchange/Mode/Symbol/Modal) ditulis SEKALI, lalu
+   * tabel per-strategi yang menampilkan interval/risk/RR/cek-tiap secara
+   * eksplisit per baris — tiap angka jelas miliknya strategi mana.
+   *
+   * Di-emit lewat engine LEADER (BotEngine) supaya broadcast WS otomatis
+   * menempelkan `symbol` (koordinator sendiri tidak melalui emit yang di-patch).
+   */
+  _emitUnifiedBanner() {
+    const leader = this.engines.get(this.strategies[0]);
+    if (!leader || typeof leader._logBlock !== "function") return;
+    const c0 = leader.config;
+    const coin = String(this.symbol).replace(/USDT$/i, "");
+    const modeStr = this.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING";
+
+    const lines = [];
+    lines.push(`══ QUANTARA BOT — ${coin}/USDT (multi-strategi) ══`);
+    lines.push(`Exchange   : ${c0.exchangeLabel}`);
+    lines.push(`Mode       : ${modeStr}`);
+    lines.push(`Symbol     : ${this.symbol}`);
+    lines.push(`Modal      : $${this.totalCapital.toFixed(2)} total · $${this.capitalPerStrategy.toFixed(2)} / strategi`);
+    lines.push("");
+    lines.push(`══ ${this.strategies.length} STRATEGI AKTIF ══`);
+    for (const key of this.strategies) {
+      const eng = this.engines.get(key);
+      if (!eng) continue;
+      const c = eng.config;
+      const label = this._titleCase(key);
+      const risk  = (c.riskPerTrade * 100).toFixed(1);
+      const chk   = Math.round((c.checkInterval || 0) / 1000);
+      // "Adaptive Fusion : 15m · Risk 1.5% · Lev 2x · RR 1:2 · cek tiap 900s"
+      lines.push(`${label.padEnd(16)}: ${c.interval} · Risk ${risk}% · Lev ${c.leverage}x · RR 1:${c.riskReward} · cek tiap ${chk}s`);
+    }
+    leader._logBlock("info", lines);
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // LIFECYCLE
   // ───────────────────────────────────────────────────────────────────────────
@@ -191,6 +236,9 @@ class MultiStrategyCoordinator extends EventEmitter {
         // Pre-fetched balance + leverage flag so engines skip redundant exchange calls
         sharedBalance,
         sharedLeverageSet,
+        // Jangan emit banner startup per-engine — koordinator emit SATU banner
+        // terpadu untuk seluruh grup (config tiap strategi jelas atribusinya).
+        quietStartup: true,
       });
 
       // Relay event engine → konsumen koordinator (WS streaming, dll.)
@@ -222,6 +270,9 @@ class MultiStrategyCoordinator extends EventEmitter {
 
     this.running = true;
     this._log("info", `${this.strategies.length} strategi aktif: ${this.strategies.join(", ")}`);
+    // Emit SATU banner terpadu (shared config sekali + tabel per-strategi) lewat
+    // engine leader, agar tampil sebagai 1 kartu yang jelas di panel log.
+    this._emitUnifiedBanner();
 
     if (this.pollIntervalMs > 0) {
       this._poll = setInterval(() => {
