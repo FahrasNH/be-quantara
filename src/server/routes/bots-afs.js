@@ -1,7 +1,11 @@
 // Updated bots-afs.js to use passed-in helper functions and support userId filtering
 
 module.exports = function createBotsRouter(helpers) {
-  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator } = helpers;
+  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator, acquireStartLock } = helpers;
+  // Fallback no-op lock bila helper tidak di-inject (mis. unit test router lama).
+  const _acquireStartLock = typeof acquireStartLock === "function"
+    ? acquireStartLock
+    : async () => () => {};
   const express = require("express");
   const router = express.Router();
   const { asyncHandler } = require("../../middleware/errorHandler");
@@ -559,30 +563,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // BUG-03: Pre-flight margin budget check — reject early if live mode and
-      // available margin is clearly insufficient (avoids bot starting then hanging).
-      if (!bot.dryRun) {
-        const coordinator = getCoordinator(userId);
-        const snap = coordinator.snapshot();
-        if (snap.accountEquity > 0) {
-          const remaining = snap.budget - snap.committedMargin;
-          // Conservative estimate: assume minimum 5× leverage so margin = capital / 5.
-          // Real leverage check happens at entry time via canOpen(). This guards
-          // obvious over-allocation (e.g. $500 capital, only $5 budget left).
-          const DEFAULT_LEVERAGE = 5;
-          const estimatedMargin = bot.capital / DEFAULT_LEVERAGE;
-          if (estimatedMargin > remaining) {
-            return res.status(400).json({
-              ok: false,
-              statusCode: 400,
-              message: `Margin akun tidak cukup untuk start bot ${symbol}. Tersedia: $${remaining.toFixed(2)}, dibutuhkan: ≈$${estimatedMargin.toFixed(2)} (estimasi leverage ${DEFAULT_LEVERAGE}×). Kurangi capital, stop bot lain, atau top up balance.`,
-              available: remaining,
-              required: estimatedMargin,
-            });
-          }
-        }
-      }
-
+      // ── Resolve exchange + credentials (dibutuhkan gate margin & start) ──────
       const { getExchangeCredentials } = require("../../services/userExchange");
       const { getConnectedExchange } = require("../../services/ExchangeService");
       const connectedExchange = await getConnectedExchange(userId);
@@ -607,6 +588,66 @@ module.exports = function createBotsRouter(helpers) {
           statusCode: 400,
           message: "OKX memerlukan passphrase API key. Tambahkan di Settings → API Keys.",
         });
+      }
+
+      // ── Margin gate START (live only) — BUG-FIX-01/02/03 ────────────────────
+      // Bagian kritis ini DI-SERIALISASI per user (mutex) supaya reservasi bot
+      // ke-1 sudah terlihat oleh bot ke-2 saat "Start All" (anti TOCTOU). Isinya:
+      //  (1) refresh equity dari balance (cache TTL + backoff). FAIL-CLOSED bila
+      //      tidak terbaca — JANGAN arm bot "buta" (ini akar utilisasi 536%).
+      //  (2) gate footprint MODAL PENUH (canStartBot), bukan capital/leverage yang
+      //      mengecilkan footprint 5× dan meloloskan over-allocation.
+      //  (3) reserve modal lebih awal (idempotent) agar start berikutnya melihat;
+      //      reservasi margin RIIL per posisi menggantikannya saat entry.
+      if (!bot.dryRun) {
+        const { getCachedBalance } = require("../../services/balanceCache");
+        const coordinator = getCoordinator(userId);
+        const exName = exchangeType.charAt(0).toUpperCase() + exchangeType.slice(1);
+        const unlock = await _acquireStartLock(userId);
+        try {
+          let equity = 0;
+          try {
+            const bal = await getCachedBalance(userId, exchangeType, {
+              apiKey: decryptedApiKey, apiSecret: decryptedApiSecret, apiPassphrase: decryptedPassphrase,
+            });
+            equity = (bal?.equity > 0 ? bal.equity : bal?.available) || 0;
+          } catch (e) {
+            return res.status(503).json({
+              ok: false,
+              statusCode: 503,
+              message: `Tidak bisa memulai bot ${symbol} sekarang — balance ${exName} belum terbaca (kemungkinan rate-limit exchange). Coba lagi beberapa detik lagi.`,
+            });
+          }
+          if (!(equity > 0)) {
+            return res.status(503).json({
+              ok: false,
+              statusCode: 503,
+              message: `Tidak bisa memulai bot ${symbol} — equity akun ${exName} terbaca $0. Pastikan saldo mencukupi lalu coba lagi.`,
+            });
+          }
+          coordinator.setAccountEquity(equity);
+
+          const verdict = coordinator.canStartBot({ capital: bot.capital, exceptSymbol: symbol });
+          if (!verdict.ok) {
+            return res.status(400).json({
+              ok: false,
+              statusCode: 400,
+              message: `Margin akun tidak cukup untuk start bot ${symbol}. ${verdict.reason}. ` +
+                       `Kurangi modal, stop bot lain, atau top up balance ${exName}.`,
+              available: verdict.remaining,
+              required: bot.capital,
+            });
+          }
+
+          // Reserve lebih awal — di bawah lock — agar start serentak saling lihat.
+          if (useMulti) {
+            coordinator.reserveGroup(userId, symbol, strategies, bot.capital);
+          } else {
+            coordinator.reserve(`${userId}:${symbol}`, { symbol, margin: bot.capital });
+          }
+        } finally {
+          unlock();
+        }
       }
 
       // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
@@ -663,6 +704,15 @@ module.exports = function createBotsRouter(helpers) {
           )
           .catch(async (err) => {
             console.error(`[bot-start:${symbol}] startup gagal: ${err.message}`);
+            // Lepas reservasi margin awal (BUG-FIX-03) agar tidak bocor saat start
+            // gagal sebelum bot sempat entry → kalau tidak, anggaran "tersedot" hantu.
+            if (!bot.dryRun) {
+              try {
+                const coordinator = getCoordinator(userId);
+                if (useMulti) coordinator.releaseGroup(userId, symbol);
+                else coordinator.release(`${userId}:${symbol}`);
+              } catch { /* ignore */ }
+            }
             try {
               await prisma.bot.update({
                 where: { userId_symbol: { userId, symbol } },

@@ -201,6 +201,50 @@ class AccountCoordinator {
   }
 
   /**
+   * Boleh START (arm) sebuah bot baru bermodal `capital`?  (BUG-FIX-01)
+   *
+   * Berbeda dari canOpen() yang menilai margin entry RIIL (notional/leverage),
+   * gate START ini menilai FOOTPRINT MODAL PENUH karena reserveGroup() me-reserve
+   * `totalCapital` penuh sebagai margin grup saat bot start. Gate lama memakai
+   * `capital/leverage` (mis. /5) sehingga MENGECILKAN footprint 5× → user bisa
+   * meng-arm 9 bot @ $50 di akun $105 (utilisasi 536%). Invarian yang dijaga:
+   *   Σ(modal semua bot ter-arm) ≤ equity × maxAccountUtilization
+   *
+   * @param {Object} p
+   * @param {number} p.capital            — modal bot yang akan di-start (USDT)
+   * @param {string} [p.exceptSymbol]     — abaikan reservasi simbol ini (restart bot
+   *                                         yang sama → jangan dihitung dobel)
+   * @returns {{ ok, reason?, budget, committed, remaining }}
+   */
+  canStartBot({ capital, exceptSymbol = null }) {
+    // Equity belum diketahui → caller WAJIB fail-closed (jangan arm "buta").
+    if (!(this.accountEquity > 0)) {
+      return { ok: false, reason: "EQUITY_UNKNOWN", budget: 0, committed: 0, remaining: 0 };
+    }
+    const budget = this.accountEquity * this.maxAccountUtilization;
+    let committed = 0;
+    for (const r of this.reservations.values()) {
+      if (exceptSymbol && r.symbol === exceptSymbol) continue;
+      committed += r.margin || 0;
+    }
+    const remaining = budget - committed;
+    if (!Number.isFinite(capital) || capital <= 0) {
+      return { ok: false, reason: "INVALID_CAPITAL", budget, committed, remaining };
+    }
+    if (committed + capital > budget + 1e-9) {
+      return {
+        ok: false,
+        reason: `Modal $${capital.toFixed(2)} melebihi sisa anggaran: ` +
+                `terpakai $${committed.toFixed(2)} / anggaran $${budget.toFixed(2)} ` +
+                `(${(this.maxAccountUtilization * 100).toFixed(0)}% dari equity $${this.accountEquity.toFixed(2)}), ` +
+                `sisa $${remaining.toFixed(2)}`,
+        budget, committed, remaining,
+      };
+    }
+    return { ok: true, budget, committed, remaining };
+  }
+
+  /**
    * Apakah grup ini sudah memegang posisi dengan arah tertentu pada simbol tsb?
    * Dipakai untuk direction lock (AC-05).
    */
