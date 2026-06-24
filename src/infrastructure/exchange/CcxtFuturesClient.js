@@ -71,29 +71,46 @@ class CcxtFuturesClient {
   // ── MARKET DATA ───────────────────────────────────────────────────────────
 
   async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
-    try {
-      const marketSymbol = this._marketSymbol(symbol);
-      const candles = await this.exchange.fetchOHLCV(
-        marketSymbol,
-        timeframe,
-        since,
-        Math.min(limit, 500)
-      );
-      if (!Array.isArray(candles) || candles.length === 0) {
-        throw new Error("No candles data received");
+    // OKX/Binance rate-limit per IP (OKX candles ≈ 40 req/2s). Beberapa koin ×
+    // strategy-engine berbagi satu IP → burst memicu "Too many requests" (OKX 50011).
+    // CCXT enableRateLimit hanya men-throttle PER client, tak terkoordinasi lintas N
+    // client per-koin → retry error rate-limit dengan backoff sebelum menyerah ke
+    // cache basi (yang membuat sinyal jadi stale). Error lain (simbol salah, jaringan
+    // mati) gagal cepat agar fallback cache 24 jam tetap jalan.
+    const RATE_LIMIT_RE = /Too many requests|rate.?limit|ratelimit|\b50011\b|\b429\b/i;
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const marketSymbol = this._marketSymbol(symbol);
+        const candles = await this.exchange.fetchOHLCV(
+          marketSymbol,
+          timeframe,
+          since,
+          Math.min(limit, 500)
+        );
+        if (!Array.isArray(candles) || candles.length === 0) {
+          throw new Error("No candles data received");
+        }
+        return candles.map((c) => ({
+          timestamp: c[0],
+          date: new Date(c[0]).toISOString(),
+          open: parseFloat(c[1]),
+          high: parseFloat(c[2]),
+          low: parseFloat(c[3]),
+          close: parseFloat(c[4]),
+          volume: parseFloat(c[5]),
+        }));
+      } catch (err) {
+        lastErr = err;
+        // Hanya retry rate-limit; backoff 600ms → 1800ms beri waktu window OKX pulih.
+        if (attempt < 2 && RATE_LIMIT_RE.test(err.message || "")) {
+          await new Promise((r) => setTimeout(r, 600 * Math.pow(3, attempt)));
+          continue;
+        }
+        throw new Error(`getCandles error: ${err.message}`);
       }
-      return candles.map((c) => ({
-        timestamp: c[0],
-        date: new Date(c[0]).toISOString(),
-        open: parseFloat(c[1]),
-        high: parseFloat(c[2]),
-        low: parseFloat(c[3]),
-        close: parseFloat(c[4]),
-        volume: parseFloat(c[5]),
-      }));
-    } catch (err) {
-      throw new Error(`getCandles error: ${err.message}`);
     }
+    throw new Error(`getCandles error: ${lastErr && lastErr.message}`);
   }
 
   async getTicker(symbol) {

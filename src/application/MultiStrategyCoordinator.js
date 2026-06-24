@@ -98,6 +98,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     this._stopRequested = false; // di-set stop() agar start() yang sedang warm-up bisa batal
     this.lastDecision = null; // hasil resolveConflicts terakhir (untuk getState/UI)
     this._poll = null;
+    this._statusInterval = null; // interval status report teragregasi (di stop() dibersihkan)
 
     // Permukaan kompatibel-BotEngine agar server bisa memperlakukan koordinator
     // ini sama seperti satu BotEngine (mergeBotWithLiveState, dst.).
@@ -163,6 +164,41 @@ class MultiStrategyCoordinator extends EventEmitter {
     lines.push(`Modal      : $${this.totalCapital.toFixed(2)} total · $${this.capitalPerStrategy.toFixed(2)} / strategi`);
     lines.push(`Strategi   : ${names}`);
     leader._logBlock("info", lines);
+  }
+
+  /**
+   * Emit SATU status report terpadu untuk seluruh grup (mirror _emitUnifiedBanner).
+   *
+   * Sebelumnya tiap engine punya _reportInterval sendiri → koin multi-strategi
+   * menumpuk N status report di satu kartu panel log (bug ZEC: 2 strategi = 2 report
+   * dobel; ETH 1 strategi tampak normal). Sekarang report per-engine disuppress
+   * (emitStatusReport:false) dan koordinator emit SATU report TERAGREGASI lintas-engine
+   * — angka total (capital grup, trade gabungan, posisi terbuka gabungan) konsisten
+   * dengan getState() yang dipakai UI card. Di-emit sebagai 1 _logBlock (bukan 4 _log
+   * terpisah) supaya tampil sebagai 1 kartu rapi, tak bergantung window grouping FE.
+   */
+  _emitUnifiedStatus() {
+    const leader = this.engines.get(this.strategies[0]);
+    if (!leader || typeof leader._logBlock !== "function") return;
+
+    let closed = 0, wins = 0, open = 0, pnl = 0;
+    for (const engine of this.engines.values()) {
+      const st = typeof engine.getState === "function" ? engine.getState() : {};
+      for (const t of st.trades || []) {
+        closed += 1;
+        if ((t.pnl || 0) > 0) wins += 1;
+        pnl += t.pnl || 0;
+      }
+      open += (st.openPositions || []).length;
+    }
+    const wr = closed > 0 ? Math.round((wins / closed) * 100) : 0;
+
+    leader._logBlock("info", [
+      "══ STATUS REPORT ══",
+      `Capital: $${this.totalCapital.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`,
+      `Trades: ${closed} | Wins: ${wins} | WR: ${wr}%`,
+      `Open positions: ${open}`,
+    ]);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -242,6 +278,9 @@ class MultiStrategyCoordinator extends EventEmitter {
         // Jangan emit banner startup per-engine — koordinator emit SATU banner
         // terpadu untuk seluruh grup (config tiap strategi jelas atribusinya).
         quietStartup: true,
+        // Jangan emit status report per-engine — sama alasannya: N engine = N report
+        // dobel di satu kartu. Koordinator emit SATU report teragregasi via leader.
+        emitStatusReport: false,
       });
 
       // Relay event engine → konsumen koordinator (WS streaming, dll.)
@@ -277,6 +316,11 @@ class MultiStrategyCoordinator extends EventEmitter {
     // engine leader, agar tampil sebagai 1 kartu yang jelas di panel log.
     this._emitUnifiedBanner();
 
+    // SATU status report teragregasi per jam (per-engine report sudah disuppress).
+    this._statusInterval = setInterval(() => {
+      try { this._emitUnifiedStatus(); } catch (e) { this._log("error", `status report gagal: ${e.message}`); }
+    }, 60 * 60 * 1000);
+
     if (this.pollIntervalMs > 0) {
       this._poll = setInterval(() => {
         try { this.evaluate(); } catch (e) { this._log("error", `evaluate gagal: ${e.message}`); }
@@ -296,6 +340,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     // berikutnya (anti-zombie). Di-set SYNC sebelum await apa pun.
     this._stopRequested = true;
     if (this._poll) { clearInterval(this._poll); this._poll = null; }
+    if (this._statusInterval) { clearInterval(this._statusInterval); this._statusInterval = null; }
 
     for (const [strategyKey, engine] of this.engines) {
       try {
