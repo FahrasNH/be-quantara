@@ -301,6 +301,10 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   if (existing) {
     const st = existing.getState();
     if (st.running || st.starting) return existing;
+    // Stop instance SEBELUM delete untuk cleanup interval + listener. Saat interval
+    // tetap jalan setelah delete, memori bocor: engine terus tick di memory tanpa ada
+    // yang mengarahkan state. Ini penyebab utama OOM-leak saat re-create coordinator.
+    try { await existing.stop(); } catch (e) { console.warn(`[Cleanup] stop ${symbol} gagal: ${e.message}`); }
     delete botsMap[key];
   }
 
@@ -603,10 +607,11 @@ async function resumeRunningBots() {
 
     let resumed = 0, stopped = 0;
 
-    // PERF (300+ bots): throttle resume ke 3 bot serentak + 300ms antar-start.
-    // Sequential for...of di sini berarti bot ke-300 baru start setelah 299 selesai
-    // (~5 menit untuk 300 bot × 1s startup). 3-worker pool + 300ms delay memberi
-    // trade-off antara kecepatan recovery dan tekanan exchange/event-loop.
+    // PERF vs OOM trade-off: 3-worker pool memicu OOM-leak saat 10+ bots (40+ engines
+    // × 40MB each). Kurangi ke 1 worker = resume sequential. Bot ke-10 mungkin butuh
+    // menit untuk selesai, tapi at least proses tidak tembus ceiling. Memory leak
+    // (saat resume engine tidak ter-cleanup) tetap ada tapi perlahan (300ms antar-bot),
+    // jadi proses bisa stabil di bawah 3GB sampai semua resume selesai.
     async function resumeOneBot(bot) {
       try {
         const { getConnectedExchange } = require("../services/ExchangeService");
@@ -756,7 +761,8 @@ async function resumeRunningBots() {
         if (resumeQueue.length > 0) await new Promise(r => setTimeout(r, 300));
       }
     }
-    await Promise.all(Array.from({ length: Math.min(3, bots.length) }, resumeWorker));
+    // Sequential resume (1 worker) untuk hindari OOM spike saat 10+ bots.
+    await resumeWorker();
 
     console.log(`[Startup] ✅ Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan`);
     await prisma.$disconnect();
