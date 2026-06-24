@@ -723,7 +723,13 @@ class BotEngine extends EventEmitter {
       this._interval = setInterval(() => this._tick(), this.config.checkInterval);
     }, jitterMs);
 
-    this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
+    // emitStatusReport:false → engine ini bagian dari grup multi-strategi; JANGAN
+    // pasang report per-engine. Tanpa guard ini, koin dengan N strategi menumpuk N
+    // status report di satu kartu (bug ZEC: 2 strategi → report dobel; ETH 1 strategi
+    // tampak normal). Koordinator emit SATU report teragregasi (_emitUnifiedStatus).
+    if (this.config.emitStatusReport !== false) {
+      this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
+    }
 
     // ══ BOT BERJALAN ══ + ringkasan boot lengkap → emit SATU kartu log.
     // quietStartup: engine ini bagian dari grup multi-strategi → JANGAN emit banner

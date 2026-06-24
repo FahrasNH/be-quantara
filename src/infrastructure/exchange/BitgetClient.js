@@ -9,6 +9,10 @@ const https = require("https");
 
 const BITGET_BASE = "https://api.bitget.com";
 const RETRYABLE_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|socket disconnected|TLS|timeout|network|aborted/i;
+// Rate-limit signals — Bitget's vocabulary (HTTP 429 / code 30007 "request over limit"
+// / "too many requests" / "too frequent"). Same class of bug as the OKX 50011 candle
+// incident; retried with backoff in getCandles so a burst degrades gracefully, not hard.
+const RATE_LIMIT_RE = /Too many requests|too frequent|over limit|rate.?limit|ratelimit|\b429\b|\b30007\b/i;
 
 // Paksa IPv4 — sering lebih stabil dari IPv6 untuk api.bitget.com di beberapa jaringan.
 const httpsAgent = new https.Agent({ family: 4, keepAlive: true });
@@ -141,9 +145,16 @@ class BitgetCCXTClient {
   // ─────────────────────────────────────────────
 
   async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
+    for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await this._fetchMixCandles(symbol, timeframe, limit, since);
     } catch (directErr) {
+      // Rate-limit (Bitget 429 / over-limit): backoff & retry endpoint langsung
+      // sebelum degradasi — mirror fix getCandles OKX/Binance (insiden HBAR 50011).
+      if (attempt < 2 && RATE_LIMIT_RE.test(directErr.message || "")) {
+        await new Promise((r) => setTimeout(r, 600 * Math.pow(3, attempt)));
+        continue;
+      }
       // Jangan fallback ke CCXT untuk error jaringan — endpoint sama, hanya lebih lambat.
       if (isNetworkError(directErr)) {
         throw new Error(`getCandles error: ${directErr.message}`);
@@ -175,6 +186,7 @@ class BitgetCCXTClient {
       } catch {
         throw new Error(`getCandles error: ${directErr.message}`);
       }
+    }
     }
   }
 
