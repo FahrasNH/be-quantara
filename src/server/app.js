@@ -154,6 +154,25 @@ function getCoordinator(userId) {
   return coordinatorsMap[userId];
 }
 
+// ── Per-user START mutex (BUG-FIX-03) ──────────────────────────────────────
+// "Start All" menembak N POST /start serentak. Tanpa serialisasi, tiap request
+// membaca committedMargin SEBELUM request lain sempat reserve → semua lolos gate
+// (TOCTOU) lalu reserve bareng → akun over-allocate (utilisasi 536%). Mutex per
+// user men-serialisasi bagian kritis "refresh equity → gate → reserve" sehingga
+// reservasi bot ke-1 sudah terlihat oleh bot ke-2. Hanya bagian itu yang dikunci
+// (cepat); start engine yang lambat tetap berjalan paralel di latar belakang.
+const startLocks = new Map(); // userId -> Promise (lock saat ini)
+
+async function acquireStartLock(userId) {
+  while (startLocks.get(userId)) {
+    try { await startLocks.get(userId); } catch { /* lock sebelumnya selesai */ }
+  }
+  let release;
+  const held = new Promise((r) => { release = r; });
+  startLocks.set(userId, held);
+  return () => { startLocks.delete(userId); release(); };
+}
+
 function makeKey(userId, symbol) {
   return `${userId}:${symbol}`;
 }
@@ -424,7 +443,7 @@ app.use("/api/v1/auth", createAuthRouter());
 
 // ✅ FIX: Apply auth middleware ONLY to protected routes
 // Bots routes (protected, user-isolated)
-app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator }));
+app.use("/api/v1/bots", authMiddleware, createBotsRouter({ getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator, acquireStartLock }));
 
 // Market routes (protected)
 app.use("/api/v1/market", authMiddleware, createMarketRouter({
