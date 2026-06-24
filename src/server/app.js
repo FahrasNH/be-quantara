@@ -318,11 +318,23 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
     positionSizeAdjustment: _pairClass.paramOverrides.positionSizeAdjustment,
   };
 
+  // SATU ccxt client dipakai bersama oleh ke-4 engine pada koin/akun ini. TANPA ini,
+  // tiap engine (4 per koin) memuat cache market exchange-nya sendiri — Binance ~2000
+  // market × blob `info` = ~5–15MB per client. 4× per koin × N koin = ratusan MB
+  // duplikat → penyumbang UTAMA OOM. Karena ke-4 engine berbagi user+symbol+exchange+
+  // akun yang sama, mereka aman berbagi satu client (rate-limiter pun jadi 1 antrian
+  // → tekanan API berkurang). `stop()` tidak menutup client, jadi sibling tak terganggu.
+  const sharedExchangeClient = createExchangeClient(opts.exchangeType || "bitget", {
+    apiKey:        opts.apiKey,
+    apiSecret:     opts.apiSecret,
+    apiPassphrase: opts.passphrase,
+  });
+
   // engineFactory di-INJECT ke koordinator → satu AdaptiveStrategyEngine per strategi,
   // berbagi AccountCoordinator + kredensial user. cfg dari koordinator sudah berisi
   // strategyKey/capital/dryRun/botKey/groupKey.
-  const engineFactory = (strategyKey, cfg2) =>
-    new AdaptiveStrategyEngine({
+  const engineFactory = (strategyKey, cfg2) => {
+    const eng = new AdaptiveStrategyEngine({
       ...cfg2,
       coordinator: accountCoordinator,
       exchangeType: opts.exchangeType || "bitget",
@@ -331,6 +343,11 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       passphrase:  opts.passphrase,
       botId:       opts.botId,
     });
+    // Ganti client per-engine (baru dibuat, market BELUM dimuat = nyaris gratis)
+    // dengan client bersama → cache market dimuat SEKALI per koin, bukan 4×.
+    eng.client = sharedExchangeClient;
+    return eng;
+  };
 
   // Leverage adaptif berdasarkan equity akun — user tinggal pilih koin & running,
   // leverage otomatis adjust (akun kecil 5×, besar 1×). Lolos min-notional untuk
