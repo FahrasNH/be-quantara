@@ -617,15 +617,19 @@ module.exports = function createAdminRouter(helpers = {}) {
         return res.status(404).json({ ok: false, statusCode: 404, message: "User not found" });
       }
 
-      const stat = await prisma.$queryRaw`
-        SELECT COUNT(t.id)::int AS "trades",
-               COALESCE(SUM(t.pnl), 0)::float AS "netPnl",
-               COALESCE(SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END), 0)::int AS "wins",
-               COALESCE(SUM(CASE WHEN t.status = 'OPEN' THEN 1 ELSE 0 END), 0)::int AS "openPositions"
-        FROM "Bot" b
-        LEFT JOIN "Trade" t ON t."botId" = b.id
-        WHERE b."userId" = ${id}`;
-      const s = stat[0] || {};
+      // Query real trade data from raw SQL store (Prisma "Trade" model is
+      // unused — engine writes to raw `trades` table via database.js).
+      const tradeStats = await db.getUserTradeStats(user.id);
+
+      // Build a symbol→totalTrades map from bot_sessions + trades for the bots table.
+      const botStatMap = new Map();
+      for (const bs of tradeStats.botStats) {
+        const prev = botStatMap.get(bs.symbol) || { totalTrades: 0, netPnl: 0 };
+        botStatMap.set(bs.symbol, {
+          totalTrades: prev.totalTrades + (bs.total_trades || 0),
+          netPnl:      Number((prev.netPnl + (bs.net_pnl || 0)).toFixed(2)),
+        });
+      }
 
       res.json({
         ok: true,
@@ -647,14 +651,14 @@ module.exports = function createAdminRouter(helpers = {}) {
             capital:     `$${b.capital.toLocaleString("en-US")}`,
             status:      b.running ? "Running" : "Stopped",
             since:       fmtShort(b.startedAt),
-            totalTrades: b.totalTrades,
+            totalTrades: botStatMap.get(b.symbol)?.totalTrades ?? b.totalTrades ?? 0,
           })),
           stats: {
-            trades:        s.trades || 0,
-            netPnl:        Number((s.netPnl || 0).toFixed(2)),
-            wins:          s.wins || 0,
-            winRate:       s.trades ? Number(((s.wins / s.trades) * 100).toFixed(1)) : 0,
-            openPositions: s.openPositions || 0,
+            trades:        tradeStats.trades,
+            netPnl:        tradeStats.netPnl,
+            wins:          tradeStats.wins,
+            winRate:       tradeStats.winRate,
+            openPositions: tradeStats.openPositions,
           },
         },
       });

@@ -1260,6 +1260,49 @@ function mapBacktestRow(row) {
   };
 }
 
+// Per-user trade stats for Admin User Detail page.
+// Reads from the REAL trades store (raw SQL) joined via bot_sessions.
+// Returns { trades, netPnl, wins, winRate, openPositions, botStats[] }
+async function getUserTradeStats(userId) {
+  if (!userId) return { trades: 0, netPnl: 0, wins: 0, winRate: 0, openPositions: 0, botStats: [] };
+  const [kpiRes, botRes] = await Promise.all([
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE t.status != 'cancelled')::int                                     AS trades,
+         COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+           FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float              AS net_pnl,
+         COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL)::int                       AS wins,
+         COUNT(*) FILTER (WHERE t.close_time IS NULL AND t.status = 'open')::int                   AS open_positions
+       FROM trades t
+       JOIN bot_sessions s ON t.session_id = s.id
+       WHERE s.user_id = $1`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT s.symbol,
+              COUNT(*) FILTER (WHERE t.status != 'cancelled')::int AS total_trades,
+              COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+                FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float AS net_pnl
+         FROM bot_sessions s
+         LEFT JOIN trades t ON t.session_id = s.id
+        WHERE s.user_id = $1
+        GROUP BY s.symbol`,
+      [userId]
+    ),
+  ]);
+  const k = kpiRes.rows[0] || {};
+  const trades = k.trades || 0;
+  const wins = k.wins || 0;
+  return {
+    trades,
+    netPnl:        Number((k.net_pnl || 0).toFixed(2)),
+    wins,
+    winRate:       trades > 0 ? Number(((wins / trades) * 100).toFixed(1)) : 0,
+    openPositions: k.open_positions || 0,
+    botStats:      botRes.rows || [],
+  };
+}
+
 // ── Utils ─────────────────────────────────────
 
 function safeParseJSON(str) {
@@ -1294,6 +1337,7 @@ module.exports = {
   getAdminStrategyStats,
   getAdminStrategyPnlHistory,
   getAdminTradesExport,
+  getUserTradeStats,
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
