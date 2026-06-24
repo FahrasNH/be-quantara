@@ -202,7 +202,7 @@ class BotEngine extends EventEmitter {
       running:       false,
       starting:      false, // set synchronously in start() before first await — prevents double-start race
       openPositions: [],
-      trades:        [],
+      trades:        [],    // CAPPED: keep() shiftoleh saat melebihi 500 (mem leak guard — trades[] naik 436MB/5min)
       capital:       0,
       startCapital:  0,
       lastSignal:    null,
@@ -373,6 +373,19 @@ class BotEngine extends EventEmitter {
       return true;
     }
     return false;
+  }
+
+  _capTrades() {
+    // Maintain trades array at most 500 entries (mem leak guard). Saat .length > 500,
+    // shift (hapus oldest). Rationale: UI laporan menampilkan ~100 trades max, DB sudah
+    // punya full history — in-memory copy di-keep untuk WS stream + getState() reports,
+    // tidak perlu grow unbounded (436MB setiap 5min). Oldest trades paling sering
+    // tidak diakses (sudah lama ditutup). Keep newest 500 untuk 99th percentile user
+    // query (backtest recents, recent P&L calculation).
+    const MAX_TRADES = 500;
+    while (this.state.trades.length > MAX_TRADES) {
+      this.state.trades.shift();
+    }
   }
 
   _sep(label = "") {
@@ -2233,6 +2246,7 @@ class BotEngine extends EventEmitter {
       closedAt:  Date.now(),
       partial:   true,
     });
+    this._capTrades();
     this._updateRiskAfterClose(pnl, pos);
 
     // ── Catat ke DB (insert + langsung close) ────────────────────────────────
@@ -2469,6 +2483,7 @@ class BotEngine extends EventEmitter {
           } else {
             // Trade milik sesi saat ini — masukkan ke state.trades normal
             this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
+            this._capTrades();
           }
 
           this._updateRiskAfterClose(pnl, pos);
@@ -2563,6 +2578,7 @@ class BotEngine extends EventEmitter {
                   // Hanya bukukan stats/trade bila DB-close benar-benar berlaku (anti double-book).
                   if (applied && (!pos.restoredFrom || pos.restoredFrom === this.sessionId)) {
                     this.state.trades.push({ ...pos, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
+                    this._capTrades();
                   }
                   if (applied) this._updateRiskAfterClose(pnl, pos);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
@@ -2654,6 +2670,7 @@ class BotEngine extends EventEmitter {
         });
 
         this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee, reason, closedAt: closeTime });
+        this._capTrades();
         this._updateRiskAfterClose(pnl, pos);
         toClose.push(pos.id);
       }
