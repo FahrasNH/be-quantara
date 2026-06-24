@@ -1782,6 +1782,13 @@ class BotEngine extends EventEmitter {
             if (!slOk) this._log("error", `SL gagal: ${slErr}`);
             if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
             this._log("error", `🚨 SL tidak terkonfirmasi — TUTUP posisi darurat (anti naked position)`);
+            // Anti-churn: tanpa cooldown, tick berikutnya membuka simbol yang sama →
+            // gagal SL → tutup darurat lagi (insiden LAB live: 5× open/tutup dalam 6 menit,
+            // bocor fee + spam Telegram). Kunci re-entry beberapa menit lewat mekanisme
+            // cooldown yang sudah ada (dicek di gate entry _checkRiskGates).
+            const slFailCd = Math.max(this.config.cooldownAfterLoss || 30, 15);
+            this.state.cooldownUntil = Date.now() + slFailCd * 60 * 1000;
+            this._log("warn", `🕐 Cooldown ${slFailCd} menit (SL gagal) — hindari buka ulang tanpa proteksi`);
             try {
               const closeSide = signal === "LONG" ? "close_long" : "close_short";
               await this.client.closePosition(this.config.symbol, closeSide, finalSize);
