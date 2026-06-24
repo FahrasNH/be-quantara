@@ -381,12 +381,32 @@ module.exports = function createAdminRouter(helpers = {}) {
         status:   t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
       }));
 
-      const total     = stats.total || 0;
-      const closed    = stats.closed || 0;
-      const wins      = stats.wins || 0;
-      const winRate   = closed ? ((wins / closed) * 100).toFixed(1) : "0.0";
-      const netPnl    = stats.net_pnl || 0;
+      const total    = stats.total || 0;
+      const closed   = stats.closed || 0;
+      const wins     = stats.wins || 0;
+      const losses   = stats.losses || 0;
+      const winRate  = closed ? ((wins / closed) * 100).toFixed(1) : "0.0";
+      const netPnl   = stats.net_pnl || 0;
+      const grossPnl = stats.gross_pnl || 0;
+      const grossLoss = Math.abs(stats.gross_loss || 0);
+      const avgWin   = stats.avg_win || 0;
+      const avgLoss  = Math.abs(stats.avg_loss || 0);
+
       const netPnlStr = netPnl >= 0 ? `+$${netPnl.toFixed(2)}` : `-$${Math.abs(netPnl).toFixed(2)}`;
+
+      // Profit Factor = gross wins / gross losses (undefined if no closed trades)
+      let profitFactor = "—";
+      if (grossPnl > 0 && grossLoss === 0) profitFactor = "∞";
+      else if (grossPnl > 0) profitFactor = (grossPnl / grossLoss).toFixed(2);
+
+      // Expectancy = (winRate × avgWin) - (lossRate × avgLoss)
+      let expectancy = "—";
+      if (closed > 0) {
+        const wr = wins / closed;
+        const lr = losses / closed;
+        const exp = wr * avgWin - lr * avgLoss;
+        expectancy = (exp >= 0 ? "+$" : "-$") + Math.abs(exp).toFixed(2);
+      }
 
       res.json({
         ok: true,
@@ -395,6 +415,8 @@ module.exports = function createAdminRouter(helpers = {}) {
         kpis: [
           { label: "Total Trades",       value: total.toLocaleString("en-US") },
           { label: "Win Rate (closed)",  value: `${winRate}%`, color: wins ? "green" : undefined },
+          { label: "Profit Factor",      value: profitFactor, color: profitFactor !== "—" && parseFloat(profitFactor) >= 1 ? "green" : profitFactor !== "—" ? "red" : undefined },
+          { label: "Expectancy",         value: expectancy, color: expectancy !== "—" && expectancy.startsWith("+") ? "green" : expectancy !== "—" ? "red" : undefined },
           { label: "Platform Net PnL",   value: netPnlStr, color: netPnl >= 0 ? "green" : "red" },
           { label: "Closed Trades",      value: closed.toLocaleString("en-US") },
         ],
@@ -1041,6 +1063,40 @@ module.exports = function createAdminRouter(helpers = {}) {
       }));
 
       res.json({ ok: true, strategies, window: sinceDays ? `${sinceDays}d` : "all" });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/strategy-pnl-history — daily PnL per strategy for the
+   * Net PnL time-series line chart. Query: days (trailing window, default 30, max 365).
+   * → { ok, series: [{date, [strategyKey]: dailyPnl, ...}], strategies: ["AF", ...] }
+   */
+  router.get(
+    "/strategy-pnl-history",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
+      const rows = await db.getAdminStrategyPnlHistory({ days });
+
+      // Pivot: [{day, strategy, daily_pnl}] → [{date, AF: x, TM: y, MR: z}, ...]
+      const dayMap = new Map();
+      const stratSet = new Set();
+      for (const r of rows) {
+        const label = abbrevStrategy(r.strategy);
+        stratSet.add(label);
+        if (!dayMap.has(r.day)) dayMap.set(r.day, { date: r.day });
+        dayMap.get(r.day)[label] = Number((r.daily_pnl || 0).toFixed(2));
+      }
+
+      // Fill missing strategy values with 0 for each day so recharts renders gaps as 0.
+      const strategies = [...stratSet].sort();
+      const series = [...dayMap.values()].map(d => {
+        for (const s of strategies) if (d[s] === undefined) d[s] = 0;
+        return d;
+      });
+
+      res.setHeader("Cache-Control", "public, max-age=300");
+      res.json({ ok: true, series, strategies, days });
     })
   );
 
