@@ -721,14 +721,33 @@ async function resumeRunningBots() {
           console.log(`[Startup] Skip resume ${bot.symbol} — sudah di-stop selagi warm-up`);
           return;
         }
-        if (!instance.getState().running) await instance.start();
+        // Jangan panggil start() bila instance sudah running ATAU sedang starting:
+        // memanggil start() pada coordinator yang masih warm-up melempar "sedang dalam
+        // proses start" → resume bot ini GAGAL (gejala: NEAR tak pernah tampil ROI/live
+        // PnL sementara WLD muncul). Cukup lewati; instance yang sedang start akan
+        // menyelesaikan warm-up-nya sendiri.
+        const liveState = instance.getState();
+        if (!liveState.running && !liveState.starting) await instance.start();
         resumed++;
       } catch (e) {
         console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
       }
     }
 
-    const resumeQueue = [...bots];
+    // Dedupe per (user, symbol): bila ada >1 baris bot untuk simbol sama (data lama/
+    // duplikat), dua worker bisa me-resume coordinator yang SAMA paralel → satu set
+    // starting=true, satu lagi panggil start() lagi → throw "sedang dalam proses start"
+    // → bot itu gugur resume (mis. NEAR). Resume cukup satu per (user, symbol).
+    const seenResumeKeys = new Set();
+    const resumeQueue = bots.filter(b => {
+      const k = `${b.userId}::${b.symbol}`;
+      if (seenResumeKeys.has(k)) {
+        console.warn(`[Startup] Lewati duplikat resume ${b.symbol} (baris bot ganda untuk user ${b.userId})`);
+        return false;
+      }
+      seenResumeKeys.add(k);
+      return true;
+    });
     async function resumeWorker() {
       while (resumeQueue.length) {
         const bot = resumeQueue.shift();
