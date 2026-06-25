@@ -15,6 +15,7 @@ const {
   calcEMA, calcRSI, calcATR, calcSMA, calcBollingerBands, calcVolumeSMA,
 } = require('../../domain/indicators');
 const { classifyHTFRegime } = require('../../domain/htfRegimeFilter');
+const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require('../../infrastructure/exchange/candleFetch');
 
 /** Ambil elemen terakhir yang non-null dari array indikator. */
 function lastVal(arr) {
@@ -38,12 +39,21 @@ async function getMarketSnapshot(client, symbol, opts = {}) {
     bbPeriod = 20, bbStdDev = 2,
     ltfInterval = '15m', htfInterval = '1h',
     ltfLimit = 120, htfLimit = 60,
+    exchange = 'bitget',
   } = opts;
 
   if (!client?.getCandles) return null;
 
   // ── LTF candles → indikator entry ──────────────────────────────────────────
-  const candles = await client.getCandles(symbol, ltfInterval, ltfLimit);
+  let candles;
+  try {
+    candles = await fetchCandlesWithCache(client, {
+      exchange, symbol, interval: ltfInterval, limit: ltfLimit,
+      cacheTtlSeconds: LTF_CACHE_TTL, minBars: emaSlow + 5,
+    });
+  } catch {
+    return null;
+  }
   if (!candles || candles.length < emaSlow + 5) return null;
 
   const closes  = candles.map(c => c.close);
@@ -70,7 +80,10 @@ async function getMarketSnapshot(client, symbol, opts = {}) {
   // ── HTF candles → regime (strong_bull / strong_bear / ranging / uncertain) ──
   let htfTrend = 'unknown';
   try {
-    const htfCandles = await client.getCandles(symbol, htfInterval, htfLimit);
+    const htfCandles = await fetchCandlesWithCache(client, {
+      exchange, symbol, interval: htfInterval, limit: htfLimit,
+      cacheTtlSeconds: HTF_CACHE_TTL, minBars: emaSlow + 5,
+    });
     if (htfCandles && htfCandles.length >= emaSlow + 5) {
       const hCloses = htfCandles.map(c => c.close);
       const hHighs  = htfCandles.map(c => c.high);

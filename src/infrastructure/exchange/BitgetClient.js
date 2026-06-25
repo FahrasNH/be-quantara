@@ -8,6 +8,7 @@ const axios = require("axios");
 const https = require("https");
 
 const BITGET_BASE = "https://api.bitget.com";
+const { withExchangeGate } = require("./exchangeRateGate");
 const RETRYABLE_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|socket disconnected|TLS|timeout|network|aborted/i;
 // Rate-limit signals — Bitget's vocabulary (HTTP 429 / code 30007 "request over limit"
 // / "too many requests" / "too frequent"). Same class of bug as the OKX 50011 candle
@@ -147,7 +148,9 @@ class BitgetCCXTClient {
   async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
     for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await this._fetchMixCandles(symbol, timeframe, limit, since);
+      return await withExchangeGate("bitget", () =>
+        this._fetchMixCandles(symbol, timeframe, limit, since)
+      );
     } catch (directErr) {
       // Rate-limit (Bitget 429 / over-limit): backoff & retry endpoint langsung
       // sebelum degradasi — mirror fix getCandles OKX/Binance (insiden HBAR 50011).
@@ -165,11 +168,13 @@ class BitgetCCXTClient {
           const base = marketSymbol.slice(0, -4);
           marketSymbol = `${base}/USDT:USDT`;
         }
-        const candles = await this.exchange.fetchOHLCV(
-          marketSymbol,
-          timeframe,
-          since,
-          Math.min(limit, 500)
+        const candles = await withExchangeGate("bitget", () =>
+          this.exchange.fetchOHLCV(
+            marketSymbol,
+            timeframe,
+            since,
+            Math.min(limit, 500)
+          )
         );
         if (!Array.isArray(candles) || candles.length === 0) {
           throw new Error("No candles data received");

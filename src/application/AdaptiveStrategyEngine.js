@@ -193,15 +193,16 @@ class AdaptiveStrategyEngine extends BotEngine {
       //     Override _tick() sebelumnya melewati blok ini → htfTrend selalu UNKNOWN.
       if (this.config.higherTf) {
         try {
-          const htfCandles = await this.client.getCandles(
-            this.config.symbol, this.config.higherTf,
-            Math.max(this.config.htfEmaSlow + 10, 50),
-          );
-          this.state.htfTrend = detectHTFTrend(htfCandles, {
-            htfEmaFast:           this.config.htfEmaFast,
-            htfEmaSlow:           this.config.htfEmaSlow,
-            sidewaysThresholdPct: this.config.sidewaysThresholdPct,
-          });
+          const htfCandles = await this._fetchHtfCandles();
+          if (htfCandles?.length) {
+            this.state.htfTrend = detectHTFTrend(htfCandles, {
+              htfEmaFast:           this.config.htfEmaFast,
+              htfEmaSlow:           this.config.htfEmaSlow,
+              sidewaysThresholdPct: this.config.sidewaysThresholdPct,
+            });
+          } else {
+            this.state.htfTrend = "UNKNOWN";
+          }
         } catch {
           // FAIL-CLOSED: tanpa data regime HTF, jangan buka posisi baru (diblok
           // di 6c). Sebelumnya fail-open → 10/18 trade loss dry-run 11–12 Jun
