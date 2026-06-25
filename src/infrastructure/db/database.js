@@ -608,12 +608,14 @@ async function getAdminStrategyStats({ sinceDays = null } = {}) {
     timeFilter = `WHERE t.open_time >= now() - ($${params.length} || ' days')::interval`;
   }
   const { rows } = await pool.query(
-    `SELECT COALESCE(t.strategy_name, 'Untracked')                                AS strategy,
-            COUNT(*)::int                                                          AS total,
-            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL)::int                  AS closed,
-            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int    AS wins,
-            COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float AS net_pnl,
-            COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float AS avg_pnl
+    `SELECT COALESCE(t.strategy_name, 'Untracked')                                                        AS strategy,
+            COUNT(*)::int                                                                                  AS total,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL)::int                                          AS closed,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                            AS wins,
+            COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL), 0)::float                                            AS net_pnl,
+            COALESCE(AVG((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL), 0)::float                                            AS avg_pnl
        FROM trades t
        ${timeFilter}
       GROUP BY COALESCE(t.strategy_name, 'Untracked')
@@ -649,14 +651,14 @@ async function getAdminTradeStats() {
     `SELECT
        COUNT(*)::int                                                                        AS total,
        COUNT(*) FILTER (WHERE t.open_time >= date_trunc('day', now()))::int                 AS today,
-       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl IS NOT NULL)::int           AS closed,
-       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                   AS wins,
-       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0)::int                  AS losses,
-       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float                AS net_pnl,
-       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float  AS gross_pnl,
-       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float AS gross_loss,
-       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float  AS avg_win,
-       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float AS avg_loss
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl IS NOT NULL)::int                                                  AS closed,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                                                          AS wins,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0)::int                                                         AS losses,
+       COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0))) FILTER (WHERE t.close_time IS NOT NULL), 0)::float         AS net_pnl,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float                                         AS gross_pnl,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float                                        AS gross_loss,
+       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float                                         AS avg_win,
+       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float                                        AS avg_loss
      FROM trades t`
   );
   return rows[0] || { total: 0, today: 0, closed: 0, wins: 0, losses: 0, net_pnl: 0, gross_pnl: 0, gross_loss: 0, avg_win: 0, avg_loss: 0 };
@@ -1260,6 +1262,27 @@ function mapBacktestRow(row) {
   };
 }
 
+// Aggregate trade stats across ALL users for the Admin Users list.
+// Returns Map<userId, { trades, netPnl, wins }> from the real trades store.
+async function getAllUsersTradeStats() {
+  const { rows } = await pool.query(
+    `SELECT s.user_id                                                                            AS user_id,
+            COUNT(*) FILTER (WHERE t.status != 'cancelled')::int                                AS trades,
+            COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float         AS net_pnl,
+            COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL)::int                 AS wins
+       FROM bot_sessions s
+       LEFT JOIN trades t ON t.session_id = s.id
+      WHERE s.user_id IS NOT NULL
+      GROUP BY s.user_id`
+  );
+  return new Map(rows.map(r => [r.user_id, {
+    trades: r.trades || 0,
+    netPnl: Number((r.net_pnl || 0).toFixed(2)),
+    wins:   r.wins || 0,
+  }]));
+}
+
 // Per-user trade stats for Admin User Detail page.
 // Reads from the REAL trades store (raw SQL) joined via bot_sessions.
 // Returns { trades, netPnl, wins, winRate, openPositions, botStats[] }
@@ -1337,6 +1360,7 @@ module.exports = {
   getAdminStrategyStats,
   getAdminStrategyPnlHistory,
   getAdminTradesExport,
+  getAllUsersTradeStats,
   getUserTradeStats,
   getTodayRiskStats,
   getOpenTrades,

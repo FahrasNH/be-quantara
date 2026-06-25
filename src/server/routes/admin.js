@@ -208,7 +208,7 @@ module.exports = function createAdminRouter(helpers = {}) {
       const tier   = (req.query.tier   || "").toString().trim();
       const status = (req.query.status || "").toString().trim();
 
-      const [rows, pnlRows, total] = await Promise.all([
+      const [rows, pnlMap, total] = await Promise.all([
         prisma.user.findMany({
           take: limit,
           orderBy: { createdAt: "desc" },
@@ -219,18 +219,10 @@ module.exports = function createAdminRouter(helpers = {}) {
             exchanges:  { where: { deletedAt: null }, select: { exchangeType: true } },
           },
         }),
-        // One pass for trade counts + realized PnL per user (Trade has no userId).
-        prisma.$queryRaw`
-          SELECT b."userId" AS "userId",
-                 COUNT(t.id)::int AS "trades",
-                 COALESCE(SUM(t.pnl), 0)::float AS "netPnl"
-          FROM "Bot" b
-          LEFT JOIN "Trade" t ON t."botId" = b.id
-          GROUP BY b."userId"`,
+        // Real trade stats from raw pg store (Prisma "Trade" model is always empty).
+        db.getAllUsersTradeStats(),
         prisma.user.count(),
       ]);
-
-      const pnlMap = new Map(pnlRows.map(r => [r.userId, r]));
 
       let users = rows.map(u => {
         const agg        = pnlMap.get(u.id) || { trades: 0, netPnl: 0 };
