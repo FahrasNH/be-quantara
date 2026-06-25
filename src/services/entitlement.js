@@ -41,6 +41,19 @@ function filterStrategiesByMode(strategies, mode) {
  * @returns {Promise<string>} tier key e.g. "FOUNDRY"
  */
 async function getUserTier(userId) {
+  // Sprint 5 (PAY-07): an active, non-expired Subscription is the authoritative
+  // tier. The legacy UserStrategy.tier is kept in sync by PaymentService on
+  // grant, but the Subscription is the source of truth (and carries expiry).
+  const activeSub = await getActiveSubscription(userId);
+  if (activeSub) return activeSub.tier;
+
+  // Once a user has entered the paid system (any Subscription row), it is
+  // authoritative: no active sub → they drop to the free base tier. This makes
+  // expiry/cancellation actually revoke access (PAY-07) instead of leaving the
+  // synced legacy UserStrategy.tier granting the old paid tier forever.
+  const hadSub = await prisma.subscription.count({ where: { userId } });
+  if (hadSub > 0) return "FOUNDRY";
+
   const record = await prisma.userStrategy.findUnique({
     where:  { userId },
     select: { tier: true, balanceTier: true },
@@ -138,8 +151,34 @@ async function getTierStrategies(userId, mode = "dry") {
   return filterStrategiesByMode(config?.strategies ?? [], mode);
 }
 
+/**
+ * Return the user's currently-active subscription, or null. "Active" =
+ * status ACTIVE && endDate in the future. Lazily expires a stale ACTIVE row it
+ * encounters (defensive — a cron could also do this) so entitlement never
+ * over-grants past endDate.
+ *
+ * @param {string} userId
+ * @returns {Promise<{ id, tier, status, billingCycle, startDate, endDate }|null>}
+ */
+async function getActiveSubscription(userId) {
+  const sub = await prisma.subscription.findFirst({
+    where:   { userId, status: "ACTIVE" },
+    orderBy: { endDate: "desc" },
+    select:  { id: true, tier: true, status: true, billingCycle: true, startDate: true, endDate: true },
+  });
+  if (!sub) return null;
+
+  if (sub.endDate && new Date(sub.endDate).getTime() <= Date.now()) {
+    // Expired but not yet swept — flip it and treat as no active sub.
+    await prisma.subscription.update({ where: { id: sub.id }, data: { status: "EXPIRED" } }).catch(() => {});
+    return null;
+  }
+  return sub;
+}
+
 module.exports = {
   getUserTier,
+  getActiveSubscription,
   assertStrategyAllowed,
   getStrategyEntitlements,
   getTierStrategies,

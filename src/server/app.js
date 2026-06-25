@@ -34,6 +34,8 @@ const createLegacyRouter = require("./routes/legacy");
 const createAccountRouter = require("./routes/account");
 const createAdminRouter = require("./routes/admin");
 const createSubscriptionRouter = require("./routes/subscription");
+const createAdminVouchersRouter = require("./routes/adminVouchers");
+const { createPaymentsRouter, createPaymentWebhookRouter } = require("./routes/payments");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
@@ -465,6 +467,14 @@ app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_L
 // Account routes (protected)
 app.use("/api/v1/account", authMiddleware, createAccountRouter({ stopAllUserBotsInMemory }));
 app.use("/api/v1/subscription", authMiddleware, createSubscriptionRouter());
+
+// Payment & Voucher System (Sprint 5). Webhook is PUBLIC (SHA512-signature auth)
+// and MUST be mounted before the authed /payments router so authMiddleware never
+// gates it. Admin voucher CRUD self-guards (JWT + admin role) inside its router.
+app.use("/api/v1/payments/webhook", createPaymentWebhookRouter());
+app.use("/api/v1/payments", authMiddleware, createPaymentsRouter());
+app.use("/api/v1/admin/vouchers", createAdminVouchersRouter());
+
 app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory, getBot })); // routes self-guard (JWT+role); ADMIN_SECRET only for the legacy billing stub
 
 // 404 handler

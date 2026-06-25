@@ -42,6 +42,19 @@ const cfg = {
   // e.g. https://quantara.example.com or http://187.77.135.156
   APP_URL:    process.env.APP_URL    || "http://localhost:5173",
 
+  // ── Midtrans payment gateway (Sprint 5 / PAY-01) ────────────────────────────
+  // Get Server Key & Client Key from the Midtrans dashboard
+  //   (Settings → Access Keys). Use the SANDBOX keys on staging.
+  //   MIDTRANS_IS_PRODUCTION=false → sandbox  |  true → production
+  // The Server Key is also the secret used to verify webhook SHA512 signatures —
+  // it must NEVER be exposed to the frontend. Only the Client Key is public.
+  MIDTRANS_SERVER_KEY:    process.env.MIDTRANS_SERVER_KEY    || "",
+  MIDTRANS_CLIENT_KEY:    process.env.MIDTRANS_CLIENT_KEY    || "",
+  MIDTRANS_IS_PRODUCTION: process.env.MIDTRANS_IS_PRODUCTION === "true",
+  // Public base URL of THIS backend — used to build the webhook/redirect URLs
+  // registered in the Midtrans dashboard. e.g. https://staging.quantara.software
+  API_PUBLIC_URL:         process.env.API_PUBLIC_URL || process.env.APP_URL || "http://localhost:3000",
+
   // ── Secrets (dipakai AuthService & crypto) ──────────────────────────────────
   JWT_SECRET:         process.env.JWT_SECRET         || "",
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || "",
