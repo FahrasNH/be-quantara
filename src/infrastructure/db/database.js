@@ -1267,10 +1267,10 @@ function mapBacktestRow(row) {
 async function getAllUsersTradeStats() {
   const { rows } = await pool.query(
     `SELECT s.user_id                                                                            AS user_id,
-            COUNT(*) FILTER (WHERE t.status != 'cancelled')::int                                AS trades,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed')::int      AS trades,
             COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
               FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float         AS net_pnl,
-            COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL)::int                 AS wins
+            COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL AND t.status = 'closed')::int AS wins
        FROM bot_sessions s
        LEFT JOIN trades t ON t.session_id = s.id
       WHERE s.user_id IS NOT NULL
