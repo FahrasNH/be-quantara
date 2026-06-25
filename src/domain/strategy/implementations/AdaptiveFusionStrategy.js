@@ -297,7 +297,28 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     // PAIR-TIER-07: respect votingThresholdOverride from pair tier (e.g. 0.65 for VOLATILE)
     const votingThresholdOverride = config.tierOverrides?.votingThresholdOverride ?? null;
-    const resolved = this._resolveSignalConflict(signals, votingThresholdOverride);
+    let resolved = this._resolveSignalConflict(signals, votingThresholdOverride);
+
+    // FEE-01: Anti-chase guard. Post-mortem data (69 trade live): LONG WR 21%
+    // (-$37.90) sementara SHORT breakeven, dan Component C state-based fire
+    // berulang di tren (WLDUSDT 36 trade). Akar = entry CHASING — harga sudah
+    // jauh dari mean (EMA9) saat masuk, sehingga pullback normal langsung
+    // menyentuh SL. Tolak entry bila ekstensi |close - EMA9| / ATR melebihi
+    // maxEntryExtensionATR (default 1.5). Entry hanya diterima DEKAT mean
+    // (fresh cross / pullback-resume), bukan di ujung ekstensi. Ini menaikkan
+    // kualitas entry (WR) tanpa mematikan AF. Lihat juga FEE-03 min-edge gate.
+    if (resolved) {
+      const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
+      const maxExt = config.maxEntryExtensionATR ?? 1.5;
+      if (
+        closeConfirmed != null && emaFast != null && atr > 0 &&
+        Math.abs(closeConfirmed - emaFast) / atr > maxExt
+      ) {
+        const ext = (Math.abs(closeConfirmed - emaFast) / atr).toFixed(2);
+        this._lastChaseReject = { signal: resolved, extension: ext, maxExt };
+        resolved = null;
+      }
+    }
 
     if (resolved) {
       // P6: Store which component(s) fired for SL/TP selection

@@ -135,6 +135,19 @@ class BotEngine extends EventEmitter {
       // Dipakai untuk estimasi fee dry-run/backtest & fallback live.
       feeRate:       strat.feeRate ?? 0.0006,
 
+      // ── FEE-02: Mode entry (taker | maker) ────────────────────────────────
+      // "maker" = limit post-only (fee ~0.02%/sisi vs taker 0.06%). makerFeeRate
+      // dipakai untuk accounting saat entryMode=maker. Order-routing post-only
+      // sebenarnya di-handle di layer eksekusi; di sini knob + akuntansi fee.
+      entryMode:     strat.entryMode   || "taker",
+      makerFeeRate:  strat.makerFeeRate ?? 0.0002,
+
+      // ── FEE-03: Fee-aware min-edge gate ───────────────────────────────────
+      // Reward leg (jarak ke TP, sbg fraksi harga) WAJIB ≥ minEdgeFeeMultiple ×
+      // fee roundtrip (2×feeRate). Mencegah entry yang edge-nya ditelan fee —
+      // akar kerugian net (fee 8× lebih besar dari edge per trade). 0 = nonaktif.
+      minEdgeFeeMultiple: strat.minEdgeFeeMultiple ?? 5,
+
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
       leverage:     strat.leverage,
@@ -1535,6 +1548,29 @@ class BotEngine extends EventEmitter {
       return;
     }
 
+    // ── FEE-03: Fee-aware min-edge gate ───────────────────────────────────────
+    // Edge per trade harus jauh lebih besar dari biaya. Roundtrip fee =
+    // entry+exit = 2×fee (pakai makerFeeRate bila entryMode=maker). Tolak entry
+    // bila reward leg (jarak ke TP sbg fraksi harga) tak menutup
+    // minEdgeFeeMultiple× fee roundtrip → mencegah scalp marginal yang fee-nya
+    // menelan profit (akar kerugian net: fee 8× lebih besar dari edge per trade).
+    const minEdgeMult = this.config.minEdgeFeeMultiple ?? 0;
+    if (minEdgeMult > 0 && price > 0) {
+      const perSideFee     = this.config.entryMode === "maker"
+        ? (this.config.makerFeeRate ?? 0.0002)
+        : (this.config.feeRate ?? 0.0006);
+      const roundtripFee   = 2 * perSideFee;
+      const tpFrac         = tpDist / price;
+      if (tpFrac < minEdgeMult * roundtripFee) {
+        this._log("warn",
+          `[FEE-GATE] Edge terlalu tipis vs fee — sinyal ${signal} diabaikan. ` +
+          `TP=${(tpFrac * 100).toFixed(3)}% < ${minEdgeMult}× fee roundtrip ` +
+          `(${(minEdgeMult * roundtripFee * 100).toFixed(2)}% minimum)`
+        );
+        return;
+      }
+    }
+
     // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
     // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
@@ -2703,9 +2739,15 @@ class BotEngine extends EventEmitter {
    * Inilah penyebab gap "Net PnL gross" vs balance riil: fee tak pernah dikurangi.
    */
   _estimateFee(entryPrice, exitPrice, size) {
-    const rate = this.config.feeRate ?? 0.0006;
-    const notional = (Math.abs(entryPrice) + Math.abs(exitPrice)) * Math.abs(size);
-    return notional * rate;
+    const sz = Math.abs(size);
+    const takerRate = this.config.feeRate ?? 0.0006;
+    // FEE-02: entry pakai maker rate bila entryMode="maker" (limit post-only);
+    // exit (SL/TP) selalu market → taker. Memodelkan penghematan maker di sisi
+    // entry saja, sesuai realita eksekusi.
+    const entryRate = this.config.entryMode === "maker"
+      ? (this.config.makerFeeRate ?? 0.0002)
+      : takerRate;
+    return Math.abs(entryPrice) * sz * entryRate + Math.abs(exitPrice) * sz * takerRate;
   }
 
   /**
