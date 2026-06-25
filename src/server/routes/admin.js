@@ -342,15 +342,18 @@ module.exports = function createAdminRouter(helpers = {}) {
   );
 
   /**
-   * GET /api/v1/admin/trades — recent trades across all users, with KPI summary
-   * (AC-04). Query: limit (≤200). Trade has no userId, so we join via Bot.
+   * GET /api/v1/admin/trades — all trades across all users, with KPI summary
+   * (AC-04). Query: limit (≤5000, default loads the full set). Trade has no
+   * userId, so we join via Bot.
    * → { ok, trades: [{ id, user, symbol, side, strategy, entry, exit, netPnl, opened, status }], kpis, total }
    */
   router.get(
     "/trades",
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      // Default loads the full history (cap 5000, selaras dengan export) sehingga
+      // trade terlama (#1) ikut tampil; pagination tabel dilakukan client-side.
+      const limit = Math.min(parseInt(req.query.limit, 10) || 5000, 5000);
 
       // Read from the REAL trades store (db layer), not the unused Prisma table.
       const [rows, stats] = await Promise.all([

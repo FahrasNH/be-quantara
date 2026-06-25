@@ -32,6 +32,13 @@ class AccountCoordinator {
     this.userId = userId;
     this.maxAccountUtilization = maxAccountUtilization;
     this.maxConcurrentPositions = maxConcurrentPositions;
+    // Cap JUMLAH posisi terbuka serentak LINTAS-AKUN per-tier (fix meter "8/4").
+    // SENGAJA dipisah dari maxConcurrentPositions: gate itu menghitung
+    // reservations.size (= slot strategi ter-arm, bisa ~100) sehingga TIDAK boleh
+    // dipakai sbg cap posisi terbuka. Field ini HANYA untuk dilaporkan ke FE
+    // (snapshot/margin-budget); penegakan riil ada di BotEngine yang menghitung
+    // posisi terbuka NYATA dari DB. 0 = belum di-set (FE fallback ke default tier).
+    this.maxAccountOpenPositions = 0;
     // Batas kerugian harian AGREGAT lintas-bot (#5 residual). 0 = nonaktif.
     // Mencegah skenario tiap bot menembus 4%-nya sendiri → akun rugi 3×4%=12%.
     this.maxAccountDailyLossPct = maxAccountDailyLossPct;
@@ -47,6 +54,18 @@ class AccountCoordinator {
   /** Update snapshot equity akun (semua bot user ini berbagi akun yang sama). */
   setAccountEquity(equity) {
     if (Number.isFinite(equity) && equity > 0) this.accountEquity = equity;
+  }
+
+  /**
+   * Set cap account-wide posisi terbuka serentak per-tier (per-tier account
+   * open-position cap). Dipanggil saat bot START / resume setelah tier diketahui.
+   * Hanya dipakai untuk pelaporan ke FE — penegakan riil di BotEngine via DB.
+   * @param {number} n
+   */
+  setMaxAccountOpenPositions(n) {
+    const v = Number(n);
+    if (Number.isFinite(v) && v > 0) this.maxAccountOpenPositions = v;
+    return this;
   }
 
   /**
@@ -371,6 +390,8 @@ class AccountCoordinator {
       committedMargin: this.committedMargin(),
       openCount: this.openCount(),
       maxConcurrentPositions: this.maxConcurrentPositions,
+      // Cap account-wide posisi terbuka per-tier (untuk denominator meter FE).
+      maxAccountOpenPositions: this.maxAccountOpenPositions,
       reservations: Array.from(this.reservations.entries()).map(([botKey, r]) => ({
         botKey, symbol: r.symbol, margin: r.margin,
       })),

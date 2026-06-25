@@ -1523,6 +1523,44 @@ class BotEngine extends EventEmitter {
    *                     Dipakai untuk sideways breakout/retest entry dimana
    *                     SL ditempatkan di tepi range, bukan berbasis ATR.
    */
+  /**
+   * Gate cap posisi-terbuka AKUN per-tier (per-tier account open-position cap).
+   *
+   * Menghitung posisi terbuka NYATA milik user dari DB (close_time IS NULL) lintas
+   * SEMUA koin/strategi — SENGAJA BUKAN AccountCoordinator.openCount()/reservations.size,
+   * karena reservasi dibuat saat bot START (satu per strategi per koin) & baru dilepas
+   * saat stop → reservations.size ≈ jumlah slot strategi ter-arm (~100 utk 27 bot),
+   * memakainya sebagai cap akan memblokir SEMUA entry. Cap berlaku di dry-run & live.
+   *
+   * Resilient: bila jumlah posisi tak bisa dibaca (DB error / helper absen) → FAIL-OPEN
+   * dengan warning (jangan crash entry), karena gate ini sifatnya proteksi tambahan.
+   *
+   * @returns {Promise<{allowed: boolean, reason?: string}>}
+   */
+  async _checkAccountOpenCap() {
+    const cap = Number(this.config.maxAccountOpenPositions) || 0;
+    if (!(cap > 0)) return { allowed: true }; // belum dikonfigurasi → tidak membatasi
+    const userId = this.config.userId;
+    if (!userId) return { allowed: true };    // tanpa userId tak bisa hitung → jangan blokir
+    try {
+      const db = require("../infrastructure/db/database");
+      if (typeof db.countOpenTradesByUser !== "function") return { allowed: true };
+      // Filter per-mode (dry/live) agar konsisten dgn MultiStrategyCoordinator.canEnter.
+      const currentOpen = await db.countOpenTradesByUser(userId, this.config.dryRun);
+      if (currentOpen >= cap) {
+        return {
+          allowed: false,
+          reason: `Batas posisi terbuka akun tercapai (${currentOpen}/${cap}) untuk tier kamu — ` +
+                  `entry ditahan sampai ada posisi yang tutup`,
+        };
+      }
+      return { allowed: true };
+    } catch (e) {
+      this._log("warn", `Cap posisi akun: gagal baca jumlah posisi terbuka (${e.message}) — fail-open`);
+      return { allowed: true };
+    }
+  }
+
   async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
@@ -1542,6 +1580,22 @@ class BotEngine extends EventEmitter {
       this._log("warn", `Dedup: sudah ada posisi ${signal} ${this.config.symbol} terbuka — skip open duplikat`);
       return;
     }
+
+    // ── Per-tier account open-position cap ────────────────────────────────────
+    // Fix bug meter "Account Risk → Open positions" yang menampilkan "8 / 4":
+    // cap account-wide TAK PERNAH ditegakkan. Gate INDEPENDEN dari anggaran margin
+    // (canOpen/reserveGroup) — membatasi JUMLAH posisi terbuka serentak LINTAS
+    // semua koin/strategi sesuai tier user. Chokepoint tunggal di sini meng-cover
+    // kedua jalur (engine tunggal & multi-strategi: AdaptiveStrategyEngine memanggil
+    // super._handleSignal). WAJIB jalan di DRY-RUN juga (kasus dilaporkan = simulasi)
+    // — TIDAK ditempatkan di balik guard !dryRun. Sumber hitung = posisi terbuka
+    // NYATA dari DB, BUKAN reservations.size (= slot strategi ter-arm).
+    const capVerdict = await this._checkAccountOpenCap();
+    if (!capVerdict.allowed) {
+      this._log("warn", `🚦 ${capVerdict.reason}`);
+      return;
+    }
+
     this._lastOpenAt[dedupKey] = now0;
 
     // Pair-tier SL override: VOLATILE 1.5× / STABLE 1.1× / LIQUID 1.0×. Memperlebar

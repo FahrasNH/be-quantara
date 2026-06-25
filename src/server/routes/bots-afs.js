@@ -15,7 +15,9 @@ module.exports = function createBotsRouter(helpers) {
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
-  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies } = require("../../services/entitlement");
+  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies, getUserTier } = require("../../services/entitlement");
+  // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
+  const { getMaxConcurrentPositions } = require("../../domain/tierConfig");
   const db = require("../../infrastructure/db/database");
 
   // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
@@ -246,6 +248,23 @@ module.exports = function createBotsRouter(helpers) {
       const coordinator = getCoordinator(userId);
       const snap = coordinator.snapshot();
 
+      // Per-tier account open-position cap (fix meter "8/4"): resolusi tier user →
+      // cap, agar FE punya DENOMINATOR sebenarnya (4/8/12/16), bukan hardcoded 4.
+      // Diresolusi langsung di sini supaya benar walau belum ada bot yang start
+      // (coordinator.maxAccountOpenPositions masih 0). Fallback FOUNDRY(4) bila error.
+      let maxConcurrentPositions;
+      try {
+        maxConcurrentPositions = getMaxConcurrentPositions(await getUserTier(userId));
+      } catch (_e) {
+        maxConcurrentPositions = getMaxConcurrentPositions(undefined);
+      }
+      // openCount = jumlah posisi terbuka NYATA dari DB (sumber kebenaran tunggal,
+      // bukan reservations.size). Best-effort: gagal → null (FE jatuh ke agregat state).
+      let openCount = null;
+      try {
+        openCount = await db.countOpenTradesByUser(userId, null);
+      } catch (_e) { /* biarkan null — fail-open utk display */ }
+
       // Hitung minimum margin per pair (leverage 2x, SL=1.5×ATR, asumsi ATR% pasar)
       // Diperhitungkan dari: margin = (notional) / leverage = (price × size) / 2
       // Untuk user, kami estimasi dengan asumsi size minimum per pair + ATR% rata-rata
@@ -272,6 +291,9 @@ module.exports = function createBotsRouter(helpers) {
         committed: committedBySymbol,
         remaining: snap.budget - snap.committedMargin,
         minimumForLeverage2x: minMarginEstimate,
+        // Cap account-wide posisi terbuka per-tier + jumlah terbuka NYATA (DB).
+        maxConcurrentPositions,
+        openCount,
       });
     })
   );
@@ -655,6 +677,20 @@ module.exports = function createBotsRouter(helpers) {
         }
       }
 
+      // ── Per-tier account open-position cap (fix meter "8/4") ─────────────────
+      // Resolusi tier user → cap JUMLAH posisi terbuka serentak lintas-akun, lalu:
+      //  (a) set di coordinator agar dilaporkan ke FE (denominator meter),
+      //  (b) teruskan ke engine config → gate BotEngine._checkAccountOpenCap aktif.
+      // Gate ini INDEPENDEN dari anggaran margin (canStartBot/reserveGroup) — tidak
+      // mengganggunya. Fail-safe: tier tak terbaca → fallback FOUNDRY(4), bukan unlimited.
+      let accountOpenCap;
+      try {
+        accountOpenCap = getMaxConcurrentPositions(await getUserTier(userId));
+      } catch (_e) {
+        accountOpenCap = getMaxConcurrentPositions(undefined); // FOUNDRY fallback
+      }
+      getCoordinator(userId).setMaxAccountOpenPositions(accountOpenCap);
+
       // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
       const instance = useMulti
         ? await createMultiStrategyInstance(userId, symbol, {
@@ -668,6 +704,7 @@ module.exports = function createBotsRouter(helpers) {
             apiSecret:  decryptedApiSecret,
             passphrase: decryptedPassphrase,
             pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
+            maxAccountOpenPositions: accountOpenCap,
           })
         : createBotInstance(userId, symbol, {
             capital:     bot.capital,
@@ -681,6 +718,7 @@ module.exports = function createBotsRouter(helpers) {
             apiSecret:   decryptedApiSecret,
             passphrase:  decryptedPassphrase,
             pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
+            maxAccountOpenPositions: accountOpenCap,
           });
 
       const instState = instance.getState();

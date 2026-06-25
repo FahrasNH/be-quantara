@@ -565,7 +565,7 @@ async function getTrades({ sessionId = null, symbol = null, limit = 100, userId 
 // is never written to — real trades live in this `trades` table (written by the
 // engine via insertTrade). These helpers read the real store, joined to
 // bot_sessions → "User" so each row carries the owner's username.
-async function getAdminTrades({ limit = 50 } = {}) {
+async function getAdminTrades({ limit = 5000 } = {}) {
   const { rows } = await pool.query(
     `SELECT t.id, t.symbol, t.side, t.entry_price, t.exit_price, t.pnl,
             t.status, t.open_time, t.close_time, t.strategy_name, t.dry_run,
@@ -575,7 +575,7 @@ async function getAdminTrades({ limit = 50 } = {}) {
        LEFT JOIN "User" u       ON u.id = s.user_id
       ORDER BY t.open_time DESC
       LIMIT $1`,
-    [Math.min(limit, 200)]
+    [Math.min(limit, 5000)]
   );
   return rows;
 }
@@ -988,6 +988,34 @@ async function getOpenTradesByUser(userId) {
 }
 
 /**
+ * Hitung JUMLAH posisi TERBUKA (close_time IS NULL) milik satu user LINTAS SEMUA
+ * simbol/strategi. Sumber kebenaran tunggal untuk gate "per-tier account
+ * open-position cap" (fix meter Account Risk "8 / 4"): cap menghitung posisi
+ * terbuka NYATA dari tabel trades, BUKAN AccountCoordinator.reservations.size
+ * (yang = jumlah slot strategi ter-arm saat bot START, bisa ~100 utk 27 bot →
+ * akan memblokir semua entry). Mode dry-run & live tersimpan di kolom yang sama;
+ * `dryRun` opsional memfilter t.dry_run agar konsisten dengan MultiStrategy
+ * Coordinator.canEnter (yang juga memfilter per-mode).
+ * @param {string} userId
+ * @param {boolean|null} [dryRun=null]  null = semua mode, true/false = filter mode
+ * @returns {Promise<number>} jumlah posisi terbuka
+ */
+async function countOpenTradesByUser(userId, dryRun = null) {
+  if (userId == null) return 0;
+  const params = [userId];
+  let where = `t.close_time IS NULL AND s.user_id = $1`;
+  if (dryRun != null) { params.push(dryRun ? 1 : 0); where += ` AND t.dry_run = $${params.length}`; }
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS open_count
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}`,
+    params
+  );
+  return rows[0]?.open_count || 0;
+}
+
+/**
  * Batch-fetch open position count + realised net PnL per (userId, symbol)
  * for the admin bots table. Returns real data from the pg trade store, not
  * the unused Prisma Trade model. One query over all provided userIds.
@@ -1378,6 +1406,7 @@ module.exports = {
   getOpenTrades,
   getOpenTradesBySymbol,
   getOpenTradesByUser,
+  countOpenTradesByUser,
   getBotsStats,
   getClosedPnlByUser,
   getOpenPositionsForGate,
