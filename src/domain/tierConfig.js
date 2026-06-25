@@ -17,6 +17,10 @@ const TIER_CONFIG = {
     // satu koin, dan maks satu posisi per strategi per simbol.
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
+    // Cap JUMLAH posisi terbuka serentak LINTAS-AKUN (semua koin/strategi digabung).
+    // Field BARU & terpisah dari maxPositions/maxPositionsPerSymbol (yang per-simbol):
+    // ini batas account-wide yang ditegakkan di gate buka posisi (fix meter "8/4").
+    maxConcurrentPositions: 4,
     autoSelector: false,
     aiOptimizer: false,
     supportSLA: null,       // self-service
@@ -31,6 +35,8 @@ const TIER_CONFIG = {
     maxPositions: 2,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 2,
+    // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
+    maxConcurrentPositions: 8,
     autoSelector: false,
     aiOptimizer: false,
     supportSLA: "48h",
@@ -45,6 +51,8 @@ const TIER_CONFIG = {
     maxPositions: 3,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 3,
+    // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
+    maxConcurrentPositions: 12,
     autoSelector: true,
     aiOptimizer: false,     // static equal-weight allocation
     supportSLA: "24h",
@@ -59,6 +67,8 @@ const TIER_CONFIG = {
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
     capitalAllocation: { equal: true /* dynamic: false */ },
     maxPositionsPerSymbol: 4,   // bukan maxPositions global
+    // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
+    maxConcurrentPositions: 16,
     autoSelector: true,
     // AI optimizer feature flag — disabled until Fase 3
     aiOptimizer: process.env.VAULT_AI_OPTIMIZER_ENABLED === "true",
@@ -102,6 +112,20 @@ function canUseStrategy(tier, strategyKey) {
 }
 
 /**
+ * Cap JUMLAH posisi terbuka serentak LINTAS-AKUN untuk sebuah tier.
+ * Sumber kebenaran tunggal gate "per-tier account open-position cap" (fix bug
+ * meter Account Risk yang menampilkan "8 / 4" karena cap tak pernah ditegakkan
+ * & angka 4 di-hardcode di UI). Tier tak dikenal → fallback aman ke FOUNDRY (4),
+ * BUKAN unlimited (backward-compatible & konservatif).
+ * @param {string} tier
+ * @returns {number}
+ */
+function getMaxConcurrentPositions(tier) {
+  const config = getTierConfig(tier);
+  return config?.maxConcurrentPositions ?? TIER_CONFIG.FOUNDRY.maxConcurrentPositions;
+}
+
+/**
  * Map legacy balanceTier (A/B/C) to new tier name.
  * Used only for the one-time migration.
  * @param {string} legacy  "A" | "B" | "C"
@@ -128,6 +152,7 @@ module.exports = {
   TIER_ORDER,
   getTierConfig,
   canUseStrategy,
+  getMaxConcurrentPositions,
   migrateLegacyTier,
   listTiers,
 };

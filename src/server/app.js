@@ -45,7 +45,10 @@ cfg.validate();
 const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
 
 // Entitlement service (dipakai resumeRunningBots untuk fallback tier-strategies)
-const { getTierStrategies } = require("../services/entitlement");
+const { getTierStrategies, getUserTier } = require("../services/entitlement");
+// Cap account-wide posisi terbuka per-tier (fix meter "8/4"). Dipakai di resume
+// agar cap di-set tanpa perlu start manual.
+const { getMaxConcurrentPositions } = require("../domain/tierConfig");
 // PAIR-TIER: klasifikasi pair (LIQUID/STABLE/VOLATILE) untuk override SL/posisi
 // + filter strategi. Dipakai di createBot*/resume agar override SELALU diterapkan,
 // tidak peduli bot dibuat lewat start manual atau auto-resume.
@@ -425,6 +428,10 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       pairSlMultiplier:           _pairOverrides.slMultiplier,
       pairPositionSizeAdjustment: _pairOverrides.positionSizeAdjustment,
       tierOverrides:              _tierOverrides,
+      // Cap account-wide posisi terbuka per-tier (per-tier account open-position cap).
+      // Diteruskan ke TIAP AdaptiveStrategyEngine → gate _checkAccountOpenCap aktif
+      // utk jalur multi-strategi (semua engine berbagi user → cap dihitung dari DB).
+      maxAccountOpenPositions: opts.maxAccountOpenPositions ?? 0,
     },
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
@@ -752,6 +759,19 @@ async function resumeRunningBots() {
 
         const useMulti = MULTI_STRATEGY_ENABLED && strategies && strategies.length > 0;
 
+        // Per-tier account open-position cap (fix meter "8/4"): resolusi tier user
+        // → cap, lalu set di coordinator (utk dilaporkan ke FE) & teruskan ke engine
+        // config (penegakan gate). Resume TAHU tier (bot.userId) jadi tak ada limitasi.
+        // Fail-safe: tier tak terbaca → fallback FOUNDRY(4) via getMaxConcurrentPositions.
+        let accountOpenCap = 0;
+        try {
+          accountOpenCap = getMaxConcurrentPositions(await getUserTier(bot.userId));
+          getCoordinator(bot.userId).setMaxAccountOpenPositions(accountOpenCap);
+        } catch (e) {
+          accountOpenCap = getMaxConcurrentPositions(undefined); // FOUNDRY fallback
+          console.warn(`[Startup] Gagal resolve cap posisi tier ${bot.symbol}: ${e.message} — fallback ${accountOpenCap}`);
+        }
+
         let instance;
         if (useMulti) {
           instance = await createMultiStrategyInstance(bot.userId, bot.symbol, {
@@ -762,6 +782,7 @@ async function resumeRunningBots() {
             botId:       bot.id,
             exchangeType,
             apiKey, apiSecret, passphrase,
+            maxAccountOpenPositions: accountOpenCap,
           });
           console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
         } else {
@@ -774,6 +795,7 @@ async function resumeRunningBots() {
             userId:      bot.userId,
             exchangeType,
             apiKey, apiSecret, passphrase,
+            maxAccountOpenPositions: accountOpenCap,
           });
           console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
         }
