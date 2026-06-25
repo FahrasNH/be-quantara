@@ -647,21 +647,33 @@ async function getAdminStrategyPnlHistory({ days = 30 } = {}) {
 
 // Platform-wide trade KPIs for the admin dashboard + stat cards.
 async function getAdminTradeStats() {
+  // SEMUA metrik trading (win/loss, profit factor, expectancy, gross pnl)
+  // dihitung pada pnl GROSS (sebelum biaya) agar internally consistent — Profit
+  // Factor, Expectancy, dan Gross PnL memakai basis yang sama. Biaya exchange
+  // (fee + funding) TIDAK dibakar diam-diam ke dalam "net pnl"; ia dikeluarkan
+  // sebagai `total_fee` dan ditampilkan sebagai KPI terpisah "Fee Exchange",
+  // sehingga admin melihat dua komponen jelas: hasil trading kotor vs biaya.
+  // (Sebelumnya net_pnl = pnl-fee-funding sementara metrik lain gross → panel
+  // menampilkan PF/Expectancy POSITIF tapi Net PnL NEGATIF. Lihat memory
+  // gross-vs-net fee fix.)
   const { rows } = await pool.query(
     `SELECT
        COUNT(*)::int                                                                        AS total,
        COUNT(*) FILTER (WHERE t.open_time >= date_trunc('day', now()))::int                 AS today,
-       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl IS NOT NULL)::int                                                  AS closed,
-       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                                                          AS wins,
-       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0)::int                                                         AS losses,
-       COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0))) FILTER (WHERE t.close_time IS NOT NULL), 0)::float         AS net_pnl,
-       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float                                         AS gross_pnl,
-       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float                                        AS gross_loss,
-       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float                                         AS avg_win,
-       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float                                        AS avg_loss
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl IS NOT NULL)::int           AS closed,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                   AS wins,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0)::int                  AS losses,
+       -- Gross trading PnL (fee & funding DIKECUALIKAN) — konsisten dgn PF & expectancy
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float                AS net_pnl,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float  AS gross_pnl,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float AS gross_loss,
+       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float  AS avg_win,
+       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float AS avg_loss,
+       -- Biaya exchange (fee + funding) — ditampilkan TERPISAH sebagai "Fee Exchange"
+       COALESCE(SUM(COALESCE(t.fee,0) + COALESCE(t.funding,0)) FILTER (WHERE t.close_time IS NOT NULL), 0)::float AS total_fee
      FROM trades t`
   );
-  return rows[0] || { total: 0, today: 0, closed: 0, wins: 0, losses: 0, net_pnl: 0, gross_pnl: 0, gross_loss: 0, avg_win: 0, avg_loss: 0 };
+  return rows[0] || { total: 0, today: 0, closed: 0, wins: 0, losses: 0, net_pnl: 0, gross_pnl: 0, gross_loss: 0, avg_win: 0, avg_loss: 0, total_fee: 0 };
 }
 
 async function getTradeStats(sessionId, userId = null) {
