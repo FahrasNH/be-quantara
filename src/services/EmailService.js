@@ -117,4 +117,58 @@ async function sendEmailVerification(toEmail, verifyUrl) {
   });
 }
 
-module.exports = { sendPasswordReset, sendEmailVerification };
+/**
+ * Subscription-activated receipt (Sprint 5 / PAY-04). Best-effort — the caller
+ * wraps this in try/catch so a mail failure never blocks the payment webhook.
+ * @param {string} toEmail
+ * @param {{ username, tier, billingCycle, endDate, finalAmount }} info
+ */
+async function sendSubscriptionActivated(toEmail, info) {
+  const transporter = getTransporter();
+  const fmtIDR = (n) => "Rp" + Number(n || 0).toLocaleString("id-ID");
+  const endStr = info.endDate ? new Date(info.endDate).toLocaleDateString("id-ID", { year: "numeric", month: "long", day: "numeric" }) : "-";
+  const cycle = String(info.billingCycle || "MONTHLY").toLowerCase();
+
+  await transporter.sendMail({
+    from: `"Quantara" <${cfg.EMAIL_USER}>`,
+    to: toEmail,
+    subject: `Langganan Quantara ${info.tier} kamu aktif 🎉`,
+    text: [
+      `Hai ${info.username || "Trader"},`,
+      '',
+      `Pembayaran kamu berhasil dan langganan tier ${info.tier} (${cycle}) sudah aktif.`,
+      `Total dibayar: ${fmtIDR(info.finalAmount)}`,
+      `Berlaku sampai: ${endStr}`,
+      '',
+      'Selamat trading!',
+      '— Tim Quantara',
+    ].join('\n'),
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:sans-serif;background:#f2f2fa;padding:32px">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:linear-gradient(135deg,#171430,#241a52);padding:32px;text-align:center">
+      <div style="font-size:28px;font-weight:800;color:#fff;letter-spacing:-1px">⚡ Quantara</div>
+      <div style="color:#a29bd4;margin-top:6px;font-size:13px">Personal Trading Bot</div>
+    </div>
+    <div style="padding:32px">
+      <h2 style="margin:0 0 12px;color:#1a1040;font-size:20px">Langganan ${info.tier} aktif 🎉</h2>
+      <p style="color:#555;line-height:1.6;margin:0 0 24px">
+        Hai <strong>${info.username || "Trader"}</strong>, pembayaran kamu berhasil dan
+        tier <strong>${info.tier}</strong> (${cycle}) sudah aktif.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:0 0 24px;font-size:14px;color:#333">
+        <tr><td style="padding:8px 0;color:#888">Total dibayar</td><td style="padding:8px 0;text-align:right;font-weight:600">${fmtIDR(info.finalAmount)}</td></tr>
+        <tr><td style="padding:8px 0;color:#888">Berlaku sampai</td><td style="padding:8px 0;text-align:right;font-weight:600">${endStr}</td></tr>
+      </table>
+      <a href="${cfg.APP_URL}" style="display:inline-block;background:#6c5ce7;color:#fff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:600;font-size:15px">Buka Dashboard</a>
+    </div>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+module.exports = { sendPasswordReset, sendEmailVerification, sendSubscriptionActivated };
