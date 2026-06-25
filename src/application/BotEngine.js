@@ -148,6 +148,16 @@ class BotEngine extends EventEmitter {
       // akar kerugian net (fee 8× lebih besar dari edge per trade). 0 = nonaktif.
       minEdgeFeeMultiple: strat.minEdgeFeeMultiple ?? 5,
 
+      // ── FEE-01/01b: ADAPTIVE_FUSION entry-quality knobs ───────────────────
+      // Diteruskan ke AdaptiveFusionStrategy.detectSignal (lewat AdaptiveStrategyEngine)
+      // agar anti-chase & conviction-veto bisa di-tune live tanpa ubah kode.
+      // - maxEntryExtensionATR: tolak entry bila |close−EMA9|/ATR melebihi ini.
+      // - afRejectOnDissent: tolak entry saat komponen saling berlawanan (2-1).
+      // - afMinVotes: kuorum minimum komponen searah (2 = default; 3 = unanim).
+      maxEntryExtensionATR: strat.maxEntryExtensionATR ?? 1.5,
+      afRejectOnDissent:    strat.afRejectOnDissent ?? true,
+      afMinVotes:           strat.afMinVotes ?? 2,
+
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
       leverage:     strat.leverage,
@@ -189,15 +199,18 @@ class BotEngine extends EventEmitter {
       cooldownAfterLoss: strat.cooldownAfterLoss || 30,
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
-      // ── Take-Profit mode ─────────────────────────────────────────────────
+      // ── Take-Profit mode (FEE-04) ────────────────────────────────────────
       // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
-      // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R (risiko ↓, reward ↓)
-      tpMode: "full",
+      // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R, sisa dibiarkan
+      //             lari ke TP penuh (~2.5–2.85R). Membiarkan winner lari sambil
+      //             mengunci sebagian profit → ekspektasi net-of-fee membaik di
+      //             strategi tren (TREND_MOMENTUM). Knob per-strategi via strat.tpMode.
+      tpMode: strat.tpMode || "full",
 
       // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
       slPlusEnabled:     true,   // legacy; dikontrol oleh tpMode
-      slPlusPartial1Pct: 0.40,   // +1R → 40% partial, SL ke BEP
-      slPlusPartial2Pct: 0.275,  // +2R → 27.5% partial, SL ke +1R
+      slPlusPartial1Pct: strat.slPlusPartial1Pct ?? 0.40,   // +1R → 40% partial, SL ke BEP
+      slPlusPartial2Pct: strat.slPlusPartial2Pct ?? 0.275,  // +2R → 27.5% partial, SL ke +1R
 
       // ── DB overrides (SELALU override semua default di atas) ─────────────
       // apiKey/apiSecret/passphrase sudah dihapus dari safeOverrides (keamanan)
@@ -1755,9 +1768,20 @@ class BotEngine extends EventEmitter {
         // ── Buka posisi + embed preset SL/TP atomik (CCXT v4.5 Bitget V2) ──────
         // Kirim harga SL/TP MENTAH — client yang format ke tick-size. toFixed(2)
         // lama merusak trigger price koin murah (mis. XPL → SL/TP jadi $0.09).
-        const order = await this.client.openPosition(
-          this.config.symbol, side, finalSize, "USDT", sl, tp
-        );
+        // FEE-02: entryMode="maker" → rute limit post-only (fee maker) dengan
+        // fallback taker bila tak ke-fill. Default taker → jalur lama identik.
+        const useMaker = this.config.entryMode === "maker" &&
+          typeof this.client.openPositionMaker === "function";
+        const order = useMaker
+          ? await this.client.openPositionMaker(this.config.symbol, side, finalSize, "USDT", sl, tp)
+          : await this.client.openPosition(this.config.symbol, side, finalSize, "USDT", sl, tp);
+        if (order?.entryFill) {
+          enrichedSnapshot.entryFill = order.entryFill;
+          this._log("trade",
+            `Entry fill: ${order.entryFill}` +
+            (order.filledMaker ? ` (maker ${order.filledMaker}/${finalSize})` : "")
+          );
+        }
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
         // Reservasi margin di koordinator akun bersama (#5)

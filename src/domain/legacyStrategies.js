@@ -268,6 +268,23 @@ const STRATEGIES = {
     cooldownAfterLoss: 30,
     maxConsecLoss:     3,
 
+    // ── FEE-01/03: pengetatan entry agar AF gross-positif (TETAP LIVE) ───────
+    // AF adalah satu-satunya strategi yang rugi SEBELUM fee (WR 26%, gross
+    // −$37). Akar = entry chasing + over-trading di edge tipis. Alih-alih
+    // mem-pause AF (konstrain user: AF tetap jalan), kita perketat kualitas
+    // entry lewat knob yang reversible:
+    //  - maxEntryExtensionATR 1.5 → 1.2: hanya terima entry dekat mean (EMA9);
+    //    entry yang sudah >1.2×ATR dari EMA9 (chasing) ditolak.
+    //  - minEdgeFeeMultiple 5 → 6: reward leg AF wajib ≥6× fee roundtrip
+    //    (TP ≥0.72% taker / ≥0.24% maker) → buang scalp marginal yang fee-nya
+    //    menelan edge.
+    //  - afMinVotes 2: kuorum default; naikkan ke 3 untuk lebih selektif.
+    // Gross-positif divalidasi via FEE-06 dry-run sebelum promote ke live.
+    maxEntryExtensionATR: 1.2,
+    minEdgeFeeMultiple:   6,
+    afMinVotes:           2,
+    afRejectOnDissent:    true,
+
     leverage:      2,
     interval:      "15m",
     checkInterval: 60000,
@@ -325,6 +342,13 @@ const STRATEGIES = {
     maxTradesPerDay:  10,
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
+
+    // FEE-04: biarkan winner lari. Profit gross +$38 tertelan fee $45 (net −$7)
+    // karena TP penuh dipukul rata di ~1.9R. Mode "partial" mengunci 40% di +1R
+    // & 27.5% di +2R lalu menggeser SL ke BEP/+1R sembari sisanya lari ke TP
+    // penuh — menaikkan ekspektasi net-of-fee tanpa menaikkan risiko. Knob:
+    // set tpMode:"full" untuk perilaku lama.
+    tpMode:        "partial",
 
     leverage:      2,
     interval:      "5m",

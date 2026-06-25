@@ -225,6 +225,11 @@ class AdaptiveStrategyEngine extends BotEngine {
         volatility:     this.lastVolatility,
         trend_strength: this.lastTrendStrength,
         htfTrend:       this.state.htfTrend,
+        // FEE-01/01b: knob entry-quality AF — diteruskan dari config bot/strategi
+        // agar anti-chase & conviction-veto bisa di-tune live tanpa ubah kode.
+        maxEntryExtensionATR: this.config.maxEntryExtensionATR,
+        afRejectOnDissent:    this.config.afRejectOnDissent,
+        afMinVotes:           this.config.afMinVotes,
       });
 
       if (!signal) return;

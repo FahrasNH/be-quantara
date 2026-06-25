@@ -297,7 +297,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     // PAIR-TIER-07: respect votingThresholdOverride from pair tier (e.g. 0.65 for VOLATILE)
     const votingThresholdOverride = config.tierOverrides?.votingThresholdOverride ?? null;
-    let resolved = this._resolveSignalConflict(signals, votingThresholdOverride);
+    let resolved = this._resolveSignalConflict(signals, votingThresholdOverride, {
+      rejectOnDissent: config.afRejectOnDissent ?? true,
+      minVotes:        config.afMinVotes ?? 2,
+    });
 
     // FEE-01: Anti-chase guard. Post-mortem data (69 trade live): LONG WR 21%
     // (-$37.90) sementara SHORT breakeven, dan Component C state-based fire
@@ -525,8 +528,21 @@ class AdaptiveFusionStrategy extends StrategyBase {
    *   Require votes/total >= threshold fraction before executing.
    *   STABLE = 0.55 (same effective bar as default for 3 signals)
    *   VOLATILE = 0.65 (3/3 = 100% required — single dissent blocks entry)
+   *
+   * FEE-01b — Conviction guards (reversible via strat.*):
+   *   - rejectOnDissent (default true): tolak entry bila komponen yang fire
+   *     saling bertentangan (mis. 2 LONG vs 1 SHORT). Saat ini komponen jarang
+   *     berkonflik (ketiganya bergantung pada alignment EMA9/EMA21 yang sama),
+   *     jadi ini terutama safeguard bila logika komponen berevolusi.
+   *   - minVotes (default 2): kuorum minimum komponen searah. Set
+   *     `strat.afMinVotes=3` untuk menuntut unanimitas (entry paling selektif) —
+   *     menekan over-trading di edge tipis (akar gross-negatif AF) tanpa
+   *     mematikan strategi. Pengetatan utama AF berada di preset config
+   *     (maxEntryExtensionATR lebih ketat + minEdgeFeeMultiple), divalidasi via
+   *     FEE-06 dry-run sebelum promote.
    */
-  _resolveSignalConflict(signals, votingThresholdOverride = null) {
+  _resolveSignalConflict(signals, votingThresholdOverride = null, opts = {}) {
+    const { rejectOnDissent = true, minVotes = 2 } = opts;
     const votes = Object.values(signals).filter(Boolean);
     if (votes.length === 0) return null;
 
@@ -534,14 +550,16 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const shorts = votes.filter(v => v === "SHORT").length;
     const total  = votes.length;
 
+    if (rejectOnDissent && longs > 0 && shorts > 0) return null;
+
     if (votingThresholdOverride !== null) {
       if (longs / total  >= votingThresholdOverride) return "LONG";
       if (shorts / total >= votingThresholdOverride) return "SHORT";
       return null;
     }
 
-    if (longs >= 2)  return "LONG";
-    if (shorts >= 2) return "SHORT";
+    if (longs >= minVotes)  return "LONG";
+    if (shorts >= minVotes) return "SHORT";
     return null;
   }
 

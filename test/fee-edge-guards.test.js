@@ -91,3 +91,104 @@ test("FEE-03: minEdgeFeeMultiple=0 menonaktifkan gate", () => {
   const ok = passesMinEdge({ tpDist: 0.001, price: 100, feeRate: 0.0006, minEdgeFeeMultiple: 0 });
   assert.strictEqual(ok, true);
 });
+
+// ── FEE-01b: conviction guards di _resolveSignalConflict ─────────────────────
+
+test("FEE-01b: dissent veto — komponen berlawanan (2 LONG vs 1 SHORT) → null", () => {
+  const r = afs._resolveSignalConflict({ A: "LONG", B: "LONG", C: "SHORT" });
+  assert.strictEqual(r, null);
+});
+
+test("FEE-01b: dissent veto bisa dimatikan (afRejectOnDissent=false) → mayoritas menang", () => {
+  const r = afs._resolveSignalConflict({ A: "LONG", B: "LONG", C: "SHORT" }, null, { rejectOnDissent: false });
+  assert.strictEqual(r, "LONG");
+});
+
+test("FEE-01b: kuorum 2 searah tanpa dissent → diterima", () => {
+  const r = afs._resolveSignalConflict({ A: "LONG", B: "LONG" });
+  assert.strictEqual(r, "LONG");
+});
+
+test("FEE-01b: afMinVotes=3 menuntut unanimitas → 2 suara ditolak", () => {
+  const r = afs._resolveSignalConflict({ A: "LONG", B: "LONG" }, null, { minVotes: 3 });
+  assert.strictEqual(r, null);
+});
+
+// ── FEE-01: anti-chase + afMinVotes lewat config detectSignal (preset AF) ─────
+
+test("FEE-01: anti-chase lebih ketat (maxEntryExtensionATR 1.2) memblok entry ekstensi 1.4", () => {
+  // close 104.2 → |104.2 - 103.5| / 0.5 = 1.4 > 1.2 → diblok dengan preset ketat
+  const sig = afs.detectSignal(uptrendIndicators(104.2), N, { ...cfg, maxEntryExtensionATR: 1.2 });
+  assert.strictEqual(sig, null);
+  // sementara dengan default 1.5, ekstensi 1.4 tetap diterima
+  const sigDefault = afs.detectSignal(uptrendIndicators(104.2), N, cfg);
+  assert.strictEqual(sigDefault, "LONG");
+});
+
+test("FEE-01b: afMinVotes=3 lewat config — entry 2-vote (A+C) ditolak", () => {
+  // uptrend hanya memicu A + C (B event-based tidak fire) → 2 suara
+  assert.strictEqual(afs.detectSignal(uptrendIndicators(104), N, cfg), "LONG");
+  assert.strictEqual(afs.detectSignal(uptrendIndicators(104), N, { ...cfg, afMinVotes: 3 }), null);
+});
+
+// ── FEE-02: maker/post-only entry routing + fallback taker ───────────────────
+// Uji layer routing openPositionMaker pada BitgetClient dengan exchange palsu —
+// memastikan: (1) fill maker penuh, (2) timeout → fallback taker size utuh,
+// (3) partial maker → sisa diselesaikan taker (maker_partial). Tanpa jaringan.
+const BitgetClient = require("../src/infrastructure/exchange/BitgetClient");
+
+function makerClient(fakeExchange) {
+  const c = new BitgetClient("k", "s", "p");
+  c.exchange = fakeExchange;
+  c.getTicker = async () => ({ bestBid: 99.9, bestAsk: 100.1, last: 100 });
+  c._fmtPrice = (_m, p) => p;
+  return c;
+}
+const fastOpts = { fillTimeoutMs: 120, pollIntervalMs: 20, maxRequotes: 1 };
+
+test("FEE-02: post-only fill penuh → entryFill 'maker', tanpa taker", async () => {
+  let marketCalls = 0;
+  const ex = {
+    createOrder: async () => ({ id: "m1", status: "open", filled: 0 }),
+    fetchOrder:  async () => ({ id: "m1", status: "closed", filled: 1 }),
+    cancelOrder: async () => ({}),
+    createMarketOrder: async () => { marketCalls++; return { id: "t1" }; },
+  };
+  const c = makerClient(ex);
+  const res = await c.openPositionMaker("BTCUSDT", "open_long", 1, "USDT", 95, 110, fastOpts);
+  assert.strictEqual(res.entryFill, "maker");
+  assert.strictEqual(marketCalls, 0);
+  assert.strictEqual(res.presetSLTP, false);
+});
+
+test("FEE-02: post-only tak ke-fill → fallback taker, size utuh, SL/TP di-embed", async () => {
+  let marketCalls = 0;
+  const ex = {
+    createOrder: async () => ({ id: "m2", status: "open", filled: 0 }),
+    fetchOrder:  async () => ({ id: "m2", status: "open", filled: 0 }),
+    cancelOrder: async () => ({}),
+    createMarketOrder: async (_s, _d, size) => { marketCalls++; return { id: "t2", filled: size }; },
+  };
+  const c = makerClient(ex);
+  const res = await c.openPositionMaker("BTCUSDT", "open_long", 1, "USDT", 95, 110, fastOpts);
+  assert.strictEqual(res.entryFill, "taker");
+  assert.strictEqual(res.filledMaker, 0);
+  assert.strictEqual(marketCalls, 1);
+  assert.strictEqual(res.presetSLTP, true); // pure-taker → embed SL/TP atomik
+});
+
+test("FEE-02: partial maker fill → sisa via taker (maker_partial), SL/TP terpisah", async () => {
+  let marketSize = null;
+  const ex = {
+    createOrder: async () => ({ id: "m3", status: "open", filled: 0 }),
+    fetchOrder:  async () => ({ id: "m3", status: "open", filled: 0.4 }),
+    cancelOrder: async () => ({}),
+    createMarketOrder: async (_s, _d, size) => { marketSize = size; return { id: "t3", filled: size }; },
+  };
+  const c = makerClient(ex);
+  const res = await c.openPositionMaker("BTCUSDT", "open_long", 1, "USDT", 95, 110, fastOpts);
+  assert.strictEqual(res.entryFill, "maker_partial");
+  assert.ok(Math.abs(res.filledMaker - 0.4) < 1e-9);
+  assert.ok(Math.abs(marketSize - 0.6) < 1e-9); // sisa diselesaikan taker
+  assert.strictEqual(res.presetSLTP, false);    // ada porsi maker → BotEngine pasang SL/TP
+});

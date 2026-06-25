@@ -523,6 +523,113 @@ class BitgetCCXTClient {
     }
   }
 
+  /**
+   * FEE-02 — Entry maker/post-only dengan fallback taker.
+   *
+   * Pasang limit post-only di sisi PASIF (buy @ bestBid / sell @ bestAsk) agar
+   * kena fee maker (~0.02%/sisi) bukan taker (~0.06%). Post-only TIDAK dijamin
+   * fill → requote mengikuti harga beberapa kali; bila sampai timeout belum
+   * penuh, SISA diselesaikan market (taker) supaya size tetap utuh (tidak ada
+   * posisi setengah jadi). SL/TP TIDAK di-embed saat ada porsi maker — BotEngine
+   * memasangnya terpisah setelah fill (presetSLTP:false). Caveat: post-only bisa
+   * miss momentum → wajib A/B vs taker (lihat FEE-06). Default entryMode tetap
+   * taker; rute ini hanya aktif saat entryMode="maker".
+   *
+   * @returns {{orderId, presetSLTP:boolean, entryFill:"maker"|"maker_partial"|"taker", filledMaker:number}}
+   */
+  async openPositionMaker(symbol, side, size, marginCoin = "USDT", slPrice = undefined, tpPrice = undefined, opts = {}) {
+    const {
+      maxRequotes    = 2,
+      fillTimeoutMs  = 4000,
+      pollIntervalMs = 700,
+      fallbackTaker  = true,
+    } = opts;
+
+    let marketSymbol = symbol;
+    if (!marketSymbol.includes("/")) {
+      const base = marketSymbol.slice(0, -4);
+      marketSymbol = `${base}/USDT:USDT`;
+    }
+    const isBuy     = side.includes("long");
+    const direction = isBuy ? "buy" : "sell";
+    const sleep     = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    let filledMaker = 0;
+    let lastOrderId = null;
+
+    for (let attempt = 0; attempt <= maxRequotes; attempt++) {
+      const remaining = parseFloat((size - filledMaker).toFixed(10));
+      if (remaining <= 0) break;
+
+      let quote;
+      try { quote = await this.getTicker(symbol); } catch { break; }
+      const passive = isBuy ? quote.bestBid : quote.bestAsk;
+      if (!(passive > 0)) break;
+      const limitPrice = this._fmtPrice(marketSymbol, passive);
+
+      let order;
+      try {
+        order = await this.exchange.createOrder(
+          marketSymbol, "limit", direction, remaining, limitPrice,
+          { tradeSide: "open", postOnly: true }
+        );
+      } catch (err) {
+        // Post-only yang akan langsung match ditolak exchange → requote lebih pasif.
+        if (/post.?only|immediately|would match|40808|43025/i.test(err.message || "")) {
+          await sleep(150);
+          continue;
+        }
+        throw new Error(`openPositionMaker error: ${err.message}`);
+      }
+      lastOrderId = order.id;
+
+      let status = order.status, filled = order.filled || 0;
+      const deadline = Date.now() + fillTimeoutMs;
+      while (Date.now() < deadline && status !== "closed" && status !== "canceled") {
+        await sleep(pollIntervalMs);
+        try {
+          const o = await this.exchange.fetchOrder(order.id, marketSymbol);
+          status = o.status; filled = o.filled || 0;
+        } catch { /* terus polling — fetchOrder bisa gagal sementara */ }
+      }
+
+      if (status === "closed") {
+        filledMaker = parseFloat((filledMaker + (filled || remaining)).toFixed(10));
+        break;
+      }
+
+      // Belum penuh → batalkan sisa order yang masih open, lalu hitung fill final.
+      try { await this.exchange.cancelOrder(order.id, marketSymbol); } catch { /* mungkin sudah ke-fill/cancel */ }
+      try {
+        const o = await this.exchange.fetchOrder(order.id, marketSymbol);
+        filled = o.filled || filled;
+      } catch { /* pakai nilai terakhir */ }
+      filledMaker = parseFloat((filledMaker + (filled || 0)).toFixed(10));
+
+      if (filled > 0) break; // partial fill → selesaikan sisa via taker, stop requote
+    }
+
+    const remaining = parseFloat((size - filledMaker).toFixed(10));
+
+    if (remaining > 0 && fallbackTaker) {
+      // Pure-taker (tak ada porsi maker) → aman embed SL/TP atomik. Bila sudah ada
+      // porsi maker, biarkan BotEngine pasang SL/TP untuk SELURUH posisi terpisah.
+      const embed = filledMaker <= 0;
+      const taker = embed
+        ? await this.openPosition(symbol, side, remaining, marginCoin, slPrice, tpPrice)
+        : await this.openPosition(symbol, side, remaining, marginCoin);
+      return {
+        ...taker,
+        orderId:    taker.orderId || lastOrderId,
+        presetSLTP: embed ? !!(slPrice && tpPrice) && !!taker.presetSLTP : false,
+        entryFill:  filledMaker > 0 ? "maker_partial" : "taker",
+        filledMaker,
+      };
+    }
+
+    return { orderId: lastOrderId, presetSLTP: false, entryFill: "maker", filledMaker };
+  }
+
   async closePosition(symbol, side, size, marginCoin = "USDT") {
     try {
       let marketSymbol = symbol;

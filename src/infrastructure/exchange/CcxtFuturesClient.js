@@ -302,6 +302,100 @@ class CcxtFuturesClient {
     }
   }
 
+  /**
+   * FEE-02 — Entry maker/post-only dengan fallback taker.
+   *
+   * Limit post-only di sisi pasif (buy @ bestBid / sell @ bestAsk) untuk kena fee
+   * maker, bukan taker. Post-only tak dijamin fill → requote beberapa kali; bila
+   * belum penuh sampai timeout, sisa diselesaikan market (taker) agar size utuh.
+   * Binance/OKX tak mendukung embed SL/TP di market order → presetSLTP selalu
+   * false (BotEngine pasang SL/TP terpisah). Default entryMode tetap taker;
+   * rute ini hanya aktif saat entryMode="maker" (lihat A/B FEE-06).
+   *
+   * @returns {{orderId, presetSLTP:false, entryFill:"maker"|"maker_partial"|"taker", filledMaker:number}}
+   */
+  async openPositionMaker(symbol, side, size, _marginCoin = "USDT", _slPrice = undefined, _tpPrice = undefined, opts = {}) {
+    const {
+      maxRequotes    = 2,
+      fillTimeoutMs  = 4000,
+      pollIntervalMs = 700,
+      fallbackTaker  = true,
+    } = opts;
+
+    const marketSymbol = this._marketSymbol(symbol);
+    const isBuy        = side.includes("long");
+    const direction    = isBuy ? "buy" : "sell";
+    const sleep        = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    let filledMaker = 0;
+    let lastOrderId = null;
+
+    for (let attempt = 0; attempt <= maxRequotes; attempt++) {
+      const remaining = parseFloat((size - filledMaker).toFixed(10));
+      if (remaining <= 0) break;
+
+      let quote;
+      try { quote = await this.getTicker(symbol); } catch { break; }
+      const passive = isBuy ? quote.bestBid : quote.bestAsk;
+      if (!(passive > 0)) break;
+      const limitPrice = this._fmtPrice(marketSymbol, passive);
+
+      let order;
+      try {
+        order = await this.exchange.createOrder(
+          marketSymbol, "limit", direction, remaining, limitPrice,
+          this._orderParams({ postOnly: true })
+        );
+      } catch (err) {
+        if (/post.?only|immediately|would match/i.test(err.message || "")) {
+          await sleep(150);
+          continue;
+        }
+        throw new Error(`openPositionMaker error: ${err.message}`);
+      }
+      lastOrderId = order.id;
+
+      let status = order.status, filled = order.filled || 0;
+      const deadline = Date.now() + fillTimeoutMs;
+      while (Date.now() < deadline && status !== "closed" && status !== "canceled") {
+        await sleep(pollIntervalMs);
+        try {
+          const o = await this.exchange.fetchOrder(order.id, marketSymbol);
+          status = o.status; filled = o.filled || 0;
+        } catch { /* terus polling */ }
+      }
+
+      if (status === "closed") {
+        filledMaker = parseFloat((filledMaker + (filled || remaining)).toFixed(10));
+        break;
+      }
+
+      try { await this.exchange.cancelOrder(order.id, marketSymbol); } catch { /* mungkin sudah ke-fill/cancel */ }
+      try {
+        const o = await this.exchange.fetchOrder(order.id, marketSymbol);
+        filled = o.filled || filled;
+      } catch { /* pakai nilai terakhir */ }
+      filledMaker = parseFloat((filledMaker + (filled || 0)).toFixed(10));
+
+      if (filled > 0) break;
+    }
+
+    const remaining = parseFloat((size - filledMaker).toFixed(10));
+
+    if (remaining > 0 && fallbackTaker) {
+      const taker = await this.openPosition(symbol, side, remaining, _marginCoin);
+      return {
+        ...taker,
+        orderId:    taker.orderId || lastOrderId,
+        presetSLTP: false,
+        entryFill:  filledMaker > 0 ? "maker_partial" : "taker",
+        filledMaker,
+      };
+    }
+
+    return { orderId: lastOrderId, presetSLTP: false, entryFill: "maker", filledMaker };
+  }
+
   async closePosition(symbol, side, size) {
     try {
       const marketSymbol = this._marketSymbol(symbol);
