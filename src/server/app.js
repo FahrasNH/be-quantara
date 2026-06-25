@@ -111,12 +111,15 @@ const limiter = rateLimit({
   standardHeaders: true,  // kirim RateLimit-* headers agar FE bisa baca sisa kuota
   legacyHeaders: false,
   message: { ok: false, statusCode: 429, message: "Terlalu banyak permintaan. Tunggu beberapa saat lalu coba lagi." },
+  skip: () => process.env.NODE_ENV !== "production",
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: AUTH_MAX,
   message: { ok: false, statusCode: 429, message: "Terlalu banyak permintaan. Tunggu beberapa saat lalu coba lagi." },
   skip: (req) => {
+    // Rate limiting only in production
+    if (process.env.NODE_ENV !== "production") return true;
     // Skip refresh - has its own refreshLimiter (20/15min)
     if (req.method === "POST" && req.path === "/refresh") {
       return true;
