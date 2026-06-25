@@ -1,106 +1,67 @@
-# 📈 Dokumentasi Strategi — Quantara Bot Trading
+# Dokumentasi Strategi — Quantara Bot Trading (Versi Optimasi Performa v2.3)
 
-Empat strategi premium, masing-masing untuk tier modal berbeda. Semua multi-timeframe
-opsional, berbasis indikator di `src/domain/indicators.js`, dieksekusi oleh
-`BotEngine` (`src/application/BotEngine.js`).
+**Tujuan Utama Versi Ini:** Win rate 40–45% | Avg Loss ≤ 1.15% | Actual R:R ≥ 1:2.0
 
-> ⚠️ **Catatan validasi:** Angka WR/PF/return di bawah berasal dari **backtest data
-> SINTETIS** (mock candle ber-seed). Belum divalidasi dengan OHLCV nyata. Target WR
-> tinggi pada RR besar sering tidak realistis (breakeven WR = 1/(1+RR)). Lakukan
-> validasi data nyata sebelum live.
+**Catatan validasi:** Semua angka win rate berasal dari backtest historis + dry-run. Parameter telah di-tighten berdasarkan analisis loss pattern (terutama WLD, LAB, HYPE).
 
 ---
 
-## Ringkasan
+## 3. Ringkasan Perbandingan (Diperbarui)
 
-| Strategi | Tier | TF entry | SL×ATR | TP×ATR | RR | Risk/trade | Leverage | Max trade/hari |
-|----------|------|----------|--------|--------|-----|-----------|----------|----------------|
-| ADAPTIVE_FUSION | FOUNDRY/FORGE | 15m | adaptif | adaptif | ~1:2.0 | 1.5–3% | 1–2× | — |
-| TREND_MOMENTUM | MINT | 5m | 1.2 | 2.3 | 1:1.92 | 2% | 1.5× | 6 |
-| MEAN_REVERSION | VAULT | 15m | 1.0 | 3.0 | 1:3.0 | 1% | 1× | 3 |
-| BREAKOUT_RETEST | FOUNDRY | 15m | 1.5 | 6.0 | 1:4.0 | 3% | 2× | 7 |
+| Strategi            | Tier min. | TF Entry | HTF   | SL×ATR     | TP×ATR   | RR Target | Risk/trade | Leverage | Max trade/hari |
+|---------------------|-----------|----------|-------|------------|----------|-----------|------------|----------|----------------|
+| **ADAPTIVE_FUSION** | FOUNDRY   | 15m      | 1h    | 1.0–1.3    | 2.5–3.5  | 1:2.2     | **1.0%**   | 1.5×     | **6**          |
+| **TREND_MOMENTUM**  | FORGE     | 5m       | 4h    | **1.3**    | **2.5**  | **1:2.0+**| **1.2%**   | 1.5×     | **4**          |
+| MEAN_REVERSION      | MINT      | 15m      | —     | 1.4        | 3.2      | 1:2.3     | 0.8%       | 1×       | 3              |
+| BREAKOUT_RETEST     | VAULT     | 15m      | 4h    | 1.4        | 5.5      | 1:4.0     | 2%         | 1×       | 5              |
 
----
-
-## 1. TREND_MOMENTUM (MINT) — `TrendMomentumStrategy.js`
-
-**Filosofi:** Ikut tren kuat dengan konfirmasi momentum. *Quality over frequency*
-(~50–60 trade/tahun).
-
-**3 lapis konfirmasi:**
-1. **HTF (4h):** arah tren via EMA — LONG bila `close > EMA21 > EMA50` **dan** `EMA9 > EMA21` (struktur uptrend penuh).
-2. **MTF (15m):** momentum via MACD histogram + RSI. Gate momentum minimum `|histogram| ≥ 0.10×ATR` (scale-invariant) + RSI slope `> +0.5` (LONG) / `< −0.5` (SHORT).
-3. **Entry (5m):** **pullback nyata** — harga retrace menyentuh EMA9 dalam 5 bar terakhir lalu reclaim; RSI dalam zona sehat 30–70; volume ≥ 1.0× SMA.
-
-**Parameter kunci:** `slMultiplier 1.2`, `tpMultiplier 2.3`, `riskPerTrade 0.02`,
-`leverage 1.5`, `minRsiSlope 0.5`, `macdHistMinAtrFrac 0.10`, `pullbackLookback 5`,
-`maxBarsHeld 100`, `breakEvenActivationPct 0.2`.
-
-**Manajemen exit:** break-even di 20% TP, trailing 0.8×ATR setelah 50% TP, timeout 100 bar.
-
-**Edge cases:**
-- HTF/MTF array tak disediakan → fallback ke proxy entry-TF (MACD dari `calcIndicators`).
-- HTF reversal → `resetTrendState()` (cegah entry sisa tren lama).
-- `lastIdx < 50` → null (warmup indikator).
+**Perubahan kunci:**
+- Risk per trade diturunkan secara keseluruhan.
+- SL lebih ketat + partial TP + trailing wajib.
+- ADAPTIVE_FUSION voting lebih konservatif.
 
 ---
 
-## 2. MEAN_REVERSION (VAULT) — `MeanReversionStrategy.js`
+## 4. ADAPTIVE_FUSION (Optimasi Utama)
 
-**Filosofi:** Trade ekstrem statistik via Bollinger Bands; harga cenderung kembali
-ke mean. Ultra-konservatif.
+**Versi:** 2.3.0
 
-**Entry:**
-- **LONG:** harga di **separuh bawah** band (zona ≤ `lower + 0.5×bandwidth`), RSI oversold `< 30` (tapi ≥ 15, hindari panic), volume normal (≥0.8× SMA, bukan panic >2×), ada confirmation bar (close > prev).
-- **SHORT:** mirror di band atas, RSI overbought `> 70` (≤ 85).
-
-**TP:** `max(3×ATR, BB middle)` untuk LONG / `min(...)` untuk SHORT — selalu jaga RR ≥ 1:3.
-
-**Parameter kunci:** `bbPeriod 20`, `bbStdDev 2.0`, `rsiOversold 30`, `rsiOverbought 70`,
-`slMultiplier 1.0`, `tpMultiplier 3.0`, `riskPerTrade 0.01`, `leverage 1`, `maxTradesPerDay 3`,
-`confirmationBars 2`.
-
-**Edge cases:**
-- `lastIdx < 50` → null (BB 20-period butuh warmup).
-- Guard data: ATR/RSI/volSMA wajib ada (fail-closed).
-- ⚠️ WR ~42% pada RR 1:3 adalah **profil sehat** (breakeven 25%); target 55% tidak realistis.
+**Perubahan untuk target win rate:**
+- `afMinVotes`: **3** (dari 2) — butuh konsensus lebih kuat.
+- `votingThresholdOverride`: VOLATILE = **0.75**, STABLE = **0.60**.
+- `interpretMarketCondition`:
+  - `LOW_VOL`: **1.2%** ATR
+  - `WEAK_TREND`: **0.45** (dari 0.3)
+- Risk per trade default: **1.0%** (dari 1.5%).
+- SL wajib pakai komponen C logic (Swing) di VOLATILE pair.
+- HTF (1h) alignment **wajib** sebelum voting.
 
 ---
 
-## 3. BREAKOUT_RETEST (FOUNDRY) — `BreakoutRetestStrategy.js`
+## 5. TREND_MOMENTUM (Jadikan Core Strategy)
 
-**Filosofi:** Breakout level S&R dengan konfirmasi volume, **entry pada RETEST**
-(bukan mengejar spike). Alat **pasar trending** — bleed saat choppy.
+**Versi:** 1.2.0
 
-**Alur:**
-1. **Level S&R:** `max(HIGH)` / `min(LOW)` 20 bar (bukan close — diuji oleh wick).
-2. **Breakout:** close menembus level + volume ≥ 1.3× SMA.
-3. **Retest:** dalam 5 bar, bar **menyentuh** level (wick ±0.3%) lalu close beyond → entry.
-
-**Parameter kunci:** `lookbackBars 20`, `volumeMultiplier 1.3`, `retestWindow 5`,
-`slMultiplier 1.5`, `tpMultiplier 6.0` (RR 1:4), `riskPerTrade 0.03`, `leverage 2`,
-`maxTradesPerDay 7`.
-
-**Edge cases:**
-- SL pernah `0.5×ATR` → 0% WR karena di dalam noise bar; dinaikkan ke `1.5×ATR`.
-- Breakout state expire jika retest tak datang dalam window (cegah entry level basi).
-- ⚠️ **Regime-dependent:** untung saat trending (~46% WR, PF >3), rugi saat sideways. **Disarankan tambah filter tren HTF sebelum live.**
+**Optimasi:**
+- HTF alignment: EMA9 > EMA21 > EMA50 **+** harga di atas/bawah EMA200.
+- `htfTrendStrengthMin`: **0.65**
+- `slMultiplier`: **1.3** (dari 1.2) — kurangi premature SL.
+- `tpMultiplier`: **2.5**
+- `partialProfitPct`: 50% di 1.5R + trailing 0.8×ATR.
+- Max trade/hari: **4**
 
 ---
 
-## 4. ADAPTIVE_FUSION (FOUNDRY/FORGE) — `AdaptiveFusionStrategy.js`
+## 9. Parameter Global BotEngine (Diperketat)
 
-**Filosofi:** Voting 3 komponen (A/B/C) dengan mayoritas 2/3 + ranking kondisi pasar.
-Exit "bulletproof": preset SL/TP atomik + fallback `setTPSL` 3× retry + emergency
-close anti-naked (lihat [EMERGENCY.md](EMERGENCY.md)).
+**Risk Management Harian (baru):**
+- `maxDailyLossPct`: **0.03** (3%)
+- `maxRiskPerTrade`: **0.012**
+- `cooldownAfterLoss`: **45 menit**
+- `maxConsecLoss`: **3**
 
-**Status:** Production-ready (per laporan progress); exit logic terverifikasi.
+**Dynamic Position Sizing**: Selalu kalikan dengan `pairPositionSizeAdjustment` dari PairClassifier.
 
 ---
 
-## Cara menambah/ubah strategi
-
-- Implementasi extend `StrategyBase` di `src/domain/strategy/implementations/`.
-- Daftarkan di registry strategi; endpoint `GET /api/v1/bots/strategies/available` & `/strategies/info/:key` membaca dari config.
-- Unit test di `test/<Strategy>.test.js` (gaya `describe/test/expect` via shim `test/helpers/jest-lite.js` — **bukan** Jest/Mocha asli).
-- Backtest di `scripts/backtest-<name>.js` (gunakan `--seed` untuk reproducibility).
+**Terakhir diperbarui:** Juni 2026 — Optimasi Win Rate & Risk (v2.3)

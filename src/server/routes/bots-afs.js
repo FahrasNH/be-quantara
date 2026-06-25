@@ -26,7 +26,7 @@ module.exports = function createBotsRouter(helpers) {
   const { strategyGuard } = require("../../middleware/strategyGuard");
   const { strategyChangeLimiter, emergencyStopConfirmGuard } = require("../../middleware/strategyRateLimiter");
   const { analyzeStrategyFit } = require("../../domain/strategyAnalysis");
-  const { getMarketSnapshot } = require("../services/MarketSnapshotService");
+  const { getMarketSnapshot, getPairTierMetrics } = require("../services/MarketSnapshotService");
   const { issueConfirmToken, DEFAULT_MAX_AGE_MS } = require("../../infrastructure/security/confirmToken");
   const { createBotOpLock } = require("../../middleware/botOpLock");
   // SEC-002 GAP1: satu lock dibagi start+stop agar start & stop untuk bot yang
@@ -501,7 +501,12 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       // ── PAIR-TIER-05: classify pair → filter + merge tier overrides ──────────
-      const pairClass = pairClassifier.classify(symbol);
+      // v2.3 Hybrid Metric: hitung ATR%30d + likuiditas 24j dari candle harian,
+      // lalu sertakan ke classify() agar bump dinamis (ATR tinggi → naik tier;
+      // likuiditas tipis → paksa VOLATILE) AKTIF saat bot dimulai. Non-fatal:
+      // bila gagal/null → classify jatuh ke tier dasar (backward-compatible).
+      const pairMetrics = await getPairTierMetrics(sharedClient, symbol).catch(() => null);
+      const pairClass = pairClassifier.classify(symbol, pairMetrics);
       const tierOverrides = pairClass.paramOverrides;
 
       // Block non-MR strategies on VOLATILE pairs (AC-PAIR-04)
@@ -513,7 +518,7 @@ module.exports = function createBotsRouter(helpers) {
             return res.status(400).json({
               ok: false,
               statusCode: 400,
-              message: `${symbol} adalah pair VOLATILE. Strategi ${blockedStrategies.join(", ")} diblokir — hanya MEAN_REVERSION yang diizinkan untuk pasangan berisiko tinggi ini.`,
+              message: `${symbol} adalah pair VOLATILE. Strategi ${blockedStrategies.join(", ")} diblokir (ADAPTIVE_FUSION & BREAKOUT_RETEST) — hanya MEAN_REVERSION & TREND_MOMENTUM (dengan filter regime ketat) yang diizinkan untuk pasangan berisiko tinggi ini.`,
               pairTier: pairClass.tier,
               blockedStrategies,
               allowedStrategies: pairClass.recommendedStrategies,
@@ -662,6 +667,7 @@ module.exports = function createBotsRouter(helpers) {
             apiKey:     decryptedApiKey,
             apiSecret:  decryptedApiSecret,
             passphrase: decryptedPassphrase,
+            pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
           })
         : createBotInstance(userId, symbol, {
             capital:     bot.capital,
@@ -674,6 +680,7 @@ module.exports = function createBotsRouter(helpers) {
             apiKey:      decryptedApiKey,
             apiSecret:   decryptedApiSecret,
             passphrase:  decryptedPassphrase,
+            pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
           });
 
       const instState = instance.getState();

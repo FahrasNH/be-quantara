@@ -4,7 +4,9 @@
  * Philosophy: "Trade strong trends with momentum confirmation"
  * - Multi-timeframe: 4H trend, 15m momentum, 5m entry (lower risk)
  * - Quality over frequency: 60 trades/year vs 100+/month
- * - Tight stops (1.2×ATR), good reward (2.3×ATR) = RR 1:1.92
+ * - v2.3 (STRATEGIES.md §5): SL 1.3×ATR, TP 2.5×ATR (RR ~1:1.92), risk 1.2%,
+ *   max 4 trade/hari, HTF EMA9>EMA21>EMA50 + harga vs EMA200, htfTrendStrengthMin 0.65,
+ *   partial 50% di 1.5R + trailing 0.8×ATR.
  * - Best for: MINT tier (Rp10-15M, 54-58% WR, 100-180% annual)
  *
  * 3-Layer Confirmation:
@@ -48,7 +50,7 @@ class TrendMomentumStrategy extends StrategyBase {
         "Multi-timeframe trend trading with momentum confirmation. " +
         "Identifies strong trends (4H), confirms momentum (15m), enters on retracement (5m). " +
         "Tight stops, good risk-reward. Fewer trades, higher quality. Best for MINT tier (Rp10-15M).",
-      version: "1.1.0",
+      version: "1.2.0",
       enabled: true,
       ...config,
     });
@@ -82,6 +84,10 @@ class TrendMomentumStrategy extends StrategyBase {
       minRsiSlope: 0.5,         // Slope harus > 0.5 (LONG) / < -0.5 (SHORT) — momentum
                                 // benar-benar membangun, bukan sekadar > 0 (FIX #4)
 
+      // v2.3 spec (STRATEGIES.md §5): kekuatan tren HTF minimum sebelum entry.
+      // Dipakai sebagai gate trend-strength di validateMarketCondition.
+      htfTrendStrengthMin: 0.65,
+
       // Momentum minimum — histogram MACD harus cukup kuat relatif ATR (scale-invariant,
       // berlaku lintas-simbol). Mengganti gagasan ">10" literal yang bergantung skala harga.
       macdHistMinAtrFrac: 0.10, // |histogram| >= 0.10 × ATR (FIX #2)
@@ -94,21 +100,25 @@ class TrendMomentumStrategy extends StrategyBase {
       volSMAPeriod: 20,         // Period for volume SMA (entry TF)
       minVolRatio: 1.0,         // Minimum volume ratio (>= 1.0× SMA)
 
-      // Risk management (MINT tier: conservative)
-      riskPerTrade: 0.02,       // 2% per trade
-      slMultiplier: 1.2,        // SL = 1.2×ATR (tight)
-      tpMultiplier: 2.3,        // TP = 2.3×ATR (quality)
+      // Risk management (MINT tier: conservative) — v2.3 spec (STRATEGIES.md §5)
+      riskPerTrade: 0.012,      // 1.2% per trade (v2.3: dari 2%)
+      slMultiplier: 1.3,        // SL = 1.3×ATR (v2.3: 1.2 → 1.3, kurangi premature SL)
+      tpMultiplier: 2.5,        // TP = 2.5×ATR (v2.3: 2.3 → 2.5) → RR ~1:1.92
       leverage: 1.5,
 
       // Position management
-      maxTradesPerDay: 6,
+      maxTradesPerDay: 4,       // v2.3: 6 → 4 (quality over frequency)
       minCapital: 10000000,     // Rp10M minimum
-      trailingStopAtrMultiplier: 0.8,  // Trail after 50% TP
+      trailingStopAtrMultiplier: 0.8,  // Trail 0.8×ATR setelah partial 50% di 1.5R (v2.3)
+
+      // Take-profit mode — v2.3: partial 50% di 1.5R + trailing 0.8×ATR.
+      // BotEngine memakai tpMode untuk mengaktifkan partial close + trailing.
+      tpMode: "partial",
 
       // Exit management (FIX #8)
       maxBarsHeld: 100,             // Force close after N bars (timeout)
       breakEvenActivationPct: 0.2,  // Move SL to entry at 20% of TP reached
-      partialProfitPct: 0.5,        // (reserved) close 50% at 50% TP
+      partialProfitPct: 0.5,        // v2.3: close 50% di 1.5R
     };
 
     // Track open positions for trailing stop
@@ -139,21 +149,30 @@ class TrendMomentumStrategy extends StrategyBase {
   }
 
   /**
-   * Layer 1: Detect HTF trend (4H timeframe)
-   * LONG: close > EMA21 > EMA50, fast > mid (uptrend structure)
-   * SHORT: close < EMA21 < EMA50, fast < mid (downtrend structure)
+   * Layer 1: Detect HTF trend (4H timeframe).
+   * v2.3 spec (STRATEGIES.md §5): alignment EMA9 > EMA21 > EMA50 DAN harga di
+   * atas/bawah EMA200.
+   *   LONG : EMA9 > EMA21 > EMA50, price > EMA21, dan price > EMA200.
+   *   SHORT: EMA9 < EMA21 < EMA50, price < EMA21, dan price < EMA200.
+   * @param {number} ema200HTF - EMA200 di HTF (opsional; fail-open bila null).
    * Returns: "LONG" | "SHORT" | null
    */
-  detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF) {
+  detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF, ema200HTF = null) {
     if (!htfClosesLast || !emaFastHTF || !emaMidHTF || !emaSlowHTF) return null;
 
     const close = htfClosesLast;
 
-    if (close > emaMidHTF && emaMidHTF > emaSlowHTF && emaFastHTF > emaMidHTF) {
+    if (
+      close > emaMidHTF && emaMidHTF > emaSlowHTF && emaFastHTF > emaMidHTF &&
+      (ema200HTF == null || close > ema200HTF)   // v2.3: harga di atas EMA200
+    ) {
       return "LONG";
     }
 
-    if (close < emaMidHTF && emaMidHTF < emaSlowHTF && emaFastHTF < emaMidHTF) {
+    if (
+      close < emaMidHTF && emaMidHTF < emaSlowHTF && emaFastHTF < emaMidHTF &&
+      (ema200HTF == null || close < ema200HTF)   // v2.3: harga di bawah EMA200
+    ) {
       return "SHORT";
     }
 
@@ -380,8 +399,10 @@ class TrendMomentumStrategy extends StrategyBase {
     const htfEmaFast = indicators.emaFastHTF?.[idxHTF] ?? emaFastEntry;
     const htfEmaMid  = indicators.emaMidHTF?.[idxHTF]  ?? emaMidEntry;
     const htfEmaSlow = indicators.emaSlowHTF?.[idxHTF] ?? indicators.emaTrend?.[lastIdx] ?? null;
+    // v2.3: EMA200 HTF untuk filter "harga di atas/bawah EMA200" (fail-open bila null).
+    const htfEma200  = indicators.ema200HTF?.[idxHTF] ?? null;
 
-    const htfTrend = this.detectHTFTrend(htfClose, htfEmaFast, htfEmaMid, htfEmaSlow);
+    const htfTrend = this.detectHTFTrend(htfClose, htfEmaFast, htfEmaMid, htfEmaSlow, htfEma200);
 
     // Reset state if HTF trend reversed (FIX #9)
     if (this._trendState.htfTrendDirection && htfTrend && htfTrend !== this._trendState.htfTrendDirection) {
@@ -487,7 +508,7 @@ class TrendMomentumStrategy extends StrategyBase {
 
   /**
    * Calculate SL/TP based on ATR
-   * SL = 1.2×ATR, TP = 2.3×ATR → RR = 1.92 ≈ 1:2.3
+   * v2.3: SL = 1.3×ATR, TP = 2.5×ATR → RR = 2.5/1.3 ≈ 1.92 (1:2.0+)
    */
   calculateRiskConfig(entryPrice, atr, signal) {
     const slDist = atr * this.config.slMultiplier;
@@ -629,7 +650,7 @@ class TrendMomentumStrategy extends StrategyBase {
 
   /**
    * Validate market conditions
-   * Best: ATR 0.5-8%, trend strength > 0.4
+   * Best: ATR 0.5-8%, trend strength >= htfTrendStrengthMin (v2.3: 0.65)
    */
   validateMarketCondition(volatility = 0, trendStrength = 0) {
     const atrPct = volatility;
@@ -642,8 +663,10 @@ class TrendMomentumStrategy extends StrategyBase {
       return { valid: false, reason: `Market too volatile (ATR ${atrPct.toFixed(2)}% > 8%)` };
     }
 
-    if (trendStrength < 0.4) {
-      return { valid: false, reason: `No clear trend (strength ${trendStrength.toFixed(2)} < 0.4)` };
+    // v2.3 spec (STRATEGIES.md §5): butuh tren HTF kuat (htfTrendStrengthMin 0.65).
+    const trendMin = this.config.htfTrendStrengthMin ?? 0.65;
+    if (trendStrength < trendMin) {
+      return { valid: false, reason: `No clear trend (strength ${trendStrength.toFixed(2)} < ${trendMin})` };
     }
 
     return { valid: true, reason: "Market suitable for trend trading" };

@@ -109,4 +109,79 @@ async function getMarketSnapshot(client, symbol, opts = {}) {
   };
 }
 
-module.exports = { getMarketSnapshot };
+/**
+ * Hitung metrik hybrid untuk PairClassifier (v2.3 — PAIR_VOLATILITY.md §"Tambahan
+ * Hybrid Metric"). Dipakai untuk menaikkan/menurunkan tier dasar (market-cap) saat
+ * volatilitas nyata tinggi atau likuiditas tipis:
+ *   - atrPct30d : ATR(14) pada candle HARIAN (lookback ~30 hari) sebagai % harga.
+ *                 PairClassifier menaikkan tier 1 level bila > 4.5%.
+ *   - volume24h : estimasi quote-volume (USD) 24 jam = base-volume × close pada
+ *                 candle harian terakhir.
+ *   - lowLiquidity / minVolume24h : flag likuiditas tipis → paksa VOLATILE.
+ *
+ * Reuse fetchCandlesWithCache + calcATR (sama dgn getMarketSnapshot) — tidak ada
+ * fetch baru selain candle harian (di-cache). Mengembalikan null bila data tak
+ * tersedia → classify() jatuh ke tier dasar (backward-compatible, tanpa bump).
+ *
+ * @param {Object} client - exchange client dengan getCandles
+ * @param {string} symbol
+ * @param {Object} [opts]
+ * @param {number} [opts.atrPeriod=14]
+ * @param {number} [opts.dailyLimit=35]   - jumlah candle harian (≈30 hari + warmup ATR)
+ * @param {number} [opts.minBars=20]      - minimum candle agar metrik dianggap valid
+ * @param {number} [opts.minVolume24h=2_000_000] - threshold likuiditas (USD/24j)
+ * @param {string} [opts.exchange='bitget']
+ * @returns {Promise<{atrPct30d?:number, volume24h:number, minVolume24h:number, lowLiquidity:boolean}|null>}
+ */
+async function getPairTierMetrics(client, symbol, opts = {}) {
+  const {
+    atrPeriod = 14,
+    dailyLimit = 35,
+    minBars = 20,
+    // Threshold likuiditas default: $2.000.000 quote-volume per 24 jam. Di bawah
+    // ini order book umumnya tipis (spread lebar, slippage tinggi) → paksa VOLATILE
+    // sebagai fail-safe. Nilai konservatif & dapat di-tune (lihat catatan rilis).
+    minVolume24h = 2_000_000,
+    exchange = 'bitget',
+  } = opts;
+
+  if (!client?.getCandles) return null;
+
+  let daily;
+  try {
+    daily = await fetchCandlesWithCache(client, {
+      exchange, symbol, interval: '1d', limit: dailyLimit,
+      cacheTtlSeconds: HTF_CACHE_TTL, minBars,
+    });
+  } catch {
+    return null;
+  }
+  if (!daily || daily.length < minBars) return null;
+
+  const closes = daily.map(c => c.close);
+  const highs  = daily.map(c => c.high);
+  const lows   = daily.map(c => c.low);
+  const vols   = daily.map(c => c.volume || 0);
+
+  const lastClose = closes[closes.length - 1];
+  if (!(lastClose > 0)) return null;
+
+  const atr = lastVal(calcATR(highs, lows, closes, atrPeriod));
+  const atrPct30d = atr != null ? (atr / lastClose) * 100 : null;
+
+  // Quote-volume (USD) 24 jam ≈ base-volume × harga close candle harian terakhir.
+  const baseVol24h = vols[vols.length - 1] ?? 0;
+  const volume24h  = baseVol24h * lastClose;
+
+  // Fail-OPEN saat volume tak terbaca (0): jangan paksa VOLATILE tanpa data.
+  const lowLiquidity = minVolume24h > 0 && volume24h > 0 && volume24h < minVolume24h;
+
+  return {
+    atrPct30d: atrPct30d != null ? parseFloat(atrPct30d.toFixed(3)) : undefined,
+    volume24h,
+    minVolume24h,
+    lowLiquidity,
+  };
+}
+
+module.exports = { getMarketSnapshot, getPairTierMetrics };

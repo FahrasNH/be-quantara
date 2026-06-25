@@ -259,7 +259,8 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:      0.015,
+    // v2.3 spec (STRATEGIES.md §4): risk per trade default 1.5% → 1.0%.
+    riskPerTrade:      0.01,
     maxDailyLossPct:   0.05,
     maxTradesPerDay:   10,
     // 5 → 30 menit: nilai 5 di sini diam-diam meng-override balik fix cooldown
@@ -278,11 +279,11 @@ const STRATEGIES = {
     //  - minEdgeFeeMultiple 5 → 6: reward leg AF wajib ≥6× fee roundtrip
     //    (TP ≥0.72% taker / ≥0.24% maker) → buang scalp marginal yang fee-nya
     //    menelan edge.
-    //  - afMinVotes 2: kuorum default; naikkan ke 3 untuk lebih selektif.
+    //  - afMinVotes 3 (v2.3): kuorum unanim untuk entry paling selektif.
     // Gross-positif divalidasi via FEE-06 dry-run sebelum promote ke live.
     maxEntryExtensionATR: 1.2,
     minEdgeFeeMultiple:   6,
-    afMinVotes:           2,
+    afMinVotes:           3,
     afRejectOnDissent:    true,
 
     leverage:      2,
@@ -302,8 +303,7 @@ const STRATEGIES = {
   //   HTF: 1H (EMA trend)
   //   MTF: 15m (MACD + RSI momentum)
   //   Entry: 5m (EMA + RSI + volume confirmation)
-  //   SL: 1.2x ATR | TP: 2.3x ATR (RR 1:1.92)
-  //   Risk: 2% per trade
+  //   v2.3: SL 1.3x ATR | TP 2.5x ATR (RR ~1:1.92) | Risk 1.2% | Max 4 trade/hari
   //   Target: 54-58% WR, 100-180% annual
   // ─────────────────────────────────────────────
   TREND_MOMENTUM: {
@@ -324,8 +324,8 @@ const STRATEGIES = {
     rsiShortMax:   65,
 
     atrPeriod:     14,
-    atrMultiplier: 1.2,        // SL = 1.2x ATR
-    riskReward:    1.92,       // TP = 2.3x ATR
+    atrMultiplier: 1.3,        // v2.3: SL = 1.3x ATR (dari 1.2)
+    riskReward:    1.92,       // TP = 1.92×1.3 ≈ 2.5x ATR (v2.3)
     atrMinMult:    0.5,
     atrMaxMult:    8.0,
 
@@ -337,9 +337,9 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.02,
+    riskPerTrade:     0.012,   // v2.3: 1.2% per trade (dari 2%)
     maxDailyLossPct:  0.06,
-    maxTradesPerDay:  10,
+    maxTradesPerDay:  4,       // v2.3: 4 trade/hari (dari 10)
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
@@ -367,8 +367,7 @@ const STRATEGIES = {
   //   BB: 20 period, 2σ deviation
   //   RSI: 14 period (oversold <25, overbought >75)
   //   Entry: Price touch band + RSI confirmation + 2-bar validate
-  //   SL: 1.0x ATR | TP: 3.0x ATR (RR 1:3.0)
-  //   Risk: 1% per trade (ultra-conservative)
+  //   v2.3: SL 1.4x ATR | TP 3.2x ATR (RR ~1:2.3) | Risk 0.8% per trade
   //   Target: 55-60% WR, 100-150% annual
   // ─────────────────────────────────────────────
   MEAN_REVERSION: {
@@ -389,8 +388,8 @@ const STRATEGIES = {
     rsiShortMax:   85,
 
     atrPeriod:     14,
-    atrMultiplier: 1.0,        // SL = 1.0x ATR (very tight)
-    riskReward:    3.0,        // TP = 3.0x ATR (reach mean)
+    atrMultiplier: 1.4,        // v2.3: SL = 1.4x ATR (dari 1.0)
+    riskReward:    2.29,       // TP = 1.4×2.29 ≈ 3.2x ATR → RR ~1:2.3 (v2.3)
     atrMinMult:    0.5,
     atrMaxMult:    6.0,
 
@@ -401,7 +400,7 @@ const STRATEGIES = {
 
     volSmaMultiplier: 0.8,
 
-    riskPerTrade:     0.01,    // 1% ultra-conservative
+    riskPerTrade:     0.008,   // v2.3: 0.8% ultra-conservative (dari 1%)
     maxDailyLossPct:  0.03,
     maxTradesPerDay:  3,
     cooldownAfterLoss: 15,
@@ -422,8 +421,7 @@ const STRATEGIES = {
   // BREAKOUT_RETEST — Breakout + Retest (VAULT Tier)
   //
   //   Entry TF  : 15m — deteksi level S&R 20-bar, breakout + retest
-  //   SL        : 1.5× ATR | TP: 6× ATR (RR 1:4)
-  //   Risk      : 3% per trade
+  //   v2.3: SL 1.4× ATR | TP 5.5× ATR (RR ~1:4) | Risk 2% | Max 5 trade/hari
   // ─────────────────────────────────────────────
   BREAKOUT_RETEST: {
     name:          "BREAKOUT_RETEST",
@@ -443,8 +441,8 @@ const STRATEGIES = {
     rsiShortMax:   60,
 
     atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5× ATR (di atas noise bar)
-    riskReward:    4,          // TP = 6× ATR → RR 6/1.5 = 1:4
+    atrMultiplier: 1.4,        // v2.3: SL = 1.4× ATR (dari 1.5)
+    riskReward:    3.93,       // TP = 1.4×3.93 ≈ 5.5× ATR → RR ~1:4 (v2.3)
     atrMinMult:    0.2,
     atrMaxMult:    5.0,
 
@@ -455,9 +453,9 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.03,
+    riskPerTrade:     0.02,    // v2.3: 2% per trade (dari 3%)
     maxDailyLossPct:  0.08,
-    maxTradesPerDay:  7,
+    maxTradesPerDay:  5,       // v2.3: 5 trade/hari (dari 7)
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 

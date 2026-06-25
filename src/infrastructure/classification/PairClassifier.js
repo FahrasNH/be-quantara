@@ -3,10 +3,11 @@
  *
  * PAIR-TIER-01 (AC-PAIR-01, AC-PAIR-02)
  *
- * Classifies a trading pair into one of three volatility tiers:
- *   LIQUID   — blue-chip, high-liquidity (BTC, ETH, SOL, BNB, XRP)
- *   STABLE   — mid-cap, moderate-volatility (AVAX, LINK, DOT, MATIC...)
- *   VOLATILE — high-volatility altcoins (WLD, HYPE, SUI, ENA, SEI...)
+ * Classifies a trading pair into one of four volatility tiers (v2.3):
+ *   LIQUID        — ultra blue-chip, high-liquidity (rank ≤ 12)
+ *   STABLE        — mid-cap, moderate-volatility (rank 13–60)
+ *   SEMI_VOLATILE — transisi (rank 61–150) [v2.3 baru]
+ *   VOLATILE      — high-volatility altcoins (rank > 150 / unknown)
  *
  * NOTE: "pair tier" is distinct from the user's subscription tier
  * (FOUNDRY/FORGE/MINT/VAULT). Pair tier affects strategy param overrides
@@ -18,11 +19,23 @@
 const https = require("https");
 
 // ─── Pair Tier Constants ──────────────────────────────────────────────────────
+// v2.3 spec (PAIR_VOLATILITY.md): tier SEMI_VOLATILE baru ditambahkan sebagai
+// transisi halus antara STABLE dan VOLATILE (rank CoinGecko 61–150).
 const PAIR_TIER = Object.freeze({
-  LIQUID:   'LIQUID',
-  STABLE:   'STABLE',
-  VOLATILE: 'VOLATILE',
+  LIQUID:        'LIQUID',
+  STABLE:        'STABLE',
+  SEMI_VOLATILE: 'SEMI_VOLATILE',
+  VOLATILE:      'VOLATILE',
 });
+
+// Urutan tier dari paling aman → paling berisiko. Dipakai untuk "bump up 1 level"
+// pada hybrid metric (ATR% 30-hari tinggi → naikkan tier). v2.3 spec.
+const TIER_ORDER = Object.freeze([
+  PAIR_TIER.LIQUID,
+  PAIR_TIER.STABLE,
+  PAIR_TIER.SEMI_VOLATILE,
+  PAIR_TIER.VOLATILE,
+]);
 
 // ─── Static Classification Tables ────────────────────────────────────────────
 // LIQUID: top-10 by market cap, >$5B daily volume, institutional-grade liquidity.
@@ -43,6 +56,9 @@ const VOLATILE_PAIRS = new Set([
 // Everything else → STABLE (mid-cap, moderate volatility)
 
 // ─── Strategy Recommendations per Pair Tier ───────────────────────────────────
+// v2.3 spec (PAIR_VOLATILITY.md §6): VOLATILE & SEMI_VOLATILE merekomendasikan
+// MEAN_REVERSION + TREND_MOMENTUM (dengan regime filter ketat). ADAPTIVE_FUSION
+// hanya diizinkan di LIQUID/STABLE (diblokir di SEMI_VOLATILE & VOLATILE).
 const STRATEGIES_BY_PAIR_TIER = Object.freeze({
   LIQUID: {
     recommended: ['ADAPTIVE_FUSION', 'TREND_MOMENTUM', 'MEAN_REVERSION'],
@@ -54,47 +70,69 @@ const STRATEGIES_BY_PAIR_TIER = Object.freeze({
     cautious:    ['TREND_MOMENTUM', 'BREAKOUT_RETEST'],
     blocked:     [],
   },
+  SEMI_VOLATILE: {
+    // Transisi: TM diizinkan (dengan regime filter wajib), AF diblokir karena
+    // voting-nya rentan over-trading di pair transisi. BR masih hati-hati.
+    recommended: ['MEAN_REVERSION', 'TREND_MOMENTUM'],
+    cautious:    ['BREAKOUT_RETEST'],
+    blocked:     ['ADAPTIVE_FUSION'],
+  },
   VOLATILE: {
-    // Only MR (with HTF filter) is allowed — it captures mean-reversion after
-    // sharp moves. Trend-following strategies lose badly on thin-book altcoins.
-    recommended: ['MEAN_REVERSION'],
+    // MR + TM (dengan HTF regime filter ketat). AF & BR diblokir di altcoin
+    // thin-book berisiko tinggi. v2.3: TM tidak lagi diblokir total — diizinkan
+    // hanya jika lolos triple-EMA regime filter (regimeFilterRequired=true).
+    recommended: ['MEAN_REVERSION', 'TREND_MOMENTUM'],
     cautious:    [],
-    blocked:     ['ADAPTIVE_FUSION', 'TREND_MOMENTUM', 'BREAKOUT_RETEST'],
+    blocked:     ['ADAPTIVE_FUSION', 'BREAKOUT_RETEST'],
   },
 });
 
 // ─── Param Overrides per Pair Tier ───────────────────────────────────────────
+// v2.3 spec (PAIR_VOLATILITY.md §"Override Parameter Risk (Diperketat)"):
+// risk di-tighten lintas tier. CONFLICT NOTE: votingThresholdOverride VOLATILE —
+// PAIR_VOLATILITY.md menulis 0.78, STRATEGIES.md §4 menulis 0.75. PairClassifier
+// adalah sumber kebenaran runtime, jadi kita pakai nilai TER-KETAT 0.78.
+// regimeFilterRequired = true untuk SEMUA tier kecuali LIQUID.
 const PARAM_OVERRIDES = Object.freeze({
   LIQUID: {
     slMultiplier:            1.0,   // baseline SL width
     positionSizeAdjustment:  1.0,   // no reduction
     maxTradesPerDay:         null,  // unlimited
     dailyLossLimit:          null,  // no override
-    regimeFilterRequired:    false, // optional for MR
-    votingThresholdOverride: null,  // AF uses default (~0.50)
+    regimeFilterRequired:    false, // optional for MR (satu-satunya tier tanpa regime filter)
+    votingThresholdOverride: null,  // AF uses default
   },
   STABLE: {
     slMultiplier:            1.1,   // 10% wider SL (less liquid)
-    positionSizeAdjustment:  0.9,   // 10% smaller position
+    positionSizeAdjustment:  0.95,  // 5% smaller position (v2.3: 0.9 → 0.95)
     maxTradesPerDay:         8,
     dailyLossLimit:          null,
-    regimeFilterRequired:    false,
-    votingThresholdOverride: 0.55,  // AF needs stronger signal consensus
+    regimeFilterRequired:    true,  // v2.3: regime filter wajib untuk semua tier kecuali LIQUID
+    votingThresholdOverride: 0.60,  // v2.3: 0.55 → 0.60 (AF needs stronger consensus)
+  },
+  SEMI_VOLATILE: {
+    slMultiplier:            1.3,   // v2.3 tier transisi baru
+    positionSizeAdjustment:  0.75,
+    maxTradesPerDay:         6,
+    dailyLossLimit:          0.025, // hard 2.5% daily loss cap
+    regimeFilterRequired:    true,
+    votingThresholdOverride: 0.70,  // AF tetap diblokir di tier ini; nilai disiapkan untuk MR/TM gating
   },
   VOLATILE: {
     slMultiplier:            1.5,   // 50% wider SL (volatile moves)
-    positionSizeAdjustment:  0.6,   // 40% smaller (risk management)
-    maxTradesPerDay:         5,
+    positionSizeAdjustment:  0.55,  // v2.3: 0.6 → 0.55 (45% smaller, risk management)
+    maxTradesPerDay:         4,     // v2.3: 5 → 4
     dailyLossLimit:          0.03,  // hard 3% daily loss cap
     regimeFilterRequired:    true,  // MUST pass HTF regime check
-    votingThresholdOverride: 0.65,  // AF requires very strong consensus
+    votingThresholdOverride: 0.78,  // v2.3 (stricter of 0.78 vs 0.75) — single dissent blocks entry
   },
 });
 
 const RISK_LEVEL = Object.freeze({
-  LIQUID:   'LOW',
-  STABLE:   'MEDIUM',
-  VOLATILE: 'HIGH',
+  LIQUID:        'LOW',
+  STABLE:        'MEDIUM',
+  SEMI_VOLATILE: 'MEDIUM-HIGH',
+  VOLATILE:      'HIGH',
 });
 
 // ─── Stablecoins to skip during dynamic classification ────────────────────────
@@ -106,11 +144,13 @@ class PairClassifier {
     // Dynamic sets populated from CoinGecko — empty means "use static fallback".
     // Stored as BASE tickers (BTC, ETH, …), not BTCUSDT, so we can match exchange
     // symbols that carry leverage-token prefixes (1000BONK, 1000000BOB → BONK, BOB).
-    this._dynamicLiquid = new Set();  // market_cap_rank ≤ 15
-    this._dynamicStable = new Set();  // market_cap_rank 16–100
+    // v2.3 spec: ambang rank lebih granular (≤12 / 13–60 / 61–150 / >150).
+    this._dynamicLiquid       = new Set();  // market_cap_rank ≤ 12
+    this._dynamicStable       = new Set();  // market_cap_rank 13–60
+    this._dynamicSemiVolatile = new Set();  // market_cap_rank 61–150
     this._dynamicLastAt = null;
-    // 4-hour refresh interval (don't hammer CoinGecko free tier: ~6 calls/day)
-    this._CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+    // v2.3 spec: refresh tiap 2 jam (dari 4 jam) — masih hemat CoinGecko free tier (~12 calls/day).
+    this._CACHE_TTL_MS = 2 * 60 * 60 * 1000;
   }
 
   /**
@@ -127,9 +167,11 @@ class PairClassifier {
 
   /**
    * Fetch coin market data from CoinGecko and update dynamic tier sets.
-   * Rank ≤ 15 (non-stablecoin) → LIQUID
-   * Rank 16–100  → STABLE
-   * Rank > 100   → VOLATILE
+   * v2.3 spec (PAIR_VOLATILITY.md §3) — ambang rank lebih granular:
+   *   Rank ≤ 12 (non-stablecoin) → LIQUID
+   *   Rank 13–60   → STABLE
+   *   Rank 61–150  → SEMI_VOLATILE
+   *   Rank > 150 atau tidak ada → VOLATILE (fail-safe)
    * Falls back to static tables silently on error.
    */
   async refreshDynamic() {
@@ -146,20 +188,24 @@ class PairClassifier {
               return resolve(false);
             }
             const coins = JSON.parse(body);
-            const newLiquid = new Set();
-            const newStable = new Set();
+            const newLiquid       = new Set();
+            const newStable       = new Set();
+            const newSemiVolatile = new Set();
             for (const coin of coins) {
               const sym = (coin.symbol || "").toUpperCase();
               if (!sym || STABLECOINS.has(sym)) continue;
               const rank = coin.market_cap_rank ?? 9999;
-              if (rank <= 15)       newLiquid.add(sym);   // blue-chip
-              else if (rank <= 100) newStable.add(sym);   // mid-cap
-              // rank > 100 (and the whole long tail not returned) → VOLATILE by default
+              // v2.3 spec: ≤12 LIQUID · 13–60 STABLE · 61–150 SEMI_VOLATILE · >150 VOLATILE
+              if (rank <= 12)        newLiquid.add(sym);        // ultra blue-chip
+              else if (rank <= 60)   newStable.add(sym);        // mid-cap stabil
+              else if (rank <= 150)  newSemiVolatile.add(sym);  // transisi
+              // rank > 150 (and the whole long tail not returned) → VOLATILE by default
             }
-            this._dynamicLiquid = newLiquid;
-            this._dynamicStable = newStable;
+            this._dynamicLiquid       = newLiquid;
+            this._dynamicStable       = newStable;
+            this._dynamicSemiVolatile = newSemiVolatile;
             this._dynamicLastAt = Date.now();
-            console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID, ${newStable.size} STABLE (rank ≤100); all other pairs → VOLATILE (CoinGecko market cap)`);
+            console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID (≤12), ${newStable.size} STABLE (13–60), ${newSemiVolatile.size} SEMI_VOLATILE (61–150); all other pairs → VOLATILE (CoinGecko market cap)`);
             resolve(true);
           } catch (e) {
             console.warn("[PairClassifier] CoinGecko parse error:", e.message, "— using static tables");
@@ -180,24 +226,87 @@ class PairClassifier {
   }
 
   /**
-   * Classify a symbol into LIQUID | STABLE | VOLATILE.
-   * Uses dynamic CoinGecko data if available, otherwise static fallback.
-   * Falls back to STABLE for unknown symbols (safe default).
-   * @param {string} symbol  e.g. "BTCUSDT", "WLDUSDT"
-   * @returns {'LIQUID' | 'STABLE' | 'VOLATILE'}
+   * Bump a tier up by one level toward VOLATILE (e.g. STABLE → SEMI_VOLATILE,
+   * SEMI_VOLATILE → VOLATILE). v2.3 hybrid-metric helper.
+   * @param {string} tier
+   * @returns {string} tier satu level lebih berisiko (atau VOLATILE bila sudah puncak)
    */
-  determineTier(symbol) {
+  _bumpTierUp(tier) {
+    const idx = TIER_ORDER.indexOf(tier);
+    if (idx < 0) return PAIR_TIER.VOLATILE;
+    return TIER_ORDER[Math.min(idx + 1, TIER_ORDER.length - 1)];
+  }
+
+  /**
+   * Apply v2.3 hybrid-metric adjustments on top of the base (market-cap) tier.
+   *
+   * INTEGRATION POINT (PAIR_VOLATILITY.md §"Tambahan Hybrid Metric"):
+   *   - ATR% 30-hari > 4.5%  → naikkan tier 1 level (STABLE → SEMI_VOLATILE → VOLATILE).
+   *   - Liquidity score (24h volume) di bawah threshold → paksa VOLATILE.
+   *
+   * Data ATR%/volume TIDAK di-fetch di modul ini (PairClassifier hanya tahu
+   * market-cap rank dari CoinGecko). Mekanisme ini adalah HOOK terstruktur &
+   * testable: caller (BotEngine / MarketSnapshotService yang sudah punya OHLCV)
+   * boleh menyuplai metrics; bila tidak ada, tier dasar dikembalikan apa adanya.
+   *
+   * @param {string} baseTier
+   * @param {Object} [metrics]
+   * @param {number} [metrics.atrPct30d]   - ATR% historis 30-hari (mis. 5.2 = 5.2%)
+   * @param {boolean} [metrics.lowLiquidity] - true bila 24h volume < threshold
+   * @param {number} [metrics.volume24h]    - opsional; dibandingkan minVolume24h
+   * @param {number} [metrics.minVolume24h] - threshold likuiditas (default 0 = nonaktif)
+   * @returns {string} tier setelah penyesuaian hybrid
+   */
+  applyHybridMetrics(baseTier, metrics = null) {
+    if (!metrics) return baseTier;
+    let tier = baseTier;
+
+    // ATR% 30-hari > 4.5% → naikkan tier 1 level (volatilitas riil tinggi).
+    if (typeof metrics.atrPct30d === 'number' && metrics.atrPct30d > 4.5) {
+      tier = this._bumpTierUp(tier);
+    }
+
+    // Likuiditas rendah → paksa VOLATILE (fail-safe untuk thin order book).
+    const lowLiq = metrics.lowLiquidity === true
+      || (typeof metrics.volume24h === 'number'
+          && typeof metrics.minVolume24h === 'number'
+          && metrics.minVolume24h > 0
+          && metrics.volume24h < metrics.minVolume24h);
+    if (lowLiq) tier = PAIR_TIER.VOLATILE;
+
+    return tier;
+  }
+
+  /**
+   * Classify a symbol into LIQUID | STABLE | SEMI_VOLATILE | VOLATILE.
+   * Uses dynamic CoinGecko data if available, otherwise static fallback.
+   * Optional `metrics` apply v2.3 hybrid adjustments (ATR%/liquidity).
+   * @param {string} symbol  e.g. "BTCUSDT", "WLDUSDT"
+   * @param {Object} [metrics] - lihat applyHybridMetrics()
+   * @returns {'LIQUID' | 'STABLE' | 'SEMI_VOLATILE' | 'VOLATILE'}
+   */
+  determineTier(symbol, metrics = null) {
     const sym = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const base = this._baseTier(sym);
+    return this.applyHybridMetrics(base, metrics);
+  }
+
+  /**
+   * Base tier from market-cap data only (no hybrid metric).
+   * @param {string} sym - already normalised (uppercase, alnum)
+   * @returns {string}
+   */
+  _baseTier(sym) {
     // Dynamic path — authoritative CoinGecko market-cap data is loaded.
-    // Only the top-100 are LIQUID (≤15) or STABLE (16–100); EVERYTHING else —
-    // the long tail of small/new alts an exchange lists (0G, fresh memecoins,
-    // anything off CoinGecko's top-100) — is treated as a high-risk microcap →
-    // VOLATILE. This is the safe default the old code got backwards (it defaulted
-    // unknowns to STABLE, so microcaps wrongly got loose risk + all strategies).
-    if (this._dynamicLiquid.size > 0 || this._dynamicStable.size > 0) {
+    // v2.3: rank ≤12 LIQUID · 13–60 STABLE · 61–150 SEMI_VOLATILE · everything
+    // else (the long tail of small/new alts off CoinGecko's top-150) → VOLATILE.
+    // This is the safe default the old code got backwards (it defaulted unknowns
+    // to STABLE, so microcaps wrongly got loose risk + all strategies).
+    if (this._dynamicLiquid.size > 0 || this._dynamicStable.size > 0 || this._dynamicSemiVolatile.size > 0) {
       const base = this._baseOf(sym);
-      if (this._dynamicLiquid.has(base)) return PAIR_TIER.LIQUID;
-      if (this._dynamicStable.has(base)) return PAIR_TIER.STABLE;
+      if (this._dynamicLiquid.has(base))       return PAIR_TIER.LIQUID;
+      if (this._dynamicStable.has(base))       return PAIR_TIER.STABLE;
+      if (this._dynamicSemiVolatile.has(base)) return PAIR_TIER.SEMI_VOLATILE;
       return PAIR_TIER.VOLATILE;
     }
     // Static fallback (CoinGecko unreachable) — curated lists, conservative STABLE default.
@@ -236,8 +345,8 @@ class PairClassifier {
    *   paramOverrides: Object
    * }}
    */
-  classify(symbol) {
-    const tier = this.determineTier(symbol);
+  classify(symbol, metrics = null) {
+    const tier = this.determineTier(symbol, metrics);
     const strategies = this.getStrategiesForTier(tier);
     const paramOverrides = this.getParamOverridesForTier(tier);
     return {
@@ -256,9 +365,9 @@ class PairClassifier {
    * @param {string} strategyKey
    * @returns {boolean}
    */
-  isStrategyBlocked(symbol, strategyKey) {
-    const tier = this.determineTier(symbol);
-    return STRATEGIES_BY_PAIR_TIER[tier].blocked.includes(strategyKey);
+  isStrategyBlocked(symbol, strategyKey, metrics = null) {
+    const tier = this.determineTier(symbol, metrics);
+    return this.getStrategiesForTier(tier).blocked.includes(strategyKey);
   }
 }
 
@@ -269,6 +378,7 @@ module.exports = {
   PairClassifier,
   pairClassifier,
   PAIR_TIER,
+  TIER_ORDER,
   LIQUID_PAIRS,
   VOLATILE_PAIRS,
   STRATEGIES_BY_PAIR_TIER,

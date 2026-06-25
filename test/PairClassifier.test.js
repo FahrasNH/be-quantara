@@ -93,24 +93,27 @@ describe('PairClassifier', () => {
       assert.equal(r.paramOverrides.votingThresholdOverride, null);
     });
 
-    it('WLDUSDT returns correct VOLATILE classification', () => {
+    it('WLDUSDT returns correct VOLATILE classification (v2.3)', () => {
       const r = pairClassifier.classify('WLDUSDT');
       assert.equal(r.tier, 'VOLATILE');
       assert.equal(r.riskLevel, 'HIGH');
+      // v2.3: VOLATILE merekomendasikan MEAN_REVERSION + TREND_MOMENTUM (regime filter ketat)
       assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
-      assert.equal(r.recommendedStrategies.length, 1);
+      assert.ok(r.recommendedStrategies.includes('TREND_MOMENTUM'));
+      assert.equal(r.recommendedStrategies.length, 2);
+      // v2.3: AF & BR diblokir; TM TIDAK lagi diblokir (diizinkan dengan regime filter)
       assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
-      assert.ok(r.blockedStrategies.includes('TREND_MOMENTUM'));
       assert.ok(r.blockedStrategies.includes('BREAKOUT_RETEST'));
+      assert.ok(!r.blockedStrategies.includes('TREND_MOMENTUM'));
       assert.equal(r.paramOverrides.slMultiplier, 1.5);
-      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.6);
-      assert.equal(r.paramOverrides.maxTradesPerDay, 5);
+      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.55);
+      assert.equal(r.paramOverrides.maxTradesPerDay, 4);
       assert.equal(r.paramOverrides.dailyLossLimit, 0.03);
       assert.equal(r.paramOverrides.regimeFilterRequired, true);
-      assert.equal(r.paramOverrides.votingThresholdOverride, 0.65);
+      assert.equal(r.paramOverrides.votingThresholdOverride, 0.78);
     });
 
-    it('AVAXUSDT returns correct STABLE classification', () => {
+    it('AVAXUSDT returns correct STABLE classification (v2.3)', () => {
       const r = pairClassifier.classify('AVAXUSDT');
       assert.equal(r.tier, 'STABLE');
       assert.equal(r.riskLevel, 'MEDIUM');
@@ -118,11 +121,12 @@ describe('PairClassifier', () => {
       assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
       assert.deepEqual(r.blockedStrategies, []);
       assert.equal(r.paramOverrides.slMultiplier, 1.1);
-      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.9);
+      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.95);
       assert.equal(r.paramOverrides.maxTradesPerDay, 8);
       assert.equal(r.paramOverrides.dailyLossLimit, null);
-      assert.equal(r.paramOverrides.regimeFilterRequired, false);
-      assert.equal(r.paramOverrides.votingThresholdOverride, 0.55);
+      // v2.3: regime filter wajib untuk semua tier kecuali LIQUID
+      assert.equal(r.paramOverrides.regimeFilterRequired, true);
+      assert.equal(r.paramOverrides.votingThresholdOverride, 0.60);
     });
 
     it('HYPEUSDT returns VOLATILE classification', () => {
@@ -151,8 +155,8 @@ describe('PairClassifier', () => {
     it('ADAPTIVE_FUSION IS blocked on WLDUSDT', () => {
       assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'ADAPTIVE_FUSION'), true);
     });
-    it('TREND_MOMENTUM IS blocked on HYPEUSDT', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('HYPEUSDT', 'TREND_MOMENTUM'), true);
+    it('TREND_MOMENTUM NOT blocked on HYPEUSDT (v2.3: allowed with regime filter)', () => {
+      assert.equal(pairClassifier.isStrategyBlocked('HYPEUSDT', 'TREND_MOMENTUM'), false);
     });
     it('BREAKOUT_RETEST IS blocked on SUIUSDT', () => {
       assert.equal(pairClassifier.isStrategyBlocked('SUIUSDT', 'BREAKOUT_RETEST'), true);
@@ -176,14 +180,86 @@ describe('PairClassifier', () => {
       assert.equal(PARAM_OVERRIDES.LIQUID.dailyLossLimit, null);
       assert.equal(PARAM_OVERRIDES.LIQUID.regimeFilterRequired, false);
     });
-    it('STABLE has slMultiplier 1.1 and votingThresholdOverride 0.55', () => {
+    it('STABLE has slMultiplier 1.1 and votingThresholdOverride 0.60 (v2.3)', () => {
       assert.equal(PARAM_OVERRIDES.STABLE.slMultiplier, 1.1);
-      assert.equal(PARAM_OVERRIDES.STABLE.votingThresholdOverride, 0.55);
+      assert.equal(PARAM_OVERRIDES.STABLE.votingThresholdOverride, 0.60);
+    });
+    it('SEMI_VOLATILE (v2.3) has slMultiplier 1.3 and dailyLossLimit 0.025', () => {
+      assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.slMultiplier, 1.3);
+      assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.positionSizeAdjustment, 0.75);
+      assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.maxTradesPerDay, 6);
+      assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.dailyLossLimit, 0.025);
+      assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.regimeFilterRequired, true);
+      assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.votingThresholdOverride, 0.70);
     });
     it('VOLATILE has slMultiplier 1.5 and regimeFilterRequired true', () => {
       assert.equal(PARAM_OVERRIDES.VOLATILE.slMultiplier, 1.5);
       assert.equal(PARAM_OVERRIDES.VOLATILE.regimeFilterRequired, true);
       assert.equal(PARAM_OVERRIDES.VOLATILE.dailyLossLimit, 0.03);
+      assert.equal(PARAM_OVERRIDES.VOLATILE.votingThresholdOverride, 0.78);
+    });
+  });
+
+  // ── SEMI_VOLATILE dynamic tier (v2.3) ─────────────────────────────────────
+
+  describe('dynamic SEMI_VOLATILE tier (v2.3)', () => {
+    it('rank 61–150 base ticker classifies as SEMI_VOLATILE', () => {
+      const pc = new PairClassifier();
+      pc._dynamicSemiVolatile = new Set(['FOO']);
+      assert.equal(pc.determineTier('FOOUSDT'), PAIR_TIER.SEMI_VOLATILE);
+      const r = pc.classify('FOOUSDT');
+      assert.equal(r.tier, 'SEMI_VOLATILE');
+      assert.equal(r.riskLevel, 'MEDIUM-HIGH');
+      assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
+    });
+
+    it('hybrid metric: ATR% 30d > 4.5% bumps STABLE → SEMI_VOLATILE', () => {
+      const pc = new PairClassifier();
+      pc._dynamicStable = new Set(['BAR']);
+      assert.equal(pc.determineTier('BARUSDT'), PAIR_TIER.STABLE);
+      assert.equal(pc.determineTier('BARUSDT', { atrPct30d: 5.0 }), PAIR_TIER.SEMI_VOLATILE);
+    });
+
+    it('hybrid metric: low liquidity forces VOLATILE', () => {
+      const pc = new PairClassifier();
+      pc._dynamicLiquid = new Set(['BAZ']);
+      assert.equal(pc.determineTier('BAZUSDT'), PAIR_TIER.LIQUID);
+      assert.equal(pc.determineTier('BAZUSDT', { lowLiquidity: true }), PAIR_TIER.VOLATILE);
+    });
+
+    it('hybrid metric: volume24h < minVolume24h forces VOLATILE (wired path)', () => {
+      const pc = new PairClassifier();
+      pc._dynamicLiquid = new Set(['QUX']);
+      // Likuiditas tipis: volume24h < threshold → paksa VOLATILE meski base LIQUID.
+      assert.equal(
+        pc.determineTier('QUXUSDT', { volume24h: 500_000, minVolume24h: 2_000_000 }),
+        PAIR_TIER.VOLATILE,
+      );
+      // Likuiditas cukup → tetap di tier dasar.
+      assert.equal(
+        pc.determineTier('QUXUSDT', { volume24h: 50_000_000, minVolume24h: 2_000_000 }),
+        PAIR_TIER.LIQUID,
+      );
+    });
+
+    it('hybrid metric: full classify() honors ATR bump + propagates overrides', () => {
+      const pc = new PairClassifier();
+      pc._dynamicStable = new Set(['QZ']);
+      const base = pc.classify('QZUSDT');
+      assert.equal(base.tier, PAIR_TIER.STABLE);
+      const bumped = pc.classify('QZUSDT', { atrPct30d: 6.0 });
+      assert.equal(bumped.tier, PAIR_TIER.SEMI_VOLATILE);
+      // Override paramnya ikut tier hasil bump (SL diperlebar, AF diblokir).
+      assert.ok(bumped.paramOverrides.slMultiplier > base.paramOverrides.slMultiplier);
+      assert.ok(bumped.blockedStrategies.includes('ADAPTIVE_FUSION'));
+    });
+
+    it('hybrid metric: backward-compatible — no metrics & ATR ≤ 4.5% = no bump', () => {
+      const pc = new PairClassifier();
+      pc._dynamicStable = new Set(['NB']);
+      assert.equal(pc.determineTier('NBUSDT'), PAIR_TIER.STABLE);          // no metrics
+      assert.equal(pc.determineTier('NBUSDT', null), PAIR_TIER.STABLE);     // explicit null
+      assert.equal(pc.determineTier('NBUSDT', { atrPct30d: 4.5 }), PAIR_TIER.STABLE); // boundary, not >
     });
   });
 

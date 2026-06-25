@@ -255,7 +255,11 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     delete botsMap[key];
   }
   // PAIR-TIER override juga untuk engine tunggal (legacy/non-multi).
-  const _singlePair = pairClassifier.classify(symbol);
+  // v2.3: pairMetrics (ATR%30d + likuiditas 24j) opsional dari caller (bot-start)
+  // → bump tier dinamis. Tanpa metrics → klasifikasi tier dasar (backward-compatible).
+  // Diekstrak agar tidak ikut ter-spread ke config BotEngine.
+  const { pairMetrics: _pairMetrics, ...engineOverrides } = configOverrides;
+  const _singlePair = pairClassifier.classify(symbol, _pairMetrics || null);
   const bot = new BotEngine({
     symbol,
     botKey:      key,
@@ -263,7 +267,10 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     pairTier:                   _singlePair.tier,
     pairSlMultiplier:           _singlePair.paramOverrides.slMultiplier,
     pairPositionSizeAdjustment: _singlePair.paramOverrides.positionSizeAdjustment,
-    ...configOverrides,
+    // v2.3: teruskan seluruh override tier (votingThresholdOverride,
+    // regimeFilterRequired, dll) ke engine agar gating tier benar-benar aktif.
+    tierOverrides:              { tier: _singlePair.tier, ..._singlePair.paramOverrides },
+    ...engineOverrides,
     // SELALU set userId (defense-in-depth): tanpa ini, openSession membuat
     // bot_sessions.user_id NULL → getTrades (INNER JOIN s.user_id) menyembunyikan
     // trade dari History. Bug ini muncul di jalur auto-resume yang lupa meneruskan
@@ -335,12 +342,17 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   const accountCoordinator = getCoordinator(userId);
 
   // Klasifikasi tier pair → ambil override SL & ukuran posisi (lihat engineConfig).
-  const _pairClass = pairClassifier.classify(symbol);
+  // v2.3: opts.pairMetrics (ATR%30d + likuiditas 24j) opsional dari caller (bot-start)
+  // → bump tier dinamis. Tanpa metrics → klasifikasi tier dasar (backward-compatible).
+  const _pairClass = pairClassifier.classify(symbol, opts.pairMetrics || null);
   const _pairOverrides = {
     tier:                   _pairClass.tier,
     slMultiplier:           _pairClass.paramOverrides.slMultiplier,
     positionSizeAdjustment: _pairClass.paramOverrides.positionSizeAdjustment,
   };
+  // v2.3: override tier lengkap untuk gating runtime (voting threshold, regime
+  // filter, SL komponen-C VOLATILE) di tiap AdaptiveStrategyEngine.
+  const _tierOverrides = { tier: _pairClass.tier, ..._pairClass.paramOverrides };
 
   // SATU ccxt client dipakai bersama oleh ke-4 engine pada koin/akun ini. TANPA ini,
   // tiap engine (4 per koin) memuat cache market exchange-nya sendiri — Binance ~2000
@@ -412,6 +424,7 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       pairTier:                   _pairOverrides.tier,
       pairSlMultiplier:           _pairOverrides.slMultiplier,
       pairPositionSizeAdjustment: _pairOverrides.positionSizeAdjustment,
+      tierOverrides:              _tierOverrides,
     },
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
@@ -835,9 +848,9 @@ db.init()
     // Purge soft-deleted exchange keys older than 7 days (every 6h)
     const { scheduleKeyPurge } = require("../services/exchangeKeyPurge");
     scheduleKeyPurge();
-    // Dynamic pair classification dari CoinGecko (refresh tiap 4 jam, non-blocking)
+    // Dynamic pair classification dari CoinGecko (v2.3: refresh tiap 2 jam, non-blocking)
     pairClassifier.refreshDynamic().catch(() => {});
-    setInterval(() => pairClassifier.refreshDynamic().catch(() => {}), 4 * 60 * 60 * 1000);
+    setInterval(() => pairClassifier.refreshDynamic().catch(() => {}), 2 * 60 * 60 * 1000);
     // Pulihkan bot yang sedang berjalan (async, tidak memblok startup)
     resumeRunningBots();
   })

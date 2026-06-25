@@ -5,8 +5,8 @@
  * - Identify price extremes via Bollinger Bands
  * - Confirm with RSI overbought/oversold (>75 or <25)
  * - Enter on mean reversion signal (high probability)
- * - Ultra-tight stops (1.0×ATR), long targets (3.0×ATR)
- * - Very selective: 40 trades/month, 55-60% WR, 1:3.0 RR
+ * - v2.3: tight stops (1.4×ATR), long targets (3.2×ATR) → RR ~1:2.3
+ * - Very selective: 40 trades/month, 55-60% WR
  * - Best for: VAULT tier (ultra-conservative, smooth equity)
  *
  * Mean Reversion Principle:
@@ -48,10 +48,10 @@ class MeanReversionStrategy extends StrategyBase {
       volSMAPeriod: 20,
       minVolRatio: 0.8,       // >= 0.8x avg volume (not dead)
 
-      // Risk management (VAULT tier - ultra-conservative)
-      riskPerTrade: 0.01,     // 1% per trade ONLY
-      slMultiplier: 1.5,      // SL = 1.5x ATR (wider — prevent stop-hunt, per dry-run 2026-06-09)
-      tpMultiplier: 3.0,      // TP = 3.0x ATR (reach mean) → effective RR = 2.0 with 1.5x SL
+      // Risk management (VAULT tier - ultra-conservative) — v2.3 spec (STRATEGIES.md §3)
+      riskPerTrade: 0.008,    // v2.3: 0.8% per trade (dari 1%)
+      slMultiplier: 1.4,      // v2.3: SL = 1.4x ATR (dari 1.5)
+      tpMultiplier: 3.2,      // v2.3: TP = 3.2x ATR → RR = 3.2/1.4 ≈ 1:2.3
       leverage: 1.0,          // NO leverage
 
       // Position management
@@ -329,7 +329,7 @@ class MeanReversionStrategy extends StrategyBase {
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
       takeProfit: parseFloat(takeProfit.toFixed(8)),
-      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // 2.0 (tp 3.0x / sl 1.5x)
+      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // v2.3: ~2.29 (tp 3.2x / sl 1.4x)
       slDistance: slDist,
       tpDistance: tpDist,
       slMultiplier: this.config.slMultiplier,

@@ -231,6 +231,10 @@ class AdaptiveStrategyEngine extends BotEngine {
         maxEntryExtensionATR: this.config.maxEntryExtensionATR,
         afRejectOnDissent:    this.config.afRejectOnDissent,
         afMinVotes:           this.config.afMinVotes,
+        // v2.3: tier pair + override agar voting threshold, regime filter, dan
+        // SL komponen-C (VOLATILE/SEMI_VOLATILE) aktif di multi-strategy engine.
+        pairTier:             this.config.pairTier,
+        tierOverrides:        this.config.tierOverrides,
       });
 
       if (!signal) return;
