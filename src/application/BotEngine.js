@@ -6,6 +6,8 @@
 
 const EventEmitter = require("events");
 const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exchange");
+const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../infrastructure/exchange/candleFetch");
+const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../config/env");
 const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
@@ -730,9 +732,8 @@ class BotEngine extends EventEmitter {
       return;
     }
 
-    // Jitter: sebarkan start-time interval tiap engine secara acak (0–30s) agar
-    // 300+ engines yang start hampir bersamaan tidak semua tick di t=N, N+60s, N+120s…
-    // Tanpa ini, "Start All" → spike event-loop tiap 60s + exchange 429 berulang.
+    // Jitter + stagger antar strategi (tickStaggerMs) sebarkan start-time interval
+    // agar multi-strategy pada koin sama tidak burst getCandles bersamaan.
     //
     // PENTING (anti-zombie): pemasangan setInterval DITUNDA via setTimeout yang
     // handle-nya disimpan (this._startTimer), BUKAN `await new Promise(setTimeout)`.
@@ -741,7 +742,8 @@ class BotEngine extends EventEmitter {
     // stop → ticker zombie jalan selamanya walau bot sudah di-stop. Pola deferred
     // setTimeout membuat stop() bisa membatalkan pemasangan lewat clearTimeout, dan
     // guard di dalam timer mencegah pemasangan bila stop sudah terjadi.
-    const jitterMs = Math.floor(Math.random() * Math.min(this.config.checkInterval, 30_000));
+    const baseJitter = Math.floor(Math.random() * Math.min(this.config.checkInterval, 15_000));
+    const jitterMs = (this.config.tickStaggerMs || 0) + baseJitter;
     this._startTimer = setTimeout(() => {
       this._startTimer = null;
       // Bot sudah di-stop selama warm-up → jangan pasang interval (cegah zombie ticker)
@@ -1072,16 +1074,17 @@ class BotEngine extends EventEmitter {
       let htfCandlesCache = null;  // disimpan untuk sideways breakout detection
       if (this.config.higherTf) {
         try {
-          const htfCandles = await this.client.getCandles(
-            this.config.symbol, this.config.higherTf,
-            Math.max(this.config.htfEmaSlow + 10, 50)
-          );
-          htfCandlesCache = htfCandles;
-          this.state.htfTrend = detectHTFTrend(htfCandles, {
-            htfEmaFast:           this.config.htfEmaFast,
-            htfEmaSlow:           this.config.htfEmaSlow,
-            sidewaysThresholdPct: this.config.sidewaysThresholdPct,
-          });
+          const htfCandles = await this._fetchHtfCandles();
+          if (htfCandles?.length) {
+            htfCandlesCache = htfCandles;
+            this.state.htfTrend = detectHTFTrend(htfCandles, {
+              htfEmaFast:           this.config.htfEmaFast,
+              htfEmaSlow:           this.config.htfEmaSlow,
+              sidewaysThresholdPct: this.config.sidewaysThresholdPct,
+            });
+          } else {
+            this.state.htfTrend = "UNKNOWN";
+          }
         } catch {
           // Tidak bisa fetch HTF → UNKNOWN. Entry baru DIBLOK (fail-closed) di
           // STEP 3 — tanpa data regime, jangan ambil posisi baru. Posisi terbuka
@@ -1208,7 +1211,7 @@ class BotEngine extends EventEmitter {
             let mrSignal = signal;
             if (signal && (this.config.strategyKey === "MEAN_REVERSION" || this.config.signalType === "MEAN_REVERSION")) {
               try {
-                const htf = htfCandlesCache || await this.client.getCandles(this.config.symbol, "1h", 60);
+                const htf = htfCandlesCache || await this._fetchHtfCandles();
                 if (htf && htf.length >= 30) {
                   const hCloses = htf.map(c => c.close);
                   const hHighs  = htf.map(c => c.high);
@@ -1411,43 +1414,26 @@ class BotEngine extends EventEmitter {
   // FETCH CANDLES — dengan cache DB
   // ─────────────────────────────────────────────
   async _fetchCandles() {
-    // OHLCV adalah endpoint publik — tidak perlu API key.
-    // dryRun hanya mencegah order placement, bukan pengambilan harga nyata.
-    // Selalu coba fetch data real; simulasi hanya jika exchange benar-benar tidak bisa dijangkau.
+    const minBars = this.config.emaSlow + 20;
+    const timeframe = this.config.interval.toLowerCase();
 
-    // 1. Coba cache dulu (valid 15 menit)
     try {
-      const cached = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 900);
-      if (cached && cached.length >= this.config.emaSlow + 20) {
-        return cached;
-      }
-    } catch { /* cache error tidak masalah */ }
-
-    // 2. Fetch dari exchange API (public endpoint — tidak butuh API key)
-    try {
-      const timeframe = this.config.interval.toLowerCase();
-      const candles   = await this.client.getCandles(this.config.symbol, timeframe, 200);
-
-      // Simpan ke cache
-      try {
-        db.cacheCandles(this.config.exchange, this.config.symbol, this.config.interval, candles);
-      } catch { /* cache write error tidak masalah */ }
-
-      return candles;
+      return await fetchCandlesWithCache(this.client, {
+        exchange:         this.config.exchange,
+        symbol:           this.config.symbol,
+        interval:         timeframe,
+        limit:            200,
+        cacheTtlSeconds:  LTF_CACHE_TTL,
+        minBars,
+      });
     } catch (err) {
-      this._log("warn", `Gagal ambil candles dari exchange: ${err.message}`);
-
-      // 2b. Fallback cache stale (hingga 24 jam) saat jaringan ke Bitget bermasalah
-      try {
-        const stale = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 86_400);
-        if (stale && stale.length >= this.config.emaSlow + 20) {
-          this._log("info", `Pakai candle cache (${stale.length} bar) — exchange tidak terjangkau`);
-          return stale;
-        }
-      } catch { /* abaikan */ }
+      this._log(
+        isRateLimitError(err) ? "info" : "warn",
+        `Gagal ambil candles dari exchange: ${err.message}`
+      );
     }
 
-    // 3. Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
+    // Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
     //    sehingga ATR / SL / TP simulasi tetap proporsional dengan harga nyata.
     let seedPrice = null;
     try {
@@ -1459,6 +1445,25 @@ class BotEngine extends EventEmitter {
     } catch { /* ticker juga gagal — gunakan harga hardcode sebagai last resort */ }
 
     return this._generateDryRunCandles(seedPrice);
+  }
+
+  /** HTF candles dengan cache DB (10 menit) — hindari fetch tiap tick / tiap strategi. */
+  async _fetchHtfCandles() {
+    if (!this.config.higherTf) return null;
+    const limit = Math.max(this.config.htfEmaSlow + 10, 50);
+    const minBars = Math.max(this.config.htfEmaSlow + 5, 30);
+    try {
+      return await fetchCandlesWithCache(this.client, {
+        exchange:        this.config.exchange,
+        symbol:          this.config.symbol,
+        interval:        this.config.higherTf,
+        limit,
+        cacheTtlSeconds: HTF_CACHE_TTL,
+        minBars,
+      });
+    } catch {
+      return null;
+    }
   }
 
   // seedPrice: harga real dari ticker (null = tidak tersedia, pakai hardcode per simbol)

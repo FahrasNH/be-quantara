@@ -257,6 +257,8 @@ class MultiStrategyCoordinator extends EventEmitter {
         userId: this.userId,
         symbol: this.symbol,
         strategyKey,
+        // Stagger tick antar strategi pada koin sama → kurangi burst getCandles HTF/LTF.
+        tickStaggerMs: i * 15_000,
         capital: this.capitalPerStrategy,
         dryRun: this.dryRun,
         // botKey unik per strategi → AccountCoordinator melacak per-strategi,

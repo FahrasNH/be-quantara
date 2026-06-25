@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ccxt = require("ccxt");
+const { withExchangeGate } = require("../infrastructure/exchange/exchangeRateGate");
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 
 const prisma = require("../infrastructure/db/prismaClient");
@@ -261,7 +262,9 @@ async function getCandlesForUser(userId, symbol, timeframe = "1d", limit = 500) 
     let since = Date.now() - total * msPerBar;
     while (all.length < total) {
       const remaining = total - all.length;
-      const batch = await client.fetchOHLCV(marketSymbol, timeframe, since, Math.min(remaining, PAGE));
+      const batch = await withExchangeGate(exchange, () =>
+        client.fetchOHLCV(marketSymbol, timeframe, since, Math.min(remaining, PAGE))
+      );
       if (!Array.isArray(batch) || batch.length === 0) break;
       all.push(...batch);
       since = batch[batch.length - 1][0] + msPerBar;

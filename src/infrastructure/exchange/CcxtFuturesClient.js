@@ -5,6 +5,7 @@
 
 const ccxt = require("ccxt");
 const { toRawSymbol, toCcxtSymbol } = require("./ccxtSymbol");
+const { withExchangeGate } = require("./exchangeRateGate");
 
 const BALANCE_TYPE = {
   binance: "future",
@@ -82,11 +83,13 @@ class CcxtFuturesClient {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const marketSymbol = this._marketSymbol(symbol);
-        const candles = await this.exchange.fetchOHLCV(
-          marketSymbol,
-          timeframe,
-          since,
-          Math.min(limit, 500)
+        const candles = await withExchangeGate(this.exchangeId, () =>
+          this.exchange.fetchOHLCV(
+            marketSymbol,
+            timeframe,
+            since,
+            Math.min(limit, 500)
+          )
         );
         if (!Array.isArray(candles) || candles.length === 0) {
           throw new Error("No candles data received");
