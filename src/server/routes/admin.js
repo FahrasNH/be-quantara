@@ -378,20 +378,24 @@ module.exports = function createAdminRouter(helpers = {}) {
       const wins     = stats.wins || 0;
       const losses   = stats.losses || 0;
       const winRate  = closed ? ((wins / closed) * 100).toFixed(1) : "0.0";
-      const netPnl   = stats.net_pnl || 0;
-      const grossPnl = stats.gross_pnl || 0;
-      const grossLoss = Math.abs(stats.gross_loss || 0);
-      const avgWin   = stats.avg_win || 0;
-      const avgLoss  = Math.abs(stats.avg_loss || 0);
+      // Semua metrik di bawah konsisten basis GROSS (pnl, sebelum biaya).
+      const grossPnl  = stats.gross_pnl || 0;          // Σ pnl trade menang
+      const grossLoss = Math.abs(stats.gross_loss || 0); // |Σ pnl trade rugi|
+      const avgWin    = stats.avg_win || 0;
+      const avgLoss   = Math.abs(stats.avg_loss || 0);
+      const tradingPnl = stats.net_pnl || 0;           // Σ pnl semua trade (gross)
+      const totalFee   = stats.total_fee || 0;         // Σ (fee + funding) exchange
 
-      const netPnlStr = netPnl >= 0 ? `+$${netPnl.toFixed(2)}` : `-$${Math.abs(netPnl).toFixed(2)}`;
+      const tradingPnlStr = tradingPnl >= 0 ? `+$${tradingPnl.toFixed(2)}` : `-$${Math.abs(tradingPnl).toFixed(2)}`;
+      // Fee selalu biaya (≥0) → tampilkan sebagai pengurang.
+      const feeStr = totalFee > 0 ? `-$${totalFee.toFixed(2)}` : "$0.00";
 
       // Profit Factor = gross wins / gross losses (undefined if no closed trades)
       let profitFactor = "—";
       if (grossPnl > 0 && grossLoss === 0) profitFactor = "∞";
       else if (grossPnl > 0) profitFactor = (grossPnl / grossLoss).toFixed(2);
 
-      // Expectancy = (winRate × avgWin) - (lossRate × avgLoss)
+      // Expectancy = (winRate × avgWin) - (lossRate × avgLoss), basis gross
       let expectancy = "—";
       if (closed > 0) {
         const wr = wins / closed;
@@ -409,7 +413,8 @@ module.exports = function createAdminRouter(helpers = {}) {
           { label: "Win Rate (closed)",  value: `${winRate}%`, color: wins ? "green" : undefined },
           { label: "Profit Factor",      value: profitFactor, color: profitFactor !== "—" && parseFloat(profitFactor) >= 1 ? "green" : profitFactor !== "—" ? "red" : undefined },
           { label: "Expectancy",         value: expectancy, color: expectancy !== "—" && expectancy.startsWith("+") ? "green" : expectancy !== "—" ? "red" : undefined },
-          { label: "Platform Net PnL",   value: netPnlStr, color: netPnl >= 0 ? "green" : "red" },
+          { label: "Gross PnL",          value: tradingPnlStr, color: tradingPnl >= 0 ? "green" : "red" },
+          { label: "Fee Exchange",       value: feeStr, color: totalFee > 0 ? "red" : undefined },
           { label: "Closed Trades",      value: closed.toLocaleString("en-US") },
         ],
       });
