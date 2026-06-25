@@ -35,7 +35,10 @@ function uptrendIndicators(lastClose) {
     volSMA: mk(N, 100), // volRatio 2.0 ≥ 1.5 → A volOk
   };
 }
-const cfg = { balance: 500, volatility: 1.2, trend_strength: 0.5 };
+// v2.3: afMinVotes default kini 3. Tes anti-chase ini menguji sinyal 2-vote
+// (A+C) yang valid, jadi set afMinVotes:2 eksplisit agar tetap LONG.
+// volatility 1.5 (> LOW_VOL 1.2 v2.3) supaya bukan DEAD_MARKET.
+const cfg = { balance: 500, volatility: 1.5, trend_strength: 0.5, afMinVotes: 2 };
 
 test("FEE-01 control: entry dekat mean (ekstensi ≤1.5 ATR) → LONG diterima", () => {
   // close 104 → |104 - 103.5| / 0.5 = 1.0 ≤ 1.5

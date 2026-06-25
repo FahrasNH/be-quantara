@@ -234,7 +234,8 @@ const N = 30; // lastIdx = N
 // Downtrend BTC mirip log nyata: EMA9 < EMA21 < EMA50, price < EMA21, RSI 42.
 // Event pullback-resume: candle N-1 sempat close DI ATAS EMA9 (pullback naik),
 // candle N close kembali di bawah (resume turun) → B SHORT, C SHORT → 2/3.
-// volatility 1.2 (bukan 0.30 — itu DEAD_MARKET dan kini diblok, lihat tes bawah).
+// v2.3: volatility 1.5 (> LOW_VOL 1.2, bukan DEAD_MARKET) & afMinVotes:2 (default
+// kini 3 → 2-vote butuh override eksplisit) untuk menguji kuorum 2/3.
 {
   const closes = mkSeries(N, 62600);
   closes[N - 1] = 62700;   // pullback ke atas EMA9 (62684)
@@ -249,7 +250,7 @@ const N = 30; // lastIdx = N
     volumes:   mkSeries(N, 1),
     volSMA:    mkSeries(N, null),
   };
-  const sig = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.2, trend_strength: 0.15 });
+  const sig = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.15, afMinVotes: 2 });
   tB("BTC downtrend + pullback-resume — detectSignal SHORT", sig, "SHORT");
   const meta = afs.getLastSignalMeta();
   tB("lastSignalMeta tersedia setelah signal", meta !== null, true);
@@ -274,7 +275,7 @@ const N = 30; // lastIdx = N
     volumes:   mkSeries(N, 100),
     volSMA:    mkSeries(N, 80),
   };
-  const sig = afs.detectSignal(upIndicators, N, { balance: 500, volatility: 0.5, trend_strength: 0.5 });
+  const sig = afs.detectSignal(upIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.5, afMinVotes: 2 });
   tB("Uptrend + pullback-resume — detectSignal LONG", sig, "LONG");
 }
 

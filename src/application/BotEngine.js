@@ -131,7 +131,9 @@ class BotEngine extends EventEmitter {
       atrMultiplier: strat.atrMultiplier,
       riskReward:    strat.riskReward,
       riskPerTrade:  strat.riskPerTrade,
-      maxRiskPerTrade: 0.05,
+      // v2.3 spec (STRATEGIES.md §9): maxRiskPerTrade default 0.05 → 0.012.
+      // Tetap bisa di-override per-strategi via strat.maxRiskPerTrade / DB config.
+      maxRiskPerTrade: strat.maxRiskPerTrade ?? 0.012,
 
       // Fee trading per sisi (taker). Bitget USDT-M futures default ~0.06%.
       // Dipakai untuk estimasi fee dry-run/backtest & fallback live.
@@ -158,7 +160,8 @@ class BotEngine extends EventEmitter {
       // - afMinVotes: kuorum minimum komponen searah (2 = default; 3 = unanim).
       maxEntryExtensionATR: strat.maxEntryExtensionATR ?? 1.5,
       afRejectOnDissent:    strat.afRejectOnDissent ?? true,
-      afMinVotes:           strat.afMinVotes ?? 2,
+      // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
+      afMinVotes:           strat.afMinVotes ?? 3,
 
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
@@ -192,14 +195,14 @@ class BotEngine extends EventEmitter {
       sidewaysBreakoutVolMult: strat.sidewaysBreakoutVolMult || 1.2,
       sidewaysBreakoutBufMult: strat.sidewaysBreakoutBufMult || 0.3,
 
-      // ── Risk management harian ────────────────────────────────────────────
-      maxDailyLossPct:   strat.maxDailyLossPct  || 0.04,
+      // ── Risk management harian (v2.3 spec — STRATEGIES.md §9: diperketat) ──
+      maxDailyLossPct:   strat.maxDailyLossPct  || 0.03,   // v2.3: 0.04 → 0.03
       maxTradesPerDay:   strat.maxTradesPerDay   || 10,
-      // 30 menit (sebelumnya 5): data dry-run 12 Jun menunjukkan re-entry menit ke-6
-      // pada setup identik setelah SL → loss duplikat beruntun. Strategi bisa
-      // override via strat.cooldownAfterLoss (MR: 15).
-      cooldownAfterLoss: strat.cooldownAfterLoss || 30,
-      maxConsecLoss:     strat.maxConsecLoss     || 3,
+      // v2.3: default cooldown 30 → 45 menit. Data dry-run 12 Jun menunjukkan
+      // re-entry cepat pada setup identik setelah SL → loss duplikat beruntun.
+      // Strategi tetap bisa override via strat.cooldownAfterLoss (MR: 15).
+      cooldownAfterLoss: strat.cooldownAfterLoss || 45,
+      maxConsecLoss:     strat.maxConsecLoss     || 3,     // v2.3: tetap 3
 
       // ── Take-Profit mode (FEE-04) ────────────────────────────────────────
       // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
@@ -1201,6 +1204,14 @@ class BotEngine extends EventEmitter {
               volatility:       atrPctNow,
               trend_strength:   trendStr,
               balance:          this.state.capital,
+              // v2.3: teruskan knob AF + tier pair agar voting threshold, HTF
+              // alignment, anti-chase, dan SL komponen-C (VOLATILE) aktif live.
+              afMinVotes:           this.config.afMinVotes,
+              afRejectOnDissent:    this.config.afRejectOnDissent,
+              maxEntryExtensionATR: this.config.maxEntryExtensionATR,
+              htfTrend:             this.state.htfTrend,
+              pairTier:             this.config.pairTier,
+              tierOverrides:        this.config.tierOverrides,
             });
 
             // ── STEP 2c: MEAN_REVERSION HTF regime guard (FIX-4) ──────────────
@@ -1629,8 +1640,9 @@ class BotEngine extends EventEmitter {
       }
     }
 
-    // Pair-tier position adjustment: VOLATILE 0.6× / STABLE 0.9× / LIQUID 1.0×.
-    // Mengecilkan posisi (manajemen risiko) di koin berisiko tinggi. Default 1.
+    // Pair-tier position adjustment (v2.3): VOLATILE 0.55× / SEMI_VOLATILE 0.75× /
+    // STABLE 0.95× / LIQUID 1.0×. Mengecilkan posisi (manajemen risiko) di koin
+    // berisiko tinggi. SELALU dikalikan ke sizing (STRATEGIES.md §9). Default 1.
     const pairPosAdj = this.config.pairPositionSizeAdjustment || 1;
     const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl) * pairPosAdj;
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }

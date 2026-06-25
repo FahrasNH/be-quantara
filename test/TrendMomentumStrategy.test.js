@@ -287,9 +287,9 @@ describe("TrendMomentumStrategy", () => {
       const atr = 100;
       const riskCfg = strategy.calculateRiskConfig(entry, atr, "LONG");
 
-      expect(riskCfg.stopLoss).toBe(42000 - 100 * 1.2);  // 41880
-      expect(riskCfg.takeProfit).toBe(42000 + 100 * 2.3); // 42230
-      expect(riskCfg.riskReward).toBeCloseTo(1.92, 1);    // 2.3/1.2
+      expect(riskCfg.stopLoss).toBe(42000 - 100 * 1.3);  // v2.3: 41870
+      expect(riskCfg.takeProfit).toBe(42000 + 100 * 2.5); // v2.3: 42250
+      expect(riskCfg.riskReward).toBeCloseTo(1.92, 1);    // 2.5/1.3 ≈ 1.92
     });
 
     test("SHORT SL/TP calculation", () => {
@@ -297,8 +297,8 @@ describe("TrendMomentumStrategy", () => {
       const atr = 100;
       const riskCfg = strategy.calculateRiskConfig(entry, atr, "SHORT");
 
-      expect(riskCfg.stopLoss).toBe(42000 + 100 * 1.2);   // 42120
-      expect(riskCfg.takeProfit).toBe(42000 - 100 * 2.3); // 41770
+      expect(riskCfg.stopLoss).toBe(42000 + 100 * 1.3);   // v2.3: 42130
+      expect(riskCfg.takeProfit).toBe(42000 - 100 * 2.5); // v2.3: 41750
       expect(riskCfg.riskReward).toBeCloseTo(1.92, 1);
     });
 
@@ -313,8 +313,8 @@ describe("TrendMomentumStrategy", () => {
       const atr = 100;
       const riskCfg = strategy.calculateRiskConfig(42000, atr, "LONG");
 
-      expect(riskCfg.slDistance).toBe(atr * 1.2);
-      expect(riskCfg.tpDistance).toBe(atr * 2.3);
+      expect(riskCfg.slDistance).toBe(atr * 1.3);
+      expect(riskCfg.tpDistance).toBe(atr * 2.5);
     });
   });
 
@@ -332,7 +332,7 @@ describe("TrendMomentumStrategy", () => {
       };
 
       const atr = 100;
-      const currentPrice = 42115;  // Above entry + 50% of TP distance
+      const currentPrice = 42130;  // v2.3: above entry + 50% of TP distance (125)
 
       strategy.updateTrailingStop(trade, currentPrice, atr);
 
@@ -366,7 +366,7 @@ describe("TrendMomentumStrategy", () => {
       };
 
       const atr = 100;
-      const currentPrice = 41885;  // Below entry - 50% of TP distance
+      const currentPrice = 41870;  // v2.3: below entry - 50% of TP distance (125)
 
       strategy.updateTrailingStop(trade, currentPrice, atr);
 
@@ -409,8 +409,8 @@ describe("TrendMomentumStrategy", () => {
       expect(result.reason).toContain("volatile");
     });
 
-    test("Healthy market (ATR 1%, trend 0.6)", () => {
-      const result = strategy.validateMarketCondition(1.0, 0.6);
+    test("Healthy market (ATR 1%, trend 0.7 ≥ htfTrendStrengthMin 0.65)", () => {
+      const result = strategy.validateMarketCondition(1.0, 0.7);
       expect(result.valid).toBe(true);
       expect(result.reason).toContain("suitable");
     });
@@ -437,17 +437,18 @@ describe("TrendMomentumStrategy", () => {
   // ──────────────────────────────────────────────────────────
 
   describe("Configuration", () => {
-    test("Default config set correctly", () => {
-      expect(strategy.config.slMultiplier).toBe(1.2);
-      expect(strategy.config.tpMultiplier).toBe(2.3);
-      expect(strategy.config.riskPerTrade).toBe(0.02);
-      expect(strategy.config.maxTradesPerDay).toBe(6);
+    test("Default config set correctly (v2.3)", () => {
+      expect(strategy.config.slMultiplier).toBe(1.3);
+      expect(strategy.config.tpMultiplier).toBe(2.5);
+      expect(strategy.config.riskPerTrade).toBe(0.012);
+      expect(strategy.config.maxTradesPerDay).toBe(4);
+      expect(strategy.config.htfTrendStrengthMin).toBe(0.65);
     });
 
     test("Config can be updated", () => {
       strategy.setConfig({ riskPerTrade: 0.01 });
       expect(strategy.config.riskPerTrade).toBe(0.01);
-      expect(strategy.config.tpMultiplier).toBe(2.3);  // Other values unchanged
+      expect(strategy.config.tpMultiplier).toBe(2.5);  // Other values unchanged (v2.3)
     });
   });
 

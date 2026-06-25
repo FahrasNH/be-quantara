@@ -1,5 +1,13 @@
 /**
- * AdaptiveFusionStrategy.js — v2.2 (Post-mortem dry-run 11–12 Jun)
+ * AdaptiveFusionStrategy.js — v2.3 (Optimasi Performa — STRATEGIES.md §4)
+ *
+ * v2.3 spec changes (target win rate 40–45%):
+ *  - afMinVotes default 2 → 3 (butuh konsensus lebih kuat).
+ *  - votingThresholdOverride: VOLATILE 0.78 (sumber: PairClassifier), STABLE 0.60.
+ *  - interpretMarketCondition: LOW_VOL 1.0 → 1.2 (ATR%), WEAK_TREND 0.3 → 0.45.
+ *  - riskPerTrade default 0.015 → 0.01.
+ *  - HTF (1h) alignment WAJIB sebelum voting (config.htfTrend).
+ *  - SL wajib pakai komponen C (Swing) logic di VOLATILE/SEMI_VOLATILE pair.
  *
  * Fixes applied:
  *  P1 — calculateRiskConfig(): component-aware SL/TP multipliers
@@ -33,7 +41,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "2.2.0",
+      version: "2.3.0",
       enabled: true,
       ...config,
     });
@@ -103,11 +111,12 @@ class AdaptiveFusionStrategy extends StrategyBase {
    */
   getMarketThresholds() {
     return {
-      LOW_VOL:         1.0,    // ATR% < 1.0 → dead market
-      NORMAL_VOL:      2.0,    // ATR% 1.0–2.0 → normal
+      // v2.3 spec (STRATEGIES.md §4): LOW_VOL 1.0 → 1.2, WEAK_TREND 0.3 → 0.45.
+      LOW_VOL:         1.2,    // ATR% < 1.2 → dead market (lebih ketat)
+      NORMAL_VOL:      2.0,    // ATR% 1.2–2.0 → normal
       HIGH_VOL:        3.5,    // ATR% > 3.5 → high volatility
-      WEAK_TREND:      0.3,    // < 0.3 → no real trend
-      NORMAL_TREND:    0.6,    // 0.3–0.6 → emerging trend
+      WEAK_TREND:      0.45,   // < 0.45 → no real trend (lebih ketat)
+      NORMAL_TREND:    0.6,    // 0.45–0.6 → emerging trend
       STRONG_TREND:    0.8,    // > 0.8 → clear trend
       COMP_A_MIN_SCORE: 30,
       COMP_B_MIN_SCORE: 40,
@@ -253,6 +262,14 @@ class AdaptiveFusionStrategy extends StrategyBase {
     );
     if (marketCond === "DEAD_MARKET") return null;
 
+    // v2.3 spec (STRATEGIES.md §4): HTF (1h) alignment WAJIB sebelum voting.
+    // Bila caller (AdaptiveStrategyEngine/BotEngine) menyuplai htfTrend, blok
+    // entry saat regime HTF tak bisa ditentukan (UNKNOWN) → fail-closed. Filter
+    // directional (LONG vs BEARISH dst) diterapkan setelah sinyal di-resolve.
+    // Backward-compatible: bila htfTrend tidak disuplai (unit test), gate dilewati.
+    const htfTrend = config.htfTrend ?? null;
+    if (htfTrend === "UNKNOWN") return null;
+
     const rankings  = this.rankByMarketConditions(marketConditions);
     const scoreMap  = Object.fromEntries(rankings.map(r => [r.key, r.score]));
 
@@ -295,12 +312,21 @@ class AdaptiveFusionStrategy extends StrategyBase {
       signals.C = this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed);
     }
 
-    // PAIR-TIER-07: respect votingThresholdOverride from pair tier (e.g. 0.65 for VOLATILE)
+    // PAIR-TIER-07 / v2.3: respect votingThresholdOverride from pair tier
+    // (STABLE 0.60, SEMI_VOLATILE 0.70, VOLATILE 0.78 — lihat PairClassifier).
     const votingThresholdOverride = config.tierOverrides?.votingThresholdOverride ?? null;
     let resolved = this._resolveSignalConflict(signals, votingThresholdOverride, {
       rejectOnDissent: config.afRejectOnDissent ?? true,
-      minVotes:        config.afMinVotes ?? 2,
+      // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
+      minVotes:        config.afMinVotes ?? 3,
     });
+
+    // v2.3: HTF directional alignment WAJIB — buang sinyal yang melawan tren HTF.
+    // LONG hanya valid bila HTF bukan BEARISH; SHORT hanya bila HTF bukan BULLISH.
+    if (resolved && htfTrend) {
+      if (resolved === "LONG"  && htfTrend === "BEARISH") resolved = null;
+      if (resolved === "SHORT" && htfTrend === "BULLISH") resolved = null;
+    }
 
     // FEE-01: Anti-chase guard. Post-mortem data (69 trade live): LONG WR 21%
     // (-$37.90) sementara SHORT breakeven, dan Component C state-based fire
@@ -325,13 +351,27 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     if (resolved) {
       // P6: Store which component(s) fired for SL/TP selection
-      const winningComponent = this._pickBestComponent(signals, resolved, scoreMap);
+      let winningComponent = this._pickBestComponent(signals, resolved, scoreMap);
+
+      // v2.3 spec (STRATEGIES.md §4): "SL wajib pakai komponen C logic (Swing)
+      // di VOLATILE pair". Untuk pair VOLATILE/SEMI_VOLATILE, paksa komponen C
+      // (SL 1×ATR / TP 2.5×ATR — swing) agar SL tidak terlalu sempit di koin
+      // berisiko tinggi. Dideteksi via config.pairTier atau config.tierOverrides.
+      const isVolatilePair = this._isVolatilePair(config);
+      let forcedComponent = null;
+      if (isVolatilePair) {
+        forcedComponent = "C";
+        winningComponent = "C";
+      }
+
       this._lastSignalMeta = {
         direction:   resolved,
         component:   winningComponent,
+        forcedComponent,
         votes:       signals,
         scores:      scoreMap,
         marketCond,
+        htfTrend,
       };
     }
 
@@ -347,6 +387,25 @@ class AdaptiveFusionStrategy extends StrategyBase {
       .filter(([, sig]) => sig === direction)
       .sort(([ka], [kb]) => (scoreMap[kb] ?? 0) - (scoreMap[ka] ?? 0));
     return agreeing.length > 0 ? agreeing[0][0] : "B";
+  }
+
+  /**
+   * v2.3: deteksi apakah pair tergolong VOLATILE/SEMI_VOLATILE dari config.
+   * Sumber prioritas: config.pairTier (string tier) → fallback config.tierOverrides
+   * (regimeFilterRequired + votingThresholdOverride ketat mengindikasikan tier
+   * berisiko). Dipakai untuk memaksa SL komponen C (Swing) di pair volatil.
+   * @param {Object} config
+   * @returns {boolean}
+   */
+  _isVolatilePair(config = {}) {
+    const tier = config.pairTier || config.tierOverrides?.tier || null;
+    if (tier) return tier === "VOLATILE" || tier === "SEMI_VOLATILE";
+    // Fallback heuristik: regime filter wajib + ambang voting ≥ 0.70 ≈ tier berisiko.
+    const to = config.tierOverrides;
+    if (to && to.regimeFilterRequired && (to.votingThresholdOverride ?? 0) >= 0.70) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -524,10 +583,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
    *   2/3 agree → execute (high confidence)
    *   1/3      → skip (safety first)
    *
-   * With votingThresholdOverride (PAIR-TIER-07):
+   * With votingThresholdOverride (PAIR-TIER-07 / v2.3):
    *   Require votes/total >= threshold fraction before executing.
-   *   STABLE = 0.55 (same effective bar as default for 3 signals)
-   *   VOLATILE = 0.65 (3/3 = 100% required — single dissent blocks entry)
+   *   STABLE = 0.60 · SEMI_VOLATILE = 0.70 · VOLATILE = 0.78
+   *   (VOLATILE 0.78 ⇒ butuh ~unanimitas — single dissent blocks entry)
    *
    * FEE-01b — Conviction guards (reversible via strat.*):
    *   - rejectOnDissent (default true): tolak entry bila komponen yang fire
@@ -567,7 +626,8 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
   getRiskConfig() {
     return {
-      riskPerTrade:      0.015,
+      // v2.3 spec (STRATEGIES.md §4): risk per trade default 1.5% → 1.0%.
+      riskPerTrade:      0.01,
       maxRiskPerTrade:   0.02,
       maxDailyLossPct:   0.05,
       maxTradesPerDay:   10,
