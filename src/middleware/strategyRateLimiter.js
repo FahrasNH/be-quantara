@@ -39,8 +39,8 @@ const strategyChangeLimiter = rateLimit({
       code: 'STRATEGY_RATE_LIMITED',
     });
   },
-  // Skip di unit test dan saat eksplisit di-disable (E2E rate-limit test lain)
-  skip: () => process.env.NODE_ENV === 'test',
+  // Skip di non-production (staging/dev), hanya aktif di production
+  skip: () => process.env.NODE_ENV !== 'production',
 });
 
 /**

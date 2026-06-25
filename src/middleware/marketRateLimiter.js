@@ -29,7 +29,7 @@ const symbolsRateLimiter = rateLimit({
       code: "SYMBOLS_RATE_LIMITED",
     });
   },
-  skip: () => process.env.NODE_ENV === "test",
+  skip: () => process.env.NODE_ENV !== "production",
 });
 
 module.exports = { symbolsRateLimiter };
