@@ -43,6 +43,37 @@ module.exports = function createBotsRouter(helpers) {
     return isEncrypted(value) ? decrypt(value) : value;
   }
 
+  /** Mirror BotEngine.getState() — unrealized PnL per posisi dari mark price. */
+  function calcPositionUnrealizedPL(position, markPrice) {
+    if (position.unrealizedPL && position.unrealizedPL !== 0) return position.unrealizedPL;
+    if (!markPrice || !position.entry) return 0;
+    const sz = position.remainingSize || position.size || 0;
+    return position.side === "LONG"
+      ? (markPrice - position.entry) * sz
+      : (position.entry - markPrice) * sz;
+  }
+
+  function sumUnrealizedPnL(positions) {
+    return positions.reduce((s, p) => s + (p.unrealizedPL || 0), 0);
+  }
+
+  async function fetchMarkPrice(symbol) {
+    if (!sharedClient?.getTicker) return null;
+    try {
+      const ticker = await sharedClient.getTicker(symbol);
+      return ticker?.last > 0 ? ticker.last : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function enrichPositionsWithUnrealized(positions, markPrice) {
+    return positions.map(p => ({
+      ...p,
+      unrealizedPL: calcPositionUnrealizedPL(p, markPrice),
+    }));
+  }
+
   /**
    * Gabungkan record DB dengan state live (BotEngine ATAU MultiStrategyCoordinator).
    * `openTradesMap` (opsional): Map symbol→trades hasil 1 query getOpenTradesByUser,
@@ -56,12 +87,12 @@ module.exports = function createBotsRouter(helpers) {
     // dipulihkan (auto-resume) atau masih warm-up. Inilah akar bug "open posisi
     // muncul/hilang antar hard-refresh": sebelumnya posisi 100% bergantung pada
     // keberadaan instance live yang tidak stabil saat server habis restart.
-    async function readDbOpenPositions() {
+    async function readDbOpenPositions(enrichUnrealized = false) {
       try {
         const dbTrades = openTradesMap
           ? (openTradesMap.get(botRecord.symbol) || [])
           : await db.getOpenTradesBySymbol(botRecord.symbol, userId);
-        return dbTrades.map(t => ({
+        const positions = dbTrades.map(t => ({
           id:          t.order_id || `db_${t.id}`,
           dbId:        t.id,
           side:        t.side,
@@ -73,6 +104,9 @@ module.exports = function createBotsRouter(helpers) {
           atr:         t.atr,
           restoredFrom: t.session_id,
         }));
+        if (!enrichUnrealized || positions.length === 0) return positions;
+        const markPrice = await fetchMarkPrice(botRecord.symbol);
+        return enrichPositionsWithUnrealized(positions, markPrice);
       } catch { return []; /* non-critical — fall back to empty */ }
     }
 
@@ -93,7 +127,12 @@ module.exports = function createBotsRouter(helpers) {
       // Posisi: utamakan live (sudah di-enrich unrealizedPL/mark). Bila engine baru
       // warm-up & belum memuat posisinya, fallback ke DB → posisi tetap tampil.
       const livePositions = Array.isArray(live.openPositions) ? live.openPositions : [];
-      const openPositions = livePositions.length > 0 ? livePositions : await readDbOpenPositions();
+      const openPositions = livePositions.length > 0
+        ? livePositions
+        : await readDbOpenPositions(true);
+      const unrealizedPnL = livePositions.length > 0
+        ? (live.unrealizedPnL ?? sumUnrealizedPnL(openPositions))
+        : sumUnrealizedPnL(openPositions);
       return {
         ...botRecord,
         ...live,
@@ -112,6 +151,7 @@ module.exports = function createBotsRouter(helpers) {
         pairRiskLevel,
         openPositions,
         openTradeCount: openPositions.length,
+        unrealizedPnL,
         params: {
           // Single-strategy engine punya `instance.config`; MultiStrategyCoordinator
           // tidak (config-nya per-engine) → pakai leverage efektif dari getState (`live`).
@@ -124,7 +164,8 @@ module.exports = function createBotsRouter(helpers) {
     }
     // Stopped / belum-resume: DB authoritative. Posisi terbuka tetap diambil dari DB
     // agar bot yang running=true (menunggu auto-resume) tetap menampilkan posisinya.
-    const openPositions = await readDbOpenPositions();
+    const openPositions = await readDbOpenPositions(true);
+    const unrealizedPnL = sumUnrealizedPnL(openPositions);
     const dbSg = Array.isArray(botRecord.strategyGroup) && botRecord.strategyGroup.length > 0
       ? botRecord.strategyGroup
       : tierStrategies;  // legacy bots with strategyGroup=[] show tier count
@@ -140,7 +181,7 @@ module.exports = function createBotsRouter(helpers) {
       openTradeCount: openPositions.length,
       closedTrades:   botRecord.totalTrades ?? 0,
       totalPnL:       historicalPnL,
-      unrealizedPnL:  0,
+      unrealizedPnL,
       strategyGroup:  dbSg,
       multiStrategy:  dbSg.length > 1,
     };
@@ -581,10 +622,8 @@ module.exports = function createBotsRouter(helpers) {
         bot = await prisma.bot.update({
           where: { userId_symbol: { userId, symbol } },
           data: {
-            capital:   capital || bot.capital,
+            capital: capital || bot.capital,
             ...botData,
-            running:   true,
-            startedAt: new Date(),
           },
         });
       }
@@ -598,6 +637,7 @@ module.exports = function createBotsRouter(helpers) {
       const decryptedApiKey     = creds?.apiKey;
       const decryptedApiSecret  = creds?.apiSecret;
       const decryptedPassphrase = creds?.apiPassphrase;
+      const exchangeType = (connectedExchange || "bitget").toLowerCase();
 
       if (!decryptedApiKey || !decryptedApiSecret) {
         return res.status(400).json({
@@ -607,7 +647,6 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      const exchangeType = (connectedExchange || "bitget").toLowerCase();
       if (exchangeType === "okx" && !decryptedPassphrase) {
         return res.status(400).json({
           ok: false,
@@ -689,6 +728,13 @@ module.exports = function createBotsRouter(helpers) {
         accountOpenCap = getMaxConcurrentPositions(undefined); // FOUNDRY fallback
       }
       getCoordinator(userId).setMaxAccountOpenPositions(accountOpenCap);
+
+      // Semua validasi start lulus — baru persist running=true (hindari zombie
+      // running di DB bila API key / margin gate gagal).
+      bot = await prisma.bot.update({
+        where: { userId_symbol: { userId, symbol } },
+        data:  { running: true, startedAt: new Date() },
+      });
 
       // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
       const instance = useMulti
