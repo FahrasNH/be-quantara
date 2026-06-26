@@ -1173,6 +1173,8 @@ async function getAllEquity(mode = "live", userId = null) {
 
 // ── Candle cache ──────────────────────────────
 
+const DB_BACKTEST_KLINES_TTL = Number(process.env.BACKTEST_KLINES_DB_TTL_SEC) || 86_400;
+
 /** Fire-and-forget best-effort — upsert dalam transaksi. */
 async function cacheCandles(exchange, symbol, interval, candles) {
   if (!candles || candles.length === 0) return;
@@ -1207,6 +1209,29 @@ async function getCachedCandles(exchange, symbol, interval, maxAgeSeconds = 900)
        AND cached_at > extract(epoch from now())::bigint - $4
      ORDER BY timestamp ASC`,
     [exchange, symbol, interval, maxAgeSeconds]
+  );
+  if (rows.length === 0) return null;
+  return rows.map((r) => ({
+    timestamp: r.timestamp,
+    date:      new Date(r.timestamp).toISOString(),
+    open:      r.open,
+    high:      r.high,
+    low:       r.low,
+    close:     r.close,
+    volume:    r.volume,
+  }));
+}
+
+/** Candle historis dalam rentang timestamp (Phase 2 backtest). */
+async function getCachedCandlesInRange(exchange, symbol, interval, startTs, endTs, maxAgeSeconds = DB_BACKTEST_KLINES_TTL) {
+  const ttl = maxAgeSeconds ?? 86_400;
+  const { rows } = await pool.query(
+    `SELECT * FROM candle_cache
+     WHERE exchange = $1 AND symbol = $2 AND "interval" = $3
+       AND timestamp >= $4 AND timestamp <= $5
+       AND cached_at > extract(epoch from now())::bigint - $6
+     ORDER BY timestamp ASC`,
+    [exchange, symbol, interval, startTs, endTs, ttl]
   );
   if (rows.length === 0) return null;
   return rows.map((r) => ({
@@ -1533,6 +1558,7 @@ module.exports = {
   // candles
   cacheCandles,
   getCachedCandles,
+  getCachedCandlesInRange,
   clearOldCache,
   // logs
   insertLog,

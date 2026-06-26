@@ -8,6 +8,7 @@ const { asyncHandler } = require("../../middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
 const BacktestHistoryService = require("../services/BacktestHistoryService");
 const BacktestCsvService = require("../services/BacktestCsvService");
+const HistoricalKlinesService = require("../services/HistoricalKlinesService");
 const ReportGeneratorService = require("../services/ReportGeneratorService");
 const OptimizationAnalysisService = require("../services/OptimizationAnalysisService");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
@@ -147,6 +148,60 @@ module.exports = function createBacktestRouter(context) {
     }
     const preset = await BacktestHistoryService.savePreset(req.userId, name, strategyKey, parameters);
     res.json({ ok: true, preset });
+  }));
+
+  /**
+   * GET /api/v1/backtest/data-source
+   * Status exchange terhubung untuk backtest real
+   */
+  router.get("/data-source", asyncHandler(async (req, res) => {
+    const status = await HistoricalKlinesService.getDataSourceStatus(req.userId);
+    res.json(status);
+  }));
+
+  /**
+   * GET /api/v1/backtest/klines
+   * OHLCV historis real dari exchange user
+   * Query: symbol, timeframe, start, end, periodId, customStart, customEnd, autoListing
+   */
+  router.get("/klines", asyncHandler(async (req, res) => {
+    const {
+      symbol,
+      timeframe = "1d",
+      start,
+      end,
+      periodId,
+      customStart,
+      customEnd,
+      autoListing,
+    } = req.query;
+
+    const result = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
+      symbol,
+      timeframe,
+      start,
+      end,
+      periodId,
+      customStart,
+      customEnd,
+      autoListing: autoListing === "1" || autoListing === "true",
+    });
+
+    res.json({
+      ok: true,
+      exchange: result.exchange,
+      exchangeLabel: result.exchangeLabel,
+      symbol: result.symbol,
+      timeframe: result.timeframe,
+      startDate: result.startDate,
+      endDate: result.endDate,
+      listingDate: result.listingDate,
+      bars: result.bars,
+      gapsFilled: result.gapsFilled,
+      cached: result.cached,
+      source: result.source,
+      candles: result.candles,
+    });
   }));
 
   /**
