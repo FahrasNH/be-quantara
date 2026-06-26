@@ -371,9 +371,11 @@ module.exports = function createAdminRouter(helpers = {}) {
         entry:    fmtPrice(t.entry_price),
         exit:     t.exit_price === null || t.exit_price === undefined ? "—" : fmtPrice(t.exit_price),
         netPnl:   Number((t.pnl || 0).toFixed(2)),
+        fee:      Number(((t.fee || 0) + (t.funding || 0)).toFixed(2)),
         opened:   fmtShort(t.open_time),
         ts:       t.open_time ? new Date(t.open_time).toISOString() : null,
         status:   t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
+        dryRun:   t.dry_run === 1,
       }));
 
       const total    = stats.total || 0;
