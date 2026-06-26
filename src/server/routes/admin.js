@@ -225,7 +225,7 @@ module.exports = function createAdminRouter(helpers = {}) {
       ]);
 
       let users = rows.map(u => {
-        const agg        = pnlMap.get(u.id) || { trades: 0, netPnl: 0 };
+        const agg        = pnlMap.get(u.id) || { trades: 0, netPnl: 0, totalFee: 0 };
         const hasRunning = u.bots.some(b => b.running);
         // Only show an exchange when the user has ACTUALLY connected one — an
         // active UserExchange record or a stored key fingerprint. The User
@@ -243,6 +243,7 @@ module.exports = function createAdminRouter(helpers = {}) {
           bots:     u.bots.length,
           trades:   agg.trades,
           netPnl:   Number(agg.netPnl.toFixed(2)),
+          totalFee: Number((agg.totalFee || 0).toFixed(2)),
           status:   hasRunning ? "Active" : "Inactive",
           flagged:  platformStore.isFlagged(u.id),
         };

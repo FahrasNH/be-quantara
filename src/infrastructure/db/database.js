@@ -1312,6 +1312,8 @@ async function getAllUsersTradeStats() {
             COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed')::int      AS trades,
             COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
               FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float         AS net_pnl,
+            COALESCE(SUM(COALESCE(t.fee,0) + COALESCE(t.funding,0))
+              FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float         AS total_fee,
             COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL AND t.status = 'closed')::int AS wins
        FROM bot_sessions s
        LEFT JOIN trades t ON t.session_id = s.id
@@ -1321,6 +1323,7 @@ async function getAllUsersTradeStats() {
   return new Map(rows.map(r => [r.user_id, {
     trades: r.trades || 0,
     netPnl: Number((r.net_pnl || 0).toFixed(2)),
+    totalFee: Number((r.total_fee || 0).toFixed(2)),
     wins:   r.wins || 0,
   }]));
 }
