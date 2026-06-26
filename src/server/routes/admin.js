@@ -362,21 +362,39 @@ module.exports = function createAdminRouter(helpers = {}) {
       ]);
 
       const fmtPrice = n => (n === null || n === undefined ? "—" : Number(n).toLocaleString("en-US"));
-      const trades = rows.map(t => ({
-        id:       String(t.id).slice(-6).toUpperCase(),
-        user:     t.username || "—",
-        symbol:   t.symbol,
-        side:     t.side,
-        strategy: abbrevStrategy(t.strategy_name),
-        entry:    fmtPrice(t.entry_price),
-        exit:     t.exit_price === null || t.exit_price === undefined ? "—" : fmtPrice(t.exit_price),
-        netPnl:   Number((t.pnl || 0).toFixed(2)),
-        fee:      Number(((t.fee || 0) + (t.funding || 0)).toFixed(2)),
-        opened:   fmtShort(t.open_time),
-        ts:       t.open_time ? new Date(t.open_time).toISOString() : null,
-        status:   t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
-        dryRun:   t.dry_run === 1,
-      }));
+      const trades = rows.map(t => {
+        const grossPnl = Number((t.pnl || 0).toFixed(2));
+        const feeTotal = Number(((t.fee || 0) + (t.funding || 0)).toFixed(2));
+        const netPnl   = Number((grossPnl - feeTotal).toFixed(2));
+        // R-multiple: net / (|entry - sl| × size). null jika data tidak lengkap.
+        let r = null;
+        if (t.close_time && t.entry_price && t.sl && t.size) {
+          const risk = Math.abs(Number(t.entry_price) - Number(t.sl)) * Number(t.size);
+          if (risk > 0) r = Number((t.pnl / risk).toFixed(2));
+        }
+        return {
+          id:        String(t.id).slice(-6).toUpperCase(),
+          user:      t.username || "—",
+          symbol:    t.symbol,
+          side:      t.side,
+          strategy:  abbrevStrategy(t.strategy_name),
+          entry:     fmtPrice(t.entry_price),
+          exit:      t.exit_price === null || t.exit_price === undefined ? "—" : fmtPrice(t.exit_price),
+          netPnl:    grossPnl,    // field lama dipertahankan → dipakai computeKpis FE (gross)
+          gross:     grossPnl,
+          fee:       feeTotal,
+          net:       netPnl,
+          sl:        t.sl   != null ? Number(t.sl)   : null,
+          size:      t.size != null ? Number(t.size) : null,
+          reason:    t.reason    ?? null,
+          isPartial: t.is_partial === 1,
+          r,
+          opened:    fmtShort(t.open_time),
+          ts:        t.open_time ? new Date(t.open_time).toISOString() : null,
+          status:    t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
+          dryRun:    t.dry_run === 1,
+        };
+      });
 
       const total    = stats.total || 0;
       const closed   = stats.closed || 0;
