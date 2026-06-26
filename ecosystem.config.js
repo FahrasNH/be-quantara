@@ -18,6 +18,9 @@
  * PM2 restart monitoring: index.js membaca env `restart_time` (injected PM2) saat boot
  * dan mengirim alert Telegram admin bila mendekati/melewati max_restarts di bawah.
  * Override threshold via PM2_MAX_RESTARTS env (default 10, selaras max_restarts di sini).
+ *
+ * TODO(P2-13): Bot tick worker process — ekstrak loop per-user dari proses HTTP utama
+ * untuk isolasi memory/CPU saat scale 50+ bot. Worker architecture belum diimplementasi.
  */
 module.exports = {
   apps: [
@@ -69,6 +72,8 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT:     3001,
+        // Profiling heap/RSS tiap 30s di pm2 logs (index.js MEM_DEBUG=1). Matikan di prod.
+        MEM_DEBUG: "1",
       },
     },
   ],

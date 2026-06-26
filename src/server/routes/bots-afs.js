@@ -17,7 +17,7 @@ module.exports = function createBotsRouter(helpers) {
   const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
   const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies, getUserTier } = require("../../services/entitlement");
   // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
-  const { getMaxConcurrentPositions } = require("../../domain/tierConfig");
+  const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../domain/tierConfig");
   const db = require("../../infrastructure/db/database");
 
   // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
@@ -55,6 +55,36 @@ module.exports = function createBotsRouter(helpers) {
 
   function sumUnrealizedPnL(positions) {
     return positions.reduce((s, p) => s + (p.unrealizedPL || 0), 0);
+  }
+
+  /**
+   * Enforce per-tier hard cap on total bots (running + configured/stopped).
+   * @param {string} userId
+   * @param {{ isNewBot?: boolean }} [opts]
+   * @returns {Promise<{ ok: true, cap: number, count: number, tier: string } | { ok: false, cap: number, count: number, tier: string, message: string }>}
+   */
+  async function assertBotCap(userId, { isNewBot = true } = {}) {
+    let tier;
+    try {
+      tier = await getUserTier(userId);
+    } catch (_e) {
+      tier = "FOUNDRY";
+    }
+    const cap = getMaxActiveBots(tier);
+    const count = await prisma.bot.count({ where: { userId } });
+    if (isNewBot && count >= cap) {
+      const label = getTierConfig(tier)?.label ?? tier;
+      return {
+        ok: false,
+        cap,
+        count,
+        tier,
+        message:
+          `Batas bot tier ${label} tercapai (${count}/${cap}). ` +
+          `Hapus bot yang tidak dipakai atau upgrade tier untuk menambah bot.`,
+      };
+    }
+    return { ok: true, cap, count, tier };
   }
 
   async function fetchMarkPrice(symbol) {
@@ -297,10 +327,16 @@ module.exports = function createBotsRouter(helpers) {
       // Diresolusi langsung di sini supaya benar walau belum ada bot yang start
       // (coordinator.maxAccountOpenPositions masih 0). Fallback FOUNDRY(4) bila error.
       let maxConcurrentPositions;
+      let maxActiveBots;
+      let botCount = null;
       try {
-        maxConcurrentPositions = getMaxConcurrentPositions(await getUserTier(userId));
+        const tier = await getUserTier(userId);
+        maxConcurrentPositions = getMaxConcurrentPositions(tier);
+        maxActiveBots = getMaxActiveBots(tier);
+        botCount = await prisma.bot.count({ where: { userId } });
       } catch (_e) {
         maxConcurrentPositions = getMaxConcurrentPositions(undefined);
+        maxActiveBots = getMaxActiveBots(undefined);
       }
       // openCount = jumlah posisi terbuka NYATA dari DB (sumber kebenaran tunggal,
       // bukan reservations.size). Best-effort: gagal → null (FE jatuh ke agregat state).
@@ -338,6 +374,8 @@ module.exports = function createBotsRouter(helpers) {
         // Cap account-wide posisi terbuka per-tier + jumlah terbuka NYATA (DB).
         maxConcurrentPositions,
         openCount,
+        maxActiveBots,
+        botCount,
       });
     })
   );
@@ -496,6 +534,21 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+      // Per-tier bot cap — hanya saat menambah bot BARU (upsert simbol baru).
+      if (!existing) {
+        const capVerdict = await assertBotCap(userId, { isNewBot: true });
+        if (!capVerdict.ok) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message: capVerdict.message,
+            maxActiveBots: capVerdict.cap,
+            botCount: capVerdict.count,
+            tier: capVerdict.tier,
+          });
+        }
+      }
+
       const botData = {
         strategyKey:        strategies[0],
         strategyGroup:      useMulti ? strategies : [],
@@ -606,6 +659,21 @@ module.exports = function createBotsRouter(helpers) {
       let bot = await prisma.bot.findUnique({
         where: { userId_symbol: { userId, symbol } },
       });
+
+      // Per-tier bot cap — hanya saat start akan membuat bot BARU.
+      if (!bot) {
+        const capVerdict = await assertBotCap(userId, { isNewBot: true });
+        if (!capVerdict.ok) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message: capVerdict.message,
+            maxActiveBots: capVerdict.cap,
+            botCount: capVerdict.count,
+            tier: capVerdict.tier,
+          });
+        }
+      }
 
       const botData = {
         // strategyKey[0] disimpan untuk backward-compat (kolom lama tetap terisi).
