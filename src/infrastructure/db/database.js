@@ -1398,6 +1398,23 @@ async function getBacktestHistoryByIds(ids, userId = null) {
   return rows.map(mapBacktestRow);
 }
 
+async function deleteBacktestHistoryById(id) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM backtest_history WHERE id = $1`,
+    [id]
+  );
+  return rowCount > 0;
+}
+
+async function deleteBacktestHistoryByIds(ids) {
+  if (!ids?.length) return 0;
+  const { rowCount } = await pool.query(
+    `DELETE FROM backtest_history WHERE id = ANY($1::int[])`,
+    [ids]
+  );
+  return rowCount;
+}
+
 async function insertStrategyPreset({ userId, name, strategyKey, parameters }) {
   const { rows } = await pool.query(
     `INSERT INTO strategy_presets (user_id, name, strategy_key, parameters)
@@ -1577,6 +1594,8 @@ module.exports = {
   getBacktestHistoryById,
   getBacktestArchive,
   getBacktestHistoryByIds,
+  deleteBacktestHistoryById,
+  deleteBacktestHistoryByIds,
   insertStrategyPreset,
   getStrategyPresets,
   // meta

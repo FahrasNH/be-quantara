@@ -4,6 +4,8 @@
  */
 
 const db = require("../../infrastructure/db/database");
+const prisma = require("../../infrastructure/db/prismaClient");
+const { ADMIN_ROLES } = require("../../middleware/adminGuard");
 
 class BacktestHistoryService {
   /**
@@ -169,6 +171,71 @@ class BacktestHistoryService {
    * @param {number} id2 - Second backtest ID
    * @returns {object} - Comparison object
    */
+  static async _getCallerRole(userId) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    return user?.role || "USER";
+  }
+
+  static _assertCanDelete(record, userId, role) {
+    if (!record) {
+      const err = new Error("Backtest tidak ditemukan");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (ADMIN_ROLES.includes(role)) return;
+    if (record.user_id === userId || record.user_id == null) return;
+    const err = new Error("Forbidden — tidak bisa menghapus backtest pengguna lain");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  static async deleteRun(id, userId) {
+    try {
+      const record = await this.getById(id);
+      const role = await this._getCallerRole(userId);
+      this._assertCanDelete(record, userId, role);
+      await db.deleteBacktestHistoryById(id);
+      return { deleted: true, id };
+    } catch (err) {
+      console.error(`[BacktestHistory] Error deleting run ${id}: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async deleteRuns(ids, userId) {
+    try {
+      const uniqueIds = [...new Set(ids.map(Number).filter(Number.isFinite))];
+      if (!uniqueIds.length) {
+        const err = new Error("ids diperlukan");
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const records = await db.getBacktestHistoryByIds(uniqueIds);
+      const foundIds = new Set(records.map(r => r.id));
+      const missing = uniqueIds.filter(id => !foundIds.has(id));
+      if (missing.length) {
+        const err = new Error(`Backtest tidak ditemukan: ${missing.join(", ")}`);
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const role = await this._getCallerRole(userId);
+      for (const record of records) {
+        this._assertCanDelete(record, userId, role);
+      }
+
+      const deleted = await db.deleteBacktestHistoryByIds(uniqueIds);
+      return { deleted, ids: uniqueIds };
+    } catch (err) {
+      console.error(`[BacktestHistory] Error bulk deleting runs: ${err.message}`);
+      throw err;
+    }
+  }
+
   static async compareBacktests(id1, id2) {
     try {
       const bt1 = await this.getById(id1);

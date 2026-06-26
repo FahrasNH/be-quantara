@@ -299,6 +299,32 @@ module.exports = function createBacktestRouter(context) {
   }));
 
   /**
+   * DELETE /api/v1/backtest/runs/bulk
+   * Hapus beberapa backtest sekaligus (bulk select di arsip)
+   */
+  router.delete("/runs/bulk", asyncHandler(async (req, res) => {
+    const { ids } = req.body;
+    if (!ids?.length) {
+      return res.status(400).json({ ok: false, error: "ids diperlukan" });
+    }
+    const result = await BacktestHistoryService.deleteRuns(ids, req.userId);
+    res.json({ ok: true, ...result, message: `${result.deleted} backtest dihapus` });
+  }));
+
+  /**
+   * DELETE /api/v1/backtest/run/:id
+   * User hapus run sendiri; admin bisa hapus run user mana pun
+   */
+  router.delete("/run/:id", asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ ok: false, error: "ID tidak valid" });
+    }
+    await BacktestHistoryService.deleteRun(id, req.userId);
+    res.json({ ok: true, id, message: "Backtest dihapus" });
+  }));
+
+  /**
    * GET /api/v1/backtest/run/:id
    * Alias detail backtest by ID
    */
