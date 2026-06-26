@@ -390,6 +390,7 @@ module.exports = function createAdminRouter(helpers = {}) {
           isPartial: t.is_partial === 1,
           r,
           opened:    fmtShort(t.open_time),
+          closed:    t.close_time ? fmtShort(t.close_time) : null,
           ts:        t.open_time ? new Date(t.open_time).toISOString() : null,
           status:    t.close_time === null || t.close_time === undefined ? "Open" : "Closed",
           dryRun:    t.dry_run === 1,
