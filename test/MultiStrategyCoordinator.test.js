@@ -146,6 +146,14 @@ function runStateAggTest() {
       t("engines summary berisi 2 entri", st.engines.length === 2);
       t("multiStrategy flag = true", st.multiStrategy === true);
 
+      engines.AF.state.lastTick = "2026-06-26T10:00:00.000Z";
+      engines.AF.state.lastPrice = 3500;
+      engines.AF.sessionId = "sess-leader";
+      const st2 = c.getState();
+      t("getState lastTick dari leader", st2.lastTick === "2026-06-26T10:00:00.000Z");
+      t("getState lastPrice dari leader", st2.lastPrice === 3500);
+      t("getState sessionId dari leader", st2.sessionId === "sess-leader");
+
       runCanEnterTests();
     });
   }

@@ -562,9 +562,41 @@ class MultiStrategyCoordinator extends EventEmitter {
     const wins      = trades.filter((t) => (t.pnl || 0) > 0).length;
     const winRate   = trades.length > 0 ? Math.round((wins / trades.length) * 100) : 0;
 
+    // Telemetri tick: utamakan engine leader (strategies[0]), fallback engine dengan
+    // lastTick paling baru — agar FE/WS menampilkan lastPrice/sessionId/sparkline
+    // sama seperti BotEngine tunggal (mergeBotWithLiveState, BotCard).
+    let lastTick = null;
+    let lastPrice = null;
+    let sessionId = null;
+
+    const leader = this.engines.get(this.strategies[0]);
+    if (leader && typeof leader.getState === "function") {
+      const lst = leader.getState();
+      lastTick = lst.lastTick ?? null;
+      lastPrice = lst.lastPrice ?? null;
+      sessionId = lst.sessionId ?? leader.sessionId ?? null;
+    }
+
+    if (lastTick == null) {
+      let bestTs = 0;
+      for (const [, engine] of this.engines) {
+        const st = typeof engine.getState === "function" ? engine.getState() : {};
+        const ts = st.lastTick ? new Date(st.lastTick).getTime() : 0;
+        if (ts >= bestTs) {
+          bestTs = ts;
+          lastTick = st.lastTick ?? lastTick;
+          lastPrice = st.lastPrice ?? lastPrice;
+          sessionId = st.sessionId ?? engine.sessionId ?? sessionId;
+        }
+      }
+    }
+
     return {
       running:  this.running,
       starting: this.starting,
+      sessionId,
+      lastTick,
+      lastPrice,
       symbol: this.symbol,
       dryRun: this.dryRun,
       multiStrategy: true,

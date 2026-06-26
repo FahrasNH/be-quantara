@@ -19,6 +19,7 @@ const { createExchangeClient } = require("../infrastructure/exchange");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
 const telegramBot = require("../infrastructure/notifications/TelegramBotPoller");
+const notifier = require("../infrastructure/notifications/TelegramNotifier");
 
 // Middleware
 const { authMiddleware } = require("../middleware/auth");
@@ -661,174 +662,197 @@ const PORT = process.env.PORT || 3000;
 // BotEngine-nya dengan dryRun & kredensial yang TERSIMPAN — jadi bot LIVE tetap
 // LIVE tanpa intervensi user. start() akan me-reuse sesi terbuka (lihat
 // openSession) sehingga tidak membuat sesi duplikat.
+
+const RESUME_MAX_RETRIES = parseInt(process.env.RESUME_MAX_RETRIES, 10) || 3;
+const _resumeInFlight = new Set(); // `${userId}::${symbol}` — cegah resume paralel ganda
+
+/**
+ * Resume satu bot dari record DB. Dipakai startup auto-resume & watchdog cron.
+ * Gagal setelah N retry → set DB running=false + alert Telegram admin (anti-zombie).
+ *
+ * @returns {Promise<{ ok: boolean, action?: string, reason?: string }>}
+ */
+async function resumeOneBot(bot, { source = "startup" } = {}) {
+  const inflightKey = `${bot.userId}::${bot.symbol}`;
+  if (_resumeInFlight.has(inflightKey)) {
+    return { ok: false, reason: "in-flight" };
+  }
+  _resumeInFlight.add(inflightKey);
+
+  const prisma = require("../infrastructure/db/prismaClient");
+  let lastErr = null;
+
+  try {
+    for (let attempt = 1; attempt <= RESUME_MAX_RETRIES; attempt++) {
+      try {
+        const result = await _resumeOneBotAttempt(bot, prisma);
+        return result;
+      } catch (e) {
+        lastErr = e;
+        console.warn(
+          `[Resume/${source}] Percobaan ${attempt}/${RESUME_MAX_RETRIES} gagal ${bot.symbol}: ${e.message}`
+        );
+        if (attempt < RESUME_MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
+      }
+    }
+
+    // Semua retry habis — tandai stopped di DB agar tidak zombie (running=true tanpa engine)
+    try {
+      await prisma.bot.update({
+        where: { id: bot.id },
+        data: { running: false, stoppedAt: new Date() },
+      });
+    } catch (dbErr) {
+      console.error(`[Resume/${source}] Gagal set running=false ${bot.symbol}: ${dbErr.message}`);
+    }
+
+    const alertMsg =
+      `[${source}] Gagal resume bot ${bot.symbol} (user ${bot.userId}) ` +
+      `setelah ${RESUME_MAX_RETRIES} percobaan: ${lastErr?.message ?? "unknown"}. ` +
+      `DB running=false (anti-zombie).`;
+    console.error(`[Resume/${source}] ${alertMsg}`);
+    notifier.notifyError(alertMsg);
+
+    return { ok: false, reason: lastErr?.message ?? "max-retries" };
+  } finally {
+    _resumeInFlight.delete(inflightKey);
+  }
+}
+
+/** Satu percobaan resume — throw bila gagal (untuk retry loop di resumeOneBot). */
+async function _resumeOneBotAttempt(bot, prisma) {
+  const { getExchangeCredentials } = require("../services/userExchange");
+  const { getConnectedExchange } = require("../services/ExchangeService");
+
+  const connectedExchange = await getConnectedExchange(bot.userId);
+  const creds = await getExchangeCredentials(bot.userId, connectedExchange || "bitget");
+  const apiKey     = creds?.apiKey;
+  const apiSecret  = creds?.apiSecret;
+  const passphrase = creds?.apiPassphrase;
+
+  // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
+  if (!bot.dryRun && (!apiKey || !apiSecret)) {
+    await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
+    console.warn(`[Startup] Bot LIVE ${bot.symbol} tidak punya API key → stopped`);
+    return { ok: true, action: "stopped-no-creds" };
+  }
+
+  const exchangeType = (connectedExchange || "bitget").toLowerCase();
+  if (!bot.dryRun && exchangeType === "okx" && !passphrase) {
+    await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
+    console.warn(`[Startup] Bot LIVE ${bot.symbol} OKX tanpa passphrase → stopped`);
+    return { ok: true, action: "stopped-no-passphrase" };
+  }
+
+  let strategies = null;
+
+  if (MULTI_STRATEGY_ENABLED) {
+    try {
+      const mode = bot.dryRun ? "dry" : "live";
+      const tierStrategies = await getTierStrategies(bot.userId, mode);
+      const dbStrategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
+        ? bot.strategyGroup
+        : [];
+      strategies = tierStrategies.length >= dbStrategies.length
+        ? tierStrategies
+        : dbStrategies;
+      if (JSON.stringify(strategies) !== JSON.stringify(dbStrategies)) {
+        await prisma.bot.update({
+          where: { id: bot.id },
+          data: { strategyGroup: strategies, strategyKey: strategies[0] },
+        }).catch(() => {});
+      }
+    } catch (_) {
+      strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
+        ? bot.strategyGroup
+        : null;
+    }
+  }
+
+  if (Array.isArray(strategies) && strategies.length > 0) {
+    const pc = pairClassifier.classify(bot.symbol);
+    if (pc.tier === "VOLATILE") {
+      const filtered = strategies.filter((s) => !pc.blockedStrategies.includes(s));
+      const volStrategies = filtered.length > 0 ? filtered : ["MEAN_REVERSION"];
+      if (JSON.stringify(volStrategies) !== JSON.stringify(strategies)) {
+        strategies = volStrategies;
+        await prisma.bot.update({
+          where: { id: bot.id },
+          data: { strategyGroup: strategies, strategyKey: strategies[0] },
+        }).catch(() => {});
+        console.log(`[Startup] ${bot.symbol} VOLATILE → resume hanya [${strategies.join(",")}] (filter MR-only)`);
+      }
+    }
+  }
+
+  const useMulti = MULTI_STRATEGY_ENABLED && strategies && strategies.length > 0;
+
+  let accountOpenCap = 0;
+  try {
+    accountOpenCap = getMaxConcurrentPositions(await getUserTier(bot.userId));
+    getCoordinator(bot.userId).setMaxAccountOpenPositions(accountOpenCap);
+  } catch (e) {
+    accountOpenCap = getMaxConcurrentPositions(undefined);
+    console.warn(`[Startup] Gagal resolve cap posisi tier ${bot.symbol}: ${e.message} — fallback ${accountOpenCap}`);
+  }
+
+  let instance;
+  if (useMulti) {
+    instance = await createMultiStrategyInstance(bot.userId, bot.symbol, {
+      strategies,
+      capital:     bot.capital,
+      dryRun:      bot.dryRun,
+      tpMode:      bot.tpMode ?? "full",
+      botId:       bot.id,
+      exchangeType,
+      apiKey, apiSecret, passphrase,
+      maxAccountOpenPositions: accountOpenCap,
+    });
+    console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
+  } else {
+    instance = createBotInstance(bot.userId, bot.symbol, {
+      capital:     bot.capital,
+      strategyKey: bot.strategyKey,
+      dryRun:      bot.dryRun,
+      tpMode:      bot.tpMode ?? "full",
+      botId:       bot.id,
+      userId:      bot.userId,
+      exchangeType,
+      apiKey, apiSecret, passphrase,
+      maxAccountOpenPositions: accountOpenCap,
+    });
+    console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+  }
+
+  const fresh = await prisma.bot.findUnique({ where: { id: bot.id }, select: { running: true } });
+  if (!fresh?.running) {
+    console.log(`[Startup] Skip resume ${bot.symbol} — sudah di-stop selagi warm-up`);
+    return { ok: true, action: "skipped-stopped-during-warmup" };
+  }
+
+  const liveState = instance.getState();
+  if (!liveState.running && !liveState.starting) await instance.start();
+  return { ok: true, action: "resumed" };
+}
+
 async function resumeRunningBots() {
   try {
-    // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
     const prisma = require("../infrastructure/db/prismaClient");
-    const { getExchangeCredentials } = require("../services/userExchange");
 
     const bots = await prisma.bot.findMany({
       where: { running: true },
     });
 
-    // Log tanpa syarat → penanda pasti bahwa kode auto-resume sudah ter-deploy.
     console.log(`[Startup] 🔁 Auto-resume: ${bots.length} bot dengan running=true ditemukan`);
 
-    let resumed = 0, stopped = 0;
+    let resumed = 0;
+    let stopped = 0;
+    let failed = 0;
 
-    // PERF vs OOM trade-off: 3-worker pool memicu OOM-leak saat 10+ bots (40+ engines
-    // × 40MB each). Kurangi ke 1 worker = resume sequential. Bot ke-10 mungkin butuh
-    // menit untuk selesai, tapi at least proses tidak tembus ceiling. Memory leak
-    // (saat resume engine tidak ter-cleanup) tetap ada tapi perlahan (300ms antar-bot),
-    // jadi proses bisa stabil di bawah 3GB sampai semua resume selesai.
-    async function resumeOneBot(bot) {
-      try {
-        const { getConnectedExchange } = require("../services/ExchangeService");
-        const connectedExchange = await getConnectedExchange(bot.userId);
-        const creds = await getExchangeCredentials(bot.userId, connectedExchange || "bitget");
-        const apiKey     = creds?.apiKey;
-        const apiSecret  = creds?.apiSecret;
-        const passphrase = creds?.apiPassphrase;
-
-        // Bot LIVE tanpa kredensial tidak bisa dilanjutkan → tandai stopped.
-        if (!bot.dryRun && (!apiKey || !apiSecret)) {
-          await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
-          stopped++;
-          console.warn(`[Startup] Bot LIVE ${bot.symbol} tidak punya API key → stopped`);
-          return;
-        }
-
-        const exchangeType = (connectedExchange || "bitget").toLowerCase();
-        if (!bot.dryRun && exchangeType === "okx" && !passphrase) {
-          await prisma.bot.update({ where: { id: bot.id }, data: { running: false, stoppedAt: new Date() } });
-          stopped++;
-          console.warn(`[Startup] Bot LIVE ${bot.symbol} OKX tanpa passphrase → stopped`);
-          return;
-        }
-
-        // Pilih path resume: multi-strategy jika flag ON.
-        // Selalu ambil tier strategies terkini agar upgrade tier langsung berlaku
-        // tanpa perlu stop+start manual. DB strategyGroup dipakai sebagai fallback.
-        let strategies = null;
-
-        if (MULTI_STRATEGY_ENABLED) {
-          try {
-            const mode = bot.dryRun ? "dry" : "live";
-            const tierStrategies = await getTierStrategies(bot.userId, mode);
-            const dbStrategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
-              ? bot.strategyGroup
-              : [];
-            // Pakai tier strategies jika lebih banyak dari yang tersimpan di DB
-            // (tier upgrade), atau tier strategies jika DB kosong.
-            strategies = tierStrategies.length >= dbStrategies.length
-              ? tierStrategies
-              : dbStrategies;
-            // Sync DB jika tier strategies berbeda dari yang tersimpan
-            if (JSON.stringify(strategies) !== JSON.stringify(dbStrategies)) {
-              await prisma.bot.update({
-                where: { id: bot.id },
-                data: { strategyGroup: strategies, strategyKey: strategies[0] },
-              }).catch(() => {});
-            }
-          } catch (_) {
-            strategies = Array.isArray(bot.strategyGroup) && bot.strategyGroup.length > 0
-              ? bot.strategyGroup
-              : null;
-          }
-        }
-
-        // PAIR-TIER: terapkan filter strategi VOLATILE SAAT RESUME juga (sebelumnya
-        // hanya di route start). Tanpa ini, tiap restart server me-resume bot VOLATILE
-        // dengan SEMUA 4 strategi tier → aturan "MR only" pada pair berisiko tinggi
-        // dilanggar diam-diam. Sinkronkan juga ke DB agar kartu menampilkan jumlah benar.
-        if (Array.isArray(strategies) && strategies.length > 0) {
-          const pc = pairClassifier.classify(bot.symbol);
-          if (pc.tier === "VOLATILE") {
-            const filtered = strategies.filter(s => !pc.blockedStrategies.includes(s));
-            const volStrategies = filtered.length > 0 ? filtered : ["MEAN_REVERSION"];
-            if (JSON.stringify(volStrategies) !== JSON.stringify(strategies)) {
-              strategies = volStrategies;
-              await prisma.bot.update({
-                where: { id: bot.id },
-                data: { strategyGroup: strategies, strategyKey: strategies[0] },
-              }).catch(() => {});
-              console.log(`[Startup] ${bot.symbol} VOLATILE → resume hanya [${strategies.join(",")}] (filter MR-only)`);
-            }
-          }
-        }
-
-        const useMulti = MULTI_STRATEGY_ENABLED && strategies && strategies.length > 0;
-
-        // Per-tier account open-position cap (fix meter "8/4"): resolusi tier user
-        // → cap, lalu set di coordinator (utk dilaporkan ke FE) & teruskan ke engine
-        // config (penegakan gate). Resume TAHU tier (bot.userId) jadi tak ada limitasi.
-        // Fail-safe: tier tak terbaca → fallback FOUNDRY(4) via getMaxConcurrentPositions.
-        let accountOpenCap = 0;
-        try {
-          accountOpenCap = getMaxConcurrentPositions(await getUserTier(bot.userId));
-          getCoordinator(bot.userId).setMaxAccountOpenPositions(accountOpenCap);
-        } catch (e) {
-          accountOpenCap = getMaxConcurrentPositions(undefined); // FOUNDRY fallback
-          console.warn(`[Startup] Gagal resolve cap posisi tier ${bot.symbol}: ${e.message} — fallback ${accountOpenCap}`);
-        }
-
-        let instance;
-        if (useMulti) {
-          instance = await createMultiStrategyInstance(bot.userId, bot.symbol, {
-            strategies,
-            capital:     bot.capital,
-            dryRun:      bot.dryRun,
-            tpMode:      bot.tpMode ?? "full",
-            botId:       bot.id,
-            exchangeType,
-            apiKey, apiSecret, passphrase,
-            maxAccountOpenPositions: accountOpenCap,
-          });
-          console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
-        } else {
-          instance = createBotInstance(bot.userId, bot.symbol, {
-            capital:     bot.capital,
-            strategyKey: bot.strategyKey,
-            dryRun:      bot.dryRun,           // ← mode ASLI dari DB, bukan default FE
-            tpMode:      bot.tpMode ?? "full",
-            botId:       bot.id,
-            userId:      bot.userId,
-            exchangeType,
-            apiKey, apiSecret, passphrase,
-            maxAccountOpenPositions: accountOpenCap,
-          });
-          console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
-        }
-
-        // Re-check DB sebelum start: jika user sudah Stop All selagi kita warm-up
-        // (set running=false via HTTP), batal — jangan re-start bot yang sudah
-        // distop. Tanpa re-check ini ada race: stop endpoint tidak menemukan
-        // instance (belum di-create), set DB running=false, tapi resumeOneBot lanjut
-        // membuat instance baru & start → bot jalan lagi padahal DB=false.
-        const fresh = await prisma.bot.findUnique({ where: { id: bot.id }, select: { running: true } });
-        if (!fresh?.running) {
-          console.log(`[Startup] Skip resume ${bot.symbol} — sudah di-stop selagi warm-up`);
-          return;
-        }
-        // Jangan panggil start() bila instance sudah running ATAU sedang starting:
-        // memanggil start() pada coordinator yang masih warm-up melempar "sedang dalam
-        // proses start" → resume bot ini GAGAL (gejala: NEAR tak pernah tampil ROI/live
-        // PnL sementara WLD muncul). Cukup lewati; instance yang sedang start akan
-        // menyelesaikan warm-up-nya sendiri.
-        const liveState = instance.getState();
-        if (!liveState.running && !liveState.starting) await instance.start();
-        resumed++;
-      } catch (e) {
-        console.warn(`[Startup] Gagal resume ${bot.symbol}: ${e.message}`);
-      }
-    }
-
-    // Dedupe per (user, symbol): bila ada >1 baris bot untuk simbol sama (data lama/
-    // duplikat), dua worker bisa me-resume coordinator yang SAMA paralel → satu set
-    // starting=true, satu lagi panggil start() lagi → throw "sedang dalam proses start"
-    // → bot itu gugur resume (mis. NEAR). Resume cukup satu per (user, symbol).
     const seenResumeKeys = new Set();
-    const resumeQueue = bots.filter(b => {
+    const resumeQueue = bots.filter((b) => {
       const k = `${b.userId}::${b.symbol}`;
       if (seenResumeKeys.has(k)) {
         console.warn(`[Startup] Lewati duplikat resume ${b.symbol} (baris bot ganda untuk user ${b.userId})`);
@@ -837,21 +861,113 @@ async function resumeRunningBots() {
       seenResumeKeys.add(k);
       return true;
     });
-    async function resumeWorker() {
-      while (resumeQueue.length) {
-        const bot = resumeQueue.shift();
-        await resumeOneBot(bot);
-        // 300ms inter-start breathing room untuk exchange rate-limiter
-        if (resumeQueue.length > 0) await new Promise(r => setTimeout(r, 300));
+
+    for (const bot of resumeQueue) {
+      const result = await resumeOneBot(bot, { source: "startup" });
+      if (result.ok) {
+        if (result.action === "resumed" || result.action === "skipped-stopped-during-warmup") resumed++;
+        else if (String(result.action || "").startsWith("stopped")) stopped++;
+      } else {
+        failed++;
+      }
+      if (resumeQueue.indexOf(bot) < resumeQueue.length - 1) {
+        await new Promise((r) => setTimeout(r, 300));
       }
     }
-    // Sequential resume (1 worker) untuk hindari OOM spike saat 10+ bots.
-    await resumeWorker();
 
-    console.log(`[Startup] ✅ Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan`);
-    await prisma.$disconnect();
+    console.log(`[Startup] ✅ Auto-resume selesai: ${resumed} dilanjutkan, ${stopped} dihentikan, ${failed} gagal`);
   } catch (err) {
     console.warn("[Startup] resumeRunningBots error (non-fatal):", err.message);
+  } finally {
+    _resumeInFlight.clear();
+  }
+}
+
+/**
+ * Watchdog cron: deteksi bot zombie (DB running=true tapi tidak ada instance in-memory
+ * dan sudah >2 menit sejak startedAt) lalu trigger resume. HealthChecker.js fokus pada
+ * metrik sistem (CPU/mem); watchdog ini khusus konsistensi bot↔DB.
+ */
+async function runBotWatchdog() {
+  try {
+    const hc = getHealthChecker();
+    if (hc && !hc.isHealthy()) {
+      console.warn("[Watchdog] Skip tick — HealthChecker melaporkan sistem unhealthy");
+      return;
+    }
+
+    const prisma = require("../infrastructure/db/prismaClient");
+    const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
+
+    const candidates = await prisma.bot.findMany({
+      where: {
+        running: true,
+        startedAt: { lt: twoMinAgo },
+      },
+    });
+
+    if (candidates.length === 0) return;
+
+    for (const bot of candidates) {
+      const instance = getBot(bot.userId, bot.symbol);
+      if (instance) continue;
+
+      console.warn(
+        `[Watchdog] Zombie bot: ${bot.symbol} (user ${bot.userId}) — DB running=true, tidak ada engine, startedAt >2m → resume`
+      );
+      await resumeOneBot(bot, { source: "watchdog" });
+    }
+  } catch (err) {
+    console.warn("[Watchdog] Error (non-fatal):", err.message);
+  }
+}
+
+function startBotWatchdog() {
+  const intervalMs = parseInt(process.env.BOT_WATCHDOG_INTERVAL_MS, 10) || 60_000;
+  setInterval(() => runBotWatchdog(), intervalMs).unref?.();
+  // Tunda tick pertama agar startup auto-resume selesai dulu
+  setTimeout(() => runBotWatchdog(), Math.max(intervalMs, 90_000)).unref?.();
+  console.log(`[Watchdog] Bot zombie checker aktif (interval ${intervalMs / 1000}s)`);
+}
+
+/** Lazy singleton HealthChecker (opsional) — skip watchdog bila sistem unhealthy. */
+let _healthCheckerInstance = null;
+function getHealthChecker() {
+  if (_healthCheckerInstance !== null) return _healthCheckerInstance;
+  try {
+    const HealthChecker = require("../infrastructure/monitoring/HealthChecker");
+    _healthCheckerInstance = new HealthChecker({ checkInterval: 60_000 });
+  } catch {
+    _healthCheckerInstance = false;
+  }
+  return _healthCheckerInstance || null;
+}
+
+/**
+ * P1-10: Log restart count PM2 saat boot; alert Telegram bila mendekati max_restarts.
+ * PM2 set restart_time via process env (unstable restarts sejak min_uptime terakhir).
+ */
+function checkPm2RestartHealth() {
+  if (!process.env.pm_id) return;
+
+  const appName = process.env.name || "quantara";
+  const restarts = parseInt(process.env.restart_time, 10) || 0;
+  const maxRestarts = parseInt(process.env.PM2_MAX_RESTARTS, 10) || 10;
+
+  console.log(`[PM2] Process "${appName}" restart_time=${restarts} (max_restarts=${maxRestarts})`);
+
+  if (restarts >= maxRestarts) {
+    const msg =
+      `PM2 max_restarts (${maxRestarts}) TERLAMPAUI untuk "${appName}" — ` +
+      `proses tidak akan auto-restart lagi. Butuh intervensi manual.`;
+    console.error(`[PM2] ${msg}`);
+    notifier.notifyError(msg);
+  } else if (restarts >= Math.max(1, maxRestarts - 1)) {
+    const msg =
+      `PM2 restart loop: "${appName}" restart ${restarts}/${maxRestarts} — ` +
+      `mendekati batas max_restarts.`;
+    console.warn(`[PM2] ${msg}`);
+    notifier.notifyError(msg);
   }
 }
 
@@ -873,6 +989,8 @@ db.init()
     // Dynamic pair classification dari CoinGecko (v2.3: refresh tiap 2 jam, non-blocking)
     pairClassifier.refreshDynamic().catch(() => {});
     setInterval(() => pairClassifier.refreshDynamic().catch(() => {}), 2 * 60 * 60 * 1000);
+    checkPm2RestartHealth();
+    startBotWatchdog();
     // Pulihkan bot yang sedang berjalan (async, tidak memblok startup)
     resumeRunningBots();
   })

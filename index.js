@@ -25,4 +25,38 @@ if (process.env.MEM_DEBUG === "1") {
   }, 30_000).unref();
 }
 
+// PM2 restart budget check (OPS-003): PM2 injects `restart_time` ke env proses.
+// Tanpa hook eksternal PM2, kita log + alert Telegram admin saat budget hampir habis.
+// max_restarts didefinisikan di ecosystem.config.js (default 10); override via PM2_MAX_RESTARTS.
+(function checkPm2RestartBudget() {
+  const pmId = process.env.pm_id;
+  if (!pmId) return;
+
+  const restartCount = parseInt(process.env.restart_time ?? process.env.RESTART_TIME ?? "0", 10);
+  const maxRestarts = parseInt(process.env.PM2_MAX_RESTARTS ?? "10", 10);
+  const appName = process.env.name ?? `pm_id:${pmId}`;
+
+  if (restartCount <= 0) return;
+
+  console.log(`[PM2] Restart count: ${restartCount}/${maxRestarts} (app: ${appName})`);
+
+  if (restartCount >= maxRestarts) {
+    const msg =
+      `PM2 max_restarts TERLAMPAUI (${restartCount}/${maxRestarts}) untuk ${appName}. ` +
+      `Proses mungkin TIDAK akan di-restart lagi setelah crash berikutnya — cek logs segera.`;
+    console.error(`[PM2] ${msg}`);
+    try {
+      require("./src/infrastructure/notifications/TelegramNotifier").notifyError(msg);
+    } catch { /* notifier opsional */ }
+  } else if (restartCount >= maxRestarts - 2) {
+    const msg =
+      `PM2 restart budget hampir habis: ${restartCount}/${maxRestarts} untuk ${appName}. ` +
+      `Investigasi crash-loop sebelum proses berhenti total.`;
+    console.warn(`[PM2] ${msg}`);
+    try {
+      require("./src/infrastructure/notifications/TelegramNotifier").notifyError(msg);
+    } catch { /* notifier opsional */ }
+  }
+})();
+
 require("./src/server/app");

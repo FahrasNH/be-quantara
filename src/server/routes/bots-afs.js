@@ -139,6 +139,7 @@ module.exports = function createBotsRouter(helpers) {
         id:          botRecord.id,
         botId:       botRecord.symbol,
         running:     botRecord.running ? live.running : false,
+        starting:    botRecord.running ? (live.starting ?? false) : false,
         strategyKey: botRecord.strategyKey,
         // Modal SELALU dari DB (yang dikonfigurasi user). getState() melaporkan
         // `capital` versi engine (mis. per-strategi / agregat) yang bisa BERBEDA
@@ -173,6 +174,8 @@ module.exports = function createBotsRouter(helpers) {
     return {
       ...botRecord,
       botId:          botRecord.symbol,
+      running:        false,
+      starting:       !!botRecord.running,
       capital:        botRecord.capital,
       startCapital:   botRecord.capital,
       pairTier,

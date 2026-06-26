@@ -14,6 +14,10 @@
  *    SIGINT sebelum PM2 mengirim SIGKILL — kritikal untuk live trading.
  *  - error_file/out_file: log persisten per-app. Pasang juga pm2-logrotate di VPS:
  *    pm2 install pm2-logrotate && pm2 set pm2-logrotate:max_size 50M
+ *
+ * PM2 restart monitoring: index.js membaca env `restart_time` (injected PM2) saat boot
+ * dan mengirim alert Telegram admin bila mendekati/melewati max_restarts di bawah.
+ * Override threshold via PM2_MAX_RESTARTS env (default 10, selaras max_restarts di sini).
  */
 module.exports = {
   apps: [
