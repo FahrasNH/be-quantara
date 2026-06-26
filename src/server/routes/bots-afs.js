@@ -523,10 +523,9 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       // ── PAIR-TIER-05: classify pair → filter + merge tier overrides ──────────
-      // v2.3 Hybrid Metric: hitung ATR%30d + likuiditas 24j dari candle harian,
-      // lalu sertakan ke classify() agar bump dinamis (ATR tinggi → naik tier;
-      // likuiditas tipis → paksa VOLATILE) AKTIF saat bot dimulai. Non-fatal:
-      // bila gagal/null → classify jatuh ke tier dasar (backward-compatible).
+      // v2.0 Hybrid Score: hitung HV30 + ATR%14 + liquidityRatio + beta/rank dari
+      // candle harian + CoinGecko, lalu sertakan ke classify(). Non-fatal: bila
+      // gagal/null → classify jatuh ke tier rank/static (backward-compatible).
       const pairMetrics = await getPairTierMetrics(sharedClient, symbol).catch(() => null);
       const pairClass = pairClassifier.classify(symbol, pairMetrics);
       const tierOverrides = pairClass.paramOverrides;
