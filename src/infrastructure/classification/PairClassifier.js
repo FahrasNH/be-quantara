@@ -9,9 +9,10 @@
  *   SEMI_VOLATILE — score 0.66–0.78 (WLD, HYPE, ENA, TAO, …)
  *   VOLATILE      — score > 0.78
  *
- * Primary path (PAIR_VOLATILITY.md v2.0): Hybrid Volatility Score dari
- * HV30 + ATR%14 + liquidityRatio + adjustment rank/beta.
- * Fallback bila metrik hybrid tidak tersedia: rank CoinGecko + static tables.
+ * Primary path (PAIR_VOLATILITY.md v2.1): Hybrid Volatility Score dari
+ * HV30 + ATR%14 + liquidityRatio + soft adjustment rank/beta.
+ * Secondary: CoinGecko real-time data (volume, market cap, 24h change proxy).
+ * Emergency fallback bila CoinGecko unreachable: static LIQUID table saja.
  *
  * NOTE: "pair tier" is distinct from the user's subscription tier
  * (FOUNDRY/FORGE/MINT/VAULT). Pair tier affects strategy param overrides
@@ -48,16 +49,8 @@ const LIQUID_PAIRS = new Set([
   'ADAUSDT', 'DOGEUSDT', 'TRXUSDT', 'LINKUSDT', 'LTCUSDT',
 ]);
 
-// VOLATILE: altcoins with high beta, thin order books, wide spreads.
-// Non-MR strategies are blocked on these pairs (AC-PAIR-04).
-const VOLATILE_PAIRS = new Set([
-  'WLDUSDT', 'HYPEUSDT', 'SUIUSDT', 'SEIUSDT', 'TIAUSDT',
-  'INJUSDT', 'ENAUSDT', 'APEUSDT', 'GALAUSDT', 'ARBUSDT',
-  'OPUSDT', 'STRKUSDT', 'JUPUSDT', 'RENDERUSDT', 'FETUSDT',
-  'AGIXUSDT', 'WOOUSDT', 'GMXUSDT', 'DYDXUSDT', 'PERPUSDT',
-]);
-
-// Everything else → STABLE (mid-cap, moderate volatility)
+// Emergency-only fallback when CoinGecko is unreachable (v2.1: no manual volatile list).
+const VOLATILE_PAIRS = new Set([]);
 
 // ─── Strategy Recommendations per Pair Tier ───────────────────────────────────
 // v2.3 spec (PAIR_VOLATILITY.md §6): VOLATILE & SEMI_VOLATILE merekomendasikan
@@ -202,16 +195,12 @@ const STABLECOINS = new Set(["USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "GUS
 // ─── PairClassifier ───────────────────────────────────────────────────────────
 class PairClassifier {
   constructor() {
-    // Dynamic sets populated from CoinGecko — empty means "use static fallback".
-    // Stored as BASE tickers (BTC, ETH, …), not BTCUSDT, so we can match exchange
-    // symbols that carry leverage-token prefixes (1000BONK, 1000000BOB → BONK, BOB).
-    // v2.3 spec: ambang rank lebih granular (≤12 / 13–60 / 61–150 / >150).
-    this._dynamicLiquid       = new Set();  // market_cap_rank ≤ 12
-    this._dynamicStable       = new Set();  // market_cap_rank 13–60
-    this._dynamicSemiVolatile = new Set();  // market_cap_rank 61–150
-    this._dynamicRankMap      = new Map();  // base ticker → market_cap_rank
-    this._dynamicLastAt = null;
-    // v2.3 spec: refresh tiap 2 jam (dari 4 jam) — masih hemat CoinGecko free tier (~12 calls/day).
+    // CoinGecko real-time market data keyed by base ticker (BTC, HYPE, …).
+    // Populated by refreshDynamic(); drives v2.1 hybrid score without manual lists.
+    this._dynamicCoinData = new Map(); // base → { id, marketCap, volume24h, rank, priceChange24h }
+    this._dynamicRankMap  = new Map(); // base ticker → market_cap_rank (soft adjustment)
+    this._dynamicLastAt   = null;
+    // Refresh tiap 2 jam — hemat CoinGecko free tier (~12 calls/day).
     this._CACHE_TTL_MS = 2 * 60 * 60 * 1000;
   }
 
@@ -228,13 +217,9 @@ class PairClassifier {
   }
 
   /**
-   * Fetch coin market data from CoinGecko and update dynamic tier sets.
-   * v2.3 spec (PAIR_VOLATILITY.md §3) — ambang rank lebih granular:
-   *   Rank ≤ 12 (non-stablecoin) → LIQUID
-   *   Rank 13–60   → STABLE
-   *   Rank 61–150  → SEMI_VOLATILE
-   *   Rank > 150 atau tidak ada → VOLATILE (fail-safe)
-   * Falls back to static tables silently on error.
+   * Fetch top-250 coin market data from CoinGecko for v2.1 hybrid classification.
+   * Stores marketCap, volume24h, rank per base ticker — no manual tier lists.
+   * Falls back to static LIQUID table silently on error.
    */
   async refreshDynamic() {
     return new Promise((resolve) => {
@@ -250,26 +235,25 @@ class PairClassifier {
               return resolve(false);
             }
             const coins = JSON.parse(body);
-            const newLiquid       = new Set();
-            const newStable       = new Set();
-            const newSemiVolatile = new Set();
-            const newRankMap      = new Map();
+            const newCoinData = new Map();
+            const newRankMap  = new Map();
             for (const coin of coins) {
               const sym = (coin.symbol || "").toUpperCase();
               if (!sym || STABLECOINS.has(sym)) continue;
               const rank = coin.market_cap_rank ?? 9999;
               newRankMap.set(sym, rank);
-              // Fallback rank buckets (bila hybrid metrics tidak tersedia)
-              if (rank <= 12)        newLiquid.add(sym);
-              else if (rank <= 60)   newStable.add(sym);
-              else if (rank <= 150)  newSemiVolatile.add(sym);
+              newCoinData.set(sym, {
+                id:             coin.id,
+                marketCap:      coin.market_cap ?? null,
+                volume24h:      coin.total_volume ?? null,
+                rank,
+                priceChange24h: coin.price_change_percentage_24h ?? null,
+              });
             }
-            this._dynamicLiquid       = newLiquid;
-            this._dynamicStable       = newStable;
-            this._dynamicSemiVolatile = newSemiVolatile;
-            this._dynamicRankMap      = newRankMap;
-            this._dynamicLastAt = Date.now();
-            console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID (≤12), ${newStable.size} STABLE (13–60), ${newSemiVolatile.size} SEMI_VOLATILE (61–150); all other pairs → VOLATILE (CoinGecko market cap)`);
+            this._dynamicCoinData = newCoinData;
+            this._dynamicRankMap  = newRankMap;
+            this._dynamicLastAt   = Date.now();
+            console.log(`[PairClassifier] Dynamic refresh OK — ${newCoinData.size} coins loaded from CoinGecko (hybrid v2.1)`);
             resolve(true);
           } catch (e) {
             console.warn("[PairClassifier] CoinGecko parse error:", e.message, "— using static tables");
@@ -287,6 +271,48 @@ class PairClassifier {
         resolve(false);
       });
     });
+  }
+
+  /**
+   * Real-time CoinGecko market data for a symbol (from last refreshDynamic()).
+   * @param {string} symbol
+   * @returns {{ coinId: string, marketCap: number, volume24h: number, marketCapRank: number, priceChange24h: number|null }|null}
+   */
+  getCoinGeckoMarketData(symbol) {
+    const base = this._baseOf(symbol);
+    const data = this._dynamicCoinData.get(base);
+    if (!data) return null;
+    return {
+      coinId:          data.id,
+      marketCap:       data.marketCap,
+      volume24h:       data.volume24h,
+      marketCapRank:   data.rank,
+      priceChange24h:  data.priceChange24h,
+    };
+  }
+
+  /**
+   * Build hybrid-score inputs from CoinGecko data when candle metrics unavailable.
+   * Uses 24h price change as HV/ATR proxy (v2.1 real-API path).
+   * @param {string} sym - normalised symbol
+   * @returns {Object|null}
+   */
+  _buildCoinGeckoHybridData(sym) {
+    const cg = this.getCoinGeckoMarketData(sym);
+    if (!cg?.marketCap || !cg.volume24h) return null;
+
+    const liquidityRatio = cg.volume24h / cg.marketCap;
+    const absChange = Math.abs(cg.priceChange24h ?? 0);
+    // Proxy HV/ATR from 24h volatility when 30-day candles not yet fetched.
+    const atrProxy = Math.max(0.5, Math.min(6.0, absChange * 1.2 + 0.8));
+    const hvProxy  = Math.max(20, Math.min(120, absChange * 8 + 30));
+
+    return {
+      hv30:           hvProxy,
+      atrPercent14:   atrProxy,
+      liquidityRatio,
+      marketCapRank:  cg.marketCapRank,
+    };
   }
 
   /**
@@ -398,42 +424,38 @@ class PairClassifier {
   determineTier(symbol, metrics = null) {
     const sym = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-    // v2.0 primary: Hybrid Volatility Score bila caller menyuplai metrik lengkap.
+    // v2.1 primary: full hybrid score from candle metrics (HV30 + ATR%14 + liquidity).
     if (this._hasHybridInputs(metrics)) {
       const hybridData = this._resolveHybridData(sym, metrics);
-      const tier = calculateHybridVolatilityScore(hybridData);
-      // Fail-safe: likuiditas ekstrem tipis tetap paksa VOLATILE.
+      let tier = calculateHybridVolatilityScore(hybridData);
       if (metrics.lowLiquidity === true) return PAIR_TIER.VOLATILE;
+      tier = this.applyHybridMetrics(tier, metrics);
       return tier;
     }
 
-    // Fallback: rank CoinGecko / static tables + legacy bump ATR%/volume.
-    const base = this._baseTier(sym);
-    return this.applyHybridMetrics(base, metrics);
+    // v2.1 secondary: CoinGecko real-time hybrid (volume, market cap, 24h change proxy).
+    const cgHybrid = this._buildCoinGeckoHybridData(sym);
+    if (cgHybrid) {
+      let tier = calculateHybridVolatilityScore(cgHybrid);
+      if (metrics) tier = this.applyHybridMetrics(tier, metrics);
+      return tier;
+    }
+
+    // Emergency: static table when CoinGecko unreachable.
+    let tier = this._staticFallbackTier(sym);
+    if (metrics) tier = this.applyHybridMetrics(tier, metrics);
+    return tier;
   }
 
   /**
-   * Base tier from market-cap data only (no hybrid metric).
+   * Emergency tier when CoinGecko data unavailable (offline / unknown symbol).
    * @param {string} sym - already normalised (uppercase, alnum)
    * @returns {string}
    */
-  _baseTier(sym) {
-    // Dynamic path — authoritative CoinGecko market-cap data is loaded.
-    // v2.3: rank ≤12 LIQUID · 13–60 STABLE · 61–150 SEMI_VOLATILE · everything
-    // else (the long tail of small/new alts off CoinGecko's top-150) → VOLATILE.
-    // This is the safe default the old code got backwards (it defaulted unknowns
-    // to STABLE, so microcaps wrongly got loose risk + all strategies).
-    if (this._dynamicLiquid.size > 0 || this._dynamicStable.size > 0 || this._dynamicSemiVolatile.size > 0) {
-      const base = this._baseOf(sym);
-      if (this._dynamicLiquid.has(base))       return PAIR_TIER.LIQUID;
-      if (this._dynamicStable.has(base))       return PAIR_TIER.STABLE;
-      if (this._dynamicSemiVolatile.has(base)) return PAIR_TIER.SEMI_VOLATILE;
-      return PAIR_TIER.VOLATILE;
-    }
-    // Static fallback (CoinGecko unreachable) — curated lists, conservative STABLE default.
+  _staticFallbackTier(sym) {
     if (LIQUID_PAIRS.has(sym))   return PAIR_TIER.LIQUID;
     if (VOLATILE_PAIRS.has(sym)) return PAIR_TIER.VOLATILE;
-    return PAIR_TIER.STABLE;
+    return PAIR_TIER.VOLATILE; // conservative fail-safe for unknown symbols
   }
 
   /**
@@ -480,8 +502,10 @@ class PairClassifier {
       paramOverrides,
     };
     if (this._hasHybridInputs(metrics)) {
-      const hybridData = this._resolveHybridData(sym, metrics);
-      result.hybridScore = computeHybridScore(hybridData);
+      result.hybridScore = computeHybridScore(this._resolveHybridData(sym, metrics));
+    } else {
+      const cgHybrid = this._buildCoinGeckoHybridData(sym);
+      if (cgHybrid) result.hybridScore = computeHybridScore(cgHybrid);
     }
     return result;
   }

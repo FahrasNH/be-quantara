@@ -2,15 +2,7 @@
 /**
  * PairClassifier.test.js  (test/PairClassifier.test.js)
  *
- * PAIR-TIER-04 — Unit tests for PairClassifier
- *
- * Coverage:
- *  - determineTier() on 25+ symbols across all three tiers
- *  - classify() full output (tier, riskLevel, strategies, paramOverrides)
- *  - isStrategyBlocked() for VOLATILE pair restrictions
- *  - paramOverrides correctness per tier
- *  - Unknown symbol falls back to STABLE
- *  - Strategy blocking rules
+ * PAIR-TIER-04 — Unit tests for PairClassifier v2.1
  */
 
 const assert = require('node:assert/strict');
@@ -28,10 +20,22 @@ const {
   calculateHybridVolatilityScore,
 } = require('../src/infrastructure/classification/PairClassifier');
 
-describe('PairClassifier', () => {
-  // ── determineTier ─────────────────────────────────────────────────────────
+/** Seed CoinGecko dynamic data for test instances. */
+function seedCoinData(pc, base, { rank, marketCap, volume24h, priceChange24h = 5 }) {
+  pc._dynamicCoinData.set(base, {
+    id:             `${base.toLowerCase()}-test`,
+    marketCap,
+    volume24h,
+    rank,
+    priceChange24h,
+  });
+  pc._dynamicRankMap.set(base, rank);
+}
 
-  describe('determineTier() — LIQUID pairs', () => {
+describe('PairClassifier', () => {
+  // ── determineTier — static emergency fallback (CoinGecko offline) ─────────
+
+  describe('determineTier() — LIQUID pairs (static emergency)', () => {
     const liquidPairs = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'LINKUSDT', 'LTCUSDT'];
     for (const sym of liquidPairs) {
       it(`classifies ${sym} as LIQUID`, () => {
@@ -44,37 +48,15 @@ describe('PairClassifier', () => {
     });
   });
 
-  describe('determineTier() — VOLATILE pairs', () => {
-    const volatilePairs = [
-      'WLDUSDT', 'HYPEUSDT', 'SUIUSDT', 'SEIUSDT', 'TIAUSDT',
-      'INJUSDT', 'ENAUSDT', 'APEUSDT', 'ARBUSDT', 'OPUSDT',
-      'STRKUSDT', 'JUPUSDT', 'RENDERUSDT', 'FETUSDT', 'GMXUSDT',
-    ];
-    for (const sym of volatilePairs) {
-      it(`classifies ${sym} as VOLATILE`, () => {
-        assert.equal(pairClassifier.determineTier(sym), PAIR_TIER.VOLATILE);
-      });
-    }
-  });
-
-  describe('determineTier() — STABLE pairs (mid-cap / unknown)', () => {
-    it('classifies AVAXUSDT as STABLE', () => {
-      assert.equal(pairClassifier.determineTier('AVAXUSDT'), PAIR_TIER.STABLE);
+  describe('determineTier() — unknown symbols (conservative fail-safe)', () => {
+    it('classifies an unknown symbol as VOLATILE when CoinGecko unavailable', () => {
+      assert.equal(pairClassifier.determineTier('UNKNOWNUSDT'), PAIR_TIER.VOLATILE);
     });
-    it('classifies MATICUSDT as STABLE', () => {
-      assert.equal(pairClassifier.determineTier('MATICUSDT'), PAIR_TIER.STABLE);
+    it('classifies an empty symbol as VOLATILE', () => {
+      assert.equal(pairClassifier.determineTier(''), PAIR_TIER.VOLATILE);
     });
-    it('classifies DOTUSDT as STABLE', () => {
-      assert.equal(pairClassifier.determineTier('DOTUSDT'), PAIR_TIER.STABLE);
-    });
-    it('classifies an unknown symbol as STABLE (safe default)', () => {
-      assert.equal(pairClassifier.determineTier('UNKNOWNUSDT'), PAIR_TIER.STABLE);
-    });
-    it('classifies an empty symbol as STABLE', () => {
-      assert.equal(pairClassifier.determineTier(''), PAIR_TIER.STABLE);
-    });
-    it('classifies null/undefined as STABLE without throwing', () => {
-      assert.equal(pairClassifier.determineTier(null), PAIR_TIER.STABLE);
+    it('classifies null/undefined as VOLATILE without throwing', () => {
+      assert.equal(pairClassifier.determineTier(null), PAIR_TIER.VOLATILE);
     });
   });
 
@@ -96,28 +78,27 @@ describe('PairClassifier', () => {
       assert.equal(r.paramOverrides.votingThresholdOverride, null);
     });
 
-    it('WLDUSDT returns correct VOLATILE classification (v2.3)', () => {
-      const r = pairClassifier.classify('WLDUSDT');
-      assert.equal(r.tier, 'VOLATILE');
-      assert.equal(r.riskLevel, 'HIGH');
-      // v2.3: VOLATILE merekomendasikan MEAN_REVERSION + TREND_MOMENTUM (regime filter ketat)
+    it('WLDUSDT with hybrid metrics → SEMI_VOLATILE (v2.1)', () => {
+      const metrics = {
+        hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015,
+        marketCapRank: 120, betaToBTC: 1.5,
+      };
+      const r = pairClassifier.classify('WLDUSDT', metrics);
+      assert.equal(r.tier, 'SEMI_VOLATILE');
+      assert.equal(r.riskLevel, 'HIGH-MED');
       assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
       assert.ok(r.recommendedStrategies.includes('TREND_MOMENTUM'));
-      assert.equal(r.recommendedStrategies.length, 2);
-      // v2.3: AF & BR diblokir; TM TIDAK lagi diblokir (diizinkan dengan regime filter)
       assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
-      assert.ok(r.blockedStrategies.includes('BREAKOUT_RETEST'));
-      assert.ok(!r.blockedStrategies.includes('TREND_MOMENTUM'));
-      assert.equal(r.paramOverrides.slMultiplier, 1.5);
-      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.55);
-      assert.equal(r.paramOverrides.maxTradesPerDay, 4);
-      assert.equal(r.paramOverrides.dailyLossLimit, 0.03);
-      assert.equal(r.paramOverrides.regimeFilterRequired, true);
-      assert.equal(r.paramOverrides.votingThresholdOverride, 0.78);
+      assert.equal(r.paramOverrides.slMultiplier, 1.3);
+      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.75);
     });
 
-    it('AVAXUSDT returns correct STABLE classification (v2.3)', () => {
-      const r = pairClassifier.classify('AVAXUSDT');
+    it('AVAXUSDT with hybrid metrics → STABLE (v2.1)', () => {
+      const metrics = {
+        hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04,
+        marketCapRank: 40, betaToBTC: 1.2,
+      };
+      const r = pairClassifier.classify('AVAXUSDT', metrics);
       assert.equal(r.tier, 'STABLE');
       assert.equal(r.riskLevel, 'MEDIUM');
       assert.ok(r.recommendedStrategies.includes('ADAPTIVE_FUSION'));
@@ -126,20 +107,39 @@ describe('PairClassifier', () => {
       assert.equal(r.paramOverrides.slMultiplier, 1.1);
       assert.equal(r.paramOverrides.positionSizeAdjustment, 0.95);
       assert.equal(r.paramOverrides.maxTradesPerDay, 8);
-      assert.equal(r.paramOverrides.dailyLossLimit, null);
-      // v2.3: regime filter wajib untuk semua tier kecuali LIQUID
       assert.equal(r.paramOverrides.regimeFilterRequired, true);
       assert.equal(r.paramOverrides.votingThresholdOverride, 0.60);
     });
 
-    it('HYPEUSDT returns VOLATILE classification', () => {
-      const r = pairClassifier.classify('HYPEUSDT');
-      assert.equal(r.tier, 'VOLATILE');
+    it('HYPEUSDT with hybrid metrics → SEMI_VOLATILE (v2.1 doc example)', () => {
+      const metrics = {
+        hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015,
+        marketCapRank: 80, betaToBTC: 1.5,
+      };
+      const r = pairClassifier.classify('HYPEUSDT', metrics);
+      assert.equal(r.tier, 'SEMI_VOLATILE');
+      assert.equal(r.riskLevel, 'HIGH-MED');
+      assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
     });
 
-    it('SUIUSDT returns VOLATILE classification', () => {
-      const r = pairClassifier.classify('SUIUSDT');
+    it('thin microcap with hybrid metrics → VOLATILE', () => {
+      const metrics = {
+        hv30: 110, atrPercent14: 5.5, liquidityRatio: 0.002,
+        marketCapRank: 200, betaToBTC: 2.0,
+      };
+      const r = pairClassifier.classify('GRASSUSDT', metrics);
       assert.equal(r.tier, 'VOLATILE');
+      assert.equal(r.riskLevel, 'HIGH');
+      assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
+      assert.ok(r.recommendedStrategies.includes('TREND_MOMENTUM'));
+      assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
+      assert.ok(r.blockedStrategies.includes('BREAKOUT_RETEST'));
+      assert.equal(r.paramOverrides.slMultiplier, 1.5);
+      assert.equal(r.paramOverrides.positionSizeAdjustment, 0.55);
+      assert.equal(r.paramOverrides.maxTradesPerDay, 4);
+      assert.equal(r.paramOverrides.dailyLossLimit, 0.03);
+      assert.equal(r.paramOverrides.regimeFilterRequired, true);
+      assert.equal(r.paramOverrides.votingThresholdOverride, 0.78);
     });
 
     it('ETHUSDT is LIQUID with LOW risk', () => {
@@ -155,23 +155,28 @@ describe('PairClassifier', () => {
     it('ADAPTIVE_FUSION NOT blocked on BTCUSDT', () => {
       assert.equal(pairClassifier.isStrategyBlocked('BTCUSDT', 'ADAPTIVE_FUSION'), false);
     });
-    it('ADAPTIVE_FUSION IS blocked on WLDUSDT', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'ADAPTIVE_FUSION'), true);
+    it('ADAPTIVE_FUSION IS blocked on WLDUSDT with semi-volatile metrics', () => {
+      const metrics = { hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 120 };
+      assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'ADAPTIVE_FUSION', metrics), true);
     });
-    it('TREND_MOMENTUM NOT blocked on HYPEUSDT (v2.3: allowed with regime filter)', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('HYPEUSDT', 'TREND_MOMENTUM'), false);
+    it('TREND_MOMENTUM NOT blocked on HYPEUSDT with semi-volatile metrics', () => {
+      const metrics = { hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 80 };
+      assert.equal(pairClassifier.isStrategyBlocked('HYPEUSDT', 'TREND_MOMENTUM', metrics), false);
     });
-    it('BREAKOUT_RETEST IS blocked on SUIUSDT', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('SUIUSDT', 'BREAKOUT_RETEST'), true);
+    it('BREAKOUT_RETEST IS blocked on thin microcap', () => {
+      const metrics = { hv30: 110, atrPercent14: 5.5, liquidityRatio: 0.002, marketCapRank: 200 };
+      assert.equal(pairClassifier.isStrategyBlocked('SUIUSDT', 'BREAKOUT_RETEST', metrics), true);
     });
-    it('MEAN_REVERSION NOT blocked on WLDUSDT', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'MEAN_REVERSION'), false);
+    it('MEAN_REVERSION NOT blocked on WLDUSDT with semi-volatile metrics', () => {
+      const metrics = { hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 120 };
+      assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'MEAN_REVERSION', metrics), false);
     });
     it('TREND_MOMENTUM NOT blocked on ETHUSDT (LIQUID)', () => {
       assert.equal(pairClassifier.isStrategyBlocked('ETHUSDT', 'TREND_MOMENTUM'), false);
     });
-    it('ADAPTIVE_FUSION NOT blocked on AVAXUSDT (STABLE)', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('AVAXUSDT', 'ADAPTIVE_FUSION'), false);
+    it('ADAPTIVE_FUSION NOT blocked on AVAXUSDT with stable metrics', () => {
+      const metrics = { hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 40 };
+      assert.equal(pairClassifier.isStrategyBlocked('AVAXUSDT', 'ADAPTIVE_FUSION', metrics), false);
     });
   });
 
@@ -183,11 +188,11 @@ describe('PairClassifier', () => {
       assert.equal(PARAM_OVERRIDES.LIQUID.dailyLossLimit, null);
       assert.equal(PARAM_OVERRIDES.LIQUID.regimeFilterRequired, false);
     });
-    it('STABLE has slMultiplier 1.1 and votingThresholdOverride 0.60 (v2.3)', () => {
+    it('STABLE has slMultiplier 1.1 and votingThresholdOverride 0.60', () => {
       assert.equal(PARAM_OVERRIDES.STABLE.slMultiplier, 1.1);
       assert.equal(PARAM_OVERRIDES.STABLE.votingThresholdOverride, 0.60);
     });
-    it('SEMI_VOLATILE (v2.3) has slMultiplier 1.3 and dailyLossLimit 0.025', () => {
+    it('SEMI_VOLATILE has slMultiplier 1.3 and dailyLossLimit 0.025', () => {
       assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.slMultiplier, 1.3);
       assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.positionSizeAdjustment, 0.75);
       assert.equal(PARAM_OVERRIDES.SEMI_VOLATILE.maxTradesPerDay, 6);
@@ -203,9 +208,9 @@ describe('PairClassifier', () => {
     });
   });
 
-  // ── Hybrid Volatility Score (v2.0) ────────────────────────────────────────
+  // ── Hybrid Volatility Score (v2.1) ────────────────────────────────────────
 
-  describe('calculateHybridVolatilityScore() — v2.0 thresholds', () => {
+  describe('calculateHybridVolatilityScore() — v2.1 thresholds', () => {
     const lowRisk = {
       hv30: 25, atrPercent14: 1.0, liquidityRatio: 0.12, marketCapRank: 5, betaToBTC: 1.0,
     };
@@ -263,7 +268,7 @@ describe('PairClassifier', () => {
     });
   });
 
-  describe('determineTier() — hybrid score path (v2.0)', () => {
+  describe('determineTier() — hybrid score path (v2.1)', () => {
     it('uses hybrid score when full metrics supplied', () => {
       const pc = new PairClassifier();
       const metrics = {
@@ -295,66 +300,74 @@ describe('PairClassifier', () => {
     });
   });
 
-  // ── SEMI_VOLATILE dynamic tier (fallback rank) ────────────────────────────
+  // ── CoinGecko dynamic hybrid (v2.1 real-API path) ─────────────────────────
 
-  describe('dynamic SEMI_VOLATILE tier (v2.3)', () => {
-    it('rank 61–150 base ticker classifies as SEMI_VOLATILE', () => {
+  describe('CoinGecko dynamic hybrid (v2.1)', () => {
+    it('HYPE classifies as SEMI_VOLATILE from CoinGecko data (high vol, large cap)', () => {
       const pc = new PairClassifier();
-      pc._dynamicSemiVolatile = new Set(['FOO']);
-      assert.equal(pc.determineTier('FOOUSDT'), PAIR_TIER.SEMI_VOLATILE);
-      const r = pc.classify('FOOUSDT');
+      // Simulates HYPE: rank ~40, high 24h change, moderate liquidity ratio
+      seedCoinData(pc, 'HYPE', {
+        rank: 40, marketCap: 12_000_000_000, volume24h: 1_200_000_000, priceChange24h: 6.5,
+      });
+      const tier = pc.determineTier('HYPEUSDT');
+      assert.equal(tier, PAIR_TIER.SEMI_VOLATILE);
+      const r = pc.classify('HYPEUSDT');
       assert.equal(r.tier, 'SEMI_VOLATILE');
       assert.equal(r.riskLevel, 'HIGH-MED');
       assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
+      assert.ok(typeof r.hybridScore === 'number');
+    });
+
+    it('BTC classifies as LIQUID from CoinGecko data (low vol, deep liquidity)', () => {
+      const pc = new PairClassifier();
+      seedCoinData(pc, 'BTC', {
+        rank: 1, marketCap: 1_200_000_000_000, volume24h: 40_000_000_000, priceChange24h: 1.2,
+      });
+      assert.equal(pc.determineTier('BTCUSDT'), PAIR_TIER.LIQUID);
     });
 
     it('hybrid metric: ATR% 30d > 4.5% bumps STABLE → SEMI_VOLATILE', () => {
       const pc = new PairClassifier();
-      pc._dynamicStable = new Set(['BAR']);
-      assert.equal(pc.determineTier('BARUSDT'), PAIR_TIER.STABLE);
-      assert.equal(pc.determineTier('BARUSDT', { atrPct30d: 5.0 }), PAIR_TIER.SEMI_VOLATILE);
+      const stableMetrics = {
+        hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 40,
+      };
+      assert.equal(pc.determineTier('BARUSDT', stableMetrics), PAIR_TIER.STABLE);
+      assert.equal(pc.determineTier('BARUSDT', { ...stableMetrics, atrPct30d: 5.0 }), PAIR_TIER.SEMI_VOLATILE);
     });
 
     it('hybrid metric: low liquidity forces VOLATILE', () => {
       const pc = new PairClassifier();
-      pc._dynamicLiquid = new Set(['BAZ']);
+      seedCoinData(pc, 'BAZ', {
+        rank: 1, marketCap: 1_000_000_000_000, volume24h: 50_000_000_000, priceChange24h: 1.0,
+      });
       assert.equal(pc.determineTier('BAZUSDT'), PAIR_TIER.LIQUID);
       assert.equal(pc.determineTier('BAZUSDT', { lowLiquidity: true }), PAIR_TIER.VOLATILE);
     });
 
-    it('hybrid metric: volume24h < minVolume24h forces VOLATILE (wired path)', () => {
+    it('hybrid metric: volume24h < minVolume24h forces VOLATILE', () => {
       const pc = new PairClassifier();
-      pc._dynamicLiquid = new Set(['QUX']);
-      // Likuiditas tipis: volume24h < threshold → paksa VOLATILE meski base LIQUID.
+      seedCoinData(pc, 'QUX', {
+        rank: 1, marketCap: 1_000_000_000_000, volume24h: 50_000_000_000, priceChange24h: 1.0,
+      });
       assert.equal(
         pc.determineTier('QUXUSDT', { volume24h: 500_000, minVolume24h: 2_000_000 }),
         PAIR_TIER.VOLATILE,
       );
-      // Likuiditas cukup → tetap di tier dasar.
       assert.equal(
         pc.determineTier('QUXUSDT', { volume24h: 50_000_000, minVolume24h: 2_000_000 }),
         PAIR_TIER.LIQUID,
       );
     });
 
-    it('hybrid metric: full classify() honors ATR bump + propagates overrides', () => {
+    it('getCoinGeckoMarketData returns stored refresh data', () => {
       const pc = new PairClassifier();
-      pc._dynamicStable = new Set(['QZ']);
-      const base = pc.classify('QZUSDT');
-      assert.equal(base.tier, PAIR_TIER.STABLE);
-      const bumped = pc.classify('QZUSDT', { atrPct30d: 6.0 });
-      assert.equal(bumped.tier, PAIR_TIER.SEMI_VOLATILE);
-      // Override paramnya ikut tier hasil bump (SL diperlebar, AF diblokir).
-      assert.ok(bumped.paramOverrides.slMultiplier > base.paramOverrides.slMultiplier);
-      assert.ok(bumped.blockedStrategies.includes('ADAPTIVE_FUSION'));
-    });
-
-    it('hybrid metric: backward-compatible — no metrics & ATR ≤ 4.5% = no bump', () => {
-      const pc = new PairClassifier();
-      pc._dynamicStable = new Set(['NB']);
-      assert.equal(pc.determineTier('NBUSDT'), PAIR_TIER.STABLE);          // no metrics
-      assert.equal(pc.determineTier('NBUSDT', null), PAIR_TIER.STABLE);     // explicit null
-      assert.equal(pc.determineTier('NBUSDT', { atrPct30d: 4.5 }), PAIR_TIER.STABLE); // boundary, not >
+      seedCoinData(pc, 'HYPE', {
+        rank: 40, marketCap: 12e9, volume24h: 800e6, priceChange24h: 8.5,
+      });
+      const data = pc.getCoinGeckoMarketData('HYPEUSDT');
+      assert.ok(data);
+      assert.equal(data.marketCapRank, 40);
+      assert.equal(data.volume24h, 800e6);
     });
   });
 
@@ -366,12 +379,12 @@ describe('PairClassifier', () => {
 
   // ── static tables ─────────────────────────────────────────────────────────
 
-  it('LIQUID_PAIRS has at least 10 entries', () => {
+  it('LIQUID_PAIRS has at least 10 entries (emergency fallback)', () => {
     assert.ok(LIQUID_PAIRS.size >= 10);
   });
 
-  it('VOLATILE_PAIRS has at least 20 entries', () => {
-    assert.ok(VOLATILE_PAIRS.size >= 20);
+  it('VOLATILE_PAIRS is empty (v2.1: fully dynamic, no manual list)', () => {
+    assert.equal(VOLATILE_PAIRS.size, 0);
   });
 
   it('VOLATILE_PAIRS and LIQUID_PAIRS are disjoint', () => {

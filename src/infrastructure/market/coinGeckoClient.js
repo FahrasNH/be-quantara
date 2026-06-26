@@ -1,14 +1,14 @@
 /**
  * coinGeckoClient.js  (src/infrastructure/market/coinGeckoClient.js)
  *
- * PAIR-TIER-02 (AC-PAIR-02)
+ * PAIR-TIER-02 (AC-PAIR-02) — v2.1 dynamic lookup
  *
  * Lightweight CoinGecko free-tier wrapper for market cap, 24h volume, and
- * ATR-proxy data. Results are cached in-process for 24 hours to avoid
- * exhausting the 30 req/min free-tier rate limit.
+ * rank data. Resolves symbols dynamically via PairClassifier refresh data
+ * and search API — no hardcoded coin lists required.
  *
  * Fallback: if CoinGecko is unreachable/slow, caller receives null (graceful
- * degradation — PairClassifier static lookup still works).
+ * degradation — PairClassifier static LIQUID lookup still works).
  */
 
 'use strict';
@@ -20,7 +20,7 @@ const COINGECKO_BASE  = 'https://api.coingecko.com/api/v3';
 const CACHE_TTL_MS    = 24 * 60 * 60 * 1000;   // 24 hours
 const REQUEST_TIMEOUT = 8_000;                  // 8 s timeout
 
-// Map exchange symbol → CoinGecko coin ID (extend as needed)
+// Legacy map for well-known symbols (fast path when refresh not yet run)
 const SYMBOL_TO_COINGECKO_ID = {
   BTCUSDT:     'bitcoin',
   ETHUSDT:     'ethereum',
@@ -36,6 +36,7 @@ const SYMBOL_TO_COINGECKO_ID = {
   LTCUSDT:     'litecoin',
   SUIUSDT:     'sui',
   WLDUSDT:     'worldcoin-wld',
+  HYPEUSDT:    'hyperliquid',
   ENAUSDT:     'ethena',
   INJUSDT:     'injective-protocol',
   ARBUSDT:     'arbitrum',
@@ -50,6 +51,7 @@ const SYMBOL_TO_COINGECKO_ID = {
 
 // ─── In-process cache ─────────────────────────────────────────────────────────
 const _cache = new Map(); // symbol → { data, expiresAt }
+const _searchCache = new Map(); // base → coinId
 
 function _getCached(symbol) {
   const entry = _cache.get(symbol);
@@ -62,11 +64,21 @@ function _setCache(symbol, data) {
   _cache.set(symbol, { data, expiresAt: Date.now() + CACHE_TTL_MS });
 }
 
+function _baseOf(symbol) {
+  let s = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  s = s.replace(/(USDT|USDC|BUSD)$/, '');
+  s = s.replace(/^(1000000|100000|10000|1000|1M)/, '');
+  return s;
+}
+
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
 function _get(path) {
   return new Promise((resolve, reject) => {
     const url = `${COINGECKO_BASE}${path}`;
-    const req = https.get(url, { timeout: REQUEST_TIMEOUT }, (res) => {
+    const req = https.get(url, {
+      timeout: REQUEST_TIMEOUT,
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Quantara-Bot/1.0' },
+    }, (res) => {
       let body = '';
       res.on('data', chunk => (body += chunk));
       res.on('end', () => {
@@ -79,22 +91,69 @@ function _get(path) {
   });
 }
 
+async function _resolveCoinId(symbol) {
+  const sym = (symbol || '').toUpperCase();
+  const base = _baseOf(sym);
+
+  // 1. PairClassifier dynamic refresh data (authoritative, real-time)
+  try {
+    const { pairClassifier } = require('../classification/PairClassifier');
+    const cg = pairClassifier.getCoinGeckoMarketData(sym);
+    if (cg?.coinId) return cg.coinId;
+  } catch { /* noop */ }
+
+  // 2. Legacy static map
+  if (SYMBOL_TO_COINGECKO_ID[sym]) return SYMBOL_TO_COINGECKO_ID[sym];
+
+  // 3. Search API (for symbols outside top-250)
+  if (_searchCache.has(base)) return _searchCache.get(base);
+
+  try {
+    const data = await _get(`/search?query=${encodeURIComponent(base)}`);
+    const coins = data?.coins || [];
+    const exact = coins.find(c => (c.symbol || '').toUpperCase() === base);
+    const coinId = exact?.id || coins[0]?.id || null;
+    if (coinId) _searchCache.set(base, coinId);
+    return coinId;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Fetch market data for a symbol from CoinGecko.
  * Returns null on timeout/error (callers must handle gracefully).
  *
- * @param {string} symbol  e.g. "BTCUSDT"
- * @returns {Promise<{marketCap: number, volume24h: number, priceChangePercent24h: number} | null>}
+ * @param {string} symbol  e.g. "BTCUSDT", "HYPEUSDT"
+ * @returns {Promise<{marketCap: number, volume24h: number, priceChangePercent24h: number, marketCapRank: number|null} | null>}
  */
 async function getMarketData(symbol) {
   const sym = (symbol || '').toUpperCase();
   const cached = _getCached(sym);
   if (cached) return cached;
 
-  const coinId = SYMBOL_TO_COINGECKO_ID[sym];
-  if (!coinId) return null;   // unknown symbol — caller uses static tier
+  // Fast path: use PairClassifier refresh data without extra HTTP call
+  try {
+    const { pairClassifier } = require('../classification/PairClassifier');
+    const cg = pairClassifier.getCoinGeckoMarketData(sym);
+    if (cg?.marketCap && cg.volume24h) {
+      const result = {
+        coinId:                cg.coinId,
+        symbol:                sym,
+        marketCap:             cg.marketCap,
+        volume24h:             cg.volume24h,
+        priceChangePercent24h: cg.priceChange24h,
+        marketCapRank:         cg.marketCapRank ?? null,
+      };
+      _setCache(sym, result);
+      return result;
+    }
+  } catch { /* fall through */ }
+
+  const coinId = await _resolveCoinId(sym);
+  if (!coinId) return null;
 
   try {
     const data = await _get(
@@ -110,13 +169,13 @@ async function getMarketData(symbol) {
       marketCap:             md.market_cap?.usd            ?? null,
       volume24h:             md.total_volume?.usd           ?? null,
       priceChangePercent24h: md.price_change_percentage_24h ?? null,
+      marketCapRank:         data?.market_cap_rank          ?? null,
       circulatingSupply:     md.circulating_supply          ?? null,
     };
 
     _setCache(sym, result);
     return result;
   } catch (err) {
-    // Non-fatal: log and return null so PairClassifier static table takes over
     if (process.env.NODE_ENV !== 'test') {
       console.warn(`[CoinGecko] ${sym}: ${err.message}`);
     }
@@ -146,6 +205,7 @@ async function getMarketDataBatch(symbols) {
  */
 function clearCache() {
   _cache.clear();
+  _searchCache.clear();
 }
 
 /**
