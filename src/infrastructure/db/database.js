@@ -568,6 +568,7 @@ async function getTrades({ sessionId = null, symbol = null, limit = 100, userId 
 async function getAdminTrades({ limit = 5000 } = {}) {
   const { rows } = await pool.query(
     `SELECT t.id, t.symbol, t.side, t.entry_price, t.exit_price, t.pnl,
+            COALESCE(t.fee, 0) AS fee, COALESCE(t.funding, 0) AS funding,
             t.status, t.open_time, t.close_time, t.strategy_name, t.dry_run,
             u.username AS username
        FROM trades t
