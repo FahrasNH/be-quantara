@@ -10,8 +10,13 @@ const {
   fillGaps,
   clampDateRange,
   periodToRange,
+  estimateBarCount,
+  enforceBarLimit,
+  findMissingRanges,
+  coverageRatio,
   MIN_HISTORICAL_MS,
   CANDLE_INTERVAL_MS,
+  MAX_BARS,
 } = require("../src/server/services/HistoricalKlinesService");
 
 // ── dedupeAndValidate ────────────────────────────────────────────────────────
@@ -73,6 +78,51 @@ const {
   assert.strictEqual(periodToRange("500"), null);
   const custom = periodToRange("custom", "2023-01-01", "2023-06-01");
   assert.ok(custom.startMs >= Date.parse("2023-01-01T00:00:00.000Z"));
+}
+
+// ── estimateBarCount / enforceBarLimit ───────────────────────────────────────
+{
+  const end = Date.now();
+  const start = end - 365 * 86_400_000;
+  const bars12m1d = estimateBarCount(start, end, "1d");
+  assert.ok(bars12m1d >= 360 && bars12m1d <= 370, "12m daily ~365 bars");
+
+  const ok = enforceBarLimit(start, end, "1d", "12m");
+  assert.strictEqual(ok.clamped, false);
+
+  const hugeStart = end - MAX_BARS * CANDLE_INTERVAL_MS["15m"] * 2;
+  assert.throws(
+    () => enforceBarLimit(hugeStart, end, "15m", "12m"),
+    (e) => e.code === "TOO_MANY_BARS"
+  );
+
+  const clamped = enforceBarLimit(hugeStart, end, "15m", "max");
+  assert.strictEqual(clamped.clamped, true);
+  assert.ok(clamped.bars <= MAX_BARS);
+}
+
+// ── findMissingRanges ────────────────────────────────────────────────────────
+{
+  const tfMs = CANDLE_INTERVAL_MS["1h"];
+  const candles = [
+    { timestamp: tfMs * 10, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+    { timestamp: tfMs * 11, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+  ];
+  const ranges = findMissingRanges(candles, 0, tfMs * 20, "1h");
+  assert.strictEqual(ranges.length, 2, "gap at start and end");
+}
+
+// ── coverageRatio ────────────────────────────────────────────────────────────
+{
+  const tfMs = CANDLE_INTERVAL_MS["1h"];
+  const end = tfMs * 10;
+  const start = 0;
+  const candles = Array.from({ length: 9 }, (_, i) => ({
+    timestamp: i * tfMs,
+    open: 1, high: 1, low: 1, close: 1, volume: 1,
+  }));
+  const ratio = coverageRatio(candles, start, end, "1h");
+  assert.ok(ratio >= 0.85, "9/10 bars = 90% coverage");
 }
 
 console.log("✓ historical-klines tests passed");

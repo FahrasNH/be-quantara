@@ -1175,25 +1175,29 @@ async function getAllEquity(mode = "live", userId = null) {
 
 const DB_BACKTEST_KLINES_TTL = Number(process.env.BACKTEST_KLINES_DB_TTL_SEC) || 86_400;
 
-/** Fire-and-forget best-effort — upsert dalam transaksi. */
+/** Fire-and-forget best-effort — upsert dalam transaksi (batch untuk dataset besar). */
 async function cacheCandles(exchange, symbol, interval, candles) {
   if (!candles || candles.length === 0) return;
+  const BATCH = 200;
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    for (const c of candles) {
-      await client.query(
-        `INSERT INTO candle_cache
-           (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
-         ON CONFLICT (exchange, symbol, "interval", timestamp)
-         DO UPDATE SET
-           open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
-           close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
-        [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
-      );
+    for (let i = 0; i < candles.length; i += BATCH) {
+      const slice = candles.slice(i, i + BATCH);
+      await client.query("BEGIN");
+      for (const c of slice) {
+        await client.query(
+          `INSERT INTO candle_cache
+             (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
+           ON CONFLICT (exchange, symbol, "interval", timestamp)
+           DO UPDATE SET
+             open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+             close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
+          [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
+        );
+      }
+      await client.query("COMMIT");
     }
-    await client.query("COMMIT");
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch { /* noop */ }
     console.warn(`[DB] cacheCandles gagal: ${e.message}`);

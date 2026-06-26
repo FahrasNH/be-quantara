@@ -31,6 +31,11 @@ const MIN_HISTORICAL_MS = Date.parse("2020-01-01T00:00:00.000Z");
 const PAGE_SIZE = 500;
 const PAUSE_MS = 120;
 const MEM_CACHE_TTL_MS = Number(process.env.BACKTEST_KLINES_CACHE_TTL_MS) || 3_600_000;
+/** Batas bar per request — cegah OOM + timeout gateway pada rentang besar (mis. max × 15m). */
+const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 20_000;
+/** Deadline fetch exchange agar request gagal rapi sebelum nginx 504 (default 240s). */
+const FETCH_DEADLINE_MS = Number(process.env.BACKTEST_KLINES_FETCH_DEADLINE_MS) || 240_000;
+const MIN_CACHE_COVERAGE = 0.85;
 
 const clientCache = new Map();
 const memCache = new Map();
@@ -139,6 +144,42 @@ function clampDateRange({ startMs, endMs, listingMs, autoListing = false }) {
   return { startMs: start, endMs: end };
 }
 
+function estimateBarCount(startMs, endMs, timeframe) {
+  const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
+  if (!tfMs || !Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
+  return Math.max(1, Math.floor((endMs - startMs) / tfMs));
+}
+
+/**
+ * Tolak/clamp rentang yang melebihi MAX_BARS.
+ * periodId=max → clamp start (bukan error); custom/3m/6m/12m → error jika terlalu besar.
+ */
+function enforceBarLimit(startMs, endMs, timeframe, periodId) {
+  const bars = estimateBarCount(startMs, endMs, timeframe);
+  if (bars <= MAX_BARS) {
+    return { startMs, endMs, bars, clamped: false };
+  }
+
+  const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
+  const maxRangeMs = MAX_BARS * tfMs;
+  const clampedStart = Math.max(startMs, endMs - maxRangeMs);
+  const clampedBars = estimateBarCount(clampedStart, endMs, timeframe);
+
+  if (String(periodId || "").toLowerCase() === "max") {
+    return { startMs: clampedStart, endMs, bars: clampedBars, clamped: true };
+  }
+
+  const e = new Error(
+    `Rentang terlalu besar (~${bars.toLocaleString("en-US")} bar, maks ${MAX_BARS.toLocaleString("en-US")}). ` +
+    "Gunakan timeframe lebih tinggi (mis. 1h/1d) atau periode lebih pendek."
+  );
+  e.statusCode = 400;
+  e.code = "TOO_MANY_BARS";
+  e.estimatedBars = bars;
+  e.maxBars = MAX_BARS;
+  throw e;
+}
+
 function periodToRange(periodId, customStart, customEnd) {
   const now = Date.now();
   const day = 86_400_000;
@@ -191,7 +232,28 @@ async function detectListingTimestamp(exchange, client, marketSymbol, timeframe)
   return MIN_HISTORICAL_MS;
 }
 
-async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs, endMs, onProgress) {
+function findMissingRanges(candles, startMs, endMs, timeframe) {
+  const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
+  if (!tfMs) return [{ startMs, endMs }];
+  if (!candles?.length) return [{ startMs, endMs }];
+
+  const sorted = dedupeAndValidate(candles);
+  const ranges = [];
+
+  if (sorted[0].timestamp > startMs + tfMs * 0.5) {
+    ranges.push({ startMs, endMs: sorted[0].timestamp - tfMs });
+  }
+
+  const last = sorted[sorted.length - 1];
+  if (last.timestamp < endMs - tfMs * 0.5) {
+    ranges.push({ startMs: last.timestamp + tfMs, endMs });
+  }
+
+  return ranges.length ? ranges : [];
+}
+
+async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs, endMs, opts = {}) {
+  const { onProgress, deadlineMs = Date.now() + FETCH_DEADLINE_MS } = opts;
   const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
   if (!tfMs) throw new Error(`Timeframe tidak didukung: ${timeframe}`);
 
@@ -201,6 +263,14 @@ async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs
   let guard = 0;
 
   while (cursor < endMs && guard++ < maxIters) {
+    if (Date.now() > deadlineMs) {
+      const e = new Error(
+        "Fetch klines melebihi batas waktu. Coba periode lebih pendek, timeframe lebih tinggi, atau ulangi nanti (cache mungkin sudah terisi sebagian)."
+      );
+      e.statusCode = 504;
+      e.code = "KLINES_FETCH_TIMEOUT";
+      throw e;
+    }
     let batch;
     try {
       batch = await withExchangeGate(exchange, () =>
@@ -236,6 +306,24 @@ async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs
   }
 
   return Array.from(byTs.values()).sort((a, b) => a.timestamp - b.timestamp);
+}
+
+async function fetchPaginatedRanges(exchange, client, marketSymbol, timeframe, ranges, opts = {}) {
+  const merged = new Map();
+  for (const range of ranges) {
+    if (range.startMs >= range.endMs) continue;
+    const chunk = await fetchPaginated(
+      exchange,
+      client,
+      marketSymbol,
+      timeframe,
+      range.startMs,
+      range.endMs,
+      opts
+    );
+    for (const c of chunk) merged.set(c.timestamp, c);
+  }
+  return Array.from(merged.values()).sort((a, b) => a.timestamp - b.timestamp);
 }
 
 async function loadFromDbCache(exchange, symbol, timeframe, startMs, endMs) {
@@ -310,26 +398,47 @@ async function fetchHistoricalKlines(userId, opts = {}) {
 
   const listingMs = await detectListingTimestamp(exchange, client, marketSymbol, timeframe);
   const clamped = clampDateRange({ startMs, endMs, listingMs, autoListing });
+  const barLimit = enforceBarLimit(clamped.startMs, clamped.endMs, timeframe, periodId);
+  const effectiveStart = barLimit.startMs;
+  const effectiveEnd = barLimit.endMs;
 
-  const cacheKey = memCacheKey(exchange, sym, timeframe, clamped.startMs, clamped.endMs);
+  const cacheKey = memCacheKey(exchange, sym, timeframe, effectiveStart, effectiveEnd);
   const memHit = getMemCached(cacheKey);
   if (memHit) {
     return { ...memHit, cached: true, source: "memory" };
   }
 
-  let candles = await loadFromDbCache(exchange, sym, timeframe, clamped.startMs, clamped.endMs);
+  const deadlineMs = Date.now() + FETCH_DEADLINE_MS;
+  let candles = await loadFromDbCache(exchange, sym, timeframe, effectiveStart, effectiveEnd);
   let source = "db";
+  const coverage = coverageRatio(candles, effectiveStart, effectiveEnd, timeframe);
 
-  if (!candles?.length || coverageRatio(candles, clamped.startMs, clamped.endMs, timeframe) < 0.85) {
-    candles = await fetchPaginated(
-      exchange,
-      client,
-      marketSymbol,
-      timeframe,
-      clamped.startMs,
-      clamped.endMs
-    );
-    source = "exchange";
+  if (!candles?.length || coverage < MIN_CACHE_COVERAGE) {
+    const fetchOpts = { deadlineMs };
+    if (candles?.length && coverage >= 0.3) {
+      const missing = findMissingRanges(candles, effectiveStart, effectiveEnd, timeframe);
+      if (missing.length) {
+        const fetched = await fetchPaginatedRanges(
+          exchange, client, marketSymbol, timeframe, missing, fetchOpts
+        );
+        const byTs = new Map(candles.map(c => [c.timestamp, c]));
+        for (const c of fetched) byTs.set(c.timestamp, c);
+        candles = Array.from(byTs.values()).sort((a, b) => a.timestamp - b.timestamp);
+        source = "exchange+db";
+      }
+    } else {
+      candles = await fetchPaginated(
+        exchange,
+        client,
+        marketSymbol,
+        timeframe,
+        effectiveStart,
+        effectiveEnd,
+        fetchOpts
+      );
+      source = "exchange";
+    }
+
     if (candles.length) {
       db.cacheCandles(exchange, sym, timeframe, candles).catch(() => {});
     }
@@ -343,7 +452,10 @@ async function fetchHistoricalKlines(userId, opts = {}) {
   }
 
   const gapsBefore = candles.length;
-  candles = fillGaps(dedupeAndValidate(candles), timeframe);
+  // Gap-fill mahal pada dataset besar — skip jika >10k bar (backtest tetap valid).
+  candles = candles.length > 10_000
+    ? dedupeAndValidate(candles)
+    : fillGaps(dedupeAndValidate(candles), timeframe);
   const gapsFilled = candles.length - gapsBefore;
 
   const meta = EXCHANGE_META[exchange] || EXCHANGE_META.bitget;
@@ -353,16 +465,19 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     exchangeLabel: meta.label || meta.name || exchange,
     symbol: sym,
     timeframe,
-    startMs: clamped.startMs,
-    endMs: clamped.endMs,
-    startDate: new Date(clamped.startMs).toISOString(),
-    endDate: new Date(clamped.endMs).toISOString(),
+    startMs: effectiveStart,
+    endMs: effectiveEnd,
+    startDate: new Date(effectiveStart).toISOString(),
+    endDate: new Date(effectiveEnd).toISOString(),
     listingMs,
     listingDate: new Date(listingMs).toISOString(),
     bars: candles.length,
+    estimatedBars: barLimit.bars,
+    maxBars: MAX_BARS,
+    rangeClamped: barLimit.clamped,
     candles,
     gapsFilled: Math.max(0, gapsFilled),
-    cached: source !== "exchange",
+    cached: !String(source).includes("exchange"),
     source,
   };
 
@@ -403,7 +518,12 @@ module.exports = {
   fillGaps,
   clampDateRange,
   periodToRange,
+  estimateBarCount,
+  enforceBarLimit,
+  findMissingRanges,
+  coverageRatio,
   CANDLE_INTERVAL_MS,
   MIN_HISTORICAL_MS,
+  MAX_BARS,
   _clearCaches,
 };
