@@ -1,53 +1,59 @@
-# Klasifikasi Volatilitas Koin (Pair Tier) — Versi Dinamis Optimasi
+# Klasifikasi Volatilitas Koin (Pair Tier) — Versi Hybrid Optimasi
 
-**Filosofi Baru:** Klasifikasi **sepenuhnya dinamis** berdasarkan market cap rank CoinGecko + ATR historis 30 hari. Minim ketergantungan manual list.
+**Versi:** 2.0 (Hybrid HV + ATR + Liquidity)  
+**Tanggal Update:** Juni 2026  
+**Tujuan:** Meningkatkan win rate ke 40–45%, menjaga average loss <1.2%, dan Actual R:R ≥ 1:2 dengan klasifikasi yang lebih akurat dan adaptif.
 
----
-
-## 3. Mode Dinamis (CoinGecko) — Diperkuat
-
-**Refresh:** Setiap **2 jam** (dari 4 jam) + saat bot start.
-
-**Aturan Rank yang Diperbarui (lebih granular):**
-
-| Rank CoinGecko | Tier       | Catatan |
-|----------------|------------|---------|
-| ≤ 12           | **LIQUID** | Ultra blue-chip |
-| 13 – 60        | **STABLE** | Mid-cap stabil |
-| 61 – 150       | **SEMI_VOLATILE** (baru) | Transisi |
-| > 150 atau tidak ada | **VOLATILE** | High risk |
-
-**Tambahan Hybrid Metric:**
-- Jika ATR% 30-hari > **4.5%** → naikkan tier 1 level (misal STABLE → VOLATILE).
-- Liquidity score (24h volume) < threshold → paksa VOLATILE.
-
-**Default unknown/new coin:** **VOLATILE** (fail-safe).
+**Sumber kebenaran:** `src/infrastructure/classification/PairClassifier.js`
 
 ---
 
-## 6. Dampak ke Strategi (Diperbarui)
+## 1. Ringkasan 4 Tier (Hybrid)
 
-### VOLATILE (termasuk SEMI_VOLATILE)
-- **Direkomendasikan:** MEAN_REVERSION + TREND_MOMENTUM (dengan regime filter ketat)
-- **Diblokir:** ADAPTIVE_FUSION (kecuali LIQUID/STABLE)
+| Tier              | Risk Level | Karakteristik                              | Contoh Koin                  | Hybrid Score Range |
+|-------------------|------------|--------------------------------------------|------------------------------|--------------------|
+| **LIQUID**        | LOW        | Blue-chip, likuiditas sangat tinggi        | BTC, ETH, SOL, BNB           | < 0.48             |
+| **STABLE**        | MEDIUM     | Mid-large cap, volatilitas terkendali      | AVAX, ADA, XRP, NEAR         | 0.48 – 0.65        |
+| **SEMI_VOLATILE** | HIGH-MED   | Volatilitas tinggi meski market cap besar  | **WLD, HYPE, LAB, ENA, TAO** | 0.66 – 0.78        |
+| **VOLATILE**      | HIGH       | Altcoin kecil, meme, likuiditas rendah     | Microcap, coin baru, GRASS   | > 0.78             |
 
-### Override Parameter Risk (Diperketat)
-
-| Parameter                  | LIQUID | STABLE | SEMI_VOL | VOLATILE |
-|---------------------------|--------|--------|----------|----------|
-| `slMultiplier`            | 1.0×   | 1.1×   | 1.3×     | **1.5×** |
-| `positionSizeAdjustment`  | 1.0    | 0.95   | 0.75     | **0.55** |
-| `maxTradesPerDay`         | unlimited | 8   | 6        | **4**    |
-| `dailyLossLimit`          | —      | —      | 2.5%     | **3%**   |
-| `votingThresholdOverride` | —      | 0.60   | 0.70     | **0.78** |
+**Kelebihan Hybrid:**
+- Coin baru otomatis terklasifikasi (tidak perlu manual entry).
+- Menggabungkan **historical** (HV), **current** (ATR), dan **eksekusi risk** (Liquidity).
+- Lebih akurat daripada hanya market cap rank CoinGecko.
 
 ---
 
-**Perubahan Lain:**
-- Tambah `SEMI_VOLATILE` tier untuk transisi yang lebih halus.
-- HTF regime filter wajib untuk semua tier kecuali LIQUID.
-- PairClassifier otomatis hitung ATR% historis untuk adjustment dinamis.
+## 2. Hybrid Volatility Score (Core Logic)
 
----
+**Formula:**
 
-*Terakhir diperbarui: Juni 2026 — Dynamic Volatility + Risk Tightening untuk Win Rate Target*
+```javascript
+/**
+ * Menghitung Hybrid Volatility Score (0.0 - 1.0)
+ * @returns {string} 'LIQUID' | 'STABLE' | 'SEMI_VOLATILE' | 'VOLATILE'
+ */
+calculateHybridVolatilityScore(symbol, data) {
+  const { hv30, atrPercent14, liquidityRatio, marketCapRank, betaToBTC } = data;
+
+  // Normalisasi
+  const hvScore = normalize(hv30, 20, 120);           // HV 30 hari
+  const atrScore = normalize(atrPercent14, 0.5, 6.0); // ATR dalam persen
+  const liqScore = normalizeInverted(liquidityRatio, 0.001, 0.15); // Semakin rendah = semakin berbahaya
+
+  let score = 
+    (hvScore * 0.40) + 
+    (atrScore * 0.35) + 
+    (liqScore * 0.25);
+
+  // Adjustment tambahan
+  if (betaToBTC > 1.8) score += 0.08;
+  if (marketCapRank > 150) score += 0.10;
+
+  score = Math.min(Math.max(score, 0), 1);
+
+  if (score > 0.78) return 'VOLATILE';
+  if (score > 0.65) return 'SEMI_VOLATILE';
+  if (score > 0.48) return 'STABLE';
+  return 'LIQUID';
+}

@@ -3,11 +3,15 @@
  *
  * PAIR-TIER-01 (AC-PAIR-01, AC-PAIR-02)
  *
- * Classifies a trading pair into one of four volatility tiers (v2.3):
- *   LIQUID        — ultra blue-chip, high-liquidity (rank ≤ 12)
- *   STABLE        — mid-cap, moderate-volatility (rank 13–60)
- *   SEMI_VOLATILE — transisi (rank 61–150) [v2.3 baru]
- *   VOLATILE      — high-volatility altcoins (rank > 150 / unknown)
+ * Classifies a trading pair into one of four volatility tiers (v2.0 Hybrid):
+ *   LIQUID        — score < 0.48  (blue-chip, likuiditas tinggi)
+ *   STABLE        — score 0.48–0.65
+ *   SEMI_VOLATILE — score 0.66–0.78 (WLD, HYPE, ENA, TAO, …)
+ *   VOLATILE      — score > 0.78
+ *
+ * Primary path (PAIR_VOLATILITY.md v2.0): Hybrid Volatility Score dari
+ * HV30 + ATR%14 + liquidityRatio + adjustment rank/beta.
+ * Fallback bila metrik hybrid tidak tersedia: rank CoinGecko + static tables.
  *
  * NOTE: "pair tier" is distinct from the user's subscription tier
  * (FOUNDRY/FORGE/MINT/VAULT). Pair tier affects strategy param overrides
@@ -131,9 +135,66 @@ const PARAM_OVERRIDES = Object.freeze({
 const RISK_LEVEL = Object.freeze({
   LIQUID:        'LOW',
   STABLE:        'MEDIUM',
-  SEMI_VOLATILE: 'MEDIUM-HIGH',
+  SEMI_VOLATILE: 'HIGH-MED',
   VOLATILE:      'HIGH',
 });
+
+// ─── Hybrid Volatility Score (PAIR_VOLATILITY.md v2.0 §2) ───────────────────
+/** Normalisasi linear ke [0, 1]; nilai di luar range di-clamp. */
+function normalize(value, min, max) {
+  if (value == null || !Number.isFinite(value) || max <= min) return 0.5;
+  return Math.min(Math.max((value - min) / (max - min), 0), 1);
+}
+
+/** Semakin rendah liquidityRatio → skor semakin tinggi (lebih berbahaya). */
+function normalizeInverted(value, min, max) {
+  return 1 - normalize(value, min, max);
+}
+
+/**
+ * Hitung Hybrid Volatility Score (0.0–1.0).
+ * @param {Object} data
+ * @param {number} [data.hv30]
+ * @param {number} [data.atrPercent14]
+ * @param {number} [data.liquidityRatio]
+ * @param {number} [data.marketCapRank]
+ * @param {number} [data.betaToBTC]
+ * @returns {number}
+ */
+function computeHybridScore(data = {}) {
+  const { hv30, atrPercent14, liquidityRatio, marketCapRank, betaToBTC } = data;
+  const hvScore  = normalize(hv30, 20, 120);
+  const atrScore = normalize(atrPercent14, 0.5, 6.0);
+  const liqScore = normalizeInverted(liquidityRatio, 0.001, 0.15);
+
+  let score = (hvScore * 0.40) + (atrScore * 0.35) + (liqScore * 0.25);
+
+  if (typeof betaToBTC === 'number' && betaToBTC > 1.8) score += 0.08;
+  if (typeof marketCapRank === 'number' && marketCapRank > 150) score += 0.10;
+
+  return Math.min(Math.max(score, 0), 1);
+}
+
+/**
+ * Map hybrid score ke tier string.
+ * @param {number} score
+ * @returns {string}
+ */
+function tierFromHybridScore(score) {
+  if (score > 0.78) return PAIR_TIER.VOLATILE;
+  if (score > 0.65) return PAIR_TIER.SEMI_VOLATILE;
+  if (score > 0.48) return PAIR_TIER.STABLE;
+  return PAIR_TIER.LIQUID;
+}
+
+/**
+ * Menghitung Hybrid Volatility Score → tier (sumber kebenaran PAIR_VOLATILITY.md).
+ * @param {Object} data
+ * @returns {string}
+ */
+function calculateHybridVolatilityScore(data) {
+  return tierFromHybridScore(computeHybridScore(data));
+}
 
 // ─── Stablecoins to skip during dynamic classification ────────────────────────
 const STABLECOINS = new Set(["USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "PYUSD", "FDUSD"]);
@@ -148,6 +209,7 @@ class PairClassifier {
     this._dynamicLiquid       = new Set();  // market_cap_rank ≤ 12
     this._dynamicStable       = new Set();  // market_cap_rank 13–60
     this._dynamicSemiVolatile = new Set();  // market_cap_rank 61–150
+    this._dynamicRankMap      = new Map();  // base ticker → market_cap_rank
     this._dynamicLastAt = null;
     // v2.3 spec: refresh tiap 2 jam (dari 4 jam) — masih hemat CoinGecko free tier (~12 calls/day).
     this._CACHE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -191,19 +253,21 @@ class PairClassifier {
             const newLiquid       = new Set();
             const newStable       = new Set();
             const newSemiVolatile = new Set();
+            const newRankMap      = new Map();
             for (const coin of coins) {
               const sym = (coin.symbol || "").toUpperCase();
               if (!sym || STABLECOINS.has(sym)) continue;
               const rank = coin.market_cap_rank ?? 9999;
-              // v2.3 spec: ≤12 LIQUID · 13–60 STABLE · 61–150 SEMI_VOLATILE · >150 VOLATILE
-              if (rank <= 12)        newLiquid.add(sym);        // ultra blue-chip
-              else if (rank <= 60)   newStable.add(sym);        // mid-cap stabil
-              else if (rank <= 150)  newSemiVolatile.add(sym);  // transisi
-              // rank > 150 (and the whole long tail not returned) → VOLATILE by default
+              newRankMap.set(sym, rank);
+              // Fallback rank buckets (bila hybrid metrics tidak tersedia)
+              if (rank <= 12)        newLiquid.add(sym);
+              else if (rank <= 60)   newStable.add(sym);
+              else if (rank <= 150)  newSemiVolatile.add(sym);
             }
             this._dynamicLiquid       = newLiquid;
             this._dynamicStable       = newStable;
             this._dynamicSemiVolatile = newSemiVolatile;
+            this._dynamicRankMap      = newRankMap;
             this._dynamicLastAt = Date.now();
             console.log(`[PairClassifier] Dynamic refresh OK — ${newLiquid.size} LIQUID (≤12), ${newStable.size} STABLE (13–60), ${newSemiVolatile.size} SEMI_VOLATILE (61–150); all other pairs → VOLATILE (CoinGecko market cap)`);
             resolve(true);
@@ -223,6 +287,52 @@ class PairClassifier {
         resolve(false);
       });
     });
+  }
+
+  /**
+   * Ambil market cap rank CoinGecko untuk base ticker (fallback hybrid adjustment).
+   * @param {string} baseOrSymbol
+   * @returns {number|null}
+   */
+  getMarketCapRank(baseOrSymbol) {
+    const base = this._baseOf(baseOrSymbol);
+    if (this._dynamicRankMap.has(base)) return this._dynamicRankMap.get(base);
+    return null;
+  }
+
+  /**
+   * Apakah metrics cukup untuk jalur hybrid score v2.0?
+   * @param {Object|null} metrics
+   * @returns {boolean}
+   */
+  _hasHybridInputs(metrics) {
+    if (!metrics) return false;
+    const hasAtr = typeof (metrics.atrPercent14 ?? metrics.atrPct30d) === 'number';
+    const hasLiq = typeof metrics.liquidityRatio === 'number'
+      || (typeof metrics.volume24h === 'number' && typeof metrics.marketCap === 'number' && metrics.marketCap > 0);
+    return hasAtr && hasLiq;
+  }
+
+  /**
+   * Susun input hybrid score dari metrics + rank map internal.
+   * @param {string} sym
+   * @param {Object} metrics
+   * @returns {Object}
+   */
+  _resolveHybridData(sym, metrics) {
+    const atrPercent14 = metrics.atrPercent14 ?? metrics.atrPct30d;
+    let liquidityRatio = metrics.liquidityRatio;
+    if (liquidityRatio == null && metrics.volume24h > 0 && metrics.marketCap > 0) {
+      liquidityRatio = metrics.volume24h / metrics.marketCap;
+    }
+    const base = this._baseOf(sym);
+    return {
+      hv30:           metrics.hv30,
+      atrPercent14,
+      liquidityRatio,
+      marketCapRank:  metrics.marketCapRank ?? this.getMarketCapRank(base),
+      betaToBTC:      metrics.betaToBTC,
+    };
   }
 
   /**
@@ -287,6 +397,17 @@ class PairClassifier {
    */
   determineTier(symbol, metrics = null) {
     const sym = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    // v2.0 primary: Hybrid Volatility Score bila caller menyuplai metrik lengkap.
+    if (this._hasHybridInputs(metrics)) {
+      const hybridData = this._resolveHybridData(sym, metrics);
+      const tier = calculateHybridVolatilityScore(hybridData);
+      // Fail-safe: likuiditas ekstrem tipis tetap paksa VOLATILE.
+      if (metrics.lowLiquidity === true) return PAIR_TIER.VOLATILE;
+      return tier;
+    }
+
+    // Fallback: rank CoinGecko / static tables + legacy bump ATR%/volume.
     const base = this._baseTier(sym);
     return this.applyHybridMetrics(base, metrics);
   }
@@ -346,10 +467,11 @@ class PairClassifier {
    * }}
    */
   classify(symbol, metrics = null) {
-    const tier = this.determineTier(symbol, metrics);
+    const sym = (symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const tier = this.determineTier(sym, metrics);
     const strategies = this.getStrategiesForTier(tier);
     const paramOverrides = this.getParamOverridesForTier(tier);
-    return {
+    const result = {
       tier,
       riskLevel:            RISK_LEVEL[tier],
       recommendedStrategies: strategies.recommended,
@@ -357,6 +479,11 @@ class PairClassifier {
       blockedStrategies:     strategies.blocked,
       paramOverrides,
     };
+    if (this._hasHybridInputs(metrics)) {
+      const hybridData = this._resolveHybridData(sym, metrics);
+      result.hybridScore = computeHybridScore(hybridData);
+    }
+    return result;
   }
 
   /**
@@ -384,4 +511,9 @@ module.exports = {
   STRATEGIES_BY_PAIR_TIER,
   PARAM_OVERRIDES,
   RISK_LEVEL,
+  normalize,
+  normalizeInverted,
+  computeHybridScore,
+  tierFromHybridScore,
+  calculateHybridVolatilityScore,
 };

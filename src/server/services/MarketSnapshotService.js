@@ -27,6 +27,60 @@ function lastVal(arr) {
 }
 
 /**
+ * HV 30 hari annualized (%): std dev log-return harian × √365 × 100.
+ * @param {number[]} closes
+ * @returns {number|null}
+ */
+function calcHV30(closes) {
+  if (!Array.isArray(closes) || closes.length < 31) return null;
+  const slice = closes.slice(-31);
+  const returns = [];
+  for (let i = 1; i < slice.length; i++) {
+    if (slice[i - 1] > 0 && slice[i] > 0) {
+      returns.push(Math.log(slice[i] / slice[i - 1]));
+    }
+  }
+  if (returns.length < 20) return null;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((a, r) => a + (r - mean) ** 2, 0) / returns.length;
+  return parseFloat((Math.sqrt(variance) * Math.sqrt(365) * 100).toFixed(3));
+}
+
+/**
+ * Beta coin vs BTC dari log-return harian (lookback 30 hari).
+ * @param {number[]} coinCloses
+ * @param {number[]} btcCloses
+ * @returns {number|null}
+ */
+function calcBetaToBTC(coinCloses, btcCloses) {
+  if (!Array.isArray(coinCloses) || !Array.isArray(btcCloses)) return null;
+  const n = Math.min(31, coinCloses.length, btcCloses.length);
+  if (n < 21) return null;
+  const cSlice = coinCloses.slice(-n);
+  const bSlice = btcCloses.slice(-n);
+  const cRet = [];
+  const bRet = [];
+  for (let i = 1; i < n; i++) {
+    if (cSlice[i - 1] > 0 && cSlice[i] > 0 && bSlice[i - 1] > 0 && bSlice[i] > 0) {
+      cRet.push(Math.log(cSlice[i] / cSlice[i - 1]));
+      bRet.push(Math.log(bSlice[i] / bSlice[i - 1]));
+    }
+  }
+  if (cRet.length < 15) return null;
+  const bMean = bRet.reduce((a, v) => a + v, 0) / bRet.length;
+  const cMean = cRet.reduce((a, v) => a + v, 0) / cRet.length;
+  let cov = 0;
+  let bVar = 0;
+  for (let i = 0; i < cRet.length; i++) {
+    const bd = bRet[i] - bMean;
+    cov += (cRet[i] - cMean) * bd;
+    bVar += bd * bd;
+  }
+  if (bVar <= 0) return null;
+  return parseFloat((cov / bVar).toFixed(3));
+}
+
+/**
  * @param {Object} client - exchange client dengan getCandles(symbol, interval, limit)
  * @param {string} symbol
  * @param {Object} [opts]
@@ -110,37 +164,21 @@ async function getMarketSnapshot(client, symbol, opts = {}) {
 }
 
 /**
- * Hitung metrik hybrid untuk PairClassifier (v2.3 — PAIR_VOLATILITY.md §"Tambahan
- * Hybrid Metric"). Dipakai untuk menaikkan/menurunkan tier dasar (market-cap) saat
- * volatilitas nyata tinggi atau likuiditas tipis:
- *   - atrPct30d : ATR(14) pada candle HARIAN (lookback ~30 hari) sebagai % harga.
- *                 PairClassifier menaikkan tier 1 level bila > 4.5%.
- *   - volume24h : estimasi quote-volume (USD) 24 jam = base-volume × close pada
- *                 candle harian terakhir.
- *   - lowLiquidity / minVolume24h : flag likuiditas tipis → paksa VOLATILE.
- *
- * Reuse fetchCandlesWithCache + calcATR (sama dgn getMarketSnapshot) — tidak ada
- * fetch baru selain candle harian (di-cache). Mengembalikan null bila data tak
- * tersedia → classify() jatuh ke tier dasar (backward-compatible, tanpa bump).
+ * Hitung metrik hybrid untuk PairClassifier (v2.0 — PAIR_VOLATILITY.md §2).
+ * Menyuplai input calculateHybridVolatilityScore:
+ *   - hv30, atrPercent14, liquidityRatio, marketCapRank, betaToBTC
+ * Legacy fields (atrPct30d, lowLiquidity) tetap ada untuk backward-compat.
  *
  * @param {Object} client - exchange client dengan getCandles
  * @param {string} symbol
  * @param {Object} [opts]
- * @param {number} [opts.atrPeriod=14]
- * @param {number} [opts.dailyLimit=35]   - jumlah candle harian (≈30 hari + warmup ATR)
- * @param {number} [opts.minBars=20]      - minimum candle agar metrik dianggap valid
- * @param {number} [opts.minVolume24h=2_000_000] - threshold likuiditas (USD/24j)
- * @param {string} [opts.exchange='bitget']
- * @returns {Promise<{atrPct30d?:number, volume24h:number, minVolume24h:number, lowLiquidity:boolean}|null>}
+ * @returns {Promise<Object|null>}
  */
 async function getPairTierMetrics(client, symbol, opts = {}) {
   const {
     atrPeriod = 14,
     dailyLimit = 35,
     minBars = 20,
-    // Threshold likuiditas default: $2.000.000 quote-volume per 24 jam. Di bawah
-    // ini order book umumnya tipis (spread lebar, slippage tinggi) → paksa VOLATILE
-    // sebagai fail-safe. Nilai konservatif & dapat di-tune (lihat catatan rilis).
     minVolume24h = 2_000_000,
     exchange = 'bitget',
   } = opts;
@@ -167,17 +205,47 @@ async function getPairTierMetrics(client, symbol, opts = {}) {
   if (!(lastClose > 0)) return null;
 
   const atr = lastVal(calcATR(highs, lows, closes, atrPeriod));
-  const atrPct30d = atr != null ? (atr / lastClose) * 100 : null;
+  const atrPercent14 = atr != null ? parseFloat(((atr / lastClose) * 100).toFixed(3)) : null;
+  const hv30 = calcHV30(closes);
 
-  // Quote-volume (USD) 24 jam ≈ base-volume × harga close candle harian terakhir.
   const baseVol24h = vols[vols.length - 1] ?? 0;
-  const volume24h  = baseVol24h * lastClose;
+  const volumeFromCandles = baseVol24h * lastClose;
 
-  // Fail-OPEN saat volume tak terbaca (0): jangan paksa VOLATILE tanpa data.
+  // Market cap + volume dari CoinGecko (lebih akurat untuk liquidityRatio).
+  const { getMarketData } = require('../../infrastructure/market/coinGeckoClient');
+  const { pairClassifier } = require('../../infrastructure/classification/PairClassifier');
+  const marketData = await getMarketData(symbol).catch(() => null);
+  const marketCap = marketData?.marketCap ?? null;
+  const volume24h = marketData?.volume24h ?? volumeFromCandles;
+  const liquidityRatio = (marketCap > 0 && volume24h > 0)
+    ? parseFloat((volume24h / marketCap).toFixed(6))
+    : null;
+  const marketCapRank = pairClassifier.getMarketCapRank(symbol);
+
+  // Beta vs BTC — butuh candle harian BTC paralel.
+  let betaToBTC = null;
+  try {
+    const btcDaily = await fetchCandlesWithCache(client, {
+      exchange, symbol: 'BTCUSDT', interval: '1d', limit: dailyLimit,
+      cacheTtlSeconds: HTF_CACHE_TTL, minBars,
+    });
+    if (btcDaily?.length >= minBars) {
+      betaToBTC = calcBetaToBTC(closes, btcDaily.map(c => c.close));
+    }
+  } catch {
+    betaToBTC = null;
+  }
+
   const lowLiquidity = minVolume24h > 0 && volume24h > 0 && volume24h < minVolume24h;
 
   return {
-    atrPct30d: atrPct30d != null ? parseFloat(atrPct30d.toFixed(3)) : undefined,
+    hv30:           hv30 ?? undefined,
+    atrPercent14:   atrPercent14 ?? undefined,
+    atrPct30d:      atrPercent14 ?? undefined,
+    liquidityRatio: liquidityRatio ?? undefined,
+    marketCap:      marketCap ?? undefined,
+    marketCapRank:  marketCapRank ?? undefined,
+    betaToBTC:      betaToBTC ?? undefined,
     volume24h,
     minVolume24h,
     lowLiquidity,

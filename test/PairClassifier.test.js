@@ -23,6 +23,9 @@ const {
   PARAM_OVERRIDES,
   LIQUID_PAIRS,
   VOLATILE_PAIRS,
+  computeHybridScore,
+  tierFromHybridScore,
+  calculateHybridVolatilityScore,
 } = require('../src/infrastructure/classification/PairClassifier');
 
 describe('PairClassifier', () => {
@@ -200,7 +203,99 @@ describe('PairClassifier', () => {
     });
   });
 
-  // ── SEMI_VOLATILE dynamic tier (v2.3) ─────────────────────────────────────
+  // ── Hybrid Volatility Score (v2.0) ────────────────────────────────────────
+
+  describe('calculateHybridVolatilityScore() — v2.0 thresholds', () => {
+    const lowRisk = {
+      hv30: 25, atrPercent14: 1.0, liquidityRatio: 0.12, marketCapRank: 5, betaToBTC: 1.0,
+    };
+    const midRisk = {
+      hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 80, betaToBTC: 1.2,
+    };
+    const highMed = {
+      hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 120, betaToBTC: 1.5,
+    };
+    const highRisk = {
+      hv30: 110, atrPercent14: 5.5, liquidityRatio: 0.002, marketCapRank: 200, betaToBTC: 2.0,
+    };
+
+    it('blue-chip metrics → LIQUID (score < 0.48)', () => {
+      assert.equal(calculateHybridVolatilityScore(lowRisk), PAIR_TIER.LIQUID);
+      assert.ok(computeHybridScore(lowRisk) < 0.48);
+    });
+
+    it('mid-cap metrics → STABLE (0.48–0.65)', () => {
+      assert.equal(calculateHybridVolatilityScore(midRisk), PAIR_TIER.STABLE);
+      const s = computeHybridScore(midRisk);
+      assert.ok(s > 0.48 && s <= 0.65, `score=${s}`);
+    });
+
+    it('transitional metrics → SEMI_VOLATILE (0.66–0.78)', () => {
+      assert.equal(calculateHybridVolatilityScore(highMed), PAIR_TIER.SEMI_VOLATILE);
+      const s = computeHybridScore(highMed);
+      assert.ok(s > 0.65 && s <= 0.78, `score=${s}`);
+    });
+
+    it('microcap / thin liquidity → VOLATILE (> 0.78)', () => {
+      assert.equal(calculateHybridVolatilityScore(highRisk), PAIR_TIER.VOLATILE);
+      assert.ok(computeHybridScore(highRisk) > 0.78);
+    });
+
+    it('betaToBTC > 1.8 adds +0.08 to score', () => {
+      const base = { hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 80, betaToBTC: 1.0 };
+      const bumped = { ...base, betaToBTC: 2.0 };
+      assert.ok(computeHybridScore(bumped) - computeHybridScore(base) >= 0.07);
+    });
+
+    it('marketCapRank > 150 adds +0.10 to score', () => {
+      const base = { hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 100, betaToBTC: 1.0 };
+      const bumped = { ...base, marketCapRank: 200 };
+      assert.ok(computeHybridScore(bumped) - computeHybridScore(base) >= 0.09);
+    });
+
+    it('tierFromHybridScore respects boundary at 0.48 / 0.65 / 0.78', () => {
+      assert.equal(tierFromHybridScore(0.48), PAIR_TIER.LIQUID);
+      assert.equal(tierFromHybridScore(0.49), PAIR_TIER.STABLE);
+      assert.equal(tierFromHybridScore(0.65), PAIR_TIER.STABLE);
+      assert.equal(tierFromHybridScore(0.66), PAIR_TIER.SEMI_VOLATILE);
+      assert.equal(tierFromHybridScore(0.78), PAIR_TIER.SEMI_VOLATILE);
+      assert.equal(tierFromHybridScore(0.79), PAIR_TIER.VOLATILE);
+    });
+  });
+
+  describe('determineTier() — hybrid score path (v2.0)', () => {
+    it('uses hybrid score when full metrics supplied', () => {
+      const pc = new PairClassifier();
+      const metrics = {
+        hv30: 25, atrPercent14: 1.0, liquidityRatio: 0.12,
+        marketCapRank: 5, betaToBTC: 1.0,
+      };
+      assert.equal(pc.determineTier('BTCUSDT', metrics), PAIR_TIER.LIQUID);
+    });
+
+    it('classify() includes hybridScore when metrics supplied', () => {
+      const pc = new PairClassifier();
+      const metrics = {
+        hv30: 110, atrPercent14: 5.5, liquidityRatio: 0.002,
+        marketCapRank: 200, betaToBTC: 2.0,
+      };
+      const r = pc.classify('GRASSUSDT', metrics);
+      assert.equal(r.tier, PAIR_TIER.VOLATILE);
+      assert.ok(typeof r.hybridScore === 'number');
+      assert.ok(r.hybridScore > 0.78);
+    });
+
+    it('lowLiquidity fail-safe forces VOLATILE even on low hybrid score', () => {
+      const pc = new PairClassifier();
+      const metrics = {
+        hv30: 25, atrPercent14: 1.0, liquidityRatio: 0.12,
+        marketCapRank: 5, betaToBTC: 1.0, lowLiquidity: true,
+      };
+      assert.equal(pc.determineTier('BTCUSDT', metrics), PAIR_TIER.VOLATILE);
+    });
+  });
+
+  // ── SEMI_VOLATILE dynamic tier (fallback rank) ────────────────────────────
 
   describe('dynamic SEMI_VOLATILE tier (v2.3)', () => {
     it('rank 61–150 base ticker classifies as SEMI_VOLATILE', () => {
@@ -209,7 +304,7 @@ describe('PairClassifier', () => {
       assert.equal(pc.determineTier('FOOUSDT'), PAIR_TIER.SEMI_VOLATILE);
       const r = pc.classify('FOOUSDT');
       assert.equal(r.tier, 'SEMI_VOLATILE');
-      assert.equal(r.riskLevel, 'MEDIUM-HIGH');
+      assert.equal(r.riskLevel, 'HIGH-MED');
       assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
     });
 

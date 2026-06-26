@@ -7,6 +7,7 @@ const db = require("../../infrastructure/db/database");
 const ExchangeService = require("../../services/ExchangeService");
 const { symbolsRateLimiter } = require("../../middleware/marketRateLimiter");
 const { pairClassifier } = require("../../infrastructure/classification/PairClassifier");
+const { getPairTierMetrics } = require("../services/MarketSnapshotService");
 
 // parseInt yang aman — kembalikan `def` jika nilai tidak finite
 const safeInt = (val, def = 0) => {
@@ -132,13 +133,14 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   // Auth-required (authMiddleware already applied at app level for /api/v1/*).
   // Response is safe to cache on client (classification is deterministic &
   // stable intra-day; no per-user data exposed).
-  router.get("/pair-classification/:symbol", (req, res) => {
+  router.get("/pair-classification/:symbol", async (req, res) => {
     try {
       const symbol = (req.params.symbol || "").toUpperCase().trim();
       if (!symbol) {
         return res.status(400).json({ ok: false, message: "symbol param required" });
       }
-      const result = pairClassifier.classify(symbol);
+      const metrics = await getPairTierMetrics(sharedClient, symbol).catch(() => null);
+      const result = pairClassifier.classify(symbol, metrics);
       res.json({
         ok: true,
         symbol,
@@ -148,6 +150,7 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
         cautiousStrategies:    result.cautiousStrategies,
         blockedStrategies:     result.blockedStrategies,
         paramOverrides:        result.paramOverrides,
+        hybridScore:           result.hybridScore ?? null,
       });
     } catch (err) {
       res.status(500).json({ ok: false, message: err.message });
