@@ -7,12 +7,250 @@ const express = require("express");
 const { asyncHandler } = require("../../middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
 const BacktestHistoryService = require("../services/BacktestHistoryService");
+const BacktestCsvService = require("../services/BacktestCsvService");
 const ReportGeneratorService = require("../services/ReportGeneratorService");
 const OptimizationAnalysisService = require("../services/OptimizationAnalysisService");
+const { STRATEGIES } = require("../../domain/legacyStrategies");
+
+const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+const STRATEGY_ABBREV = {
+  ADAPTIVE_FUSION: "AF",
+  TREND_MOMENTUM: "TM",
+  MEAN_REVERSION: "MR",
+  BREAKOUT_RETEST: "BR",
+};
+
+function buildStrategyList() {
+  return USER_STRATEGY_KEYS.map(key => {
+    const s = STRATEGIES[key];
+    return {
+      id: key,
+      key,
+      abbrev: STRATEGY_ABBREV[key],
+      name: s.label,
+      label: s.label,
+      description: s.description,
+      type: "builtin",
+      interval: s.interval,
+      defaults: {
+        emaFast: s.emaFast,
+        emaSlow: s.emaSlow,
+        rsiPeriod: s.rsiPeriod,
+        rsiOB: s.rsiOverbought,
+        atrMult: s.atrMultiplier,
+        riskReward: s.riskReward,
+        riskPerTrade: s.riskPerTrade,
+        capital: 500,
+        bbPeriod: 20,
+        bbStdDev: 2,
+        rsiOversold: s.rsiOversold,
+        rsiOverbought: s.rsiOverbought,
+        rangeLookback: s.sidewaysRangeLookback || 20,
+        afMinVotes: s.afMinVotes || 3,
+      },
+    };
+  });
+}
+
+function normalizeMetrics(stats) {
+  return {
+    totalReturn: stats.totalReturn,
+    grossReturn: stats.grossReturn,
+    winRate: stats.winRate,
+    maxDrawdown: stats.maxDrawdown,
+    profitFactor: stats.profitFactor,
+    sharpe: stats.sharpe,
+    totalTrades: stats.totalTrades,
+    finalCapital: stats.finalCapital,
+    totalFees: stats.totalFees,
+    wins: stats.wins,
+    losses: stats.losses,
+    riskReward: stats.riskReward,
+    roi_pct: parseFloat(stats.totalReturn) || 0,
+    win_rate_pct: parseFloat(stats.winRate) || 0,
+    max_drawdown_pct: parseFloat(stats.maxDrawdown) || 0,
+    profit_factor: parseFloat(stats.profitFactor) || 0,
+  };
+}
 
 module.exports = function createBacktestRouter(context) {
   const router = express.Router();
   const { SYMBOLS_LIST } = context;
+
+  /**
+   * GET /api/v1/backtest/strategies
+   * Daftar strategi user (4 built-in + preset custom)
+   */
+  router.get("/strategies", asyncHandler(async (req, res) => {
+    const builtins = buildStrategyList();
+    let presets = [];
+    if (req.userId) {
+      presets = (await BacktestHistoryService.getPresets(req.userId)).map(p => ({
+        id: `preset-${p.id}`,
+        key: p.strategyKey,
+        name: p.name,
+        label: p.name,
+        type: "custom",
+        parameters: p.parameters,
+        presetId: p.id,
+      }));
+    }
+    res.json({ ok: true, strategies: [...builtins, ...presets] });
+  }));
+
+  /**
+   * POST /api/v1/backtest/strategies/import
+   * Parse JSON parameter import
+   */
+  router.post("/strategies/import", asyncHandler(async (req, res) => {
+    const { json, yaml, name, strategyKey = "ADAPTIVE_FUSION" } = req.body;
+    let parsed = null;
+    if (json) {
+      try {
+        parsed = typeof json === "string" ? JSON.parse(json) : json;
+      } catch {
+        return res.status(400).json({ ok: false, error: "JSON tidak valid" });
+      }
+    } else if (yaml && typeof yaml === "string") {
+      parsed = {};
+      for (const line of yaml.split("\n")) {
+        const m = line.match(/^(\w+)\s*:\s*(.+)$/);
+        if (m) parsed[m[1]] = Number.isNaN(Number(m[2])) ? m[2].trim() : Number(m[2]);
+      }
+    } else {
+      return res.status(400).json({ ok: false, error: "json atau yaml diperlukan" });
+    }
+    const suggestedName = name || `Import ${strategyKey} ${new Date().toISOString().slice(0, 10)}`;
+    res.json({
+      ok: true,
+      strategy: {
+        id: `import-${Date.now()}`,
+        key: strategyKey.toUpperCase(),
+        name: suggestedName,
+        label: suggestedName,
+        type: "imported",
+        parameters: parsed,
+      },
+      suggestedName,
+      parameters: parsed,
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/strategies/presets
+   * Simpan preset parameter custom
+   */
+  router.post("/strategies/presets", asyncHandler(async (req, res) => {
+    const { name, strategyKey, parameters } = req.body;
+    if (!name || !strategyKey || !parameters) {
+      return res.status(400).json({ ok: false, error: "name, strategyKey, parameters diperlukan" });
+    }
+    const preset = await BacktestHistoryService.savePreset(req.userId, name, strategyKey, parameters);
+    res.json({ ok: true, preset });
+  }));
+
+  /**
+   * POST /api/v1/backtest/run
+   * Simpan hasil backtest dari klien (Phase 1 — engine di FE)
+   */
+  router.post("/run", asyncHandler(async (req, res) => {
+    const {
+      strategy_id: strategyId,
+      strategy_key: strategyKeyRaw,
+      pair,
+      symbol,
+      timeframe = "1d",
+      period_label: periodLabel = "500",
+      parameters,
+      metrics,
+      equity_curve: equityCurve,
+      trades,
+      trades_data: tradesData,
+      config,
+      notes,
+      multi_strategies: multiStrategies,
+    } = req.body;
+
+    const sym = (pair || symbol || "").toUpperCase();
+    const strategyKey = (strategyKeyRaw || strategyId || "").replace(/^preset-\d+$|^import-/, "").toUpperCase();
+
+    if (!sym || !metrics) {
+      return res.status(400).json({ ok: false, error: "pair/symbol dan metrics diperlukan" });
+    }
+
+    const normalized = normalizeMetrics(metrics);
+    const runConfig = {
+      ...(config || {}),
+      strategyKey,
+      timeframe,
+      periodLabel,
+      parameters: parameters || {},
+      multiStrategies: multiStrategies || null,
+    };
+
+    const id = await BacktestHistoryService.saveBacktest(
+      sym,
+      normalized,
+      equityCurve || null,
+      trades || tradesData || null,
+      runConfig,
+      notes || null,
+      { userId: req.userId, strategyKey, timeframe, periodLabel }
+    );
+
+    res.json({
+      ok: true,
+      id,
+      message: `Backtest disimpan untuk ${sym}`,
+    });
+  }));
+
+  /**
+   * GET /api/v1/backtest/archive
+   * Arsip backtest dengan filter
+   */
+  router.get("/archive", asyncHandler(async (req, res) => {
+    const { strategy, pair, limit = 50, offset = 0 } = req.query;
+    const data = await BacktestHistoryService.getArchive({
+      userId: req.userId,
+      strategy,
+      pair,
+      limit,
+      offset,
+    });
+    res.json({ ok: true, count: data.length, data });
+  }));
+
+  /**
+   * POST /api/v1/backtest/export-csv
+   * Export CSV single atau multi-run
+   */
+  router.post("/export-csv", asyncHandler(async (req, res) => {
+    const { ids, mode = "summary" } = req.body;
+    if (!ids?.length) {
+      return res.status(400).json({ ok: false, error: "ids diperlukan" });
+    }
+    const records = await BacktestHistoryService.getByIds(ids.map(Number), req.userId);
+    if (!records.length) {
+      return res.status(404).json({ ok: false, error: "Tidak ada record ditemukan" });
+    }
+    const csv = BacktestCsvService.exportBacktests(records, mode);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="backtest-export-${Date.now()}.csv"`);
+    res.send(csv);
+  }));
+
+  /**
+   * GET /api/v1/backtest/run/:id
+   * Alias detail backtest by ID
+   */
+  router.get("/run/:id", asyncHandler(async (req, res) => {
+    const record = await BacktestHistoryService.getById(parseInt(req.params.id, 10));
+    if (!record) {
+      return res.status(404).json({ ok: false, error: "Backtest tidak ditemukan" });
+    }
+    res.json({ ok: true, data: record });
+  }));
 
   /**
    * GET /api/v1/backtest/metrics
@@ -153,7 +391,7 @@ module.exports = function createBacktestRouter(context) {
    * Save backtest result to history database
    */
   router.post("/save", asyncHandler(async (req, res) => {
-    const { symbol, metrics, equityCurve, tradesData, config, notes } = req.body;
+    const { symbol, metrics, equityCurve, tradesData, config, notes, strategy_key: strategyKey, timeframe, period_label: periodLabel } = req.body;
 
     if (!symbol || !metrics) {
       return res.status(400).json({
@@ -168,7 +406,8 @@ module.exports = function createBacktestRouter(context) {
       equityCurve,
       tradesData,
       config,
-      notes
+      notes,
+      { userId: req.userId, strategyKey, timeframe, periodLabel }
     );
 
     res.json({

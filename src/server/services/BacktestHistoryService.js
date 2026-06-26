@@ -16,7 +16,7 @@ class BacktestHistoryService {
    * @param {string} notes - Optional notes/description
    * @returns {number} - ID of inserted record
    */
-  static async saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null) {
+  static async saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null, meta = {}) {
     try {
       const id = await db.insertBacktestHistory({
         symbol,
@@ -25,6 +25,10 @@ class BacktestHistoryService {
         tradesData,
         config,
         notes,
+        userId: meta.userId ?? null,
+        strategyKey: meta.strategyKey ?? config?.strategyKey ?? null,
+        timeframe: meta.timeframe ?? config?.timeframe ?? null,
+        periodLabel: meta.periodLabel ?? config?.periodLabel ?? null,
       });
 
       console.log(`[BacktestHistory] Saved backtest for ${symbol} with ID ${id}`);
@@ -119,6 +123,42 @@ class BacktestHistoryService {
       };
     } catch (err) {
       console.error(`[BacktestHistory] Error calculating statistics: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async getArchive(filters = {}) {
+    try {
+      return await db.getBacktestArchive(filters);
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching archive: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async getByIds(ids, userId = null) {
+    try {
+      return await db.getBacktestHistoryByIds(ids, userId);
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching by IDs: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async savePreset(userId, name, strategyKey, parameters) {
+    try {
+      return await db.insertStrategyPreset({ userId, name, strategyKey, parameters });
+    } catch (err) {
+      console.error(`[BacktestHistory] Error saving preset: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async getPresets(userId) {
+    try {
+      return await db.getStrategyPresets(userId);
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching presets: ${err.message}`);
       throw err;
     }
   }

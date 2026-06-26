@@ -180,8 +180,29 @@ const SCHEMA_SQL = `
  * Buat tabel + index, lalu jalankan startup repair untuk sinkronkan stats sesi
  * dengan trade records aktual. Harus dipanggil & di-await sebelum server.listen.
  */
+const BACKTEST_MIGRATION_SQL = `
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS user_id TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS strategy_key TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS timeframe TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS period_label TEXT;
+
+  CREATE TABLE IF NOT EXISTS strategy_presets (
+    id            SERIAL PRIMARY KEY,
+    user_id       TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    strategy_key  TEXT NOT NULL,
+    parameters    TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_backtest_user     ON backtest_history(user_id, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_history(strategy_key, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_preset_user       ON strategy_presets(user_id, created_at DESC);
+`;
+
 async function init() {
   await pool.query(SCHEMA_SQL);
+  await pool.query(BACKTEST_MIGRATION_SQL);
 
   // Startup repair: perbaiki bug cross-session (trade buka di sesi A, tutup di B)
   try {
@@ -1257,10 +1278,14 @@ async function setSetting(key, value) {
 
 // ── Backtest History ──────────────────────────
 
-async function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData, config, notes }) {
+async function insertBacktestHistory({
+  symbol, metrics, equityCurve, tradesData, config, notes,
+  userId = null, strategyKey = null, timeframe = null, periodLabel = null,
+}) {
   const { rows } = await pool.query(
-    `INSERT INTO backtest_history (symbol, metrics, equity_curve, trades_data, config, notes)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    `INSERT INTO backtest_history
+       (symbol, metrics, equity_curve, trades_data, config, notes, user_id, strategy_key, timeframe, period_label)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
     [
       symbol.toUpperCase(),
       JSON.stringify(metrics),
@@ -1268,6 +1293,10 @@ async function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData,
       tradesData ? JSON.stringify(tradesData) : null,
       config ? JSON.stringify(config) : null,
       notes ?? null,
+      userId,
+      strategyKey,
+      timeframe,
+      periodLabel,
     ]
   );
   return rows[0].id;
@@ -1289,9 +1318,86 @@ async function getAllBacktestHistory(limit = 50) {
   return rows.map(mapBacktestRow);
 }
 
-async function getBacktestHistoryById(id) {
-  const { rows } = await pool.query(`SELECT * FROM backtest_history WHERE id = $1`, [id]);
+async function getBacktestHistoryById(id, userId = null) {
+  const params = [id];
+  let sql = `SELECT * FROM backtest_history WHERE id = $1`;
+  if (userId) {
+    sql += ` AND (user_id = $2 OR user_id IS NULL)`;
+    params.push(userId);
+  }
+  const { rows } = await pool.query(sql, params);
   return rows[0] ? mapBacktestRow(rows[0]) : null;
+}
+
+async function getBacktestArchive({ userId, strategy, pair, limit = 50, offset = 0 } = {}) {
+  const params = [];
+  const clauses = [];
+  if (userId) {
+    params.push(userId);
+    clauses.push(`(user_id = $${params.length} OR user_id IS NULL)`);
+  }
+  if (strategy) {
+    params.push(strategy.toUpperCase());
+    clauses.push(`strategy_key = $${params.length}`);
+  }
+  if (pair) {
+    params.push(pair.toUpperCase());
+    clauses.push(`symbol = $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  params.push(Math.min(parseInt(limit, 10) || 50, 100));
+  params.push(parseInt(offset, 10) || 0);
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history ${where}
+     ORDER BY timestamp DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  return rows.map(mapBacktestRow);
+}
+
+async function getBacktestHistoryByIds(ids, userId = null) {
+  if (!ids?.length) return [];
+  const params = [ids];
+  let sql = `SELECT * FROM backtest_history WHERE id = ANY($1::int[])`;
+  if (userId) {
+    params.push(userId);
+    sql += ` AND (user_id = $2 OR user_id IS NULL)`;
+  }
+  sql += ` ORDER BY timestamp DESC`;
+  const { rows } = await pool.query(sql, params);
+  return rows.map(mapBacktestRow);
+}
+
+async function insertStrategyPreset({ userId, name, strategyKey, parameters }) {
+  const { rows } = await pool.query(
+    `INSERT INTO strategy_presets (user_id, name, strategy_key, parameters)
+     VALUES ($1, $2, $3, $4) RETURNING id, name, strategy_key, parameters, created_at`,
+    [userId, name, strategyKey.toUpperCase(), JSON.stringify(parameters)]
+  );
+  const row = rows[0];
+  return {
+    id: row.id,
+    name: row.name,
+    strategyKey: row.strategy_key,
+    parameters: safeParseJSON(row.parameters),
+    createdAt: row.created_at,
+  };
+}
+
+async function getStrategyPresets(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, name, strategy_key, parameters, created_at
+     FROM strategy_presets WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId]
+  );
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    strategyKey: r.strategy_key,
+    parameters: safeParseJSON(r.parameters),
+    createdAt: r.created_at,
+  }));
 }
 
 function mapBacktestRow(row) {
@@ -1439,6 +1545,10 @@ module.exports = {
   getBacktestHistory,
   getAllBacktestHistory,
   getBacktestHistoryById,
+  getBacktestArchive,
+  getBacktestHistoryByIds,
+  insertStrategyPreset,
+  getStrategyPresets,
   // meta
   getDbPath,
   _pool: pool,
