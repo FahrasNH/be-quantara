@@ -166,6 +166,26 @@ test("applyGate — reject when TP not approved (skip action)", () => {
   if (applied.approved) throw new Error("should reject when TP skip");
 });
 
+test("applyGate — use_rules_tp when TP review ditolak", () => {
+  const confirm = GrokConfirmService.validateConfirmation({
+    confirm_entry: true,
+    confidence: 9,
+    tp_review: { approved: false, tp_confidence: 5 },
+  }, { minConfidenceEntry: 8, minTpConfidence: 7 });
+  const applied = GrokConfirmService.applyGate(confirm, {
+    side: "LONG",
+    price: 100,
+    atr: 2,
+    slPrice: 97,
+    tpRules: 106,
+    tpRejectAction: "use_rules_tp",
+    minRiskReward: 1.2,
+  });
+  if (!applied.approved || applied.tp !== 106) {
+    throw new Error("use_rules_tp should approve entry with rules TP");
+  }
+});
+
 test("GrokConfirmPromptBuilder — lite prompt fields", () => {
   const built = GrokConfirmPromptBuilder.build({
     strategyKey: "ADAPTIVE_FUSION",

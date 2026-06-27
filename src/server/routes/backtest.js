@@ -957,18 +957,20 @@ module.exports = function createBacktestRouter(context) {
     const minEntry = strat.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY;
     const minTp = strat.grokConfirmMinTp ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE;
     const bandPct = tpBandPct ?? cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT;
-    const rejectAction = tpRejectAction ?? cfg.GROK_CONFIRM_TP_REJECT_ACTION;
+    // Backtest: jangan skip seluruh trade hanya karena TP review ditolak — pakai TP rules.
+    const rejectAction = tpRejectAction ?? "use_rules_tp";
     const minRiskReward = strat.minRiskReward ?? strat.riskReward ?? 1.2;
 
     const decisions = {};
     let approved = 0;
     let rejected = 0;
+    let apiCalls = 0;
 
     async function processSignal(sig) {
       const id = String(sig.id ?? sig.barIndex);
       const side = sig.side;
       const price = Number(sig.price ?? sig.entry);
-      const atr = Number(sig.atr);
+      const atr = Number(sig.atr ?? sig.curATR);
       const slRules = Number(sig.sl ?? sig.sl_rules);
       const tpRules = Number(sig.tp ?? sig.tp_rules);
       if (!side || !Number.isFinite(price) || !Number.isFinite(atr)) {
@@ -995,6 +997,7 @@ module.exports = function createBacktestRouter(context) {
           botId: null,
           backtest: true,
         });
+        apiCalls += 1;
 
         const applied = GrokConfirmService.applyGate(confirm, {
           side,
@@ -1049,7 +1052,7 @@ module.exports = function createBacktestRouter(context) {
         total: signals.length,
         approved,
         rejected,
-        apiCalls: signals.length,
+        apiCalls,
       },
     });
   }));
