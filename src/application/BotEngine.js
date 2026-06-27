@@ -131,6 +131,7 @@ class BotEngine extends EventEmitter {
       atrMultiplier: strat.atrMultiplier,
       riskReward:    strat.riskReward,
       riskPerTrade:  strat.riskPerTrade,
+      riskPerTradeStrong: strat.riskPerTradeStrong ?? null,
       // v2.3 spec (STRATEGIES.md §9): maxRiskPerTrade default 0.05 → 0.012.
       // Tetap bisa di-override per-strategi via strat.maxRiskPerTrade / DB config.
       maxRiskPerTrade: strat.maxRiskPerTrade ?? 0.012,
@@ -162,7 +163,7 @@ class BotEngine extends EventEmitter {
       afRejectOnDissent:    strat.afRejectOnDissent ?? true,
       // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
       afMinVotes:           strat.afMinVotes ?? 3,
-      // v2.5: TP ×1.6 saat STRONG_TREND (STRATEGIES.md §4.2).
+      // v2.6: TP ×1.8 saat STRONG_TREND (STRATEGIES.md §4.2).
       strongTrendTPMult:    strat.strongTrendTPMult ?? 1,
 
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
@@ -1325,6 +1326,9 @@ class BotEngine extends EventEmitter {
                   });
                   signalOptions.slDist = riskCfg.slDistance;
                   signalOptions.tpDist = riskCfg.tpDistance;
+                  if (meta.marketCond === "STRONG_TREND" && this.config.riskPerTradeStrong > 0) {
+                    signalOptions.riskPerTrade = this.config.riskPerTradeStrong;
+                  }
                   indicatorSnapshot.afComponent  = meta.component;
                   indicatorSnapshot.afVotes      = meta.votes;
                   indicatorSnapshot.afMarketCond = meta.marketCond;
@@ -1721,7 +1725,8 @@ class BotEngine extends EventEmitter {
     // STABLE 0.95× / LIQUID 1.0×. Mengecilkan posisi (manajemen risiko) di koin
     // berisiko tinggi. SELALU dikalikan ke sizing (STRATEGIES.md §9). Default 1.
     const pairPosAdj = this.config.pairPositionSizeAdjustment || 1;
-    const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl) * pairPosAdj;
+    const riskPct = options.riskPerTrade ?? this.config.riskPerTrade;
+    const size = calcPositionSize(availCap, riskPct, price, sl) * pairPosAdj;
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
 
     // ── Minimum lot size Bitget — flexible leverage guard ─────────────────────
@@ -1733,13 +1738,13 @@ class BotEngine extends EventEmitter {
     const minLot  = MIN_LOT[sym] ?? 0.001;
 
     let finalSize    = size;
-    let actualRiskPct = this.config.riskPerTrade;
+    let actualRiskPct = riskPct;
 
     if (finalSize < minLot) {
       const riskIfMinLot = (minLot * Math.abs(price - sl)) / availCap;
       // Batas penerimaan min-lot dibuat lebih ketat (#11): maksimal 2x risk normal,
       // dan tidak boleh melewati maxRiskPerTrade. Sebelumnya boleh sampai 5% (5x niat).
-      const minLotRiskCap = Math.min(this.config.maxRiskPerTrade, this.config.riskPerTrade * 2);
+      const minLotRiskCap = Math.min(this.config.maxRiskPerTrade, riskPct * 2);
       if (riskIfMinLot <= minLotRiskCap) {
         finalSize    = minLot;
         actualRiskPct = riskIfMinLot;
@@ -1751,7 +1756,7 @@ class BotEngine extends EventEmitter {
         this._log("warn",
           `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym}. ` +
           `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(minLotRiskCap * 100).toFixed(2)}% → skip. ` +
-          `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk trade ${sym} normal)`
+          `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / riskPct).toFixed(2)} untuk trade ${sym} normal)`
         );
         return;
       }

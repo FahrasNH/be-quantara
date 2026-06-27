@@ -119,12 +119,11 @@ test("FEE-01b: afMinVotes=3 menuntut unanimitas → 2 suara ditolak", () => {
 
 // ── FEE-01: anti-chase + afMinVotes lewat config detectSignal (preset AF) ─────
 
-test("FEE-01: anti-chase preset v2.5 (maxEntryExtensionATR 0.8) memblok entry ekstensi 1.0", () => {
-  // close 104 → |104 - 103.5| / 0.5 = 1.0 > 0.8 → diblok dengan preset v2.5
-  const sig = afs.detectSignal(uptrendIndicators(104), N, { ...cfg, maxEntryExtensionATR: 0.8 });
+test("FEE-01: anti-chase preset v2.6 (maxEntryExtensionATR 0.7) memblok entry ekstensi 0.8", () => {
+  // close 103.9 → |103.9 - 103.5| / 0.5 = 0.8 > 0.7 → diblok
+  const sig = afs.detectSignal(uptrendIndicators(103.9), N, { ...cfg, maxEntryExtensionATR: 0.7 });
   assert.strictEqual(sig, null);
-  // dekat mean: close 103.85 → ekstensi 0.7 ≤ 0.8 → diterima
-  const sigNear = afs.detectSignal(uptrendIndicators(103.85), N, { ...cfg, maxEntryExtensionATR: 0.8 });
+  const sigNear = afs.detectSignal(uptrendIndicators(103.85), N, { ...cfg, maxEntryExtensionATR: 0.7 });
   assert.strictEqual(sigNear, "LONG");
 });
 
@@ -140,21 +139,21 @@ test("FEE-01b: afMinVotes=3 lewat config — entry 2-vote (A+C) ditolak", () => 
   assert.strictEqual(afs.detectSignal(uptrendIndicators(104), N, { ...cfg, afMinVotes: 3 }), null);
 });
 
-// ── v2.5: strongTrendTPMult & DEAD_MARKET boundary ─────────────────────────
+// ── v2.6: strongTrendTPMult & DEAD_MARKET boundary ─────────────────────────
 
-test("v2.5: strongTrendTPMult ×1.6 pada STRONG_TREND — TP distance naik, SL tetap", () => {
+test("v2.6: strongTrendTPMult ×1.8 pada STRONG_TREND — TP distance naik, SL tetap", () => {
   const base = afs.calculateRiskConfig(100, 2, "LONG", "B");
   const strong = afs.calculateRiskConfig(100, 2, "LONG", "B", {
     marketCond: "STRONG_TREND",
-    strongTrendTPMult: 1.6,
+    strongTrendTPMult: 1.8,
   });
   assert.strictEqual(base.slDistance, strong.slDistance);
-  assert.ok(Math.abs(strong.tpDistance - base.tpDistance * 1.6) < 1e-9);
+  assert.ok(Math.abs(strong.tpDistance - base.tpDistance * 1.8) < 1e-9);
   assert.strictEqual(strong.strongTrendTPApplied, true);
   assert.strictEqual(base.strongTrendTPApplied, false);
 });
 
-test("v2.5: DEAD_MARKET boundary — vol 1.3, trend 0.4 → null", () => {
+test("v2.6: DEAD_MARKET boundary — vol 1.3, trend 0.4 → null", () => {
   const closes = mk(N, 104);
   closes[N] = 104;
   const indicators = {

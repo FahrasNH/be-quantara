@@ -1,12 +1,11 @@
 /**
- * AdaptiveFusionStrategy.js — v2.5 (High Win-Rate & Risk Control — STRATEGIES.md §4)
+ * AdaptiveFusionStrategy.js — v2.6 (Selective & High Probability — STRATEGIES.md §4)
  *
- * v2.5 spec changes:
- *  - Sub SL/TP/minScore: A 2.2/3.3/38, B 1.6/3.4/45, C 1.2/3.0/42.
- *  - RSI B bands: LONG 58–68, SHORT 32–42.
- *  - validateEntry ATR gate 1.0–3.5%; volSmaMultiplier 1.8 on Component A.
- *  - strongTrendTPMult ×1.6 on STRONG_TREND; maxEntryExtensionATR 0.8.
- *  - riskPerTrade 0.007, maxDailyLoss 3.5%, cooldown 60, htfTrendStrengthMin 0.72.
+ * v2.6 spec changes:
+ *  - riskPerTrade 0.005 (0.5%); riskPerTradeStrong 0.01 on STRONG_TREND.
+ *  - volSmaMultiplier 2.0; htfTrendStrengthMin 0.75; RSI B 60–68 / 32–40.
+ *  - atrMinMult 1.2; maxEntryExtensionATR 0.7; maxTrades 6; cooldown 90.
+ *  - strongTrendTPMult ×1.8 on STRONG_TREND.
  *
  * v2.3 spec changes (target win rate 40–45%):
  *  - afMinVotes default 2 → 3 (butuh konsensus lebih kuat).
@@ -48,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "2.5.0",
+      version: "2.6.0",
       enabled: true,
       ...config,
     });
@@ -303,7 +302,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
       // Pass full RSI array + index so A can compute RSI velocity (momentum)
       signals.A = this._detectSignalA(
         indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA,
-        config.volSmaMultiplier ?? 1.8
+        config.volSmaMultiplier ?? 2.0
       );
     }
 
@@ -360,7 +359,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
     // kualitas entry (WR) tanpa mematikan AF. Lihat juga FEE-03 min-edge gate.
     if (resolved) {
       const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
-      const maxExt = config.maxEntryExtensionATR ?? 0.8;
+      const maxExt = config.maxEntryExtensionATR ?? 0.7;
       if (
         closeConfirmed != null && emaFast != null && atr > 0 &&
         Math.abs(closeConfirmed - emaFast) / atr > maxExt
@@ -448,7 +447,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
   //
   // @param {number[]} rsiSeries - full RSI array
   // @param {number}   lastIdx   - current bar index (for slope)
-  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0, volMult = 1.8) {
+  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0, volMult = 2.0) {
     if (emaFast == null || emaSlow == null) return null;
 
     const rsiCurr  = rsiSeries?.[lastIdx];
@@ -515,10 +514,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
     if (!Array.isArray(closes) || closes.length < 2) return null;
     if (lastIdx == null) lastIdx = closes.length - 1;
 
-    const rsiLongMin  = config.rsiLongMin  ?? 58;
+    const rsiLongMin  = config.rsiLongMin  ?? 60;
     const rsiLongMax  = config.rsiLongMax  ?? 68;
     const rsiShortMin = config.rsiShortMin ?? 32;
-    const rsiShortMax = config.rsiShortMax ?? 42;
+    const rsiShortMax = config.rsiShortMax ?? 40;
 
     const emaFast = emaFastArr[lastIdx];
     const emaSlow = emaSlowArr[lastIdx];
@@ -653,12 +652,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
   getRiskConfig() {
     return {
-      // v2.5 spec (STRATEGIES.md §4): risk 0.7%, max 8 trade/hari, cooldown 60 mnt.
-      riskPerTrade:      0.007,
-      maxRiskPerTrade:   0.02,
-      maxDailyLossPct:   0.035,
-      maxTradesPerDay:   8,
-      cooldownAfterLoss: 60,
+      // v2.6 spec (STRATEGIES.md §4): risk 0.5%, max 6 trade/hari, cooldown 90 mnt.
+      riskPerTrade:        0.005,
+      riskPerTradeStrong:  0.01,
+      maxRiskPerTrade:     0.02,
+      maxDailyLossPct:     0.035,
+      maxTradesPerDay:     6,
+      cooldownAfterLoss:   90,
       maxConsecLoss:     2,
       leverage:          2,
     };
@@ -675,11 +675,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
   validateEntry(price, atr, volume, volSMA) {
     const atrPct  = (atr / price) * 100;
     const volRatio = volSMA > 0 ? volume / volSMA : 0;
-    // v2.5: gate 1.0–3.5% selaras atrMinMult/atrMaxMult preset.
-    if (atrPct < 1.0 || atrPct > 3.5) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (1.0–3.5%)` };
+    // v2.6: gate 1.2–3.5% selaras atrMinMult preset.
+    if (atrPct < 1.2 || atrPct > 3.5) {
+      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (1.2–3.5%)` };
     }
-    const volMin = this.config?.volSmaMultiplier ?? 1.8;
+    const volMin = this.config?.volSmaMultiplier ?? 2.0;
     if (volRatio < volMin * 0.4) {
       return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× below threshold (${(volMin * 0.4).toFixed(1)}×)` };
     }

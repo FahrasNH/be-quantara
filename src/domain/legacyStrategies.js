@@ -214,19 +214,15 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // ADAPTIVE_FUSION — Multi-Component Strategy (v2.5)
+  // ADAPTIVE_FUSION — Multi-Component Strategy (v2.6)
   //
-  //   Components A (scalp) + B (day) + C (swing) run simultaneously.
-  //   Signal fired only on majority vote (3/3 with afMinVotes=3).
-  //   SL/TP per component: A→2.2x/3.3x ATR, B→1.6x/3.4x ATR, C→1.2x/3.0x ATR
-  //   v2.5 spec (STRATEGIES.md §4): high win-rate, tight entry, strongTrendTPMult 1.6
+  //   v2.6 spec (STRATEGIES.md §4): selective & high probability — kurangi false positive.
   // ─────────────────────────────────────────────
   ADAPTIVE_FUSION: {
     name:          "ADAPTIVE_FUSION",
     label:         "Adaptive Fusion",
     description:   "3-component voting system (Scalp+Day+Swing). Adapts SL/TP to winning component.",
 
-    // Base indicators (used for calcIndicators — same as B for compatibility)
     emaFast:       9,
     emaSlow:       21,
     emaTrend:      50,
@@ -234,42 +230,41 @@ const STRATEGIES = {
     rsiPeriod:     14,
     rsiOverbought: 72,
     rsiOversold:   28,
-    rsiLongMin:    58,
+    rsiLongMin:    60,
     rsiLongMax:    68,
     rsiShortMin:   32,
-    rsiShortMax:   42,
+    rsiShortMax:   40,
 
     atrPeriod:     14,
-    // SL/TP overridden per-component in _handleSignal; these are fallback defaults
     atrMultiplier: 1.4,
     riskReward:    2.5,
-    // v2.5: selaras dengan AdaptiveFusionStrategy.validateEntry (1.0–3.5%).
-    atrMinMult:    1.0,
+    // v2.6: selaras validateEntry (1.2–3.5%).
+    atrMinMult:    1.2,
     atrMaxMult:    3.5,
 
     higherTf:      "1h",
     htfEmaFast:    9,
     htfEmaSlow:    21,
-    htfTrendStrengthMin: 0.72,
+    htfTrendStrengthMin: 0.75,
     sidewaysThresholdPct: 0.2,
 
     sidewaysRangeLookback:   20,
     sidewaysBreakoutVolMult: 1.5,
     sidewaysBreakoutBufMult: 0.3,
 
-    volSmaMultiplier: 1.8,
+    volSmaMultiplier: 2.0,
 
-    // v2.5 spec (STRATEGIES.md §4): risk 0.7%, max 8 trade/hari, cooldown 60 mnt.
-    riskPerTrade:      0.007,
-    maxDailyLossPct:   0.035,
-    maxTradesPerDay:   8,
-    cooldownAfterLoss: 60,
-    maxConsecLoss:     2,
+    // v2.6: risk 0.5% default; 1% saat STRONG_TREND (riskPerTradeStrong).
+    riskPerTrade:        0.005,
+    riskPerTradeStrong:  0.01,
+    maxDailyLossPct:     0.035,
+    maxTradesPerDay:     6,
+    cooldownAfterLoss:   90,
+    maxConsecLoss:       2,
 
-    // ── FEE-01/03: pengetatan entry v2.5 ───────────────────────────────────
-    maxEntryExtensionATR: 0.8,
+    maxEntryExtensionATR: 0.7,
     minEdgeFeeMultiple:   7,
-    strongTrendTPMult:    1.6,
+    strongTrendTPMult:    1.8,
     afMinVotes:           3,
     afRejectOnDissent:    true,
 
@@ -279,9 +274,9 @@ const STRATEGIES = {
 
     signalType:    "ADAPTIVE_FUSION",
 
-    trades:        "2-8 trade/hari",
-    winrate:       "~45-48% (v2.5 target)",
-    risk:          "Sedang",
+    trades:        "2-6 trade/hari",
+    winrate:       "~48-52% (v2.6 target)",
+    risk:          "Rendah–Sedang",
   },
 
   // ─────────────────────────────────────────────
