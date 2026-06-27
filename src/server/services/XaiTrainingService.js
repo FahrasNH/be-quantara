@@ -53,7 +53,7 @@ class XaiTrainingService {
   }
 
   static isEnabled() {
-    return cfg.XAI_ENABLED && cfg.XAI_API_KEY;
+    return cfg.XAI_ENABLED === true && Boolean(cfg.XAI_API_KEY);
   }
 
   /**
