@@ -2896,6 +2896,114 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
   // SL/TP MONITOR — harga real-time + rentang intrabar
   // ─────────────────────────────────────────────
+
+  _filterOrphanTradesForThisEngine(orphans) {
+    if (!this.config.groupKey || !this.config.strategyKey) return orphans;
+    return orphans.filter((row) => {
+      let stratOfTrade = null;
+      try { stratOfTrade = row.indicators ? JSON.parse(row.indicators)?.strategy : null; } catch { /* ignore */ }
+      if (stratOfTrade === null) return !!this.config.isGroupLeader;
+      return stratOfTrade === this.config.strategyKey;
+    });
+  }
+
+  _positionFromDbTrade(dbTrade, livePos = null) {
+    const size = dbTrade.size || 0;
+    const markPrice = livePos?.markPrice || dbTrade.entry_price;
+    const upnlFromExchange = livePos?.unrealizedPL ?? 0;
+    const upnlCalc = markPrice > 0 && dbTrade.entry_price > 0
+      ? (dbTrade.side === "LONG"
+        ? (markPrice - dbTrade.entry_price) * size
+        : (dbTrade.entry_price - markPrice) * size)
+      : 0;
+    return {
+      id:            dbTrade.order_id || `restored_${dbTrade.id}`,
+      dbId:          dbTrade.id,
+      side:          dbTrade.side,
+      entry:         dbTrade.entry_price,
+      sl:            dbTrade.sl,
+      tp:            dbTrade.tp,
+      size,
+      remainingSize: size,
+      openTime:      new Date(dbTrade.open_time).getTime(),
+      atr:           dbTrade.atr,
+      manualSLTP:    false,
+      unrealizedPL:  livePos ? (upnlFromExchange !== 0 ? upnlFromExchange : upnlCalc) : undefined,
+      markPrice:     livePos ? markPrice : undefined,
+      restoredFrom:  dbTrade.session_id,
+      R:             dbTrade.atr ? dbTrade.atr * (this.config.atrMultiplier || 1) : 0,
+      slCurrent:     dbTrade.sl,
+      m1: false, m2: false, m3: false,
+    };
+  }
+
+  /**
+   * Pulihkan posisi DB yang belum ada di state runtime — UI bisa tampil dari DB
+   * (mergeBotWithLiveState fallback) sementara engine tidak memonitor SL/TP.
+   */
+  async _reconcileOpenPositionsFromDb() {
+    if (!this.state.running || this._stopRequested) return;
+    try {
+      let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
+      orphans = this._filterOrphanTradesForThisEngine(orphans);
+      if (!orphans.length) return;
+
+      const knownDbIds = new Set(
+        this.state.openPositions.map(p => p.dbId).filter(Boolean)
+      );
+      let added = 0;
+
+      if (!this.config.dryRun && this.client?.getPositions) {
+        let liveByKey = new Map();
+        try {
+          const livePosns = await this.client.getPositions(this.config.symbol);
+          liveByKey = new Map(livePosns.map(p => [p.side, p]));
+        } catch { /* fallback dry-style restore below */ }
+
+        for (const dbTrade of orphans) {
+          if (knownDbIds.has(dbTrade.id)) continue;
+          const lp = liveByKey.get(dbTrade.side);
+          if (lp) {
+            this.state.openPositions.push(this._positionFromDbTrade(dbTrade, lp));
+            added += 1;
+          }
+        }
+      } else {
+        for (const dbTrade of orphans) {
+          if (knownDbIds.has(dbTrade.id)) continue;
+          this.state.openPositions.push(this._positionFromDbTrade(dbTrade));
+          added += 1;
+        }
+      }
+
+      if (added > 0) {
+        this._log("warn",
+          `${added} posisi DB dipulihkan ke state runtime (reconcile) — monitor SL/TP aktif kembali`
+        );
+      }
+    } catch (err) {
+      this._log("warn", `Reconcile posisi DB gagal: ${err.message}`);
+    }
+  }
+
+  /** Evaluasi hit SL/TP — intrabar + fallback harga monitor (ticker/last). */
+  _evaluateSlTpHit(pos, price, barHigh, barLow) {
+    const px = Number(price);
+    const hi = Number.isFinite(barHigh) ? barHigh : px;
+    const lo = Number.isFinite(barLow) ? barLow : px;
+    const sl = Number(pos.sl);
+    const tp = Number(pos.tp);
+    const hasSL = Number.isFinite(sl) && sl > 0;
+    const hasTP = Number.isFinite(tp) && tp > 0;
+    const hitSL = hasSL && (pos.side === "LONG"
+      ? (lo <= sl || px <= sl)
+      : (hi >= sl || px >= sl));
+    const hitTP = hasTP && (pos.side === "LONG"
+      ? (hi >= tp || px >= tp)
+      : (lo <= tp || px <= tp));
+    return { hitSL, hitTP, isTP: hitTP && !hitSL, sl, tp };
+  }
+
   /**
    * Resolve monitor price + high/low intrabar untuk cek SL/TP.
    * Dipakai BotEngine._tick(), AdaptiveStrategyEngine override, dan pass final saat stop().
@@ -2929,6 +3037,7 @@ class BotEngine extends EventEmitter {
 
   /** Monitor SL/TP posisi terbuka — wrapper agar semua jalur pakai logika yang sama. */
   async _monitorOpenPositions(candles, confirmedClose, atr) {
+    await this._reconcileOpenPositionsFromDb();
     if (this.state.openPositions.length === 0) return;
     const { monitorPrice, barHigh, barLow, atr: a } =
       await this._resolveSlTpMonitor(candles, confirmedClose, atr);
@@ -3131,12 +3240,8 @@ class BotEngine extends EventEmitter {
 
           // Jika SL/TP gagal dipasang tadi, monitor manual sekarang
           if (pos.manualSLTP) {
-            // Intrabar (BUG-TP-INTRABAR): TP kena bila high menembus TP, SL kena
-            // bila low menembus SL — bukan cuma satu titik harga.
-            const hitSL = pos.side === "LONG" ? barLow  <= pos.sl : barHigh >= pos.sl;
-            const hitTP = pos.side === "LONG" ? barHigh >= pos.tp : barLow  <= pos.tp;
+            const { hitSL, hitTP } = this._evaluateSlTpHit(pos, price, barHigh, barLow);
             if (hitSL || hitTP) {
-              // Bila satu bar menyentuh dua-duanya → asumsikan SL lebih dulu (konservatif).
               const reason = hitSL ? "SL" : "TP";
               this._log("warn", `Manual close ${pos.side} — ${reason} (manual monitor) @ $${price.toFixed(2)}`);
               try {
@@ -3210,17 +3315,11 @@ class BotEngine extends EventEmitter {
       // ── SL+ milestone check (dry run) ─────────────────────────────────────
       await this._checkSLPlusMilestones(pos, price);
 
-      // Cek SL / TP secara INTRABAR (BUG-TP-INTRABAR): TP kena bila HIGH menembus
-      // TP, SL kena bila LOW menembus SL — bukan cuma close/last (yang melewatkan
-      // wick). pos.sl/pos.tp sudah diperbarui oleh milestone bila aktif.
-      const hitTP = pos.side === "LONG" ? barHigh >= pos.tp : barLow  <= pos.tp;
-      const hitSL = pos.side === "LONG" ? barLow  <= pos.sl : barHigh >= pos.sl;
+      // Cek SL / TP — intrabar wick + fallback harga monitor (ticker).
+      const { hitSL, hitTP, isTP } = this._evaluateSlTpHit(pos, price, barHigh, barLow);
 
       if (hitTP || hitSL) {
-        // Bila satu bar menyentuh SL & TP sekaligus → asumsikan SL lebih dulu
-        // (konservatif; urutan intrabar tak bisa dipastikan tanpa data tick).
-        const isTP      = hitTP && !hitSL;
-        const exitPrice = isTP ? pos.tp : pos.sl;
+        const exitPrice = isTP ? Number(pos.tp) : Number(pos.sl);
         // Pakai remainingSize (bukan size asli) — partial sudah dicatat terpisah
         const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
         const pnl       = pos.side === "LONG"
