@@ -178,12 +178,13 @@ console.log("\nTEST 6: Entry Validation");
 console.log("─".repeat(50));
 
 const validationTests = [
-  // v2.4: floor ATR% 0.7 — ATR 350/50000 = 0.7% valid
-  { name: "Valid Entry", price: 50000, atr: 350, vol: 1000, volSMA: 800 },
-  { name: "Low Volume", price: 50000, atr: 350, vol: 100, volSMA: 800 },
+  // v2.5: floor ATR% 1.0 — ATR 550/50000 = 1.1% valid
+  { name: "Valid Entry", price: 50000, atr: 550, vol: 1000, volSMA: 800 },
+  { name: "Low Volume", price: 50000, atr: 550, vol: 100, volSMA: 800 },
   { name: "Dead Market (ATR 0.1%)", price: 50000, atr: 50, vol: 1000, volSMA: 800 },
   // Regime CSV 11–12 Jun: ATR 0.4% — harus INVALID
   { name: "Low Vol ala dry-run Jun 11-12 (ATR 0.4%)", price: 50000, atr: 200, vol: 1000, volSMA: 800 },
+  { name: "Below v2.5 ATR floor (0.7%)", price: 50000, atr: 350, vol: 1000, volSMA: 800 },
 ];
 
 for (const test of validationTests) {
@@ -234,7 +235,7 @@ const N = 30; // lastIdx = N
 // Downtrend BTC mirip log nyata: EMA9 < EMA21 < EMA50, price < EMA21, RSI 42.
 // Event pullback-resume: candle N-1 sempat close DI ATAS EMA9 (pullback naik),
 // candle N close kembali di bawah (resume turun) → B SHORT, C SHORT → 2/3.
-// v2.4: volatility 1.5 (> LOW_VOL 1.4, bukan DEAD_MARKET) & afMinVotes:2.
+// v2.5: volatility 1.5 (> LOW_VOL 1.4) & afMinVotes:2.
 {
   const closes = mkSeries(N, 62600);
   closes[N - 1] = 62700;   // pullback ke atas EMA9 (62684)
@@ -244,12 +245,12 @@ const N = 30; // lastIdx = N
     emaFast:   mkSeries(N, 62683.93),  // EMA9
     emaSlow:   mkSeries(N, 62776.78),  // EMA21
     emaTrend:  mkSeries(N, 62925.00),  // EMA50
-    rsi:       mkSeries(N, 42.4),
+    rsi:       mkSeries(N, 40),
     atr:       mkSeries(N, 189.08),
     volumes:   mkSeries(N, 1),
     volSMA:    mkSeries(N, null),
   };
-  const sig = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.15, afMinVotes: 2 });
+  const sig = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.15, afMinVotes: 2, maxEntryExtensionATR: 1.5 });
   tB("BTC downtrend + pullback-resume — detectSignal SHORT", sig, "SHORT");
   const meta = afs.getLastSignalMeta();
   tB("lastSignalMeta tersedia setelah signal", meta !== null, true);
@@ -258,9 +259,9 @@ const N = 30; // lastIdx = N
   const sigDead = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 0.4, trend_strength: 0.05 });
   tB("DEAD_MARKET (vol 0.4, trend 0.05 ala CSV) — entry diblok", sigDead, null);
 
-  // v2.4 boundary: vol 1.3 ≤ LOW_VOL 1.4 & trend 0.4 < WEAK_TREND 0.55 → DEAD_MARKET
+  // v2.5 boundary: vol 1.3 ≤ LOW_VOL 1.4 & trend 0.4 < WEAK_TREND 0.55 → DEAD_MARKET
   const sigBoundary = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.3, trend_strength: 0.4 });
-  tB("DEAD_MARKET boundary v2.4 (vol 1.3, trend 0.4) — entry diblok", sigBoundary, null);
+  tB("DEAD_MARKET boundary v2.5 (vol 1.3, trend 0.4) — entry diblok", sigBoundary, null);
 }
 
 // Uptrend: EMA9 > EMA21 > EMA50, price > EMA21, RSI 57, pullback-resume → LONG
@@ -273,12 +274,12 @@ const N = 30; // lastIdx = N
     emaFast:   mkSeries(N, 103.5),  // EMA9
     emaSlow:   mkSeries(N, 102.5),  // EMA21
     emaTrend:  mkSeries(N, 101.0),  // EMA50
-    rsi:       mkSeries(N, 57),
+    rsi:       mkSeries(N, 60),
     atr:       mkSeries(N, 0.5),
     volumes:   mkSeries(N, 100),
     volSMA:    mkSeries(N, 80),
   };
-  const sig = afs.detectSignal(upIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.5, afMinVotes: 2 });
+  const sig = afs.detectSignal(upIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.5, afMinVotes: 2, maxEntryExtensionATR: 1.5 });
   tB("Uptrend + pullback-resume — detectSignal LONG", sig, "LONG");
 }
 
@@ -289,7 +290,7 @@ const N = 30; // lastIdx = N
   const closes  = mkSeries(N, 104.5);       // selalu jauh di atas EMA9 — no pullback
   const emaFast = mkSeries(N, 103.5);
   const emaSlow = mkSeries(N, 102.5);       // tidak pernah cross dalam lookback
-  const sig = afs._detectSignalB(57, emaFast, emaSlow, 101.0, closes, N);
+  const sig = afs._detectSignalB(60, emaFast, emaSlow, 101.0, closes, N);
   tB("Aligned tapi TANPA event (extended/chasing) — B null", sig, null);
 }
 
@@ -299,7 +300,7 @@ const N = 30; // lastIdx = N
   emaFast[N - 1] = 102.4;                   // sebelum cross: EMA9 < EMA21
   const emaSlow = mkSeries(N, 102.5);
   const closes  = mkSeries(N, 104);
-  const sig = afs._detectSignalB(57, emaFast, emaSlow, 101.0, closes, N);
+  const sig = afs._detectSignalB(60, emaFast, emaSlow, 101.0, closes, N);
   tB("Fresh EMA9×EMA21 crossover — B fires LONG", sig, "LONG");
 }
 
@@ -315,7 +316,7 @@ const N = 30; // lastIdx = N
 {
   // closes sempat <= EMA9 (100.8) lalu close terakhir di atasnya → pullback-resume
   const closes = [99, 99.5, 100, 100.5, 101];
-  const sig = afs._detectSignalB(58, mkSeries(4, 100.8), mkSeries(4, 100.2), null, closes, 4);
+  const sig = afs._detectSignalB(60, mkSeries(4, 100.8), mkSeries(4, 100.2), null, closes, 4);
   tB("emaTrend=null (fallback 2-EMA) — B fires LONG", sig, "LONG");
 }
 
@@ -337,9 +338,9 @@ console.log(`\nComponent B: ${b8pass} passed, ${b8fail} failed`);
 if (b8fail > 0) { console.log("⚠️  Component B tests FAILED"); process.exitCode = 1; }
 
 // ═════════════════════════════════════════════════════════════════════════
-// TEST 9: calculateRiskConfig — strongTrendTPMult (v2.4)
+// TEST 9: calculateRiskConfig — strongTrendTPMult (v2.5)
 // ═════════════════════════════════════════════════════════════════════════
-console.log("\nTEST 9: strongTrendTPMult (v2.4)");
+console.log("\nTEST 9: strongTrendTPMult (v2.5)");
 console.log("─".repeat(50));
 
 let t9pass = 0, t9fail = 0;
@@ -352,10 +353,10 @@ const t9 = (name, ok) => {
   const base = afs.calculateRiskConfig(100, 2, "LONG", "B");
   const strong = afs.calculateRiskConfig(100, 2, "LONG", "B", {
     marketCond: "STRONG_TREND",
-    strongTrendTPMult: 1.5,
+    strongTrendTPMult: 1.6,
   });
   t9("SL unchanged on STRONG_TREND", base.slDistance === strong.slDistance);
-  t9("TP distance ×1.5", Math.abs(strong.tpDistance - base.tpDistance * 1.5) < 1e-9);
+  t9("TP distance ×1.6", Math.abs(strong.tpDistance - base.tpDistance * 1.6) < 1e-9);
   t9("strongTrendTPApplied flag", strong.strongTrendTPApplied === true);
 }
 

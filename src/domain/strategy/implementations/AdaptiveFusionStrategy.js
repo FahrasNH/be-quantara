@@ -1,12 +1,12 @@
 /**
- * AdaptiveFusionStrategy.js — v2.4 (Optimasi Win Rate & Profit Factor — STRATEGIES.md §4)
+ * AdaptiveFusionStrategy.js — v2.5 (High Win-Rate & Risk Control — STRATEGIES.md §4)
  *
- * v2.4 spec changes:
- *  - Regime thresholds: LOW_VOL 1.4, WEAK_TREND 0.55, NORMAL_TREND 0.65, STRONG_TREND 0.82.
- *  - Sub SL/TP/minScore: A 2.2/3.2/35, B 1.6/3.3/45, C 1.1/2.8/40.
- *  - RSI B bands: LONG 55–68, SHORT 32–45 (config.rsiLongMin/Max override).
- *  - validateEntry ATR gate 0.7–3.5%; strongTrendTPMult ×1.5 on STRONG_TREND.
- *  - riskPerTrade 0.009, maxTrades 8, cooldown 45, maxConsecLoss 2.
+ * v2.5 spec changes:
+ *  - Sub SL/TP/minScore: A 2.2/3.3/38, B 1.6/3.4/45, C 1.2/3.0/42.
+ *  - RSI B bands: LONG 58–68, SHORT 32–42.
+ *  - validateEntry ATR gate 1.0–3.5%; volSmaMultiplier 1.8 on Component A.
+ *  - strongTrendTPMult ×1.6 on STRONG_TREND; maxEntryExtensionATR 0.8.
+ *  - riskPerTrade 0.007, maxDailyLoss 3.5%, cooldown 60, htfTrendStrengthMin 0.72.
  *
  * v2.3 spec changes (target win rate 40–45%):
  *  - afMinVotes default 2 → 3 (butuh konsensus lebih kuat).
@@ -48,7 +48,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "2.4.0",
+      version: "2.5.0",
       enabled: true,
       ...config,
     });
@@ -62,13 +62,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
         emaFast: 9,
         emaSlow: 21,
         rsi: 7,
-        // v2.4: SL = 2.2× ATR, TP = 3.2× ATR → RR 1:1.45
+        // v2.5: SL = 2.2× ATR, TP = 3.3× ATR → RR 1:1.5
         slMultiplier: 2.2,
-        tpMultiplier: 3.2,
+        tpMultiplier: 3.3,
         riskPerTrade: 0.01,
         maxTradesPerDay: 20,
         minCapital: 50,
-        minScore: 35,
+        minScore: 38,
       },
       B: {
         name: "PDF_DAYTRADING",
@@ -79,9 +79,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
         emaSlow: 21,
         emaLong: 50,
         rsi: 14,
-        // v2.4: SL = 1.6× ATR, TP = 3.3× ATR → RR 1:2.1
+        // v2.5: SL = 1.6× ATR, TP = 3.4× ATR → RR 1:2.1
         slMultiplier: 1.6,
-        tpMultiplier: 3.3,
+        tpMultiplier: 3.4,
         riskPerTrade: 0.015,
         maxTradesPerDay: 8,
         minCapital: 20,
@@ -96,13 +96,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
         emaSlow: 50,
         emaLong: 200,
         rsi: 14,
-        // v2.4: SL = 1.1× ATR, TP = 2.8× ATR → RR 1:2.55
-        slMultiplier: 1.1,
-        tpMultiplier: 2.8,
+        // v2.5: SL = 1.2× ATR, TP = 3.0× ATR → RR 1:2.5
+        slMultiplier: 1.2,
+        tpMultiplier: 3.0,
         riskPerTrade: 0.015,
         maxTradesPerDay: 3,
         minCapital: 20,
-        minScore: 40,
+        minScore: 42,
       },
     };
 
@@ -118,16 +118,16 @@ class AdaptiveFusionStrategy extends StrategyBase {
    */
   getMarketThresholds() {
     return {
-      // v2.4 spec (STRATEGIES.md §4): LOW_VOL 1.4, WEAK_TREND 0.55, STRONG_TREND 0.82.
+      // v2.5 spec (STRATEGIES.md §4): LOW_VOL 1.4, WEAK_TREND 0.55, STRONG_TREND 0.82.
       LOW_VOL:         1.4,
       NORMAL_VOL:      2.0,
       HIGH_VOL:        3.5,
       WEAK_TREND:      0.55,
       NORMAL_TREND:    0.65,
       STRONG_TREND:    0.82,
-      COMP_A_MIN_SCORE: 35,
+      COMP_A_MIN_SCORE: 38,
       COMP_B_MIN_SCORE: 45,
-      COMP_C_MIN_SCORE: 40,
+      COMP_C_MIN_SCORE: 42,
     };
   }
 
@@ -187,11 +187,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
   /**
    * Calculate SL, TP, and RR for a specific component.
    *
-   * Component A (Scalp): SL 2.2× ATR, TP 3.2× ATR  → RR 1:1.45
-   * Component B (Day):   SL 1.6× ATR, TP 3.3× ATR → RR 1:2.1
-   * Component C (Swing): SL 1.1× ATR, TP 2.8× ATR → RR 1:2.55
+   * Component A (Scalp): SL 2.2× ATR, TP 3.3× ATR  → RR 1:1.5
+   * Component B (Day):   SL 1.6× ATR, TP 3.4× ATR → RR 1:2.1
+   * Component C (Swing): SL 1.2× ATR, TP 3.0× ATR → RR 1:2.5
    *
-   * v2.4: opts.strongTrendTPMult × TP saat marketCond === STRONG_TREND.
+   * v2.5: opts.strongTrendTPMult × TP saat marketCond === STRONG_TREND.
    */
   calculateRiskConfig(entryPrice, atr, signal, component = "B", opts = {}) {
     const sub = this.SUB_STRATEGIES[component] || this.SUB_STRATEGIES.B;
@@ -282,6 +282,12 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const htfTrend = config.htfTrend ?? null;
     if (htfTrend === "UNKNOWN") return null;
 
+    // v2.5: HTF trend strength gate — trend harus cukup kuat sebelum voting.
+    if (config.htfTrendStrengthMin != null && htfTrend && htfTrend !== "SIDEWAYS") {
+      const ts = config.htfTrendStrength;
+      if (ts == null || ts < config.htfTrendStrengthMin) return null;
+    }
+
     const rankings  = this.rankByMarketConditions(marketConditions);
     const scoreMap  = Object.fromEntries(rankings.map(r => [r.key, r.score]));
 
@@ -295,7 +301,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
       // Pass full RSI array + index so A can compute RSI velocity (momentum)
-      signals.A = this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA);
+      signals.A = this._detectSignalA(
+        indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA,
+        config.volSmaMultiplier ?? 1.8
+      );
     }
 
     // Component B — only run if balance sufficient AND score meets threshold
@@ -351,7 +360,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
     // kualitas entry (WR) tanpa mematikan AF. Lihat juga FEE-03 min-edge gate.
     if (resolved) {
       const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
-      const maxExt = config.maxEntryExtensionATR ?? 1.5;
+      const maxExt = config.maxEntryExtensionATR ?? 0.8;
       if (
         closeConfirmed != null && emaFast != null && atr > 0 &&
         Math.abs(closeConfirmed - emaFast) / atr > maxExt
@@ -439,7 +448,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
   //
   // @param {number[]} rsiSeries - full RSI array
   // @param {number}   lastIdx   - current bar index (for slope)
-  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0) {
+  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0, volMult = 1.8) {
     if (emaFast == null || emaSlow == null) return null;
 
     const rsiCurr  = rsiSeries?.[lastIdx];
@@ -448,7 +457,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     const closeCurr  = closes[closes.length - 1];
     const volRatio   = volSMA > 0 ? volume / volSMA : 0;
-    const volOk      = volRatio >= 1.5;   // scalp fires only on a genuine volume spike
+    const volOk      = volRatio >= volMult;
 
     // RSI velocity over 2 bars: positive = accelerating up, negative = down
     const rsiSlope = (rsiCurr - rsiPrev2) / 2;
@@ -506,10 +515,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
     if (!Array.isArray(closes) || closes.length < 2) return null;
     if (lastIdx == null) lastIdx = closes.length - 1;
 
-    const rsiLongMin  = config.rsiLongMin  ?? 55;
+    const rsiLongMin  = config.rsiLongMin  ?? 58;
     const rsiLongMax  = config.rsiLongMax  ?? 68;
     const rsiShortMin = config.rsiShortMin ?? 32;
-    const rsiShortMax = config.rsiShortMax ?? 45;
+    const rsiShortMax = config.rsiShortMax ?? 42;
 
     const emaFast = emaFastArr[lastIdx];
     const emaSlow = emaSlowArr[lastIdx];
@@ -644,12 +653,12 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
   getRiskConfig() {
     return {
-      // v2.4 spec (STRATEGIES.md §4): risk 0.9%, max 8 trade/hari, cooldown 45 mnt.
-      riskPerTrade:      0.009,
+      // v2.5 spec (STRATEGIES.md §4): risk 0.7%, max 8 trade/hari, cooldown 60 mnt.
+      riskPerTrade:      0.007,
       maxRiskPerTrade:   0.02,
-      maxDailyLossPct:   0.045,
+      maxDailyLossPct:   0.035,
       maxTradesPerDay:   8,
-      cooldownAfterLoss: 45,
+      cooldownAfterLoss: 60,
       maxConsecLoss:     2,
       leverage:          2,
     };
@@ -666,12 +675,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
   validateEntry(price, atr, volume, volSMA) {
     const atrPct  = (atr / price) * 100;
     const volRatio = volSMA > 0 ? volume / volSMA : 0;
-    // v2.4: gate 0.7–3.5% selaras atrMinMult/atrMaxMult preset.
-    if (atrPct < 0.7 || atrPct > 3.5) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (0.7–3.5%)` };
+    // v2.5: gate 1.0–3.5% selaras atrMinMult/atrMaxMult preset.
+    if (atrPct < 1.0 || atrPct > 3.5) {
+      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (1.0–3.5%)` };
     }
-    if (volRatio < 0.7) {
-      return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× below threshold (0.7×)` };
+    const volMin = this.config?.volSmaMultiplier ?? 1.8;
+    if (volRatio < volMin * 0.4) {
+      return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× below threshold (${(volMin * 0.4).toFixed(1)}×)` };
     }
     return { valid: true, reason: "Entry conditions met" };
   }

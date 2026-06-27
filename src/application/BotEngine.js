@@ -162,7 +162,7 @@ class BotEngine extends EventEmitter {
       afRejectOnDissent:    strat.afRejectOnDissent ?? true,
       // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
       afMinVotes:           strat.afMinVotes ?? 3,
-      // v2.4: TP ×1.5 saat STRONG_TREND (STRATEGIES.md §4.2).
+      // v2.5: TP ×1.6 saat STRONG_TREND (STRATEGIES.md §4.2).
       strongTrendTPMult:    strat.strongTrendTPMult ?? 1,
 
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
@@ -183,6 +183,7 @@ class BotEngine extends EventEmitter {
       higherTf:             strat.higherTf             || null,
       htfEmaFast:           strat.htfEmaFast            || 9,
       htfEmaSlow:           strat.htfEmaSlow            || 21,
+      htfTrendStrengthMin:  strat.htfTrendStrengthMin   ?? null,
       sidewaysThresholdPct: strat.sidewaysThresholdPct  || 0.2,
 
       // ── ATR filter ────────────────────────────────────────────────────────
@@ -1191,6 +1192,18 @@ class BotEngine extends EventEmitter {
             const emaDelta  = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
             const trendStr  = Math.min(emaDelta * 50, 1.0); // normalisasi 0–1
 
+            let htfTrendStrength = null;
+            if (htfCandlesCache?.length >= 30) {
+              const hLast = htfCandlesCache.length - 1;
+              const hCloses = htfCandlesCache.map(c => c.close);
+              const hHighs = htfCandlesCache.map(c => c.high);
+              const hLows = htfCandlesCache.map(c => c.low);
+              const hEmaF = calcEMA(hCloses, this.config.htfEmaFast)[hLast];
+              const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
+              const hAtr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
+              if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+            }
+
             const signal = detectSignal(indicators, lastIdx, {
               rsiOverbought:    this.config.rsiOverbought,
               rsiOversold:      this.config.rsiOversold,
@@ -1212,6 +1225,8 @@ class BotEngine extends EventEmitter {
               afRejectOnDissent:    this.config.afRejectOnDissent,
               maxEntryExtensionATR: this.config.maxEntryExtensionATR,
               htfTrend:             this.state.htfTrend,
+              htfTrendStrength,
+              htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
               pairTier:             this.config.pairTier,
               tierOverrides:        this.config.tierOverrides,
             });

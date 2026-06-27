@@ -1,6 +1,6 @@
 # Dokumentasi Strategi & Parameter — Quantara Bot Trading
 
-**Versi:** v2.4 (Optimasi Win Rate & Profit Factor) + Pair Tier v2.1  
+**Versi:** v2.5 (High Win-Rate & Risk Control) + Pair Tier v2.1  
 **Update:** Juni 2026  
 **Sumber kebenaran kode:** `src/domain/legacyStrategies.js` (preset runtime) → `BotEngine.js` → `src/domain/strategy/implementations/*.js`
 
@@ -12,7 +12,7 @@
 
 | Strategi | Tier min. | Entry TF | HTF | SL×ATR | TP×ATR | RR target | Risk/trade | Leverage | Max trade/hari |
 |----------|-----------|----------|-----|--------|--------|-----------|------------|----------|----------------|
-| **ADAPTIVE_FUSION** | FOUNDRY | 15m | 1h | 1.0–2.2* | 2.8–3.3* | ~1:1.8–2.8 | **0.9%** | 2× | **8** |
+| **ADAPTIVE_FUSION** | FOUNDRY | 15m | 1h | 1.2–2.2* | 3.0–3.4* | **~1:2.0–3.0** | **0.7%** | 2× | **8** |
 | **TREND_MOMENTUM** | FORGE | 5m | 4h | **1.3** | **2.5** | ~1:1.92 | **1.2%** | 2× | **4** |
 | **MEAN_REVERSION** | MINT | 15m | — | **1.4** | **3.2** | ~1:2.3 | **0.8%** | 1× | **3** |
 | **BREAKOUT_RETEST** | VAULT | 15m | 4h | **1.4** | **5.5** | ~1:4.0 | **2.0%** | 1× | **5** |
@@ -50,8 +50,8 @@ Berlaku semua strategi kecuali di-override eksplisit di preset strategi.
 | `makerFeeRate` | 0.0002 (0.02%) | Fee maker (jika `entryMode: maker`) |
 | `entryMode` | `taker` | `taker` \| `maker` (limit post-only) |
 | `minEdgeFeeMultiple` | **5** | Reward leg (jarak TP) ≥ N × fee roundtrip; AF preset = **7** |
-| `maxEntryExtensionATR` | 1.5 (AF preset **1.0**) | Tolak entry jika \|close − EMA9\| / ATR > N (anti-chase) |
-| `strongTrendTPMult` | **1.5** (AF) | TP ×1.5 saat regime STRONG_TREND (AF only) |
+| `maxEntryExtensionATR` | 1.5 (AF preset **0.8**) | Tolak entry jika \|close − EMA9\| / ATR > N (anti-chase) |
+| `strongTrendTPMult` | **1.6** (AF) | TP ×1.6 saat regime STRONG_TREND (AF only) |
 | `afMinVotes` | **3** | Kuorum minimum komponen AF searah |
 | `afRejectOnDissent` | `true` | Tolak entry AF bila komponen saling berlawanan |
 | `atrMinMult` / `atrMaxMult` | 0.1–5.0 (per strategi) | Filter ATR% relatif terhadap harga |
@@ -60,77 +60,73 @@ Berlaku semua strategi kecuali di-override eksplisit di preset strategi.
 
 ---
 
-## 4. ADAPTIVE_FUSION (AF) - v2.4 Optimized
+## 4. ADAPTIVE_FUSION (AF) - v2.5 High Win-Rate
 
-**Versi implementasi:** 2.4.0  
+**Versi implementasi:** 2.5.0  
 **Tier:** FOUNDRY+  
-**Filosofi:** 3 sub-strategi (Scalp / Day / Swing) voting dengan **entry filter lebih ketat**; SL/TP mengikuti komponen pemenang + **dynamic TP extension**.
+**Filosofi:** 3 sub-strategi voting dengan **entry filter sangat selektif** + dynamic TP di strong trend. Prioritas win rate & risk control.
 
-### Rekomendasi Utama dari Optimasi
-- **Win rate target**: Naik ke ≥42% dengan tightening entry.
-- **Profit Factor target**: Naik ke ≥1.45 dengan **take profit +50%** pada strong trend.
-- **Trade Selection**: Tambah regime filter & minScore lebih tinggi.
-
-### 4.1 Parameter Runtime (legacyStrategies → BotEngine) - Updated
+### 4.1 Parameter Runtime (legacyStrategies → BotEngine) - v2.5
 
 | Parameter | Nilai Baru | Keterangan |
 |-----------|------------|------------|
-| `interval` | 15m | Timeframe entry utama |
-| `higherTf` | 1h | HTF alignment **wajib** |
+| `interval` | 15m | Entry TF |
+| `higherTf` | 1h | HTF alignment wajib |
 | `htfEmaFast` / `htfEmaSlow` | 9 / 21 | |
 | `emaFast` / `emaSlow` / `emaTrend` | 9 / 21 / 50 | |
 | `rsiPeriod` | 14 | |
-| `rsiOverbought` / `rsiOversold` | 72 / 28 | **Diperketat** |
-| `rsiLongMin`–`rsiLongMax` | **55–68** | Naik dari 50–70 (kurangi false long) |
-| `rsiShortMin`–`rsiShortMax` | **32–45** | Diperketat |
+| `rsiOverbought` / `rsiOversold` | 72 / 28 | Diperketat |
+| `rsiLongMin`–`rsiLongMax` | **58–68** | Lebih selektif |
+| `rsiShortMin`–`rsiShortMax` | **32–42** | Diperketat |
 | `atrPeriod` | 14 | |
-| `atrMultiplier` | 1.5 | Fallback |
-| `riskReward` | **2.3** | Naik dari 2.0 |
-| `atrMinMult` / `atrMaxMult` | **0.7 / 3.5** | Gate ATR lebih ketat |
-| `riskPerTrade` | **0.009** (0.9%) | Turun sedikit untuk safety |
-| `maxDailyLossPct` | **0.045** | Override BotEngine |
+| `atrMultiplier` | **1.4** | SL lebih ketat |
+| `riskReward` | **2.5** | Naik dari 2.0 |
+| `atrMinMult` / `atrMaxMult` | **1.0 / 3.5** | Gate ATR ketat |
+| `riskPerTrade` | **0.007** (0.7%) | Turun untuk safety |
+| `maxDailyLossPct` | **0.035** | Override |
 | `maxTradesPerDay` | **8** | Turun dari 10 |
-| `cooldownAfterLoss` | **45 menit** | Naik dari 30 menit |
-| `maxConsecLoss` | **2** | Turun dari 3 |
+| `cooldownAfterLoss` | **60 menit** | Naik |
+| `maxConsecLoss` | **2** | Lebih ketat |
 | `leverage` | 2× | |
-| `maxEntryExtensionATR` | **1.0** | Diperketat dari 1.2 |
-| `minEdgeFeeMultiple` | **7** | Naik dari 6 |
-| `afMinVotes` | **3** | Tetap |
+| `maxEntryExtensionATR` | **0.8** | Anti-chasing ketat |
+| `minEdgeFeeMultiple` | **7** | Naik |
+| `afMinVotes` | **3** | |
 | `afRejectOnDissent` | true | |
-| `volSmaMultiplier` | **1.3** | Naik dari 1.0 (butuh volume lebih kuat) |
+| `volSmaMultiplier` | **1.8** | Volume harus kuat |
 | `sidewaysRangeLookback` | 20 | |
-| `sidewaysBreakoutVolMult` | **1.4** | Naik |
+| `sidewaysBreakoutVolMult` | **1.5** | Naik |
 | `checkInterval` | 60 000 ms | |
 
 ### 4.2 Voting & Regime - Enhanced
 
 | Parameter | Nilai Baru | Keterangan |
 |-----------|------------|------------|
+| `htfTrendStrengthMin` | **0.72** | Trend harus cukup kuat |
 | `afMinVotes` | 3 | |
-| `votingThresholdOverride` | tier-based | ... |
-| `LOW_VOL` | **1.4%** ATR | Diperketat |
-| `WEAK_TREND` | **0.55** | Naik dari 0.45 |
+| `votingThresholdOverride` | tier-based | STABLE 0.60 / SEMI 0.70 / VOLATILE 0.78 |
+| `LOW_VOL` | **1.4%** ATR | |
+| `WEAK_TREND` | **0.55** | |
 | `NORMAL_TREND` | 0.65 | |
 | `STRONG_TREND` | 0.82 | |
-| **New**: `strongTrendTPMult` | **1.5** | TP ×1.5 jika trend kuat (capture larger moves) |
-| Regime `DEAD_MARKET` | — | **Blok entry ketat** |
+| `strongTrendTPMult` | **1.6** | TP +60% di strong trend |
+| Regime `DEAD_MARKET` | — | **Blok entry total** |
 
-### 4.3 Sub-Strategi A / B / C - Minor Adjustment
+### 4.3 Sub-Strategi A / B / C
 
-| Komponen | ... | SL×ATR | TP×ATR | RR | ... | minScore |
-|----------|-----|--------|--------|----|-----|----------|
-| **A** Scalp | ... | **2.2** | **3.2** | 1:1.45 | ... | **35** |
-| **B** Day | ... | **1.6** | **3.3** | 1:2.1 | ... | **45** |
-| **C** Swing | ... | **1.1** | **2.8** | 1:2.55 | ... | **40** |
+| Komponen | SL×ATR | TP×ATR | RR | minScore |
+|----------|--------|--------|-----|----------|
+| **A** Scalp | 2.2 | 3.3 | 1:1.5 | 38 |
+| **B** Day | 1.6 | 3.4 | 1:2.1 | 45 |
+| **C** Swing | 1.2 | 3.0 | 1:2.5 | 42 |
 
-**Aturan baru**: Pada **STRONG_TREND**, terapkan `strongTrendTPMult: 1.5` (TP distance ×1.5; SL tidak berubah).
+**Aturan baru**: SL di VOLATILE pair wajib ikut komponen C (Swing). Strong trend pakai TP multiplier 1.6×.
 
-### 4.4 Riwayat v2.4 (as-built)
+### 4.4 Riwayat v2.5 (as-built)
 
-- Preset: risk 0.9%, max 8 trade/hari, cooldown 45 mnt, maxConsecLoss 2
-- Guards: `maxEntryExtensionATR` 1.0, `minEdgeFeeMultiple` 7, `volSmaMultiplier` 1.3
-- Regime: LOW_VOL 1.4%, WEAK_TREND 0.55, STRONG_TREND 0.82
-- Sub SL/TP/minScore naik; RSI B 55–68 / 32–45
+- Preset: risk 0.7%, max 8 trade/hari, cooldown 60 mnt, maxConsecLoss 2
+- Guards: `maxEntryExtensionATR` 0.8, `minEdgeFeeMultiple` 7, `volSmaMultiplier` 1.8
+- Regime: LOW_VOL 1.4%, WEAK_TREND 0.55, `htfTrendStrengthMin` 0.72
+- Sub SL/TP/minScore: A 2.2/3.3/38, B 1.6/3.4/45, C 1.2/3.0/42; RSI B 58–68 / 32–42
 
 ---
 
@@ -298,4 +294,4 @@ Sumber: `src/domain/tierConfig.js`
 
 ---
 
-**Terakhir diperbarui:** Juni 2026 — Parameter lengkap v2.4 + Pair Tier v2.1
+**Terakhir diperbarui:** 27 Juni 2026 — Parameter lengkap v2.5 + Pair Tier v2.1
