@@ -11,6 +11,7 @@ const BacktestCsvService = require("../services/BacktestCsvService");
 const HistoricalKlinesService = require("../services/HistoricalKlinesService");
 const ReportGeneratorService = require("../services/ReportGeneratorService");
 const OptimizationAnalysisService = require("../services/OptimizationAnalysisService");
+const db = require("../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 
@@ -264,8 +265,60 @@ module.exports = function createBacktestRouter(context) {
   }));
 
   /**
+   * GET /api/v1/backtest/lookup
+   * Cek arsip canonical shared — miss|reused|subset|extend
+   */
+  router.get("/lookup", asyncHandler(async (req, res) => {
+    const {
+      symbol,
+      strategy_key: strategyKeyRaw,
+      timeframe = "1d",
+      parameters: parametersRaw,
+      enableFees,
+      enableSlippage,
+      exchange,
+      dataSource,
+      period_label: periodLabel = "500",
+      requested_start: requestedStart,
+      requested_end: requestedEnd,
+    } = req.query;
+
+    const sym = String(symbol || "").toUpperCase();
+    const strategyKey = String(strategyKeyRaw || "").toUpperCase();
+    if (!sym || !strategyKey) {
+      return res.status(400).json({ ok: false, error: "symbol dan strategy_key diperlukan" });
+    }
+
+    let parameters = {};
+    if (parametersRaw) {
+      try {
+        parameters = typeof parametersRaw === "string" ? JSON.parse(parametersRaw) : parametersRaw;
+      } catch {
+        return res.status(400).json({ ok: false, error: "parameters JSON tidak valid" });
+      }
+    }
+
+    const result = await BacktestHistoryService.lookupCanonical({
+      symbol: sym,
+      strategyKey,
+      timeframe,
+      parameters,
+      enableFees: enableFees !== "false" && enableFees !== "0",
+      enableSlippage: enableSlippage === "true" || enableSlippage === "1",
+      exchange: exchange || "sim",
+      dataSource: dataSource || "sim",
+      periodLabel,
+      requestedStart,
+      requestedEnd,
+    });
+
+    res.json({ ok: true, ...result });
+  }));
+
+  /**
    * POST /api/v1/backtest/run
    * Simpan hasil backtest dari klien (Phase 1 — engine di FE)
+   * Opsi B: canonical shared archive — reuse / extend / insert
    */
   router.post("/run", asyncHandler(async (req, res) => {
     const {
@@ -283,6 +336,9 @@ module.exports = function createBacktestRouter(context) {
       config,
       notes,
       multi_strategies: multiStrategies,
+      data_start: dataStart,
+      data_end: dataEnd,
+      action: clientAction,
     } = req.body;
 
     const sym = (pair || symbol || "").toUpperCase();
@@ -290,6 +346,30 @@ module.exports = function createBacktestRouter(context) {
 
     if (!sym || !metrics) {
       return res.status(400).json({ ok: false, error: "pair/symbol dan metrics diperlukan" });
+    }
+
+    if (clientAction === "reused") {
+      const canonicalKey = BacktestHistoryService._buildKeyFromMeta({
+        symbol: sym,
+        strategyKey,
+        timeframe,
+        parameters: parameters || {},
+        enableFees: config?.enableFees !== false,
+        enableSlippage: !!config?.enableSlippage,
+        exchange: config?.exchange || "sim",
+        dataSource: config?.dataSource || "sim",
+        periodLabel,
+      });
+      const existing = await db.findBacktestByCanonicalKey(canonicalKey);
+      if (existing) {
+        await db.incrementBacktestHitCount(existing.id);
+        return res.json({
+          ok: true,
+          id: existing.id,
+          action: "reused",
+          message: `Backtest shared reused untuk ${sym}`,
+        });
+      }
     }
 
     const normalized = normalizeMetrics(metrics);
@@ -302,31 +382,42 @@ module.exports = function createBacktestRouter(context) {
       multiStrategies: multiStrategies || null,
     };
 
-    const id = await BacktestHistoryService.saveBacktest(
-      sym,
-      normalized,
-      equityCurve || null,
-      trades || tradesData || null,
-      runConfig,
-      notes || null,
-      { userId: req.userId, strategyKey, timeframe, periodLabel }
-    );
+    const id = await BacktestHistoryService.saveOrUpdateCanonical({
+      symbol: sym,
+      strategyKey,
+      timeframe,
+      periodLabel,
+      parameters: parameters || {},
+      enableFees: config?.enableFees !== false,
+      enableSlippage: !!config?.enableSlippage,
+      exchange: config?.exchange || "sim",
+      dataSource: config?.dataSource || "sim",
+      metrics: normalized,
+      equityCurve: equityCurve || null,
+      tradesData: trades || tradesData || null,
+      config: runConfig,
+      notes: notes || null,
+      userId: req.userId,
+      dataStart,
+      dataEnd,
+      action: clientAction || null,
+    });
 
     res.json({
       ok: true,
       id,
+      action: clientAction || "saved",
       message: `Backtest disimpan untuk ${sym}`,
     });
   }));
 
   /**
    * GET /api/v1/backtest/archive
-   * Arsip backtest dengan filter
+   * Arsip backtest global shared (tanpa filter user)
    */
   router.get("/archive", asyncHandler(async (req, res) => {
     const { strategy, pair, limit = 50, offset = 0 } = req.query;
     const data = await BacktestHistoryService.getArchive({
-      userId: req.userId,
       strategy,
       pair,
       limit,
@@ -344,7 +435,7 @@ module.exports = function createBacktestRouter(context) {
     if (!ids?.length) {
       return res.status(400).json({ ok: false, error: "ids diperlukan" });
     }
-    const records = await BacktestHistoryService.getByIds(ids.map(Number), req.userId);
+    const records = await BacktestHistoryService.getByIds(ids.map(Number));
     if (!records.length) {
       return res.status(404).json({ ok: false, error: "Tidak ada record ditemukan" });
     }

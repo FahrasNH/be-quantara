@@ -6,6 +6,12 @@
 const db = require("../../infrastructure/db/database");
 const prisma = require("../../infrastructure/db/prismaClient");
 const { ADMIN_ROLES } = require("../../middleware/adminGuard");
+const {
+  ENGINE_VERSION,
+  buildCanonicalKey,
+  filterSubset,
+  resolveAction,
+} = require("./BacktestCanonicalService");
 
 class BacktestHistoryService {
   /**
@@ -138,9 +144,9 @@ class BacktestHistoryService {
     }
   }
 
-  static async getByIds(ids, userId = null) {
+  static async getByIds(ids) {
     try {
-      return await db.getBacktestHistoryByIds(ids, userId);
+      return await db.getBacktestHistoryByIds(ids);
     } catch (err) {
       console.error(`[BacktestHistory] Error fetching by IDs: ${err.message}`);
       throw err;
@@ -185,11 +191,205 @@ class BacktestHistoryService {
       err.statusCode = 404;
       throw err;
     }
+    if (record.canonical_key || record.canonicalKey) {
+      if (ADMIN_ROLES.includes(role)) return;
+      const err = new Error("Forbidden — hanya admin bisa menghapus arsip shared");
+      err.statusCode = 403;
+      throw err;
+    }
     if (ADMIN_ROLES.includes(role)) return;
     if (record.user_id === userId || record.user_id == null) return;
     const err = new Error("Forbidden — tidak bisa menghapus backtest pengguna lain");
     err.statusCode = 403;
     throw err;
+  }
+
+  static _buildKeyFromMeta({
+    symbol, strategyKey, timeframe, parameters = {},
+    enableFees = true, enableSlippage = false,
+    exchange = "sim", dataSource = "sim", periodLabel = "500",
+  }) {
+    return buildCanonicalKey({
+      symbol,
+      strategyKey,
+      timeframe,
+      parameters,
+      enableFees,
+      enableSlippage,
+      exchange,
+      dataSource,
+      periodLabel,
+    });
+  }
+
+  /**
+   * Lookup shared canonical archive — miss|reused|subset|extend
+   */
+  static async lookupCanonical({
+    symbol,
+    strategyKey,
+    timeframe = "1d",
+    parameters = {},
+    enableFees = true,
+    enableSlippage = false,
+    exchange = "sim",
+    dataSource = "sim",
+    periodLabel = "500",
+    requestedStart,
+    requestedEnd,
+  }) {
+    const canonicalKey = this._buildKeyFromMeta({
+      symbol, strategyKey, timeframe, parameters,
+      enableFees, enableSlippage, exchange, dataSource, periodLabel,
+    });
+
+    const reqStartMs = Date.parse(requestedStart);
+    const reqEndMs = Date.parse(requestedEnd);
+    if (!Number.isFinite(reqStartMs) || !Number.isFinite(reqEndMs)) {
+      const err = new Error("requested_start dan requested_end diperlukan (ISO date)");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const record = await db.findBacktestByCanonicalKey(canonicalKey);
+    const action = resolveAction(record, reqStartMs, reqEndMs);
+
+    if (action === "miss") {
+      return { action, canonicalKey, id: null };
+    }
+
+    if (action === "extend") {
+      return {
+        action,
+        canonicalKey,
+        id: record.id,
+        dataStart: record.data_start,
+        dataEnd: record.data_end,
+      };
+    }
+
+    await db.incrementBacktestHitCount(record.id);
+
+    if (action === "subset") {
+      const filtered = filterSubset(record, reqStartMs, reqEndMs);
+      return {
+        action,
+        canonicalKey,
+        id: record.id,
+        metrics: filtered.metrics,
+        trades: filtered.trades,
+        equity_curve: filtered.equity,
+        dataStart: record.data_start,
+        dataEnd: record.data_end,
+        hitCount: (record.hit_count ?? 1) + 1,
+      };
+    }
+
+    return {
+      action: "reused",
+      canonicalKey,
+      id: record.id,
+      metrics: record.metrics,
+      trades: record.trades_data,
+      equity_curve: record.equity_curve,
+      dataStart: record.data_start,
+      dataEnd: record.data_end,
+      hitCount: (record.hit_count ?? 1) + 1,
+    };
+  }
+
+  /**
+   * Simpan atau perbarui row canonical shared (INSERT / UPDATE in-place)
+   */
+  static async saveOrUpdateCanonical({
+    symbol,
+    strategyKey,
+    timeframe = "1d",
+    periodLabel = "500",
+    parameters = {},
+    enableFees = true,
+    enableSlippage = false,
+    exchange = "sim",
+    dataSource = "sim",
+    metrics,
+    equityCurve = null,
+    tradesData = null,
+    config = null,
+    notes = null,
+    userId = null,
+    dataStart = null,
+    dataEnd = null,
+    action = null,
+  }) {
+    const canonicalKey = this._buildKeyFromMeta({
+      symbol, strategyKey, timeframe, parameters,
+      enableFees, enableSlippage, exchange, dataSource, periodLabel,
+    });
+
+    const existing = await db.findBacktestByCanonicalKey(canonicalKey);
+
+    if (action === "reused" && existing) {
+      await db.incrementBacktestHitCount(existing.id);
+      return existing.id;
+    }
+
+    if (existing && action !== "extend" && dataStart && dataEnd) {
+      const resolved = resolveAction(existing, Date.parse(dataStart), Date.parse(dataEnd));
+      if (resolved === "reused") {
+        await db.incrementBacktestHitCount(existing.id);
+        return existing.id;
+      }
+    }
+
+    if (existing && (action === "extend" || resolveAction(
+      existing,
+      Date.parse(dataStart),
+      Date.parse(dataEnd),
+    ) === "extend")) {
+      const id = await db.updateBacktestHistory(existing.id, {
+        metrics,
+        equityCurve,
+        tradesData,
+        config,
+        dataStart,
+        dataEnd,
+        engineVersion: ENGINE_VERSION,
+      });
+      return id ?? existing.id;
+    }
+
+    const runConfig = {
+      ...(config || {}),
+      strategyKey,
+      timeframe,
+      periodLabel,
+      parameters,
+      enableFees,
+      enableSlippage,
+      exchange,
+      dataSource,
+    };
+
+    const id = await db.upsertBacktestHistory({
+      symbol,
+      metrics,
+      equityCurve,
+      tradesData,
+      config: runConfig,
+      notes,
+      userId,
+      strategyKey,
+      timeframe,
+      periodLabel,
+      canonicalKey,
+      dataStart,
+      dataEnd,
+      engineVersion: ENGINE_VERSION,
+      createdByUserId: userId,
+    });
+
+    console.log(`[BacktestHistory] Canonical ${existing ? "updated" : "saved"} ${symbol}/${strategyKey} id=${id}`);
+    return id;
   }
 
   static async deleteRun(id, userId) {

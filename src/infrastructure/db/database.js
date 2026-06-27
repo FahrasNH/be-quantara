@@ -198,6 +198,17 @@ const BACKTEST_MIGRATION_SQL = `
   CREATE INDEX IF NOT EXISTS idx_backtest_user     ON backtest_history(user_id, timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_history(strategy_key, timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_preset_user       ON strategy_presets(user_id, created_at DESC);
+
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS canonical_key TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS data_start TIMESTAMPTZ;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS data_end TIMESTAMPTZ;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS hit_count INT DEFAULT 1;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS engine_version TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS created_by_user_id TEXT;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_backtest_canonical
+    ON backtest_history(canonical_key) WHERE canonical_key IS NOT NULL;
 `;
 
 async function init() {
@@ -1310,11 +1321,14 @@ async function setSetting(key, value) {
 async function insertBacktestHistory({
   symbol, metrics, equityCurve, tradesData, config, notes,
   userId = null, strategyKey = null, timeframe = null, periodLabel = null,
+  canonicalKey = null, dataStart = null, dataEnd = null, engineVersion = null,
+  createdByUserId = null,
 }) {
   const { rows } = await pool.query(
     `INSERT INTO backtest_history
-       (symbol, metrics, equity_curve, trades_data, config, notes, user_id, strategy_key, timeframe, period_label)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+       (symbol, metrics, equity_curve, trades_data, config, notes, user_id, strategy_key, timeframe, period_label,
+        canonical_key, data_start, data_end, engine_version, created_by_user_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now()) RETURNING id`,
     [
       symbol.toUpperCase(),
       JSON.stringify(metrics),
@@ -1322,10 +1336,107 @@ async function insertBacktestHistory({
       tradesData ? JSON.stringify(tradesData) : null,
       config ? JSON.stringify(config) : null,
       notes ?? null,
-      userId,
+      createdByUserId ?? userId,
       strategyKey,
       timeframe,
       periodLabel,
+      canonicalKey,
+      dataStart ? new Date(dataStart) : null,
+      dataEnd ? new Date(dataEnd) : null,
+      engineVersion,
+      createdByUserId ?? userId,
+    ]
+  );
+  return rows[0].id;
+}
+
+async function updateBacktestHistory(id, {
+  metrics, equityCurve, tradesData, config, dataStart, dataEnd, engineVersion,
+}) {
+  const { rows } = await pool.query(
+    `UPDATE backtest_history SET
+       metrics = COALESCE($2, metrics),
+       equity_curve = COALESCE($3, equity_curve),
+       trades_data = COALESCE($4, trades_data),
+       config = COALESCE($5, config),
+       data_start = COALESCE($6, data_start),
+       data_end = COALESCE($7, data_end),
+       engine_version = COALESCE($8, engine_version),
+       updated_at = now(),
+       hit_count = COALESCE(hit_count, 0) + 1
+     WHERE id = $1 RETURNING id`,
+    [
+      id,
+      metrics ? JSON.stringify(metrics) : null,
+      equityCurve ? JSON.stringify(equityCurve) : null,
+      tradesData ? JSON.stringify(tradesData) : null,
+      config ? JSON.stringify(config) : null,
+      dataStart ? new Date(dataStart) : null,
+      dataEnd ? new Date(dataEnd) : null,
+      engineVersion ?? null,
+    ]
+  );
+  return rows[0]?.id ?? null;
+}
+
+async function incrementBacktestHitCount(id) {
+  await pool.query(
+    `UPDATE backtest_history SET hit_count = COALESCE(hit_count, 0) + 1, updated_at = now() WHERE id = $1`,
+    [id]
+  );
+}
+
+async function findBacktestByCanonicalKey(canonicalKey) {
+  if (!canonicalKey) return null;
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history WHERE canonical_key = $1 LIMIT 1`,
+    [canonicalKey]
+  );
+  return rows[0] ? mapBacktestRow(rows[0]) : null;
+}
+
+/** @deprecated alias — use findBacktestByCanonicalKey */
+const getBacktestByCanonicalKey = findBacktestByCanonicalKey;
+
+async function upsertBacktestHistory({
+  symbol, metrics, equityCurve, tradesData, config, notes,
+  userId = null, strategyKey = null, timeframe = null, periodLabel = null,
+  canonicalKey = null, dataStart = null, dataEnd = null, engineVersion = null,
+  createdByUserId = null,
+}) {
+  const { rows } = await pool.query(
+    `INSERT INTO backtest_history
+       (symbol, metrics, equity_curve, trades_data, config, notes, user_id, strategy_key, timeframe, period_label,
+        canonical_key, data_start, data_end, engine_version, created_by_user_id, updated_at, hit_count)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), 1)
+     ON CONFLICT (canonical_key) WHERE canonical_key IS NOT NULL DO UPDATE SET
+       metrics = EXCLUDED.metrics,
+       equity_curve = EXCLUDED.equity_curve,
+       trades_data = EXCLUDED.trades_data,
+       config = EXCLUDED.config,
+       notes = COALESCE(EXCLUDED.notes, backtest_history.notes),
+       data_start = EXCLUDED.data_start,
+       data_end = EXCLUDED.data_end,
+       engine_version = EXCLUDED.engine_version,
+       updated_at = now(),
+       hit_count = COALESCE(backtest_history.hit_count, 0) + 1
+     RETURNING id`,
+    [
+      symbol.toUpperCase(),
+      JSON.stringify(metrics),
+      equityCurve ? JSON.stringify(equityCurve) : null,
+      tradesData ? JSON.stringify(tradesData) : null,
+      config ? JSON.stringify(config) : null,
+      notes ?? null,
+      createdByUserId ?? userId,
+      strategyKey,
+      timeframe,
+      periodLabel,
+      canonicalKey,
+      dataStart ? new Date(dataStart) : null,
+      dataEnd ? new Date(dataEnd) : null,
+      engineVersion,
+      createdByUserId ?? userId,
     ]
   );
   return rows[0].id;
@@ -1358,13 +1469,9 @@ async function getBacktestHistoryById(id, userId = null) {
   return rows[0] ? mapBacktestRow(rows[0]) : null;
 }
 
-async function getBacktestArchive({ userId, strategy, pair, limit = 50, offset = 0 } = {}) {
+async function getBacktestArchive({ strategy, pair, limit = 50, offset = 0 } = {}) {
   const params = [];
   const clauses = [];
-  if (userId) {
-    params.push(userId);
-    clauses.push(`(user_id = $${params.length} OR user_id IS NULL)`);
-  }
   if (strategy) {
     params.push(strategy.toUpperCase());
     clauses.push(`strategy_key = $${params.length}`);
@@ -1385,16 +1492,12 @@ async function getBacktestArchive({ userId, strategy, pair, limit = 50, offset =
   return rows.map(mapBacktestRow);
 }
 
-async function getBacktestHistoryByIds(ids, userId = null) {
+async function getBacktestHistoryByIds(ids) {
   if (!ids?.length) return [];
-  const params = [ids];
-  let sql = `SELECT * FROM backtest_history WHERE id = ANY($1::int[])`;
-  if (userId) {
-    params.push(userId);
-    sql += ` AND (user_id = $2 OR user_id IS NULL)`;
-  }
-  sql += ` ORDER BY timestamp DESC`;
-  const { rows } = await pool.query(sql, params);
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history WHERE id = ANY($1::int[]) ORDER BY timestamp DESC`,
+    [ids]
+  );
   return rows.map(mapBacktestRow);
 }
 
@@ -1453,6 +1556,18 @@ function mapBacktestRow(row) {
     equity_curve: safeParseJSON(row.equity_curve),
     trades_data:  safeParseJSON(row.trades_data),
     config:       safeParseJSON(row.config),
+    data_start:   row.data_start ?? null,
+    data_end:     row.data_end ?? null,
+    hit_count:    row.hit_count ?? 1,
+    canonical_key: row.canonical_key ?? null,
+    engine_version: row.engine_version ?? null,
+    created_by_user_id: row.created_by_user_id ?? null,
+    dataStart: row.data_start ?? null,
+    dataEnd: row.data_end ?? null,
+    hitCount: row.hit_count ?? 1,
+    canonicalKey: row.canonical_key ?? null,
+    engineVersion: row.engine_version ?? null,
+    createdByUserId: row.created_by_user_id ?? null,
   };
 }
 
@@ -1589,6 +1704,11 @@ module.exports = {
   setSetting,
   // backtest history
   insertBacktestHistory,
+  upsertBacktestHistory,
+  updateBacktestHistory,
+  incrementBacktestHitCount,
+  findBacktestByCanonicalKey,
+  getBacktestByCanonicalKey,
   getBacktestHistory,
   getAllBacktestHistory,
   getBacktestHistoryById,
