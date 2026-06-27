@@ -12,13 +12,25 @@ const express = require("express");
 const { asyncHandler } = require("../../middleware/errorHandler");
 const XaiTrainingService = require("../services/XaiTrainingService");
 const OptimizationAnalysisService = require("../services/OptimizationAnalysisService");
+const GrokConfirmService = require("../services/GrokConfirmService");
 const cfg = require("../../config/env");
 
 module.exports = function createAiRouter() {
   const router = express.Router();
 
   router.get("/status", asyncHandler(async (_req, res) => {
-    res.json({ ok: true, data: XaiTrainingService.getStatus() });
+    const base = XaiTrainingService.getStatus();
+    res.json({
+      ok: true,
+      data: {
+        ...base,
+        grokConfirm: {
+          liveEnabled: GrokConfirmService.isEnabled(),
+          backtestAvailable: GrokConfirmService.isApiReady(),
+          requiresLiveFlag: cfg.GROK_CONFIRM_ENABLED !== true,
+        },
+      },
+    });
   }));
 
   router.post("/analyze", asyncHandler(async (req, res) => {

@@ -133,7 +133,13 @@ class AdaptiveStrategyEngine extends BotEngine {
     try {
       // 1. Ambil data candle — method BotEngine yang benar
       const candles = await this._fetchCandles();
-      if (!candles || candles.length < this.config.emaSlow + 20) return;
+      if (!candles || candles.length < this.config.emaSlow + 20) {
+        if (this.state.openPositions.length > 0) {
+          await this._monitorOpenPositions(null, null, 0);
+          this._syncPositionManager();
+        }
+        return;
+      }
 
       // 2. Hitung indikator — fungsi domain (bukan method instance)
       const indicators = calcIndicators(candles, {
@@ -158,31 +164,11 @@ class AdaptiveStrategyEngine extends BotEngine {
         this.lastTrendStrength = Math.min(emaDelta * 50, 1.0);
       }
 
-      // 4b. Harga ticker REAL-TIME — dipakai untuk monitoring SL/TP DAN harga
-      //     entry. Post-mortem 11–12 Jun: entry direkam di `price` (close candle
-      //     confirmed, basi s/d 15 menit) sementara SL dicek pakai ticker live →
-      //     3 trade kena SL < 1 menit karena harga riil sudah jauh dari "harga
-      //     entry" sejak awal. livePrice null = ticker tidak tersedia.
-      let livePrice = null;
-      if (this.client?.getTicker) {
-        try {
-          const ticker = await this.client.getTicker(this.config.symbol);
-          if (ticker?.last > 0) livePrice = ticker.last;
-        } catch { /* livePrice tetap null — ditangani fail-closed di step 11b */ }
-      }
-
-      // 5. Monitor SL/TP posisi yang sudah terbuka — WAJIB ada agar posisi bisa close.
-      //    Parent BotEngine._tick() melakukan ini di baris ~865; karena kita override
-      //    penuh, kita harus panggil sendiri. Tanpa ini posisi tidak pernah di-close.
-      //    PENTING: super._checkOpenPositions (BUKAN this.) — lihat _syncPositionManager.
-      {
-        const monitorPrice = livePrice ?? price;
-        this.state.lastPrice = monitorPrice;
-        // SL/TP check + penutupan posisi (logika parent BotEngine)
-        await super._checkOpenPositions(monitorPrice, atr);
-        // Sinkronisasi position manager dengan state terbaru (setelah close)
-        this._syncPositionManager();
-      }
+      // 4b–5. Monitor SL/TP — pakai helper parent (_resolveSlTpMonitor) agar
+      //      barHigh/barLow forming candle + ticker sama seperti BotEngine._tick().
+      //      Sebelumnya hanya monitorPrice → intrabar wick bisa terlewat.
+      await this._monitorOpenPositions(candles, price, atr);
+      this._syncPositionManager();
 
       // 6. Jika posisi sudah penuh, skip deteksi sinyal baru
       if (this.state.openPositions.length >= this.config.maxPositions) return;
@@ -345,10 +331,16 @@ class AdaptiveStrategyEngine extends BotEngine {
       // 11b. HARGA ENTRY = ticker live, BUKAN close candle confirmed (basi s/d
       //      15 menit). Fail-closed: jika exchange punya getTicker tapi fetch
       //      gagal, skip entry tick ini — jangan buka posisi di harga fiktif.
-      //      Fallback ke close candle hanya bila client tidak punya getTicker
-      //      sama sekali (mis. stub test) — tidak ada data lebih baik.
+      //      Reuse lastPrice dari pass SL/TP di atas bila sudah di-set.
       let entryPrice = price;
       if (this.client?.getTicker) {
+        let livePrice = this.state.lastPrice;
+        if (livePrice == null || livePrice <= 0) {
+          try {
+            const ticker = await this.client.getTicker(this.config.symbol);
+            if (ticker?.last > 0) livePrice = ticker.last;
+          } catch { /* livePrice tetap null */ }
+        }
         if (livePrice == null) {
           console.log(`[${this.config.symbol}] 🚫 Skip entry (${this.strategyKey}): ticker tidak tersedia — hindari entry di harga basi`);
           return;

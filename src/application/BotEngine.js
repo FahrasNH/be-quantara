@@ -815,6 +815,15 @@ class BotEngine extends EventEmitter {
     // Sinyalkan ke start() yang mungkin masih warm-up agar membatalkan diri. Di-set
     // SYNC sebelum await apa pun, sehingga guard di start() melihatnya.
     this._stopRequested = true;
+    // Satu pass SL/TP terakhir sebelum interval dimatikan — hindari posisi "nyangkut"
+    // open walau harga sudah lewat SL (mis. LAB mark $14.65 vs SL $18.05).
+    if (this.state.openPositions.length > 0) {
+      try {
+        await this._monitorOpenPositions(null, null, 0);
+      } catch (e) {
+        this._log("warn", `Final SL/TP check gagal: ${e.message}`);
+      }
+    }
     // Batalkan timer warm-up jitter jika start() masih dalam jendela jitter — tanpa
     // ini setInterval akan terpasang SETELAH stop() → ticker zombie (lihat start()).
     if (this._startTimer)     { clearTimeout(this._startTimer); this._startTimer = null; }
@@ -1094,6 +1103,10 @@ class BotEngine extends EventEmitter {
       const candles = await this._fetchCandles();
       if (!candles || candles.length < this.config.emaSlow + 20) {
         this._log("warn", "Candle tidak cukup untuk kalkulasi indikator");
+        // Posisi terbuka tetap wajib dimonitor SL/TP meski indikator belum siap.
+        if (this.state.openPositions.length > 0) {
+          await this._monitorOpenPositions(null, null, 0);
+        }
         return;
       }
 
@@ -1158,36 +1171,7 @@ class BotEngine extends EventEmitter {
         );
       }
 
-      // Harga real-time untuk monitoring SL/TP (#7). `price` di atas = close candle
-      // ke-2 terakhir (benar untuk deteksi sinyal, tapi BASI untuk cek SL/TP — pada
-      // 15m bisa tertinggal s/d 15 menit). Gunakan ticker.last bila tersedia.
-      //
-      // BUG-TP-INTRABAR: deteksi SL/TP sebelumnya hanya pakai SATU titik harga
-      // (close/last). Wick yang menembus TP lalu retrace di dalam satu candle (atau
-      // di antara dua poll) tidak pernah terdeteksi → posisi yang harusnya kena TP
-      // malah berbalik ke SL. Fix: pakai HIGH/LOW candle berjalan (sudah merekam
-      // wick) sebagai rentang intrabar untuk cek SL/TP, bukan cuma close.
-      let monitorPrice = price;
-      const formingBar = candles[candles.length - 1] || candles[lastIdx];
-      let barHigh = formingBar?.high ?? price;
-      let barLow  = formingBar?.low  ?? price;
-      if (this.state.openPositions.length > 0 && this.client?.getTicker) {
-        try {
-          const ticker = await this.client.getTicker(this.config.symbol);
-          if (ticker?.last > 0) {
-            monitorPrice = ticker.last;
-            // ticker bisa lebih segar dari agregasi candle → perluas rentang.
-            barHigh = Math.max(barHigh, ticker.last);
-            barLow  = Math.min(barLow,  ticker.last);
-          }
-        } catch { /* fallback ke close candle */ }
-      }
-      // Rentang harus selalu mencakup harga monitor.
-      barHigh = Math.max(barHigh, monitorPrice);
-      barLow  = Math.min(barLow,  monitorPrice);
-      this.state.lastPrice = monitorPrice;
-
-      await this._checkOpenPositions(monitorPrice, atr, barHigh, barLow);
+      await this._monitorOpenPositions(candles, price, atr);
 
       // Lapor risk ke koordinator akun tiap tick (#5) — termasuk saat memegang
       // posisi — agar gate daily-loss agregat lintas-bot selalu pakai data segar.
@@ -2907,6 +2891,48 @@ class BotEngine extends EventEmitter {
     if (pos.tp) {
       await this.client.setTPSL(this.config.symbol, "profit_plan", pos.tp.toFixed(2), holdSide, remaining);
     }
+  }
+
+  // ─────────────────────────────────────────────
+  // SL/TP MONITOR — harga real-time + rentang intrabar
+  // ─────────────────────────────────────────────
+  /**
+   * Resolve monitor price + high/low intrabar untuk cek SL/TP.
+   * Dipakai BotEngine._tick(), AdaptiveStrategyEngine override, dan pass final saat stop().
+   */
+  async _resolveSlTpMonitor(candles, confirmedClose, atr) {
+    let price = confirmedClose ?? this.state.lastPrice ?? 0;
+    const formingBar = candles?.length
+      ? (candles[candles.length - 1] || candles[candles.length - 2])
+      : null;
+    let barHigh = formingBar?.high ?? price;
+    let barLow  = formingBar?.low  ?? price;
+    let monitorPrice = price;
+
+    if (this.state.openPositions.length > 0 && this.client?.getTicker) {
+      try {
+        const ticker = await this.client.getTicker(this.config.symbol);
+        if (ticker?.last > 0) {
+          monitorPrice = ticker.last;
+          barHigh = Math.max(barHigh, ticker.last);
+          barLow  = Math.min(barLow,  ticker.last);
+        }
+      } catch { /* fallback ke close candle / lastPrice */ }
+    }
+
+    barHigh = Math.max(barHigh, monitorPrice);
+    barLow  = Math.min(barLow,  monitorPrice);
+    this.state.lastPrice = monitorPrice;
+
+    return { monitorPrice, barHigh, barLow, atr: atr ?? 0 };
+  }
+
+  /** Monitor SL/TP posisi terbuka — wrapper agar semua jalur pakai logika yang sama. */
+  async _monitorOpenPositions(candles, confirmedClose, atr) {
+    if (this.state.openPositions.length === 0) return;
+    const { monitorPrice, barHigh, barLow, atr: a } =
+      await this._resolveSlTpMonitor(candles, confirmedClose, atr);
+    await this._checkOpenPositions(monitorPrice, a, barHigh, barLow);
   }
 
   // ─────────────────────────────────────────────

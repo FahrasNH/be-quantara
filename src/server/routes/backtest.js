@@ -919,15 +919,9 @@ module.exports = function createBacktestRouter(context) {
    */
   router.post("/grok-confirm", asyncHandler(async (req, res) => {
     const userId = req.user?.id;
-    const access = await GrokConfirmService.canUseGrokConfirm(userId);
+    const access = await GrokConfirmService.canUseGrokConfirm(userId, { backtest: true });
     if (!access.allowed) {
       return res.status(403).json({ ok: false, message: access.reason });
-    }
-    if (!GrokConfirmService.isEnabled()) {
-      return res.status(503).json({
-        ok: false,
-        message: "Grok Confirm belum aktif — set GROK_CONFIRM_ENABLED=true dan XAI_API_KEY",
-      });
     }
 
     const {
@@ -996,6 +990,7 @@ module.exports = function createBacktestRouter(context) {
           minTpConfidence: minTp,
           userId,
           botId: null,
+          backtest: true,
         });
 
         const applied = GrokConfirmService.applyGate(confirm, {

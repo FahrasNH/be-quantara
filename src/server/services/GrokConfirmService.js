@@ -40,12 +40,31 @@ class GrokConfirmService {
     return this._client;
   }
 
-  static isEnabled() {
-    return cfg.GROK_CONFIRM_ENABLED === true && Boolean(cfg.XAI_API_KEY);
+  /** API xAI siap dipanggil (kunci ada + client terkonfigurasi). */
+  static isApiReady() {
+    return Boolean(cfg.XAI_API_KEY) && this.client.isConfigured;
   }
 
-  static async canUseGrokConfirm(userId) {
-    if (!this.isEnabled()) return { allowed: false, reason: "Grok Confirm belum dikonfigurasi" };
+  /** Live bot gate — butuh flag GROK_CONFIRM_ENABLED + API. */
+  static isEnabled() {
+    return cfg.GROK_CONFIRM_ENABLED === true && this.isApiReady();
+  }
+
+  /**
+   * @param {string} userId
+   * @param {{ backtest?: boolean }} [opts] — backtest hanya butuh XAI_API_KEY (toggle eksplisit di UI).
+   */
+  static async canUseGrokConfirm(userId, { backtest = false } = {}) {
+    if (backtest) {
+      if (!this.isApiReady()) {
+        return { allowed: false, reason: "XAI belum dikonfigurasi — set XAI_API_KEY di server" };
+      }
+    } else if (!this.isEnabled()) {
+      if (!this.isApiReady()) {
+        return { allowed: false, reason: "Grok Confirm belum dikonfigurasi (XAI_API_KEY kosong)" };
+      }
+      return { allowed: false, reason: "Grok Confirm belum diaktifkan — set GROK_CONFIRM_ENABLED=true" };
+    }
     if (cfg.GROK_CONFIRM_OPEN === true || !cfg.isProduction) {
       return { allowed: true, reason: "dev/open mode" };
     }
@@ -60,11 +79,17 @@ class GrokConfirmService {
   }
 
   static async requestConfirmation(ctx) {
-    if (!this.isEnabled() || !this.client.isConfigured) {
+    const backtest = ctx.backtest === true;
+    const active = backtest ? this.isApiReady() : this.isEnabled();
+    if (!active) {
       if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
         return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, suggested_tp: null };
       }
-      throw new Error("Grok Confirm tidak aktif atau XAI_API_KEY kosong");
+      throw new Error(
+        backtest
+          ? "XAI belum dikonfigurasi — set XAI_API_KEY di server"
+          : "Grok Confirm tidak aktif atau XAI_API_KEY kosong"
+      );
     }
 
     const built = GrokConfirmPromptBuilder.build(ctx);
