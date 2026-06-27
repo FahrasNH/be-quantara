@@ -60,18 +60,28 @@ console.log("\n=== Grok Backtest Job Tests ===\n");
     if (job) throw new Error("expected null for wrong user");
   });
 
-  await test("toPublicJob — hides decisions until done", async () => {
+  await test("toPublicJob — expose partial decisions saat processing", async () => {
     const jobId = GrokBacktestJobService.createJob("user-1", {
       strategy_key: "MEAN_REVERSION",
       symbol: "SOLUSDT",
-      signals: [{ id: "2" }],
+      signals: [{ id: "2" }, { id: "3" }],
+      existingDecisions: { "1": { approved: true } },
     });
     const queued = GrokBacktestJobService.getJob("user-1", jobId);
     const pub = GrokBacktestJobService.toPublicJob(queued);
-    if (pub.decisions) throw new Error("decisions should not be public while processing");
-    if (!["queued", "processing"].includes(pub.status)) {
-      throw new Error(`unexpected status ${pub.status}`);
-    }
+    if (!pub.decisions?.["1"]) throw new Error("seed decision should be visible while processing");
+    if (pub.progress.done !== 1) throw new Error(`expected done=1, got ${pub.progress.done}`);
+  });
+
+  await test("createJob — dedup job aktif per strategi+simbol", async () => {
+    const payload = {
+      strategy_key: "ADAPTIVE_FUSION",
+      symbol: "BTCUSDT",
+      signals: [{ id: "a" }, { id: "b" }],
+    };
+    const id1 = GrokBacktestJobService.createJob("user-1", payload);
+    const id2 = GrokBacktestJobService.createJob("user-1", payload);
+    if (id1 !== id2) throw new Error("expected same jobId for duplicate create while active");
   });
 
   console.log(`\n${pass} passed, ${fail} failed\n`);

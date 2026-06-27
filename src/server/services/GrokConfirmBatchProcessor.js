@@ -28,6 +28,7 @@ async function processBatch({
   tpBandPct,
   tpRejectAction,
   onProgress,
+  seedDecisions = {},
 }) {
   const strat = STRATEGIES[strategyKey] || {};
   const minEntry = strat.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY;
@@ -36,12 +37,24 @@ async function processBatch({
   const rejectAction = tpRejectAction ?? "use_rules_tp";
   const minRiskReward = strat.minRiskReward ?? strat.riskReward ?? 1.2;
 
-  const decisions = {};
+  const decisions = { ...seedDecisions };
   let approved = 0;
   let rejected = 0;
   let apiCalls = 0;
-  let done = 0;
   const total = signals.length;
+
+  for (const d of Object.values(decisions)) {
+    if (d?.approved) approved += 1;
+    else rejected += 1;
+  }
+
+  const pendingSignals = signals.filter((sig) => {
+    const id = String(sig.id ?? sig.barIndex);
+    return !Object.prototype.hasOwnProperty.call(decisions, id);
+  });
+
+  let done = total - pendingSignals.length;
+  onProgress?.(done, total, decisions);
 
   async function processSignal(sig) {
     const id = String(sig.id ?? sig.barIndex);
@@ -54,7 +67,7 @@ async function processBatch({
       decisions[id] = { approved: false, reason: "invalid signal payload" };
       rejected += 1;
       done += 1;
-      onProgress?.(done, total);
+      onProgress?.(done, total, decisions);
       return;
     }
 
@@ -119,11 +132,11 @@ async function processBatch({
     }
 
     done += 1;
-    onProgress?.(done, total);
+    onProgress?.(done, total, decisions);
   }
 
-  for (let i = 0; i < signals.length; i += GROK_CONFIRM_CONCURRENCY) {
-    const chunk = signals.slice(i, i + GROK_CONFIRM_CONCURRENCY);
+  for (let i = 0; i < pendingSignals.length; i += GROK_CONFIRM_CONCURRENCY) {
+    const chunk = pendingSignals.slice(i, i + GROK_CONFIRM_CONCURRENCY);
     await Promise.all(chunk.map(processSignal));
   }
 

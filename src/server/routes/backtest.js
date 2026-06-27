@@ -636,6 +636,8 @@ module.exports = function createBacktestRouter(context) {
       });
     }
 
+    const { existingDecisions } = req.body ?? {};
+
     const jobId = GrokBacktestJobService.createJob(userId, {
       strategy_key: validated.strategyKey,
       symbol: validated.symbol,
@@ -643,13 +645,18 @@ module.exports = function createBacktestRouter(context) {
       tpAdjust: validated.tpAdjust,
       tpBandPct: validated.tpBandPct,
       tpRejectAction: validated.tpRejectAction,
+      existingDecisions: existingDecisions && typeof existingDecisions === "object"
+        ? existingDecisions
+        : {},
     });
 
+    const job = GrokBacktestJobService.getJob(userId, jobId);
     res.json({
       ok: true,
       jobId,
-      status: "queued",
-      progress: { done: 0, total: validated.signals.length },
+      status: job?.status ?? "queued",
+      progress: job?.progress ?? { done: 0, total: validated.signals.length },
+      resumed: Object.keys(existingDecisions || {}).length > 0,
     });
   }));
 
