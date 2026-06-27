@@ -185,16 +185,29 @@ test("GrokConfirmPromptBuilder — lite prompt fields", () => {
   if (!built.text.includes("confirm_entry")) throw new Error("missing task");
 });
 
-test("canUseGrokConfirm — userId kosong tidak throw (regresi 500 production)", async () => {
+test("canUseGrokConfirm — userId kosong ditolak tanpa throw", async () => {
   const GrokConfirmService = require("../src/server/services/GrokConfirmService");
-  let threw = false;
+  const r = await GrokConfirmService.canUseGrokConfirm(undefined, { backtest: true });
+  if (r.allowed !== false) throw new Error("expected denied without userId");
+  if (!r.reason?.includes("Unauthorized")) throw new Error(`unexpected reason: ${r.reason}`);
+});
+
+test("canUseGrokConfirm — backtest lolos tanpa gate langganan Vault", async () => {
+  const GrokConfirmService = require("../src/server/services/GrokConfirmService");
+  const orig = GrokConfirmService.isApiReady;
+  GrokConfirmService.isApiReady = () => true;
   try {
-    const r = await GrokConfirmService.canUseGrokConfirm(undefined, { backtest: true });
-    if (r.allowed === true) throw new Error("should not allow without userId");
-  } catch {
-    threw = true;
+    const r = await GrokConfirmService.canUseGrokConfirm("user-test-id", { backtest: true });
+    if (!r.allowed) throw new Error(`expected allowed for backtest, got: ${r.reason}`);
+  } finally {
+    GrokConfirmService.isApiReady = orig;
   }
-  if (threw) throw new Error("canUseGrokConfirm must not throw when userId missing");
+});
+
+test("hasVaultSubscription — tier VAULT true, FOUNDRY false", () => {
+  const GrokConfirmService = require("../src/server/services/GrokConfirmService");
+  if (!GrokConfirmService.hasVaultSubscription("VAULT")) throw new Error("VAULT should pass");
+  if (GrokConfirmService.hasVaultSubscription("FOUNDRY")) throw new Error("FOUNDRY should fail");
 });
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

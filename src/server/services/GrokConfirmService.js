@@ -6,7 +6,7 @@ const cfg = require("../../config/env");
 const XaiClient = require("../../infrastructure/xai/XaiClient");
 const GrokConfirmPromptBuilder = require("./GrokConfirmPromptBuilder");
 const { getUserTier } = require("../../services/entitlement");
-const { getTierConfig } = require("../../domain/tierConfig");
+const { TIER_ORDER } = require("../../domain/tierConfig");
 const { persistAiTradeInteraction } = require("../../infrastructure/db/aiTradeInteractionRepository");
 
 const GROK_CONFIRM_SYSTEM_PROMPT = `You are a crypto futures trade confirmer for Bitget USDT-M.
@@ -35,6 +35,13 @@ Required JSON schema:
 class GrokConfirmService {
   static _client = null;
 
+  /** Langganan tier VAULT (bukan flag aiOptimizer / paket backtest UI). */
+  static hasVaultSubscription(tier) {
+    const idx = TIER_ORDER.indexOf(tier);
+    const vaultIdx = TIER_ORDER.indexOf("VAULT");
+    return idx >= 0 && vaultIdx >= 0 && idx >= vaultIdx;
+  }
+
   static get client() {
     if (!this._client) this._client = new XaiClient();
     return this._client;
@@ -55,28 +62,38 @@ class GrokConfirmService {
    * @param {{ backtest?: boolean }} [opts] — backtest hanya butuh XAI_API_KEY (toggle eksplisit di UI).
    */
   static async canUseGrokConfirm(userId, { backtest = false } = {}) {
+    if (!userId) {
+      return { allowed: false, reason: "Unauthorized — userId tidak ditemukan" };
+    }
+
     if (backtest) {
       if (!this.isApiReady()) {
         return { allowed: false, reason: "XAI belum dikonfigurasi — set XAI_API_KEY di server" };
       }
-    } else if (!this.isEnabled()) {
+      // Backtest: toggle eksplisit di UI + XAI_API_KEY cukup.
+      // "Paket Vault" di backtest ≠ langganan akun — jangan gate subscription di sini.
+      return { allowed: true, reason: "backtest" };
+    }
+
+    if (!this.isEnabled()) {
       if (!this.isApiReady()) {
         return { allowed: false, reason: "Grok Confirm belum dikonfigurasi (XAI_API_KEY kosong)" };
       }
       return { allowed: false, reason: "Grok Confirm belum diaktifkan — set GROK_CONFIRM_ENABLED=true" };
     }
-    if (!userId) {
-      return { allowed: false, reason: "Unauthorized — userId tidak ditemukan" };
-    }
+
     if (cfg.GROK_CONFIRM_OPEN === true || !cfg.isProduction) {
       return { allowed: true, reason: "dev/open mode" };
     }
+
     const tier = await getUserTier(userId);
-    const tierCfg = getTierConfig(tier);
-    if (tierCfg?.aiOptimizer) return { allowed: true, reason: "tier" };
+    if (this.hasVaultSubscription(tier)) {
+      return { allowed: true, reason: "tier" };
+    }
+
     return {
       allowed: false,
-      reason: "Grok Confirm Gate membutuhkan tier VAULT",
+      reason: `Grok Confirm Gate membutuhkan langganan Vault (tier akun kamu: ${tier})`,
       tier,
     };
   }
