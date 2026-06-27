@@ -16,6 +16,7 @@ class GrokConfirmPromptBuilder {
       signalReason,
       minConfidenceEntry = 8,
       minTpConfidence = 7,
+      minTpModeConfidence = 6,
     } = ctx;
 
     const slDist = Math.abs(price - slRules);
@@ -32,7 +33,7 @@ class GrokConfirmPromptBuilder {
       `TP (rules baseline): ${tpRules} (${tpAtrMult}×ATR)`,
       `HTF: ${htfTrend ?? indicatorSnapshot.htfTrend ?? "N/A"} | RSI: ${indicatorSnapshot.rsi ?? "N/A"} | EMA fast/slow bias: ${indicatorSnapshot.emaTrendBias ?? "N/A"}`,
       "",
-      `Task: confirm_entry (conf 1-10, min ${minConfidenceEntry}) + tp_review (approve or suggest_tp, tp_confidence 1-10, min ${minTpConfidence})`,
+      `Task: confirm_entry (conf 1-10, min ${minConfidenceEntry}) + tp_mode full|partial (tp_mode_confidence 1-10, min ${minTpModeConfidence} for partial) + tp_review (approve or suggest_tp, tp_confidence 1-10, min ${minTpConfidence})`,
       "Return ONLY valid JSON per schema. NEVER suggest stop_loss.",
     ].filter(Boolean);
 

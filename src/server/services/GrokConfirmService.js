@@ -13,10 +13,13 @@ const GROK_CONFIRM_SYSTEM_PROMPT = `You are a crypto futures trade confirmer for
 A rule-based strategy has already fired a signal with proposed SL and TP from ATR math.
 Your job:
 1. Confirm or reject the ENTRY direction (confirm_entry, confidence 1-10).
-2. Review the proposed TP — approve it, or suggest a better take_profit within reason.
+2. Choose exit style: tp_mode "full" or "partial" (tp_mode_confidence 1-10, min 6 for partial).
+   - full = hold until single take-profit (no scale-out milestones).
+   - partial = scale out at +1R/+2R milestones, SL trails to BEP/+1R.
+3. Review the proposed TP price — approve it, or suggest a better take_profit within reason.
 NEVER change or suggest stop_loss — SL is fixed by the system.
 Return ONLY valid JSON per schema.
-Entry requires confidence >= 8. TP review requires tp_confidence >= 7.
+Entry requires confidence >= 8. tp_mode partial requires tp_mode_confidence >= 6. TP review requires tp_confidence >= 7.
 
 Required JSON schema:
 {
@@ -24,6 +27,8 @@ Required JSON schema:
   "confidence": 1-10,
   "side": "LONG|SHORT",
   "reasoning": "string",
+  "tp_mode": "full|partial",
+  "tp_mode_confidence": 1-10,
   "tp_review": {
     "approved": boolean,
     "tp_confidence": 1-10,
@@ -103,7 +108,7 @@ class GrokConfirmService {
     const active = backtest ? this.isApiReady() : this.isEnabled();
     if (!active) {
       if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
-        return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, suggested_tp: null };
+        return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, tp_mode: "full", suggested_tp: null };
       }
       throw new Error(
         backtest
@@ -118,7 +123,7 @@ class GrokConfirmService {
       raw = await this._callGrok(built.text);
     } catch (err) {
       if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
-        return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, suggested_tp: null, error: err.message };
+        return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, tp_mode: "full", suggested_tp: null, error: err.message };
       }
       throw err;
     }
@@ -128,7 +133,7 @@ class GrokConfirmService {
       parsed = this.parseResponse(raw);
     } catch (err) {
       if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
-        return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, suggested_tp: null, error: err.message };
+        return { failOpen: true, confirm_entry: true, confidence: 10, tp_approved: true, tp_mode: "full", suggested_tp: null, error: err.message };
       }
       throw err;
     }
@@ -170,6 +175,14 @@ class GrokConfirmService {
     }
   }
 
+  static resolveTpMode(data, ctx = {}) {
+    const minModeConf = ctx.minTpModeConfidence ?? cfg.GROK_CONFIRM_MIN_TP_MODE_CONFIDENCE ?? 6;
+    const modeConf = Number(data.tp_mode_confidence ?? 0);
+    const raw = String(data.tp_mode ?? "").toLowerCase().trim();
+    if (modeConf >= minModeConf && raw === "partial") return "partial";
+    return "full";
+  }
+
   static validateConfirmation(data, ctx = {}) {
     const minEntry = ctx.minConfidenceEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY;
     const minTp = ctx.minTpConfidence ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE;
@@ -177,6 +190,8 @@ class GrokConfirmService {
     const confidence = Number(data.confidence);
     const tp = data.tp_review || {};
     const tpConf = Number(tp.tp_confidence ?? 0);
+    const tpMode = this.resolveTpMode(data, ctx);
+    const tpModeConf = Number(data.tp_mode_confidence ?? 0);
 
     const entryOk = data.confirm_entry === true && Number.isFinite(confidence) && confidence >= minEntry;
     const tpOk = tp.approved === true && tpConf >= minTp;
@@ -185,6 +200,8 @@ class GrokConfirmService {
       confirm_entry: entryOk,
       confidence: Number.isFinite(confidence) ? confidence : 0,
       tp_approved: tpOk,
+      tp_mode: tpMode,
+      tp_mode_confidence: Number.isFinite(tpModeConf) ? tpModeConf : 0,
       suggested_tp: tp.suggested_tp != null ? Number(tp.suggested_tp) : null,
       tp_confidence: tpConf,
       reasoning: data.reasoning || "",
@@ -192,6 +209,7 @@ class GrokConfirmService {
       side: data.side,
       raw_confirm_entry: data.confirm_entry === true,
       raw_tp_approved: tp.approved === true,
+      raw_tp_mode: String(data.tp_mode ?? ""),
     };
   }
 
@@ -251,6 +269,7 @@ class GrokConfirmService {
         approved: true,
         tp: tpRules,
         tpDist: Math.abs(tpRules - price),
+        tpMode: confirm.tp_mode ?? "full",
         reason: confirm.error || "fail-open",
         confidence: confirm.confidence ?? 10,
         failOpen: true,
@@ -319,10 +338,13 @@ class GrokConfirmService {
       approved: true,
       tp: finalTp,
       tpDist: Math.abs(finalTp - price),
+      tpMode: confirm.tp_mode ?? "full",
       reason: confirm.reasoning || "",
       tpReasoning: confirm.tp_reasoning || "",
       confidence: confirm.confidence ?? 0,
       tpConfidence: confirm.tp_confidence ?? 0,
+      tpMode: confirm.tp_mode ?? "full",
+      tpModeConfidence: confirm.tp_mode_confidence ?? 0,
       failOpen: false,
     };
   }

@@ -455,7 +455,7 @@ const STRATEGIES = {
     checkInterval: 900000,
 
     grokConfirmMinEntry: 8,
-    grokConfirmMinTp:    8,
+    grokConfirmMinTp:    7,
 
     signalType:    "BREAKOUT_RETEST",
 

@@ -1791,21 +1791,27 @@ class BotEngine extends EventEmitter {
       const nextOptions = {
         ...signalOptions,
         tpDist: Math.abs(finalTp - price),
+        tpMode: confirm.tp_mode ?? "full",
       };
 
+      const tpModeLabel = (confirm.tp_mode ?? "full") === "partial" ? "Partial TP" : "Full TP";
       const tpNote = finalTp !== tpRules
         ? `TP ${tpRules.toFixed(2)}→${finalTp.toFixed(2)} (Grok adjust)`
         : `TP ${finalTp.toFixed(2)} (rules)`;
 
       this._log("info",
         `[GROK CONFIRM] ${this.config.strategyKey} → ${signal} approved ${confirm.confidence}/10 | ` +
-        `SL ${slPrice.toFixed(2)} (rules) | ${tpNote} | HTF ${this.state.htfTrend ?? "N/A"}` +
+        `${tpModeLabel} (mode conf ${confirm.tp_mode_confidence ?? 0}/10, min 6) | ` +
+        `SL ${slPrice.toFixed(2)} (rules) | ${tpNote} (tp conf ${confirm.tp_confidence ?? 0}/10, min 7) | ` +
+        `HTF ${this.state.htfTrend ?? "N/A"}` +
         (confirm.reasoning ? ` | ${confirm.reasoning}` : "")
       );
 
       indicatorSnapshot.grokConfirm = {
         confidence: confirm.confidence,
         tp_confidence: confirm.tp_confidence,
+        tp_mode: confirm.tp_mode,
+        tp_mode_confidence: confirm.tp_mode_confidence,
         reasoning: confirm.reasoning,
         tp_reasoning: confirm.tp_reasoning,
         tp_rules: tpRules,
@@ -2289,6 +2295,7 @@ class BotEngine extends EventEmitter {
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
           marginReserved: finalMargin,
+          tpMode: options.tpMode ?? this.config.tpMode ?? "full",
           // BUG-004: simpan snapshot indikator entry agar partial-close bisa
           // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
           entrySnapshot: enrichedSnapshot,
@@ -2417,7 +2424,8 @@ class BotEngine extends EventEmitter {
 
       const pos = {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
-        marginReserved,        // margin terkunci, dikembalikan tepat saat close
+        marginReserved,
+        tpMode: options.tpMode ?? this.config.tpMode ?? "full",
         // BUG-004: snapshot entry untuk diwariskan ke partial-close.
         entrySnapshot: enrichedSnapshot,
         strategyName:  this.config.strategyKey ?? null,
@@ -2690,7 +2698,7 @@ class BotEngine extends EventEmitter {
   async _checkSLPlusMilestones(pos, price) {
     // tpMode "full" → skip semua milestone; posisi lari ke TP penuh tanpa dipotong.
     // Backward compat: bila tpMode belum diset (bot lama), default ke "full".
-    if ((this.config.tpMode ?? "full") === "full") return;
+    if ((pos.tpMode ?? this.config.tpMode ?? "full") === "full") return;
     if (!this.config.slPlusEnabled) return;
     if (pos.remainingSize <= 0) return;
 

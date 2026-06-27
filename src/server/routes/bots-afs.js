@@ -19,6 +19,7 @@ module.exports = function createBotsRouter(helpers) {
   // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
   const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../domain/tierConfig");
   const db = require("../../infrastructure/db/database");
+  const envCfg = require("../../config/env");
 
   // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
   // dry-run (TASK 4.3), OFF di production via MULTI_STRATEGY_ENABLED=false.
@@ -562,7 +563,13 @@ module.exports = function createBotsRouter(helpers) {
       const bot = await prisma.bot.upsert({
         where:  { userId_symbol: { userId, symbol } },
         update: botData,
-        create: { userId, symbol, ...botData },
+        create: {
+          userId,
+          symbol,
+          ...botData,
+          // Bot baru: aktifkan Grok Confirm Gate bila server sudah enable (staging).
+          grokConfirmEnabled: envCfg.GROK_CONFIRM_ENABLED === true,
+        },
       });
 
       await AuthService.logAction(
@@ -821,6 +828,10 @@ module.exports = function createBotsRouter(helpers) {
             passphrase: decryptedPassphrase,
             pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
             maxAccountOpenPositions: accountOpenCap,
+            grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+            grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+            grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+            grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
           })
         : createBotInstance(userId, symbol, {
             capital:     bot.capital,

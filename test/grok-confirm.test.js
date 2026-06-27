@@ -86,6 +86,28 @@ test("validateConfirmation — entry conf 7 rejected", () => {
   if (!v.tp_approved) throw new Error("TP should still be approved at conf 8");
 });
 
+test("validateConfirmation — tp_mode partial requires mode conf >= 6", () => {
+  const v = GrokConfirmService.validateConfirmation({
+    confirm_entry: true,
+    confidence: 8,
+    tp_mode: "partial",
+    tp_mode_confidence: 6,
+    tp_review: { approved: true, tp_confidence: 7, suggested_tp: 98600 },
+  }, { minConfidenceEntry: 8, minTpConfidence: 7, minTpModeConfidence: 6 });
+  if (v.tp_mode !== "partial") throw new Error("expected partial tp_mode");
+});
+
+test("validateConfirmation — tp_mode partial rejected when mode conf < 6", () => {
+  const v = GrokConfirmService.validateConfirmation({
+    confirm_entry: true,
+    confidence: 8,
+    tp_mode: "partial",
+    tp_mode_confidence: 5,
+    tp_review: { approved: true, tp_confidence: 7 },
+  }, { minConfidenceEntry: 8, minTpConfidence: 7, minTpModeConfidence: 6 });
+  if (v.tp_mode !== "full") throw new Error("low mode conf should default to full");
+});
+
 test("validateConfirmation — conf 8 + tp_conf 7 approved", () => {
   const v = GrokConfirmService.validateConfirmation({
     confirm_entry: true,

@@ -434,6 +434,14 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       // Diteruskan ke TIAP AdaptiveStrategyEngine → gate _checkAccountOpenCap aktif
       // utk jalur multi-strategi (semua engine berbagi user → cap dihitung dari DB).
       maxAccountOpenPositions: opts.maxAccountOpenPositions ?? 0,
+      // tpMode + Grok Confirm dari bot DB — override strat.tpMode (mis. TM default partial
+      // tapi user pilih TP Full di UI). Sebelumnya tidak diteruskan → UI "TP Full" tapi
+      // engine tetap partial close (+1R/+2R).
+      tpMode:                    opts.tpMode ?? "full",
+      grokConfirmEnabled:        opts.grokConfirmEnabled ?? false,
+      grokConfirmTpAdjust:       opts.grokConfirmTpAdjust ?? true,
+      grokConfirmTpBandPct:      opts.grokConfirmTpBandPct,
+      grokConfirmTpRejectAction: opts.grokConfirmTpRejectAction,
     },
     // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
     // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
@@ -813,6 +821,10 @@ async function _resumeOneBotAttempt(bot, prisma) {
       exchangeType,
       apiKey, apiSecret, passphrase,
       maxAccountOpenPositions: accountOpenCap,
+      grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+      grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+      grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+      grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
     });
     console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
   } else {
