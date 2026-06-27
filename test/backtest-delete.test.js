@@ -49,12 +49,13 @@ db.deleteBacktestHistoryByIds = async (ids) => {
   return count;
 };
 
-function seed(id, userId) {
+function seed(id, userId, extra = {}) {
   records.set(id, {
     id,
     user_id: userId,
     symbol: "BTCUSDT",
     metrics: { roi_pct: 1 },
+    ...extra,
   });
 }
 
@@ -134,6 +135,54 @@ async function t(name, fn) {
     const result = await BacktestHistoryService.deleteRuns([6, 7], "admin-1");
     assert.strictEqual(result.deleted, 2);
     assert.strictEqual(records.size, 0);
+  });
+
+  await t("regular user forbidden deleting shared canonical archive", async () => {
+    records.clear();
+    deletedIds = [];
+    mockUserRole = "USER";
+    seed(8, "user-a", { canonical_key: "btc-adaptive-1d-shared" });
+    try {
+      await BacktestHistoryService.deleteRun(8, "user-a");
+      throw new Error("expected 403");
+    } catch (err) {
+      assert.strictEqual(err.statusCode, 403);
+      assert.strictEqual(deletedIds.length, 0);
+      assert(records.has(8));
+    }
+  });
+
+  await t("admin can delete shared canonical archive", async () => {
+    records.clear();
+    deletedIds = [];
+    mockUserRole = "ADMIN";
+    seed(9, "user-b", { canonical_key: "btc-adaptive-1d-shared" });
+    const result = await BacktestHistoryService.deleteRun(9, "admin-1");
+    assert.strictEqual(result.deleted, true);
+    assert.deepStrictEqual(deletedIds, [9]);
+    assert.strictEqual(records.size, 0);
+  });
+
+  await t("deleteRun returns 404 when row missing after auth check", async () => {
+    records.clear();
+    deletedIds = [];
+    mockUserRole = "ADMIN";
+    db.deleteBacktestHistoryById = async () => false;
+    seed(10, "user-a");
+    try {
+      await BacktestHistoryService.deleteRun(10, "admin-1");
+      throw new Error("expected 404");
+    } catch (err) {
+      assert.strictEqual(err.statusCode, 404);
+      assert.strictEqual(deletedIds.length, 0);
+    } finally {
+      db.deleteBacktestHistoryById = async (id) => {
+        if (!records.has(id)) return false;
+        records.delete(id);
+        deletedIds.push(id);
+        return true;
+      };
+    }
   });
 
   // restore db stubs for any later tests in same process

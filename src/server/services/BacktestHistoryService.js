@@ -397,7 +397,12 @@ class BacktestHistoryService {
       const record = await this.getById(id);
       const role = await this._getCallerRole(userId);
       this._assertCanDelete(record, userId, role);
-      await db.deleteBacktestHistoryById(id);
+      const removed = await db.deleteBacktestHistoryById(id);
+      if (!removed) {
+        const err = new Error("Backtest tidak ditemukan");
+        err.statusCode = 404;
+        throw err;
+      }
       return { deleted: true, id };
     } catch (err) {
       console.error(`[BacktestHistory] Error deleting run ${id}: ${err.message}`);
