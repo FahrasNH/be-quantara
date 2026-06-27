@@ -162,6 +162,8 @@ class BotEngine extends EventEmitter {
       afRejectOnDissent:    strat.afRejectOnDissent ?? true,
       // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
       afMinVotes:           strat.afMinVotes ?? 3,
+      // v2.4: TP ×1.5 saat STRONG_TREND (STRATEGIES.md §4.2).
+      strongTrendTPMult:    strat.strongTrendTPMult ?? 1,
 
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
@@ -1302,15 +1304,21 @@ class BotEngine extends EventEmitter {
                 if (meta) {
                   const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
                   const afsInstance = new AdaptiveFusionStrategy();
-                  const riskCfg = afsInstance.calculateRiskConfig(price, atr, filteredSignal, meta.component);
+                  const riskCfg = afsInstance.calculateRiskConfig(price, atr, filteredSignal, meta.component, {
+                    marketCond: meta.marketCond,
+                    strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
+                  });
                   signalOptions.slDist = riskCfg.slDistance;
                   signalOptions.tpDist = riskCfg.tpDistance;
                   indicatorSnapshot.afComponent  = meta.component;
                   indicatorSnapshot.afVotes      = meta.votes;
                   indicatorSnapshot.afMarketCond = meta.marketCond;
+                  const tpMultNote = riskCfg.strongTrendTPApplied
+                    ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
+                    : "";
                   this._log("info",
                     `[AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
-                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}`
                   );
                 }
               } else if (this.config.signalType === "BREAKOUT_RETEST") {

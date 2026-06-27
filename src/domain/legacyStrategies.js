@@ -214,12 +214,13 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // ADAPTIVE_FUSION — Multi-Component Strategy (v2)
+  // ADAPTIVE_FUSION — Multi-Component Strategy (v2.4)
   //
   //   Components A (scalp) + B (day) + C (swing) run simultaneously.
   //   Signal fired only on majority vote (2/3 or 3/3 agree).
   //   Low-scoring components are skipped based on market conditions.
-  //   SL/TP per component: A→2x/3x ATR, B→1.5x/3x ATR, C→1x/2.5x ATR
+  //   SL/TP per component: A→2.2x/3.2x ATR, B→1.6x/3.3x ATR, C→1.1x/2.8x ATR
+  //   v2.4 spec (STRATEGIES.md §4): tighter entry, regime gates, strongTrendTPMult
   // ─────────────────────────────────────────────
   ADAPTIVE_FUSION: {
     name:          "ADAPTIVE_FUSION",
@@ -232,21 +233,20 @@ const STRATEGIES = {
     emaTrend:      50,
 
     rsiPeriod:     14,
-    rsiOverbought: 70,
-    rsiOversold:   30,
-    rsiLongMin:    50,
-    rsiLongMax:    70,
-    rsiShortMin:   30,
-    rsiShortMax:   50,
+    rsiOverbought: 72,
+    rsiOversold:   28,
+    rsiLongMin:    55,
+    rsiLongMax:    68,
+    rsiShortMin:   32,
+    rsiShortMax:   45,
 
     atrPeriod:     14,
     // SL/TP overridden per-component in _handleSignal; these are fallback defaults
     atrMultiplier: 1.5,
-    riskReward:    2.0,
-    // 0.2 → 0.5: selaras dengan AdaptiveFusionStrategy.validateEntry (min 0.5%).
-    // Di bawah 0.5% SL 1–2×ATR berada di dalam noise normal candle 15m.
-    atrMinMult:    0.5,
-    atrMaxMult:    4.0,
+    riskReward:    2.3,
+    // v2.4: selaras dengan AdaptiveFusionStrategy.validateEntry (0.7–3.5%).
+    atrMinMult:    0.7,
+    atrMaxMult:    3.5,
 
     higherTf:      "1h",
     htfEmaFast:    9,
@@ -254,35 +254,25 @@ const STRATEGIES = {
     sidewaysThresholdPct: 0.2,
 
     sidewaysRangeLookback:   20,
-    sidewaysBreakoutVolMult: 1.2,
+    sidewaysBreakoutVolMult: 1.4,
     sidewaysBreakoutBufMult: 0.3,
 
-    volSmaMultiplier: 1.0,
+    volSmaMultiplier: 1.3,
 
-    // v2.3 spec (STRATEGIES.md §4): risk per trade default 1.5% → 1.0%.
-    riskPerTrade:      0.01,
-    maxDailyLossPct:   0.05,
-    maxTradesPerDay:   10,
-    // 5 → 30 menit: nilai 5 di sini diam-diam meng-override balik fix cooldown
-    // 30 menit di BotEngine (`strat.cooldownAfterLoss || 30`). Data dry-run
-    // 11–12 Jun: re-entry menit ke-6 setelah SL pada setup identik → loss ganda.
-    cooldownAfterLoss: 30,
-    maxConsecLoss:     3,
+    // v2.4 spec (STRATEGIES.md §4): risk 0.9%, max 8 trade/hari, cooldown 45 mnt.
+    riskPerTrade:      0.009,
+    maxDailyLossPct:   0.045,
+    maxTradesPerDay:   8,
+    cooldownAfterLoss: 45,
+    maxConsecLoss:     2,
 
-    // ── FEE-01/03: pengetatan entry agar AF gross-positif (TETAP LIVE) ───────
-    // AF adalah satu-satunya strategi yang rugi SEBELUM fee (WR 26%, gross
-    // −$37). Akar = entry chasing + over-trading di edge tipis. Alih-alih
-    // mem-pause AF (konstrain user: AF tetap jalan), kita perketat kualitas
-    // entry lewat knob yang reversible:
-    //  - maxEntryExtensionATR 1.5 → 1.2: hanya terima entry dekat mean (EMA9);
-    //    entry yang sudah >1.2×ATR dari EMA9 (chasing) ditolak.
-    //  - minEdgeFeeMultiple 5 → 6: reward leg AF wajib ≥6× fee roundtrip
-    //    (TP ≥0.72% taker / ≥0.24% maker) → buang scalp marginal yang fee-nya
-    //    menelan edge.
-    //  - afMinVotes 3 (v2.3): kuorum unanim untuk entry paling selektif.
-    // Gross-positif divalidasi via FEE-06 dry-run sebelum promote ke live.
-    maxEntryExtensionATR: 1.2,
-    minEdgeFeeMultiple:   6,
+    // ── FEE-01/03: pengetatan entry v2.4 ───────────────────────────────────
+    //  - maxEntryExtensionATR 1.2 → 1.0: anti-chase lebih ketat.
+    //  - minEdgeFeeMultiple 6 → 7: edge vs fee lebih selektif.
+    //  - strongTrendTPMult 1.5: TP ×1.5 saat STRONG_TREND (§4.2).
+    maxEntryExtensionATR: 1.0,
+    minEdgeFeeMultiple:   7,
+    strongTrendTPMult:    1.5,
     afMinVotes:           3,
     afRejectOnDissent:    true,
 
@@ -292,8 +282,8 @@ const STRATEGIES = {
 
     signalType:    "ADAPTIVE_FUSION",
 
-    trades:        "3-10 trade/hari",
-    winrate:       "~55-65% (voting filter)",
+    trades:        "2-8 trade/hari",
+    winrate:       "~42-45% (v2.4 target)",
     risk:          "Sedang",
   },
 

@@ -376,15 +376,21 @@ class AdaptiveStrategyEngine extends BotEngine {
         ? this.strategy.getLastSignalMeta()
         : null;
       if (meta && typeof this.strategy.calculateRiskConfig === "function") {
-        const riskCfg = this.strategy.calculateRiskConfig(entryPrice, atr, signal, meta.component);
+        const riskCfg = this.strategy.calculateRiskConfig(entryPrice, atr, signal, meta.component, {
+          marketCond: meta.marketCond,
+          strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
+        });
         signalOptions.slDist = riskCfg.slDistance;
         signalOptions.tpDist = riskCfg.tpDistance;
         indicatorSnapshot.afComponent  = meta.component;
         indicatorSnapshot.afVotes      = meta.votes;
         indicatorSnapshot.afMarketCond = meta.marketCond;
+        const tpMultNote = riskCfg.strongTrendTPApplied
+          ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
+          : "";
         console.log(
           `[${this.config.symbol}] [AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
-          `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+          `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}`
         );
       }
 

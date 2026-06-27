@@ -35,9 +35,9 @@ function uptrendIndicators(lastClose) {
     volSMA: mk(N, 100), // volRatio 2.0 ≥ 1.5 → A volOk
   };
 }
-// v2.3: afMinVotes default kini 3. Tes anti-chase ini menguji sinyal 2-vote
+// v2.4: afMinVotes default 3. Tes anti-chase ini menguji sinyal 2-vote
 // (A+C) yang valid, jadi set afMinVotes:2 eksplisit agar tetap LONG.
-// volatility 1.5 (> LOW_VOL 1.2 v2.3) supaya bukan DEAD_MARKET.
+// volatility 1.5 (> LOW_VOL 1.4 v2.4) supaya bukan DEAD_MARKET.
 const cfg = { balance: 500, volatility: 1.5, trend_strength: 0.5, afMinVotes: 2 };
 
 test("FEE-01 control: entry dekat mean (ekstensi ≤1.5 ATR) → LONG diterima", () => {
@@ -119,9 +119,9 @@ test("FEE-01b: afMinVotes=3 menuntut unanimitas → 2 suara ditolak", () => {
 
 // ── FEE-01: anti-chase + afMinVotes lewat config detectSignal (preset AF) ─────
 
-test("FEE-01: anti-chase lebih ketat (maxEntryExtensionATR 1.2) memblok entry ekstensi 1.4", () => {
-  // close 104.2 → |104.2 - 103.5| / 0.5 = 1.4 > 1.2 → diblok dengan preset ketat
-  const sig = afs.detectSignal(uptrendIndicators(104.2), N, { ...cfg, maxEntryExtensionATR: 1.2 });
+test("FEE-01: anti-chase lebih ketat (maxEntryExtensionATR 1.0) memblok entry ekstensi 1.4", () => {
+  // close 104.2 → |104.2 - 103.5| / 0.5 = 1.4 > 1.0 → diblok dengan preset v2.4
+  const sig = afs.detectSignal(uptrendIndicators(104.2), N, { ...cfg, maxEntryExtensionATR: 1.0 });
   assert.strictEqual(sig, null);
   // sementara dengan default 1.5, ekstensi 1.4 tetap diterima
   const sigDefault = afs.detectSignal(uptrendIndicators(104.2), N, cfg);
@@ -132,6 +132,43 @@ test("FEE-01b: afMinVotes=3 lewat config — entry 2-vote (A+C) ditolak", () => 
   // uptrend hanya memicu A + C (B event-based tidak fire) → 2 suara
   assert.strictEqual(afs.detectSignal(uptrendIndicators(104), N, cfg), "LONG");
   assert.strictEqual(afs.detectSignal(uptrendIndicators(104), N, { ...cfg, afMinVotes: 3 }), null);
+});
+
+// ── v2.4: strongTrendTPMult & DEAD_MARKET boundary ─────────────────────────
+
+test("v2.4: strongTrendTPMult ×1.5 pada STRONG_TREND — TP distance naik, SL tetap", () => {
+  const base = afs.calculateRiskConfig(100, 2, "LONG", "B");
+  const strong = afs.calculateRiskConfig(100, 2, "LONG", "B", {
+    marketCond: "STRONG_TREND",
+    strongTrendTPMult: 1.5,
+  });
+  assert.strictEqual(base.slDistance, strong.slDistance);
+  assert.ok(Math.abs(strong.tpDistance - base.tpDistance * 1.5) < 1e-9);
+  assert.strictEqual(strong.strongTrendTPApplied, true);
+  assert.strictEqual(base.strongTrendTPApplied, false);
+});
+
+test("v2.4: DEAD_MARKET boundary — vol 1.3, trend 0.4 → null", () => {
+  const closes = mk(N, 104);
+  closes[N] = 104;
+  const indicators = {
+    closes,
+    emaFast: mk(N, 103.5),
+    emaSlow: mk(N, 102.5),
+    emaTrend: mk(N, 101.0),
+    rsi: mk(N, 55),
+    atr: mk(N, 0.5),
+    volumes: mk(N, 200),
+    volSMA: mk(N, 100),
+  };
+  indicators.rsi[N - 2] = 53;
+  const sig = afs.detectSignal(indicators, N, {
+    balance: 500,
+    volatility: 1.3,
+    trend_strength: 0.4,
+    afMinVotes: 2,
+  });
+  assert.strictEqual(sig, null);
 });
 
 // ── FEE-02: maker/post-only entry routing + fallback taker ───────────────────

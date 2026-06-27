@@ -178,11 +178,11 @@ console.log("\nTEST 6: Entry Validation");
 console.log("─".repeat(50));
 
 const validationTests = [
-  // P7: floor ATR% naik 0.3 → 0.5 — ATR 300/50000 = 0.6% valid
-  { name: "Valid Entry", price: 50000, atr: 300, vol: 1000, volSMA: 800 },
-  { name: "Low Volume", price: 50000, atr: 300, vol: 100, volSMA: 800 },
+  // v2.4: floor ATR% 0.7 — ATR 350/50000 = 0.7% valid
+  { name: "Valid Entry", price: 50000, atr: 350, vol: 1000, volSMA: 800 },
+  { name: "Low Volume", price: 50000, atr: 350, vol: 100, volSMA: 800 },
   { name: "Dead Market (ATR 0.1%)", price: 50000, atr: 50, vol: 1000, volSMA: 800 },
-  // Regime CSV 11–12 Jun: ATR 0.4% — sekarang harus INVALID
+  // Regime CSV 11–12 Jun: ATR 0.4% — harus INVALID
   { name: "Low Vol ala dry-run Jun 11-12 (ATR 0.4%)", price: 50000, atr: 200, vol: 1000, volSMA: 800 },
 ];
 
@@ -234,8 +234,7 @@ const N = 30; // lastIdx = N
 // Downtrend BTC mirip log nyata: EMA9 < EMA21 < EMA50, price < EMA21, RSI 42.
 // Event pullback-resume: candle N-1 sempat close DI ATAS EMA9 (pullback naik),
 // candle N close kembali di bawah (resume turun) → B SHORT, C SHORT → 2/3.
-// v2.3: volatility 1.5 (> LOW_VOL 1.2, bukan DEAD_MARKET) & afMinVotes:2 (default
-// kini 3 → 2-vote butuh override eksplisit) untuk menguji kuorum 2/3.
+// v2.4: volatility 1.5 (> LOW_VOL 1.4, bukan DEAD_MARKET) & afMinVotes:2.
 {
   const closes = mkSeries(N, 62600);
   closes[N - 1] = 62700;   // pullback ke atas EMA9 (62684)
@@ -258,6 +257,10 @@ const N = 30; // lastIdx = N
   // P7: regime persis seperti CSV 11–12 Jun (vol 0.4, trend 0.05) → DEAD_MARKET → null
   const sigDead = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 0.4, trend_strength: 0.05 });
   tB("DEAD_MARKET (vol 0.4, trend 0.05 ala CSV) — entry diblok", sigDead, null);
+
+  // v2.4 boundary: vol 1.3 ≤ LOW_VOL 1.4 & trend 0.4 < WEAK_TREND 0.55 → DEAD_MARKET
+  const sigBoundary = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.3, trend_strength: 0.4 });
+  tB("DEAD_MARKET boundary v2.4 (vol 1.3, trend 0.4) — entry diblok", sigBoundary, null);
 }
 
 // Uptrend: EMA9 > EMA21 > EMA50, price > EMA21, RSI 57, pullback-resume → LONG
@@ -332,6 +335,32 @@ const N = 30; // lastIdx = N
 
 console.log(`\nComponent B: ${b8pass} passed, ${b8fail} failed`);
 if (b8fail > 0) { console.log("⚠️  Component B tests FAILED"); process.exitCode = 1; }
+
+// ═════════════════════════════════════════════════════════════════════════
+// TEST 9: calculateRiskConfig — strongTrendTPMult (v2.4)
+// ═════════════════════════════════════════════════════════════════════════
+console.log("\nTEST 9: strongTrendTPMult (v2.4)");
+console.log("─".repeat(50));
+
+let t9pass = 0, t9fail = 0;
+const t9 = (name, ok) => {
+  if (ok) { t9pass++; console.log(`  ✅ ${name}`); }
+  else     { t9fail++; console.log(`  ❌ ${name}`); }
+};
+
+{
+  const base = afs.calculateRiskConfig(100, 2, "LONG", "B");
+  const strong = afs.calculateRiskConfig(100, 2, "LONG", "B", {
+    marketCond: "STRONG_TREND",
+    strongTrendTPMult: 1.5,
+  });
+  t9("SL unchanged on STRONG_TREND", base.slDistance === strong.slDistance);
+  t9("TP distance ×1.5", Math.abs(strong.tpDistance - base.tpDistance * 1.5) < 1e-9);
+  t9("strongTrendTPApplied flag", strong.strongTrendTPApplied === true);
+}
+
+console.log(`\nstrongTrendTPMult: ${t9pass} passed, ${t9fail} failed`);
+if (t9fail > 0) { console.log("⚠️  strongTrendTPMult tests FAILED"); process.exitCode = 1; }
 
 // ═════════════════════════════════════════════════════════════════════════
 // SUMMARY

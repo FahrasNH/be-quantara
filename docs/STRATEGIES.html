@@ -325,7 +325,7 @@
   <!-- TOC -->
   <nav class="toc">
     <div class="logo">Quantara Docs</div>
-    <div class="subtitle">Strategi & Parameter v2.3</div>
+    <div class="subtitle">Strategi & Parameter v2.4</div>
     <a href="#ringkasan">Ringkasan Perbandingan</a>
     <a href="#pair-tier">Override Pair Tier</a>
     <a href="#global">Parameter Global</a>
@@ -349,7 +349,7 @@
     <header class="doc-header">
       <h1>Dokumentasi Strategi & Parameter</h1>
       <div class="meta">
-        <span class="badge badge-purple">v2.3 Optimasi Performa</span>
+        <span class="badge badge-purple">v2.4 Optimasi Win Rate & Profit Factor</span>
         <span class="badge badge-green">Pair Tier v2.1</span>
         <span class="badge badge-purple">Juni 2026</span>
       </div>
@@ -376,8 +376,8 @@
             <tr>
               <td><strong>ADAPTIVE_FUSION</strong></td>
               <td>FOUNDRY</td><td class="mono">15m</td><td class="mono">1h</td>
-              <td class="mono">1.0–2.0*</td><td class="mono">2.5–3.0*</td><td class="mono">~1:1.5–2.5</td>
-              <td><strong>1.0%</strong></td><td class="mono">2×</td><td><strong>10</strong></td>
+              <td class="mono">1.1–2.2*</td><td class="mono">2.8–3.3*</td><td class="mono">~1:1.8–2.8</td>
+              <td><strong>0.9%</strong></td><td class="mono">2×</td><td><strong>8</strong></td>
             </tr>
             <tr>
               <td><strong>TREND_MOMENTUM</strong></td>
@@ -467,8 +467,9 @@
             <tr><td><code class="param">feeRate</code></td><td class="mono">0.0006</td><td class="dim">Fee taker per sisi (0.06%)</td></tr>
             <tr><td><code class="param">makerFeeRate</code></td><td class="mono">0.0002</td><td class="dim">Fee maker (0.02%)</td></tr>
             <tr><td><code class="param">entryMode</code></td><td class="mono">taker</td><td class="dim">taker | maker (limit post-only)</td></tr>
-            <tr><td><code class="param">minEdgeFeeMultiple</code></td><td><strong>5</strong> (AF: <strong>6</strong>)</td><td class="dim">Reward leg ≥ N × fee roundtrip</td></tr>
-            <tr><td><code class="param">maxEntryExtensionATR</code></td><td>1.5 (AF: <strong>1.2</strong>)</td><td class="dim">Anti-chase: tolak entry jauh dari EMA9</td></tr>
+            <tr><td><code class="param">minEdgeFeeMultiple</code></td><td><strong>5</strong> (AF: <strong>7</strong>)</td><td class="dim">Reward leg ≥ N × fee roundtrip</td></tr>
+            <tr><td><code class="param">maxEntryExtensionATR</code></td><td>1.5 (AF: <strong>1.0</strong>)</td><td class="dim">Anti-chase: tolak entry jauh dari EMA9</td></tr>
+            <tr><td><code class="param">strongTrendTPMult</code></td><td><strong>1.5</strong> (AF)</td><td class="dim">TP ×1.5 saat STRONG_TREND</td></tr>
             <tr><td><code class="param">afMinVotes</code></td><td><strong>3</strong></td><td class="dim">Kuorum minimum komponen AF searah</td></tr>
             <tr><td><code class="param">afRejectOnDissent</code></td><td class="mono">true</td><td class="dim">Tolak bila komponen berlawanan</td></tr>
           </tbody>
@@ -484,7 +485,7 @@
           <h2>Adaptive Fusion</h2>
           <div class="philosophy">3 sub-strategi (Scalp / Day / Swing) voting — SL/TP mengikuti komponen pemenang</div>
           <div class="tags">
-            <span class="badge badge-purple">v2.3.0</span>
+            <span class="badge badge-purple">v2.4.0</span>
             <span class="badge badge-purple">Tier FOUNDRY+</span>
           </div>
         </div>
@@ -497,14 +498,16 @@
           <tbody>
             <tr><td><code class="param">interval</code></td><td class="mono">15m</td><td class="dim">Entry TF</td></tr>
             <tr><td><code class="param">higherTf</code></td><td class="mono">1h</td><td class="dim">HTF alignment wajib</td></tr>
-            <tr><td><code class="param">riskPerTrade</code></td><td><strong>0.01</strong></td><td class="dim">1% per trade</td></tr>
-            <tr><td><code class="param">maxTradesPerDay</code></td><td>10</td><td></td></tr>
-            <tr><td><code class="param">cooldownAfterLoss</code></td><td><strong>30 menit</strong></td><td></td></tr>
+            <tr><td><code class="param">riskPerTrade</code></td><td><strong>0.009</strong></td><td class="dim">0.9% per trade</td></tr>
+            <tr><td><code class="param">maxTradesPerDay</code></td><td><strong>8</strong></td><td></td></tr>
+            <tr><td><code class="param">cooldownAfterLoss</code></td><td><strong>45 menit</strong></td><td></td></tr>
+            <tr><td><code class="param">maxConsecLoss</code></td><td><strong>2</strong></td><td></td></tr>
             <tr><td><code class="param">leverage</code></td><td class="mono">2×</td><td></td></tr>
-            <tr><td><code class="param">maxEntryExtensionATR</code></td><td><strong>1.2</strong></td><td class="dim">Anti-chasing</td></tr>
-            <tr><td><code class="param">minEdgeFeeMultiple</code></td><td><strong>6</strong></td><td class="dim">Edge vs fee</td></tr>
+            <tr><td><code class="param">maxEntryExtensionATR</code></td><td><strong>1.0</strong></td><td class="dim">Anti-chasing</td></tr>
+            <tr><td><code class="param">minEdgeFeeMultiple</code></td><td><strong>7</strong></td><td class="dim">Edge vs fee</td></tr>
+            <tr><td><code class="param">strongTrendTPMult</code></td><td><strong>1.5</strong></td><td class="dim">TP extension STRONG_TREND</td></tr>
             <tr><td><code class="param">afMinVotes</code></td><td><strong>3</strong></td><td class="dim">Unanim voting</td></tr>
-            <tr><td><code class="param">atrMinMult / atrMaxMult</code></td><td class="mono">0.5 / 4.0</td><td class="dim">Gate ATR 0.5–4.0%</td></tr>
+            <tr><td><code class="param">atrMinMult / atrMaxMult</code></td><td class="mono">0.7 / 3.5</td><td class="dim">Gate ATR 0.7–3.5%</td></tr>
           </tbody>
         </table>
       </div>
@@ -514,9 +517,10 @@
         <table>
           <thead><tr><th>Parameter</th><th>Nilai</th><th>Keterangan</th></tr></thead>
           <tbody>
-            <tr><td><code class="param">LOW_VOL</code></td><td><strong>1.2%</strong> ATR</td><td class="dim">Dead market threshold</td></tr>
-            <tr><td><code class="param">WEAK_TREND</code></td><td><strong>0.45</strong></td><td class="dim">Trend terlalu lemah</td></tr>
-            <tr><td><code class="param">STRONG_TREND</code></td><td class="mono">0.8</td><td></td></tr>
+            <tr><td><code class="param">LOW_VOL</code></td><td><strong>1.4%</strong> ATR</td><td class="dim">Dead market threshold</td></tr>
+            <tr><td><code class="param">WEAK_TREND</code></td><td><strong>0.55</strong></td><td class="dim">Trend terlalu lemah</td></tr>
+            <tr><td><code class="param">NORMAL_TREND</code></td><td><strong>0.65</strong></td><td class="dim">Emerging trend</td></tr>
+            <tr><td><code class="param">STRONG_TREND</code></td><td><strong>0.82</strong></td><td class="dim">Clear trend → TP ×1.5</td></tr>
             <tr><td><code class="param">DEAD_MARKET</code></td><td>—</td><td class="dim"><strong>Blok entry</strong></td></tr>
             <tr><td><code class="param">votingThresholdOverride</code></td><td class="mono">tier-based</td><td class="dim">STABLE 0.60 · SEMI 0.70 · VOLATILE 0.78</td></tr>
           </tbody>
@@ -529,27 +533,27 @@
           <thead>
             <tr>
               <th>Komponen</th><th>HTF</th><th>Entry</th><th>SL×ATR</th><th>TP×ATR</th>
-              <th>RR</th><th>Risk</th><th>Max/hari</th><th>minScore</th>
+              <th>RR</th><th>minScore</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td><strong>A</strong> Scalp</td>
               <td class="mono">15m</td><td class="mono">1m</td>
-              <td class="mono"><strong>2.0</strong></td><td class="mono"><strong>3.0</strong></td>
-              <td class="mono">1:1.5</td><td class="mono">1%</td><td>20</td><td>30</td>
+              <td class="mono"><strong>2.2</strong></td><td class="mono"><strong>3.2</strong></td>
+              <td class="mono">1:1.45</td><td><strong>35</strong></td>
             </tr>
             <tr>
               <td><strong>B</strong> Day</td>
               <td class="mono">1h</td><td class="mono">15m</td>
-              <td class="mono"><strong>1.5</strong></td><td class="mono"><strong>3.0</strong></td>
-              <td class="mono">1:2</td><td class="mono">1.5%</td><td>8</td><td>40</td>
+              <td class="mono"><strong>1.6</strong></td><td class="mono"><strong>3.3</strong></td>
+              <td class="mono">1:2.1</td><td><strong>45</strong></td>
             </tr>
             <tr>
               <td><strong>C</strong> Swing</td>
               <td class="mono">1d</td><td class="mono">4h</td>
-              <td class="mono"><strong>1.0</strong></td><td class="mono"><strong>2.5</strong></td>
-              <td class="mono">1:2.5</td><td class="mono">1.5%</td><td>3</td><td>35</td>
+              <td class="mono"><strong>1.1</strong></td><td class="mono"><strong>2.8</strong></td>
+              <td class="mono">1:2.55</td><td><strong>40</strong></td>
             </tr>
           </tbody>
         </table>
@@ -722,7 +726,7 @@
     </section>
 
     <footer>
-      Terakhir diperbarui: Juni 2026 — Parameter lengkap v2.3 + Pair Tier v2.1 &nbsp;·&nbsp;
+      Terakhir diperbarui: Juni 2026 — Parameter lengkap v2.4 + Pair Tier v2.1 &nbsp;·&nbsp;
       Sumber: <code class="param">legacyStrategies.js</code> → <code class="param">BotEngine.js</code> → <code class="param">strategy/implementations/</code>
     </footer>
 
