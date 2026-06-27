@@ -185,5 +185,17 @@ test("GrokConfirmPromptBuilder — lite prompt fields", () => {
   if (!built.text.includes("confirm_entry")) throw new Error("missing task");
 });
 
+test("canUseGrokConfirm — userId kosong tidak throw (regresi 500 production)", async () => {
+  const GrokConfirmService = require("../src/server/services/GrokConfirmService");
+  let threw = false;
+  try {
+    const r = await GrokConfirmService.canUseGrokConfirm(undefined, { backtest: true });
+    if (r.allowed === true) throw new Error("should not allow without userId");
+  } catch {
+    threw = true;
+  }
+  if (threw) throw new Error("canUseGrokConfirm must not throw when userId missing");
+});
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 if (fail > 0) process.exitCode = 1;

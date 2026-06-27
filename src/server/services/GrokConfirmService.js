@@ -65,6 +65,9 @@ class GrokConfirmService {
       }
       return { allowed: false, reason: "Grok Confirm belum diaktifkan — set GROK_CONFIRM_ENABLED=true" };
     }
+    if (!userId) {
+      return { allowed: false, reason: "Unauthorized — userId tidak ditemukan" };
+    }
     if (cfg.GROK_CONFIRM_OPEN === true || !cfg.isProduction) {
       return { allowed: true, reason: "dev/open mode" };
     }

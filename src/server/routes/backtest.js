@@ -918,7 +918,10 @@ module.exports = function createBacktestRouter(context) {
    * Batch Grok Confirm Gate untuk backtest — 1 call per sinyal rules.
    */
   router.post("/grok-confirm", asyncHandler(async (req, res) => {
-    const userId = req.user?.id;
+    const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ ok: false, message: "Unauthorized" });
+    }
     const access = await GrokConfirmService.canUseGrokConfirm(userId, { backtest: true });
     if (!access.allowed) {
       return res.status(403).json({ ok: false, message: access.reason });
