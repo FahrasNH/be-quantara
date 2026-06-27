@@ -11,6 +11,7 @@ const BacktestCsvService = require("../services/BacktestCsvService");
 const HistoricalKlinesService = require("../services/HistoricalKlinesService");
 const ReportGeneratorService = require("../services/ReportGeneratorService");
 const OptimizationAnalysisService = require("../services/OptimizationAnalysisService");
+const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 
 const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
@@ -72,6 +73,61 @@ function normalizeMetrics(stats) {
     max_drawdown_pct: parseFloat(stats.maxDrawdown) || 0,
     profit_factor: parseFloat(stats.profitFactor) || 0,
   };
+}
+
+/** Phase 3 — simplified server-side backtest using shared simulator.js */
+function runSimpleServerBacktest(candles, strategyKey, parameters = {}, options = {}) {
+  const strat = STRATEGIES[strategyKey] || STRATEGIES.MEAN_REVERSION;
+  const atrMult = (parameters.atrMult ?? strat.atrMultiplier ?? 1.4) * (parameters.slMultiplier ?? 1);
+  const riskReward = parameters.riskReward ?? strat.riskReward ?? 2;
+  const capital0 = parameters.capital ?? 500;
+  const riskPerTrade = parameters.riskPerTrade ?? strat.riskPerTrade ?? 0.01;
+  const feeRate = options.enableFees === false ? 0 : 0.0006;
+  const slippageRate = options.enableSlippage ? 0.0005 : 0;
+
+  let capital = capital0;
+  const trades = [];
+  const equity = [{ date: candles[0]?.date, value: capital }];
+
+  for (let i = 30; i < candles.length - 5; i++) {
+    const c = candles[i];
+    const prev = candles[i - 1];
+    const atr = Math.max(c.high - c.low, (c.close - prev.close) ** 2) * 0.5 || c.close * 0.01;
+    const side = c.close > prev.close ? "LONG" : "SHORT";
+    const slDist = atr * atrMult;
+    const entry = c.close;
+    const sl = side === "LONG" ? entry - slDist : entry + slDist;
+    const tp = side === "LONG" ? entry + slDist * riskReward : entry - slDist * riskReward;
+    const risk = capital * riskPerTrade;
+    const size = risk / slDist;
+
+    const raw = simulateTrade(candles.slice(i), 0, side, { stopLoss: sl, takeProfit: tp });
+    const t = applyTradingCosts(raw, { feeRate, slippageRate });
+    const pnl = t.pnl * size;
+    capital += pnl;
+    trades.push({
+      date: candles[Math.min(i + raw.exitBar, candles.length - 1)]?.date,
+      side,
+      entry,
+      exit: t.exit,
+      pnl,
+      reason: t.reason,
+    });
+    equity.push({ date: candles[i].date, value: Math.round(capital * 100) / 100 });
+    i += Math.max(1, raw.exitBar);
+  }
+
+  const wins = trades.filter(t => t.pnl > 0).length;
+  const stats = {
+    totalTrades: trades.length,
+    winRate: trades.length ? ((wins / trades.length) * 100).toFixed(1) : "0.0",
+    totalReturn: (((capital - capital0) / capital0) * 100).toFixed(2),
+    finalCapital: capital.toFixed(2),
+    wins,
+    losses: trades.length - wins,
+  };
+
+  return { trades, equity, stats, strategyKey, parameters };
 }
 
 module.exports = function createBacktestRouter(context) {
@@ -667,6 +723,38 @@ module.exports = function createBacktestRouter(context) {
     res.json({
       ok: true,
       data: analysis,
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/run-server
+   * Phase 3 foundation — simplified server-side backtest (scripts/lib/simulator.js).
+   * Bukan replika BotEngine penuh; untuk validasi silang & future migration.
+   */
+  router.post("/run-server", asyncHandler(async (req, res) => {
+    const { candles, strategyKey = "MEAN_REVERSION", parameters = {}, options = {} } = req.body;
+    if (!Array.isArray(candles) || candles.length < 50) {
+      return res.status(400).json({ ok: false, error: "Minimal 50 candles diperlukan" });
+    }
+    const normalized = candles.map(c => ({
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+      volume: Number(c.volume ?? 0),
+      date: c.date,
+      timestamp: c.timestamp,
+    }));
+    const result = runSimpleServerBacktest(
+      normalized,
+      String(strategyKey).toUpperCase(),
+      parameters,
+      options,
+    );
+    res.json({
+      ok: true,
+      ...result,
+      note: "Server-side simplified simulator — bukan BotEngine penuh (Phase 3 foundation)",
     });
   }));
 
