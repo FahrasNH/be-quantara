@@ -208,6 +208,22 @@ module.exports = function createBacktestRouter(context) {
   }));
 
   /**
+   * DELETE /api/v1/backtest/strategies/presets/:id
+   * Hapus preset milik user yang login
+   */
+  router.delete("/strategies/presets/:id", asyncHandler(async (req, res) => {
+    const presetId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(presetId) || presetId <= 0) {
+      return res.status(400).json({ ok: false, error: "ID preset tidak valid" });
+    }
+    const deleted = await BacktestHistoryService.deletePreset(req.userId, presetId);
+    if (!deleted) {
+      return res.status(404).json({ ok: false, error: "Preset tidak ditemukan" });
+    }
+    res.json({ ok: true });
+  }));
+
+  /**
    * GET /api/v1/backtest/data-source
    * Status exchange terhubung untuk backtest real
    */

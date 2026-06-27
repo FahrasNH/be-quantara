@@ -1548,6 +1548,14 @@ async function getStrategyPresets(userId) {
   }));
 }
 
+async function deleteStrategyPreset({ userId, presetId }) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM strategy_presets WHERE id = $1 AND user_id = $2`,
+    [presetId, userId]
+  );
+  return rowCount > 0;
+}
+
 function mapBacktestRow(row) {
   return {
     ...row,
@@ -1717,6 +1725,7 @@ module.exports = {
   deleteBacktestHistoryByIds,
   insertStrategyPreset,
   getStrategyPresets,
+  deleteStrategyPreset,
   // meta
   getDbPath,
   _pool: pool,

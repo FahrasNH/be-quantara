@@ -171,6 +171,15 @@ class BacktestHistoryService {
     }
   }
 
+  static async deletePreset(userId, presetId) {
+    try {
+      return await db.deleteStrategyPreset({ userId, presetId });
+    } catch (err) {
+      console.error(`[BacktestHistory] Error deleting preset: ${err.message}`);
+      throw err;
+    }
+  }
+
   /**
    * Bandingkan dua backtest runs
    * @param {number} id1 - First backtest ID
