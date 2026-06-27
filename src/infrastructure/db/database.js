@@ -1418,8 +1418,7 @@ async function upsertBacktestHistory({
        data_start = EXCLUDED.data_start,
        data_end = EXCLUDED.data_end,
        engine_version = EXCLUDED.engine_version,
-       updated_at = now(),
-       hit_count = COALESCE(backtest_history.hit_count, 0) + 1
+       updated_at = now()
      RETURNING id`,
     [
       symbol.toUpperCase(),

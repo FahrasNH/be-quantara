@@ -362,7 +362,6 @@ module.exports = function createBacktestRouter(context) {
       });
       const existing = await db.findBacktestByCanonicalKey(canonicalKey);
       if (existing) {
-        await db.incrementBacktestHitCount(existing.id);
         return res.json({
           ok: true,
           id: existing.id,

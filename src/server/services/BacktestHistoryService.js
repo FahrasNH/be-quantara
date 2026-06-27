@@ -243,15 +243,32 @@ class BacktestHistoryService {
       enableFees, enableSlippage, exchange, dataSource, periodLabel,
     });
 
-    const reqStartMs = Date.parse(requestedStart);
-    const reqEndMs = Date.parse(requestedEnd);
-    if (!Number.isFinite(reqStartMs) || !Number.isFinite(reqEndMs)) {
-      const err = new Error("requested_start dan requested_end diperlukan (ISO date)");
-      err.statusCode = 400;
-      throw err;
-    }
+    const reqStartMs = requestedStart ? Date.parse(requestedStart) : NaN;
+    const reqEndMs = requestedEnd ? Date.parse(requestedEnd) : NaN;
+    const hasDates = Number.isFinite(reqStartMs) && Number.isFinite(reqEndMs);
 
     const record = await db.findBacktestByCanonicalKey(canonicalKey);
+
+    if (!hasDates) {
+      if (!record?.canonical_key) {
+        return { action: "miss", canonicalKey, id: null };
+      }
+      if (record.engine_version && record.engine_version !== ENGINE_VERSION) {
+        return { action: "miss", canonicalKey, id: null };
+      }
+      return {
+        action: "reused",
+        canonicalKey,
+        id: record.id,
+        metrics: record.metrics,
+        trades: record.trades_data,
+        equity_curve: record.equity_curve,
+        dataStart: record.data_start,
+        dataEnd: record.data_end,
+        hitCount: record.hit_count ?? 1,
+      };
+    }
+
     const action = resolveAction(record, reqStartMs, reqEndMs);
 
     if (action === "miss") {
@@ -268,8 +285,6 @@ class BacktestHistoryService {
       };
     }
 
-    await db.incrementBacktestHitCount(record.id);
-
     if (action === "subset") {
       const filtered = filterSubset(record, reqStartMs, reqEndMs);
       return {
@@ -281,7 +296,7 @@ class BacktestHistoryService {
         equity_curve: filtered.equity,
         dataStart: record.data_start,
         dataEnd: record.data_end,
-        hitCount: (record.hit_count ?? 1) + 1,
+        hitCount: record.hit_count ?? 1,
       };
     }
 
@@ -294,7 +309,7 @@ class BacktestHistoryService {
       equity_curve: record.equity_curve,
       dataStart: record.data_start,
       dataEnd: record.data_end,
-      hitCount: (record.hit_count ?? 1) + 1,
+      hitCount: record.hit_count ?? 1,
     };
   }
 
@@ -329,14 +344,12 @@ class BacktestHistoryService {
     const existing = await db.findBacktestByCanonicalKey(canonicalKey);
 
     if (action === "reused" && existing) {
-      await db.incrementBacktestHitCount(existing.id);
       return existing.id;
     }
 
     if (existing && action !== "extend" && dataStart && dataEnd) {
       const resolved = resolveAction(existing, Date.parse(dataStart), Date.parse(dataEnd));
       if (resolved === "reused") {
-        await db.incrementBacktestHitCount(existing.id);
         return existing.id;
       }
     }
