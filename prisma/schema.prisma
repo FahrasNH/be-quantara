@@ -114,6 +114,12 @@ model Bot {
   // "partial" → partial close di +1R/+2R + SL geser ke BEP/+1R (risiko lebih rendah)
   tpMode String @default("full")
 
+  // ── Grok Confirm Gate (Mode B — AF/TM/MR/BR) ─────────────────────────────
+  grokConfirmEnabled        Boolean @default(false)
+  grokConfirmTpAdjust       Boolean @default(true)
+  grokConfirmTpBandPct      Float   @default(15)
+  grokConfirmTpRejectAction String  @default("skip")
+
   running   Boolean   @default(false)
   startedAt DateTime?
   stoppedAt DateTime?
@@ -178,6 +184,23 @@ model BotLog {
 
   @@index([botId])
   @@index([level])
+}
+
+model AiTradeInteraction {
+  id        String   @id @default(uuid())
+  userId    String
+  botId     String?
+  symbol    String
+  type      String
+  prompt    String   @db.Text
+  response  String   @db.Text
+  parsed    Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([botId])
+  @@index([symbol])
+  @@index([createdAt])
 }
 
 model AuditLog {

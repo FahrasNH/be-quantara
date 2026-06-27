@@ -272,6 +272,9 @@ const STRATEGIES = {
     interval:      "15m",
     checkInterval: 60000,
 
+    grokConfirmMinEntry: 8,
+    grokConfirmMinTp:    7,
+
     signalType:    "ADAPTIVE_FUSION",
 
     trades:        "2-6 trade/hari",
@@ -336,6 +339,9 @@ const STRATEGIES = {
     interval:      "5m",
     checkInterval: 60000,
 
+    grokConfirmMinEntry: 7,
+    grokConfirmMinTp:    7,
+
     signalType:    "TREND_MOMENTUM",
 
     trades:        "8-15 trade/hari",
@@ -392,6 +398,9 @@ const STRATEGIES = {
     interval:      "15m",
     checkInterval: 60000,
 
+    grokConfirmMinEntry: 8,
+    grokConfirmMinTp:    7,
+
     signalType:    "MEAN_REVERSION",
 
     trades:        "5-15 trade/minggu",
@@ -445,11 +454,68 @@ const STRATEGIES = {
     interval:      "15m",
     checkInterval: 900000,
 
+    grokConfirmMinEntry: 8,
+    grokConfirmMinTp:    8,
+
     signalType:    "BREAKOUT_RETEST",
 
     trades:        "2-7 trade/hari",
     winrate:       "~51-56%",
     risk:          "Sedang-Tinggi",
+  },
+
+  // ─────────────────────────────────────────────
+  // GROK_AI_TRADING — Grok (xAI) Live Trading
+  // ─────────────────────────────────────────────
+  GROK_AI_TRADING: {
+    name:          "GROK_AI_TRADING",
+    label:         "Grok AI Trading",
+    description:   "Entry, confidence, TP/SL ditentukan Grok (xAI) dari data multi-TF.",
+
+    emaFast:       20,
+    emaSlow:       50,
+    emaTrend:      0,
+
+    rsiPeriod:     14,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    50,
+    rsiLongMax:    70,
+    rsiShortMin:   30,
+    rsiShortMax:   50,
+
+    atrPeriod:     14,
+    atrMultiplier: 1.0,
+    riskReward:    1.2,
+    atrMinMult:    1.0,
+    atrMaxMult:    5.0,
+
+    higherTf:      "1h",
+    htfEmaFast:    20,
+    htfEmaSlow:    50,
+    sidewaysThresholdPct: 0.2,
+
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:        0.01,
+    maxDailyLossPct:     0.05,
+    maxTradesPerDay:     20,
+    cooldownAfterLoss:   30,
+    maxConsecLoss:       3,
+
+    minConfidenceEntry:  8,
+    minConfidenceTpSl: 7,
+    minRiskReward:       1.2,
+
+    leverage:      2,
+    interval:      "15m",
+    checkInterval: 600_000,
+
+    signalType:    "GROK_AI_TRADING",
+
+    trades:        "~144 eval/hari (10m cycle)",
+    winrate:       "N/A (AI-driven)",
+    risk:          "Sedang",
   },
 };
 

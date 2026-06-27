@@ -86,6 +86,24 @@ async function getUserTier(userId) {
  * @throws {{ status: number, body: object }}
  */
 async function assertStrategyAllowed(userId, strategyKey) {
+  if (strategyKey === "GROK_AI_TRADING") {
+    const GrokTradingService = require("../server/services/GrokTradingService");
+    const access = await GrokTradingService.canUseGrokTrading(userId);
+    if (!access.allowed) {
+      throw {
+        status: 403,
+        body: {
+          ok: false,
+          statusCode: 403,
+          message: access.reason || "Grok Live Trading tidak tersedia untuk tier kamu.",
+          tier: access.tier ?? null,
+          requiredTier: "VAULT",
+        },
+      };
+    }
+    return getUserTier(userId);
+  }
+
   const tier = await getUserTier(userId);
   const result = canUseStrategy(tier, strategyKey);
 
@@ -132,7 +150,20 @@ async function getStrategyEntitlements(userId) {
     }
   }
 
-  return { tier, allowed, locked };
+  // Grok AI Trading — tier gate terpisah (VAULT / open mode)
+  const grokExtras = [];
+  try {
+    const GrokTradingService = require("../server/services/GrokTradingService");
+    const access = await GrokTradingService.canUseGrokTrading(userId);
+    if (access.allowed) grokExtras.push("GROK_AI_TRADING");
+    else if (!locked.find(l => l.key === "GROK_AI_TRADING")) {
+      locked.push({ key: "GROK_AI_TRADING", requiredTier: "VAULT" });
+    }
+  } catch { /* ignore */ }
+
+  const allowedWithGrok = [...allowed, ...grokExtras.filter(k => !allowed.includes(k))];
+
+  return { tier, allowed: allowedWithGrok, locked };
 }
 
 /**

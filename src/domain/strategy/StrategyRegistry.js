@@ -11,6 +11,7 @@ const AdaptiveFusionStrategy  = require("./implementations/AdaptiveFusionStrateg
 const TrendMomentumStrategy   = require("./implementations/TrendMomentumStrategy");
 const MeanReversionStrategy   = require("./implementations/MeanReversionStrategy");
 const BreakoutRetestStrategy  = require("./implementations/BreakoutRetestStrategy");
+const GrokAiTradingStrategy   = require("./implementations/GrokAiTradingStrategy");
 
 class StrategyRegistry {
   constructor() {
@@ -25,6 +26,7 @@ class StrategyRegistry {
     this.register("TREND_MOMENTUM",   new TrendMomentumStrategy());
     this.register("MEAN_REVERSION",   new MeanReversionStrategy());
     this.register("BREAKOUT_RETEST",  new BreakoutRetestStrategy());
+    this.register("GROK_AI_TRADING",  new GrokAiTradingStrategy());
     this.defaultKey = "ADAPTIVE_FUSION";
   }
 

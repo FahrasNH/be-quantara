@@ -826,6 +826,10 @@ async function _resumeOneBotAttempt(bot, prisma) {
       exchangeType,
       apiKey, apiSecret, passphrase,
       maxAccountOpenPositions: accountOpenCap,
+      grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+      grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+      grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+      grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
     });
     console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
   }

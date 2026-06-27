@@ -52,6 +52,29 @@ const cfg = {
   // Izinkan AI optimizer tanpa tier VAULT (dev/staging)
   XAI_OPTIMIZER_OPEN:     process.env.XAI_OPTIMIZER_OPEN === "true",
 
+  // ── Grok AI Live Trading ────────────────────────────────────────────────────
+  GROK_TRADING_ENABLED:            process.env.GROK_TRADING_ENABLED === "true",
+  GROK_TRADING_MIN_CONFIDENCE_ENTRY: parseInt(process.env.GROK_TRADING_MIN_CONFIDENCE_ENTRY, 10) || 8,
+  GROK_TRADING_MIN_CONFIDENCE_TP_SL: parseInt(process.env.GROK_TRADING_MIN_CONFIDENCE_TP_SL, 10) || 7,
+  GROK_TRADING_MAX_TOKENS:         parseInt(process.env.GROK_TRADING_MAX_TOKENS, 10) || 2000,
+  GROK_TRADING_TEMPERATURE:        parseFloat(process.env.GROK_TRADING_TEMPERATURE) || 0.3,
+  GROK_TRADING_CYCLE_MS:           parseInt(process.env.GROK_TRADING_CYCLE_MS, 10) || 600_000,
+  GROK_TRADING_DRY_RUN:            process.env.GROK_TRADING_DRY_RUN !== "false",
+  GROK_TRADING_LOG_INTERACTIONS:   process.env.GROK_TRADING_LOG_INTERACTIONS !== "false",
+  // Izinkan Grok live trading tanpa tier VAULT (dev/staging)
+  GROK_TRADING_OPEN:               process.env.GROK_TRADING_OPEN === "true",
+
+  // ── Grok Confirm Gate + TP Adjust (Mode B — AF/TM/MR/BR) ─────────────────
+  GROK_CONFIRM_ENABLED:              process.env.GROK_CONFIRM_ENABLED === "true",
+  GROK_CONFIRM_MIN_CONFIDENCE_ENTRY: parseInt(process.env.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY, 10) || 8,
+  GROK_CONFIRM_MIN_TP_CONFIDENCE:    parseInt(process.env.GROK_CONFIRM_MIN_TP_CONFIDENCE, 10) || 7,
+  GROK_CONFIRM_TP_ADJUST_BAND_PCT:   parseFloat(process.env.GROK_CONFIRM_TP_ADJUST_BAND_PCT) || 15,
+  GROK_CONFIRM_TP_MAX_ATR_MULT:      parseFloat(process.env.GROK_CONFIRM_TP_MAX_ATR_MULT) || 0.5,
+  GROK_CONFIRM_TP_REJECT_ACTION:     process.env.GROK_CONFIRM_TP_REJECT_ACTION || "skip",
+  GROK_CONFIRM_FAIL_MODE:            process.env.GROK_CONFIRM_FAIL_MODE || "closed",
+  GROK_CONFIRM_PROMPT_LITE:          process.env.GROK_CONFIRM_PROMPT_LITE !== "false",
+  GROK_CONFIRM_OPEN:                 process.env.GROK_CONFIRM_OPEN === "true",
+
   // ── Midtrans payment gateway (Sprint 5 / PAY-01) ────────────────────────────
   // Get Server Key & Client Key from the Midtrans dashboard
   //   (Settings → Access Keys). Use the SANDBOX keys on staging.

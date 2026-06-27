@@ -18,6 +18,15 @@ const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
+const GrokTradingService = require("../server/services/GrokTradingService");
+const GrokConfirmService = require("../server/services/GrokConfirmService");
+
+const GROK_CONFIRM_STRATEGIES = new Set([
+  "ADAPTIVE_FUSION",
+  "TREND_MOMENTUM",
+  "MEAN_REVERSION",
+  "BREAKOUT_RETEST",
+]);
 
 // ── Price formatter for logs ─────────────────────────────────────────────────
 // Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
@@ -179,6 +188,19 @@ class BotEngine extends EventEmitter {
       strategyKey:   strat.name,
       strategyLabel: strat.label,
       signalType:    strat.signalType,
+
+      // ── Grok AI Live Trading ───────────────────────────────────────────────
+      minConfidenceEntry: strat.minConfidenceEntry ?? cfg.GROK_TRADING_MIN_CONFIDENCE_ENTRY,
+      minConfidenceTpSl:  strat.minConfidenceTpSl  ?? cfg.GROK_TRADING_MIN_CONFIDENCE_TP_SL,
+      minRiskReward:      strat.minRiskReward      ?? 1.2,
+
+      // ── Grok Confirm Gate (Mode B) ─────────────────────────────────────────
+      grokConfirmEnabled:        false,
+      grokConfirmTpAdjust:       true,
+      grokConfirmTpBandPct:      cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT,
+      grokConfirmTpRejectAction: cfg.GROK_CONFIRM_TP_REJECT_ACTION,
+      grokConfirmMinEntry:       strat.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY,
+      grokConfirmMinTp:          strat.grokConfirmMinTp    ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE,
 
       // ── HTF trend filter ──────────────────────────────────────────────────
       higherTf:             strat.higherTf             || null,
@@ -537,6 +559,12 @@ class BotEngine extends EventEmitter {
         interval:      this.config.interval,
         checkInterval: this.config.checkInterval,
         higherTf:      this.config.higherTf,
+        grokConfirmEnabled:        this.config.grokConfirmEnabled ?? false,
+        grokConfirmTpAdjust:       this.config.grokConfirmTpAdjust ?? true,
+        grokConfirmTpBandPct:      this.config.grokConfirmTpBandPct,
+        grokConfirmTpRejectAction: this.config.grokConfirmTpRejectAction,
+        minConfidenceEntry:        this.config.minConfidenceEntry,
+        minConfidenceTpSl:         this.config.minConfidenceTpSl,
       },
     };
   }
@@ -1172,7 +1200,9 @@ class BotEngine extends EventEmitter {
         this.config.coordinator.reportRisk(botKey, { realizedLoss: this.state.dailyLoss, floatingLoss });
       }
 
-      if (this.state.openPositions.length < this.config.maxPositions) {
+      if (this.config.strategyKey === "GROK_AI_TRADING") {
+        await this._tickGrokAi(price, indicators, lastIdx, htfCandlesCache);
+      } else if (this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
         const gate = this._checkRiskGates(atr, price);
         if (!gate.ok) {
@@ -1352,6 +1382,23 @@ class BotEngine extends EventEmitter {
                 );
               }
 
+              if (signalOptions.slDist == null) {
+                signalOptions.slDist = atr * this.config.atrMultiplier;
+              }
+              if (signalOptions.tpDist == null) {
+                signalOptions.tpDist = signalOptions.slDist * this.config.riskReward;
+              }
+
+              const grokGate = await this._applyGrokConfirmGate(
+                filteredSignal, price, atr, indicatorSnapshot, signalOptions
+              );
+              if (!grokGate.signal) {
+                filteredSignal = null;
+              } else {
+                filteredSignal = grokGate.signal;
+                signalOptions = grokGate.signalOptions;
+              }
+
               // ── Idempotency guard (FIX-3) ───────────────────────────────────
               // Cegah dua posisi terbuka untuk sinyal yang sama bila tick/candle
               // diproses dua kali (mis. polling overlap atau WS reconnect).
@@ -1502,6 +1549,368 @@ class BotEngine extends EventEmitter {
     } catch {
       return null;
     }
+  }
+
+  /** Multi-TF candles untuk Grok AI prompt builder. */
+  async _fetchMultiTfCandles(timeframes = ["1m", "5m", "15m", "30m", "1h", "4h"]) {
+    const out = {};
+    await Promise.all(
+      timeframes.map(async (tf) => {
+        try {
+          const candles = await fetchCandlesWithCache(this.client, {
+            exchange:        this.config.exchange,
+            symbol:          this.config.symbol,
+            interval:        tf,
+            limit:           200,
+            cacheTtlSeconds: tf === "1m" || tf === "5m" ? LTF_CACHE_TTL : HTF_CACHE_TTL,
+            minBars:         30,
+          });
+          if (candles?.length) out[tf] = candles;
+        } catch { /* skip TF */ }
+      })
+    );
+    return out;
+  }
+
+  /**
+   * Siklus Grok AI — evaluasi posisi terbuka + entry baru dengan TP/SL eksplisit.
+   */
+  async _tickGrokAi(price, indicators, lastIdx, htfCandlesCache) {
+    const cycleMs = cfg.GROK_TRADING_CYCLE_MS;
+    const now = Date.now();
+    if (this._lastGrokCallAt && now - this._lastGrokCallAt < cycleMs) {
+      return;
+    }
+
+    const atr = indicators.atr[lastIdx];
+    const gate = this._checkRiskGates(atr, price);
+
+    let multiTfCandles = {};
+    try {
+      multiTfCandles = await this._fetchMultiTfCandles(["1m", "5m", "15m", "30m", "1h", "4h"]);
+    } catch (err) {
+      this._log("warn", `[GROK] Gagal fetch multi-TF: ${err.message}`);
+    }
+
+    const grokCtx = {
+      symbol: this.config.symbol,
+      price,
+      indicators,
+      lastIdx,
+      multiTfCandles,
+      htfCandles: htfCandlesCache,
+      minConfidenceEntry: this.config.minConfidenceEntry ?? cfg.GROK_TRADING_MIN_CONFIDENCE_ENTRY,
+      minConfidenceTpSl:  this.config.minConfidenceTpSl  ?? cfg.GROK_TRADING_MIN_CONFIDENCE_TP_SL,
+      atrMinMult:         this.config.atrMinMult ?? 1.0,
+      minRiskReward:      this.config.minRiskReward ?? 1.2,
+      atr,
+      leverage:           this.config.leverage,
+      riskPerTrade:       this.config.riskPerTrade,
+      maxConcurrentPositions: this.config.maxPositions,
+      account: {
+        balance: this.state.capital,
+        openPositions: this.state.openPositions.map(p => ({
+          side: p.side, entry: p.entry, sl: p.sl, tp: p.tp,
+        })),
+        unrealizedPnl: this.state.openPositions.reduce((s, p) => s + (p.unrealizedPL || 0), 0),
+      },
+      hasOpenPosition: this.state.openPositions.length > 0,
+      botId: this.config.botId,
+      userId: this.config.userId,
+    };
+
+    this._lastGrokCallAt = now;
+
+    if (this.state.openPositions.length > 0) {
+      const pos = this.state.openPositions[0];
+      try {
+        const action = await GrokTradingService.requestPositionAction({ ...grokCtx, position: pos });
+        if (action?.action === "CLOSE") {
+          this._log("trade", `[GROK] Tutup posisi — ${action.reasoning || "AI decision"}`);
+          await this._closePosition("GROK_AI_DECISION", price);
+          return;
+        }
+      } catch (err) {
+        this._log("error", `[GROK] Evaluasi posisi gagal: ${err.message}`);
+      }
+    }
+
+    if (this.state.openPositions.length >= this.config.maxPositions) return;
+    if (!gate.ok) {
+      if (this._shouldLogDecision()) {
+        this._log("info", `[GROK] Belum entry — ${gate.reason}`);
+      }
+      return;
+    }
+
+    try {
+      const decision = await GrokTradingService.requestTradeDecision(grokCtx);
+      if (!decision || !decision.valid) {
+        if (decision?.rejected) {
+          this._log("info", `[GROK] Sinyal ditolak — ${decision.rejected}`);
+        }
+        return;
+      }
+
+      if (!decision.entryAllowed) {
+        this._log("info",
+          `[GROK] TP/SL valid (conf ${decision.confidence}) — entry ditolak, perlu conf >= ${grokCtx.minConfidenceEntry}`
+        );
+        return;
+      }
+
+      const logLine =
+        `[GROK] ${decision.side} ${this.config.symbol} | conf ${decision.confidence}/10 | ` +
+        `TP ${decision.take_profit} | SL ${decision.stop_loss}` +
+        (decision.reasoning ? ` | ${decision.reasoning}` : "");
+      this._log("trade", logLine);
+
+      const grokDryRun = this.config.dryRun || cfg.GROK_TRADING_DRY_RUN;
+      if (grokDryRun) {
+        this._log("info",
+          `[GROK DRY-RUN] ${decision.side} conf=${decision.confidence} TP=${decision.take_profit} SL=${decision.stop_loss}`
+        );
+        return;
+      }
+
+      await this._openPositionWithExplicitTpSl(decision, price, atr);
+    } catch (err) {
+      this._log("error", `[GROK] Request trade gagal: ${err.message}`);
+    }
+  }
+
+  /**
+   * Buka posisi dengan TP/SL absolut dari respons Grok (bukan ATR×RR default).
+   */
+  async _openPositionWithExplicitTpSl(decision, price, atr) {
+    const { side, take_profit, stop_loss, confidence, reasoning } = decision;
+    const slDist = Math.abs(price - stop_loss);
+    const tpDist = Math.abs(take_profit - price);
+
+    const indicatorSnapshot = {
+      source: "GROK_AI",
+      confidence,
+      reasoning,
+      grokTp: take_profit,
+      grokSl: stop_loss,
+      htfTrend: this.state.htfTrend ?? null,
+      strategy: this.config.strategyKey,
+      atr: atr != null ? parseFloat(Number(atr).toFixed(4)) : null,
+    };
+
+    await this._handleSignal(side, price, atr, indicatorSnapshot, { slDist, tpDist });
+  }
+
+  /**
+   * Mode B — Grok Confirm Gate: konfirmasi entry + optional TP adjust (SL tetap rules).
+   * @returns {{ signal: string|null, signalOptions: object }}
+   */
+  async _applyGrokConfirmGate(signal, price, atr, indicatorSnapshot, signalOptions) {
+    const noop = { signal, signalOptions };
+
+    if (
+      !signal ||
+      !cfg.GROK_CONFIRM_ENABLED ||
+      !this.config.grokConfirmEnabled ||
+      this.config.strategyKey === "GROK_AI_TRADING" ||
+      !GROK_CONFIRM_STRATEGIES.has(this.config.strategyKey)
+    ) {
+      return noop;
+    }
+
+    const slDist = signalOptions.slDist;
+    const tpDist = signalOptions.tpDist;
+    const slPrice = signal === "LONG" ? price - slDist : price + slDist;
+    const tpRules = signal === "LONG" ? price + tpDist : price - tpDist;
+
+    let signalReason = "";
+    if (indicatorSnapshot.afComponent) {
+      signalReason =
+        `Component ${indicatorSnapshot.afComponent}, votes ${JSON.stringify(indicatorSnapshot.afVotes ?? {})}, ` +
+        `marketCond ${indicatorSnapshot.afMarketCond ?? "N/A"}`;
+    }
+
+    try {
+      const confirm = await GrokConfirmService.requestConfirmation({
+        symbol: this.config.symbol,
+        strategyKey: this.config.strategyKey,
+        side: signal,
+        price,
+        atr,
+        sl_rules: slPrice,
+        tp_rules: tpRules,
+        indicatorSnapshot,
+        htfTrend: this.state.htfTrend,
+        signalReason,
+        minConfidenceEntry: this.config.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY,
+        minTpConfidence: this.config.grokConfirmMinTp ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE,
+        userId: this.config.userId,
+        botId: this.config.botId,
+      });
+
+      if (confirm.failOpen) {
+        this._log("warn", `[GROK CONFIRM] API error — fail-open, lanjut dengan SL/TP rules`);
+        return noop;
+      }
+
+      if (!confirm?.confirm_entry) {
+        this._log("info",
+          `[GROK CONFIRM] REJECT entry — conf ${confirm?.confidence ?? 0}/10` +
+          (confirm?.reasoning ? ` | ${confirm.reasoning}` : "")
+        );
+        return { signal: null, signalOptions };
+      }
+
+      const tpRejectAction = this.config.grokConfirmTpRejectAction ?? cfg.GROK_CONFIRM_TP_REJECT_ACTION;
+
+      if (!confirm.tp_approved && tpRejectAction === "skip") {
+        this._log("info",
+          `[GROK CONFIRM] REJECT TP — ${confirm.tp_reasoning || "not approved"}`
+        );
+        return { signal: null, signalOptions };
+      }
+
+      let finalTp = tpRules;
+      const useGrokTp = this.config.grokConfirmTpAdjust !== false &&
+        confirm.tp_approved &&
+        confirm.suggested_tp != null &&
+        Number.isFinite(confirm.suggested_tp);
+
+      if (useGrokTp) {
+        finalTp = GrokConfirmService.resolveTakeProfit({
+          tpRules,
+          suggestedTp: confirm.suggested_tp,
+          side: signal,
+          price,
+          atr,
+          bandPct: this.config.grokConfirmTpBandPct ?? cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT,
+          maxAtrMult: cfg.GROK_CONFIRM_TP_MAX_ATR_MULT,
+        });
+      } else if (!confirm.tp_approved && tpRejectAction === "use_rules_tp") {
+        finalTp = tpRules;
+      }
+
+      const rrCheck = GrokConfirmService.validateRiskReward({
+        side: signal,
+        price,
+        slPrice,
+        tpPrice: finalTp,
+        minRiskReward: this.config.minRiskReward ?? 1.2,
+      });
+      if (!rrCheck.valid) {
+        this._log("info",
+          `[GROK CONFIRM] REJECT — R:R ${rrCheck.riskReward} < min setelah TP adjust`
+        );
+        return { signal: null, signalOptions };
+      }
+
+      const nextOptions = {
+        ...signalOptions,
+        tpDist: Math.abs(finalTp - price),
+      };
+
+      const tpNote = finalTp !== tpRules
+        ? `TP ${tpRules.toFixed(2)}→${finalTp.toFixed(2)} (Grok adjust)`
+        : `TP ${finalTp.toFixed(2)} (rules)`;
+
+      this._log("info",
+        `[GROK CONFIRM] ${this.config.strategyKey} → ${signal} approved ${confirm.confidence}/10 | ` +
+        `SL ${slPrice.toFixed(2)} (rules) | ${tpNote} | HTF ${this.state.htfTrend ?? "N/A"}` +
+        (confirm.reasoning ? ` | ${confirm.reasoning}` : "")
+      );
+
+      indicatorSnapshot.grokConfirm = {
+        confidence: confirm.confidence,
+        tp_confidence: confirm.tp_confidence,
+        reasoning: confirm.reasoning,
+        tp_reasoning: confirm.tp_reasoning,
+        tp_rules: tpRules,
+        tp_final: finalTp,
+        sl_rules: slPrice,
+      };
+
+      return { signal, signalOptions: nextOptions };
+    } catch (err) {
+      if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
+        this._log("warn", `[GROK CONFIRM] Error — fail-open: ${err.message}`);
+        return noop;
+      }
+      this._log("error", `[GROK CONFIRM] Error — skip trade: ${err.message}`);
+      return { signal: null, signalOptions };
+    }
+  }
+
+  /**
+   * Tutup posisi terbuka pertama (market) — dipakai Grok position_actions CLOSE.
+   */
+  async _closePosition(reason = "MANUAL", exitPrice = null) {
+    const pos = this.state.openPositions[0];
+    if (!pos) return;
+
+    const price = exitPrice ?? this.state.lastPrice ?? pos.entry;
+    const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
+
+    if (!this.config.dryRun) {
+      try {
+        const closeSide = pos.side === "LONG" ? "close_long" : "close_short";
+        await this.client.closePosition(this.config.symbol, closeSide, remaining);
+      } catch (err) {
+        this._log("error", `[GROK] Gagal tutup posisi: ${err.message}`);
+        return;
+      }
+    }
+
+    const pnl = pos.side === "LONG"
+      ? (price - pos.entry) * remaining
+      : (pos.entry - price) * remaining;
+    const pnlPct = pos.entry > 0
+      ? ((price - pos.entry) / pos.entry) * 100 * (pos.side === "LONG" ? 1 : -1)
+      : 0;
+    const fee = await this._resolveFee(pos, price, remaining);
+
+    if (this.config.dryRun) {
+      const marginBack = pos.marginReserved != null
+        ? pos.marginReserved
+        : pos.entry * remaining * this.config.riskPerTrade;
+      this.state.capital += pnl - fee + marginBack;
+    }
+
+    if (this.sessionId && pos.dbId) {
+      try {
+        await db.closeTrade(pos.dbId, {
+          exitPrice: price,
+          pnl,
+          pnlPct,
+          fee,
+          reason,
+          closeTime: new Date().toISOString(),
+        });
+      } catch (err) {
+        this._log("warn", `Gagal tutup trade #${pos.dbId} di DB: ${err.message}`);
+      }
+    }
+
+    this._log("trade",
+      `[GROK] Posisi ditutup (${reason}) ${pos.side} @ $${fmtPx(price)} | Net ${pnl - fee >= 0 ? "+" : ""}$${(pnl - fee).toFixed(2)}`
+    );
+
+    this._notifyClose({
+      symbol:     this.config.symbol,
+      side:       pos.side,
+      entryPrice: pos.entry,
+      exitPrice:  price,
+      pnl,
+      pnlPct,
+      reason,
+      dryRun:     this.config.dryRun,
+    });
+
+    this.state.trades.push({ ...pos, size: remaining, exit: price, pnl, pnlPct, fee, reason, closedAt: Date.now() });
+    this._capTrades();
+    this._updateRiskAfterClose(pnl, pos);
+    this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
+    this._releaseMarginIfFlat();
+    this._syncSessionStats();
   }
 
   // seedPrice: harga real dari ticker (null = tidak tersedia, pakai hardcode per simbol)

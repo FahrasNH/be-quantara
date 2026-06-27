@@ -835,6 +835,10 @@ module.exports = function createBotsRouter(helpers) {
             passphrase:  decryptedPassphrase,
             pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
             maxAccountOpenPositions: accountOpenCap,
+            grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+            grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+            grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+            grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
           });
 
       const instState = instance.getState();
@@ -1079,13 +1083,17 @@ module.exports = function createBotsRouter(helpers) {
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
-      const { strategyKey, capital, tpMode } = req.body ?? {};
+      const { strategyKey, capital, tpMode, grokConfirmEnabled, grokConfirmTpAdjust, grokConfirmTpBandPct, grokConfirmTpRejectAction } = req.body ?? {};
 
-      if (strategyKey === undefined && capital === undefined && tpMode === undefined) {
+      if (
+        strategyKey === undefined && capital === undefined && tpMode === undefined &&
+        grokConfirmEnabled === undefined && grokConfirmTpAdjust === undefined &&
+        grokConfirmTpBandPct === undefined && grokConfirmTpRejectAction === undefined
+      ) {
         return res.status(400).json({
           ok: false,
           statusCode: 400,
-          message: "Tidak ada perubahan. Kirim strategyKey, capital, dan/atau tpMode.",
+          message: "Tidak ada perubahan. Kirim strategyKey, capital, tpMode, dan/atau grokConfirm*.",
         });
       }
 
@@ -1141,6 +1149,26 @@ module.exports = function createBotsRouter(helpers) {
           return res.status(400).json({ ok: false, statusCode: 400, message: "tpMode harus 'full' atau 'partial'" });
         }
         data.tpMode = tpMode;
+      }
+
+      if (grokConfirmEnabled !== undefined) {
+        data.grokConfirmEnabled = grokConfirmEnabled === true || grokConfirmEnabled === "true";
+      }
+      if (grokConfirmTpAdjust !== undefined) {
+        data.grokConfirmTpAdjust = grokConfirmTpAdjust !== false && grokConfirmTpAdjust !== "false";
+      }
+      if (grokConfirmTpBandPct !== undefined) {
+        const band = Number(grokConfirmTpBandPct);
+        if (!Number.isFinite(band) || band < 1 || band > 50) {
+          return res.status(400).json({ ok: false, statusCode: 400, message: "grokConfirmTpBandPct harus 1–50" });
+        }
+        data.grokConfirmTpBandPct = band;
+      }
+      if (grokConfirmTpRejectAction !== undefined) {
+        if (!["skip", "use_rules_tp"].includes(grokConfirmTpRejectAction)) {
+          return res.status(400).json({ ok: false, statusCode: 400, message: "grokConfirmTpRejectAction harus 'skip' atau 'use_rules_tp'" });
+        }
+        data.grokConfirmTpRejectAction = grokConfirmTpRejectAction;
       }
 
       const updated = await prisma.bot.update({
