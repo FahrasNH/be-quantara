@@ -42,6 +42,16 @@ const cfg = {
   // e.g. https://quantara.example.com or http://187.77.135.156
   APP_URL:    process.env.APP_URL    || "http://localhost:5173",
 
+  // ── xAI Grok (console.x.ai) — AI training & optimizer ─────────────────────
+  XAI_ENABLED:            process.env.XAI_ENABLED === "true",
+  XAI_API_KEY:            process.env.XAI_API_KEY || "",
+  XAI_MANAGEMENT_API_KEY: process.env.XAI_MANAGEMENT_API_KEY || "",
+  XAI_COLLECTION_ID:      process.env.XAI_COLLECTION_ID || "",
+  XAI_MODEL:              process.env.XAI_MODEL || "grok-4.3",
+  XAI_TIMEOUT_MS:         parseInt(process.env.XAI_TIMEOUT_MS, 10) || 60_000,
+  // Izinkan AI optimizer tanpa tier VAULT (dev/staging)
+  XAI_OPTIMIZER_OPEN:     process.env.XAI_OPTIMIZER_OPEN === "true",
+
   // ── Midtrans payment gateway (Sprint 5 / PAY-01) ────────────────────────────
   // Get Server Key & Client Key from the Midtrans dashboard
   //   (Settings → Access Keys). Use the SANDBOX keys on staging.

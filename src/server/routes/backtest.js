@@ -799,7 +799,7 @@ module.exports = function createBacktestRouter(context) {
    * Query params: symbol (optional), backtest_id (optional)
    */
   router.get("/optimize", asyncHandler(async (req, res) => {
-    const { symbol, backtest_id } = req.query;
+    const { symbol, backtest_id, useAi } = req.query;
 
     if (!symbol && !backtest_id) {
       return res.status(400).json({
@@ -810,7 +810,11 @@ module.exports = function createBacktestRouter(context) {
 
     const analysis = await OptimizationAnalysisService.analyzeBacktest(
       symbol,
-      backtest_id ? parseInt(backtest_id) : null
+      backtest_id ? parseInt(backtest_id) : null,
+      {
+        useAi: useAi !== "false",
+        userId: req.userId,
+      }
     );
 
     res.json({
@@ -838,10 +842,16 @@ module.exports = function createBacktestRouter(context) {
       ? OptimizationAnalysisService.mapSessionStats(metrics)
       : null;
 
+    const useAi = req.body?.useAi !== false;
     const analysis = await OptimizationAnalysisService.analyzeBacktest(
       symbol,
       backtest_id ? parseInt(backtest_id, 10) : null,
-      { metricsOverride }
+      {
+        metricsOverride,
+        useAi,
+        userId: req.userId,
+        strategyKey: req.body?.strategyKey ?? null,
+      }
     );
 
     res.json({

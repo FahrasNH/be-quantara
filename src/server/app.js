@@ -31,6 +31,7 @@ const createBotsRouter = require("./routes/bots-afs");
 const createMarketRouter = require("./routes/market");
 const createHistoryRouter = require("./routes/history");
 const createBacktestRouter = require("./routes/backtest");
+const createAiRouter = require("./routes/ai");
 const createLegacyRouter = require("./routes/legacy");
 const createAccountRouter = require("./routes/account");
 const createAdminRouter = require("./routes/admin");
@@ -484,6 +485,9 @@ app.use("/api/v1/history", authMiddleware, createHistoryRouter({ SYMBOLS_LIST: c
 
 // Backtest routes (protected)
 app.use("/api/v1/backtest", authMiddleware, createBacktestRouter({ SYMBOLS_LIST: cfg.symbolsList }));
+
+// AI training & optimizer (xAI Grok — console.x.ai)
+app.use("/api/v1/ai", authMiddleware, createAiRouter());
 
 // Legacy routes (protected - deprecated)
 app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_LIST: cfg.symbolsList }));

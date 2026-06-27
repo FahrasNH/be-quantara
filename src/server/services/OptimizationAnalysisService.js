@@ -12,7 +12,7 @@ class OptimizationAnalysisService {
    */
   static async analyzeBacktest(symbol, backtest_id = null, opts = {}) {
     try {
-      const { metricsOverride = null } = opts;
+      const { metricsOverride = null, useAi = false, userId = null, strategyKey = null } = opts;
       let backtest;
 
       if (metricsOverride && typeof metricsOverride === "object") {
@@ -23,24 +23,88 @@ class OptimizationAnalysisService {
 
       const metrics = this._normalizeMetrics(backtest.metrics);
 
-      // Hitung scores dan rekomendasi
-      const overallScore = this._calculateOverallScore(metrics);
-      const recommendations = this._generateRecommendations(metrics);
-      const opportunities = this._identifyOpportunities(metrics);
-      const comparison = this._performanceComparison(metrics);
-      const riskAssessment = this._assessRisk(metrics);
+      // Rule-based analysis (always computed as baseline)
+      const ruleResult = this._buildRuleAnalysis(metrics);
 
-      return {
-        overall_score: overallScore,
-        recommendations,
-        opportunities,
-        comparison,
-        risk_assessment: riskAssessment,
-      };
+      // Optional xAI enhancement
+      if (useAi && userId) {
+        const XaiTrainingService = require("./XaiTrainingService");
+        const access = await XaiTrainingService.canUseAiOptimizer(userId);
+        if (access.allowed && XaiTrainingService.isEnabled()) {
+          try {
+            const ragQuery = `optimasi ${strategyKey ?? ""} ${symbol ?? ""} trading strategy parameters`;
+            const aiResult = await XaiTrainingService.analyzeBacktest(metrics, {
+              symbol,
+              strategyKey,
+              ragQuery,
+            });
+            return this.mergeAiWithRules(ruleResult, aiResult);
+          } catch (aiErr) {
+            console.warn(`[OptimizationAnalysis] xAI fallback to rules: ${aiErr.message}`);
+            return { ...ruleResult, ai_error: aiErr.message, source: "rules" };
+          }
+        }
+      }
+
+      return { ...ruleResult, source: "rules" };
     } catch (err) {
       console.error(`[OptimizationAnalysis] Error: ${err.message}`);
       throw err;
     }
+  }
+
+  /** Build rule-based analysis payload */
+  static _buildRuleAnalysis(metrics) {
+    return {
+      overall_score: this._calculateOverallScore(metrics),
+      recommendations: this._generateRecommendations(metrics),
+      opportunities: this._identifyOpportunities(metrics),
+      comparison: this._performanceComparison(metrics),
+      risk_assessment: this._assessRisk(metrics),
+    };
+  }
+
+  /**
+   * Gabungkan hasil rule-based + xAI Grok.
+   * AI score & summary diprioritaskan; rekomendasi digabung (dedupe by title).
+   */
+  static mergeAiWithRules(rules, ai) {
+    if (!ai) return { ...rules, source: "rules" };
+    if (!rules) return { ...ai, source: "xai" };
+
+    const seen = new Set();
+    const mergedRecs = [];
+    for (const rec of [...(ai.recommendations ?? []), ...(rules.recommendations ?? [])]) {
+      const key = (rec.title ?? "").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      mergedRecs.push(rec);
+    }
+
+    return {
+      overall_score: ai.overall_score ?? rules.overall_score,
+      ai_summary: ai.ai_summary ?? "",
+      recommendations: mergedRecs.slice(0, 6),
+      opportunities: [
+        ...(ai.opportunities ?? []),
+        ...(rules.opportunities ?? []),
+      ].slice(0, 8),
+      parameter_suggestions: ai.parameter_suggestions ?? [],
+      comparison: rules.comparison,
+      risk_assessment: {
+        ...rules.risk_assessment,
+        level: ai.risk_assessment?.level ?? rules.risk_assessment?.level,
+        summary: ai.risk_assessment?.summary || rules.risk_assessment?.summary,
+        key_risks: ai.risk_assessment?.key_risks ?? [],
+      },
+      source: "xai+rules",
+      model: ai.model,
+    };
+  }
+
+  /** Alias untuk route AI — reuse _getBacktestData */
+  static async _getBacktestDataForAi(symbol, backtest_id) {
+    return this._getBacktestData(symbol, backtest_id);
   }
 
   /** Normalisasi metrik FE (camelCase) dan BE (snake_case) */
