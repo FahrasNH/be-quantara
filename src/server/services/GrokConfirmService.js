@@ -185,6 +185,103 @@ class GrokConfirmService {
     return { valid: rr >= minRiskReward, riskReward: +rr.toFixed(3) };
   }
 
+  /**
+   * Terapkan hasil konfirmasi Grok → keputusan entry + TP final (mirror BotEngine).
+   */
+  static applyGate(confirm, ctx = {}) {
+    const {
+      side,
+      price,
+      atr,
+      slPrice,
+      tpRules,
+      tpAdjust = true,
+      tpBandPct = cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT,
+      tpRejectAction = cfg.GROK_CONFIRM_TP_REJECT_ACTION,
+      minRiskReward = 1.2,
+    } = ctx;
+
+    if (confirm?.failOpen) {
+      return {
+        approved: true,
+        tp: tpRules,
+        tpDist: Math.abs(tpRules - price),
+        reason: confirm.error || "fail-open",
+        confidence: confirm.confidence ?? 10,
+        failOpen: true,
+      };
+    }
+
+    if (!confirm?.confirm_entry) {
+      return {
+        approved: false,
+        tp: null,
+        tpDist: null,
+        reason: confirm?.reasoning || "entry not confirmed",
+        confidence: confirm?.confidence ?? 0,
+        failOpen: false,
+      };
+    }
+
+    if (!confirm.tp_approved && tpRejectAction === "skip") {
+      return {
+        approved: false,
+        tp: null,
+        tpDist: null,
+        reason: confirm.tp_reasoning || "TP not approved",
+        confidence: confirm.confidence ?? 0,
+        failOpen: false,
+      };
+    }
+
+    let finalTp = tpRules;
+    const useGrokTp = tpAdjust !== false &&
+      confirm.tp_approved &&
+      confirm.suggested_tp != null &&
+      Number.isFinite(confirm.suggested_tp);
+
+    if (useGrokTp) {
+      finalTp = this.resolveTakeProfit({
+        tpRules,
+        suggestedTp: confirm.suggested_tp,
+        side,
+        price,
+        atr,
+        bandPct: tpBandPct,
+        maxAtrMult: cfg.GROK_CONFIRM_TP_MAX_ATR_MULT,
+      });
+    }
+
+    const rrCheck = this.validateRiskReward({
+      side,
+      price,
+      slPrice,
+      tpPrice: finalTp,
+      minRiskReward,
+    });
+    if (!rrCheck.valid) {
+      return {
+        approved: false,
+        tp: null,
+        tpDist: null,
+        reason: `R:R ${rrCheck.riskReward} < min ${minRiskReward}`,
+        confidence: confirm.confidence ?? 0,
+        failOpen: false,
+      };
+    }
+
+    return {
+      approved: true,
+      tp: finalTp,
+      tpDist: Math.abs(finalTp - price),
+      reason: confirm.reasoning || "",
+      tpReasoning: confirm.tp_reasoning || "",
+      confidence: confirm.confidence ?? 0,
+      tpConfidence: confirm.tp_confidence ?? 0,
+      failOpen: false,
+    };
+  }
+
   static async _logInteraction(ctx, prompt, response, parsed, type = "GROK_CONFIRM") {
     if (cfg.GROK_TRADING_LOG_INTERACTIONS && ctx.userId) {
       persistAiTradeInteraction({

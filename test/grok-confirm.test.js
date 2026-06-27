@@ -127,6 +127,45 @@ test("validateRiskReward — accept healthy RR", () => {
   if (!rr.valid) throw new Error(`RR should pass, got ${rr.riskReward}`);
 });
 
+test("applyGate — approved with rules TP", () => {
+  const applied = GrokConfirmService.applyGate(
+    {
+      confirm_entry: true,
+      confidence: 9,
+      tp_approved: true,
+      tp_confidence: 8,
+      suggested_tp: null,
+    },
+    { side: "LONG", price: 100, atr: 2, slPrice: 98, tpRules: 104, minRiskReward: 1.2 }
+  );
+  if (!applied.approved || applied.tp !== 104) throw new Error("should approve with rules TP");
+});
+
+test("applyGate — reject entry", () => {
+  const applied = GrokConfirmService.applyGate(
+    { confirm_entry: false, confidence: 6 },
+    { side: "LONG", price: 100, atr: 2, slPrice: 98, tpRules: 104 }
+  );
+  if (applied.approved) throw new Error("should reject entry");
+});
+
+test("applyGate — reject when TP not approved (skip action)", () => {
+  const confirm = GrokConfirmService.validateConfirmation({
+    confirm_entry: true,
+    confidence: 9,
+    tp_review: { approved: false, tp_confidence: 5 },
+  }, { minConfidenceEntry: 8, minTpConfidence: 7 });
+  const applied = GrokConfirmService.applyGate(confirm, {
+    side: "LONG",
+    price: 100,
+    atr: 2,
+    slPrice: 98,
+    tpRules: 104,
+    tpRejectAction: "skip",
+  });
+  if (applied.approved) throw new Error("should reject when TP skip");
+});
+
 test("GrokConfirmPromptBuilder — lite prompt fields", () => {
   const built = GrokConfirmPromptBuilder.build({
     strategyKey: "ADAPTIVE_FUSION",

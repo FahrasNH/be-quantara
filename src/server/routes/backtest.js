@@ -14,8 +14,13 @@ const OptimizationAnalysisService = require("../services/OptimizationAnalysisSer
 const db = require("../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
+const GrokConfirmService = require("../services/GrokConfirmService");
+const cfg = require("../../config/env");
 
 const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+const GROK_CONFIRM_STRATEGIES = new Set(USER_STRATEGY_KEYS);
+const GROK_CONFIRM_MAX_SIGNALS = 500;
+const GROK_CONFIRM_CONCURRENCY = 3;
 const STRATEGY_ABBREV = {
   ADAPTIVE_FUSION: "AF",
   TREND_MOMENTUM: "TM",
@@ -905,6 +910,149 @@ module.exports = function createBacktestRouter(context) {
       ok: true,
       ...result,
       note: "Server-side simplified simulator — bukan BotEngine penuh (Phase 3 foundation)",
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/grok-confirm
+   * Batch Grok Confirm Gate untuk backtest — 1 call per sinyal rules.
+   */
+  router.post("/grok-confirm", asyncHandler(async (req, res) => {
+    const userId = req.user?.id;
+    const access = await GrokConfirmService.canUseGrokConfirm(userId);
+    if (!access.allowed) {
+      return res.status(403).json({ ok: false, message: access.reason });
+    }
+    if (!GrokConfirmService.isEnabled()) {
+      return res.status(503).json({
+        ok: false,
+        message: "Grok Confirm belum aktif — set GROK_CONFIRM_ENABLED=true dan XAI_API_KEY",
+      });
+    }
+
+    const {
+      strategy_key: strategyKeyRaw,
+      symbol,
+      signals = [],
+      tpAdjust = true,
+      tpBandPct,
+      tpRejectAction,
+    } = req.body ?? {};
+
+    const strategyKey = String(strategyKeyRaw || "").toUpperCase();
+    if (!GROK_CONFIRM_STRATEGIES.has(strategyKey)) {
+      return res.status(400).json({
+        ok: false,
+        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT_RETEST",
+      });
+    }
+    if (!Array.isArray(signals) || !signals.length) {
+      return res.json({ ok: true, decisions: {}, stats: { total: 0, approved: 0, rejected: 0, apiCalls: 0 } });
+    }
+    if (signals.length > GROK_CONFIRM_MAX_SIGNALS) {
+      return res.status(400).json({
+        ok: false,
+        message: `Maksimal ${GROK_CONFIRM_MAX_SIGNALS} sinyal per request backtest`,
+      });
+    }
+
+    const strat = STRATEGIES[strategyKey] || {};
+    const minEntry = strat.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY;
+    const minTp = strat.grokConfirmMinTp ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE;
+    const bandPct = tpBandPct ?? cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT;
+    const rejectAction = tpRejectAction ?? cfg.GROK_CONFIRM_TP_REJECT_ACTION;
+    const minRiskReward = strat.minRiskReward ?? strat.riskReward ?? 1.2;
+
+    const decisions = {};
+    let approved = 0;
+    let rejected = 0;
+
+    async function processSignal(sig) {
+      const id = String(sig.id ?? sig.barIndex);
+      const side = sig.side;
+      const price = Number(sig.price ?? sig.entry);
+      const atr = Number(sig.atr);
+      const slRules = Number(sig.sl ?? sig.sl_rules);
+      const tpRules = Number(sig.tp ?? sig.tp_rules);
+      if (!side || !Number.isFinite(price) || !Number.isFinite(atr)) {
+        decisions[id] = { approved: false, reason: "invalid signal payload" };
+        rejected += 1;
+        return;
+      }
+
+      try {
+        const confirm = await GrokConfirmService.requestConfirmation({
+          symbol: symbol || "BACKTEST",
+          strategyKey,
+          side,
+          price,
+          atr,
+          sl_rules: slRules,
+          tp_rules: tpRules,
+          indicatorSnapshot: sig.indicatorSnapshot || { rsi: sig.rsi, emaTrendBias: sig.emaTrendBias },
+          htfTrend: sig.htfTrend,
+          signalReason: sig.signalReason || "backtest rules signal",
+          minConfidenceEntry: minEntry,
+          minTpConfidence: minTp,
+          userId,
+          botId: null,
+        });
+
+        const applied = GrokConfirmService.applyGate(confirm, {
+          side,
+          price,
+          atr,
+          slPrice: slRules,
+          tpRules,
+          tpAdjust: tpAdjust !== false,
+          tpBandPct: bandPct,
+          tpRejectAction: rejectAction,
+          minRiskReward,
+        });
+
+        decisions[id] = {
+          approved: applied.approved,
+          tp: applied.tp,
+          tpDist: applied.tpDist,
+          reason: applied.reason,
+          tpReasoning: applied.tpReasoning,
+          confidence: applied.confidence,
+          tpConfidence: applied.tpConfidence,
+          failOpen: applied.failOpen ?? false,
+        };
+        if (applied.approved) approved += 1;
+        else rejected += 1;
+      } catch (err) {
+        if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
+          decisions[id] = {
+            approved: true,
+            tp: tpRules,
+            tpDist: Math.abs(tpRules - price),
+            reason: `fail-open: ${err.message}`,
+            failOpen: true,
+          };
+          approved += 1;
+        } else {
+          decisions[id] = { approved: false, reason: err.message };
+          rejected += 1;
+        }
+      }
+    }
+
+    for (let i = 0; i < signals.length; i += GROK_CONFIRM_CONCURRENCY) {
+      const chunk = signals.slice(i, i + GROK_CONFIRM_CONCURRENCY);
+      await Promise.all(chunk.map(processSignal));
+    }
+
+    res.json({
+      ok: true,
+      decisions,
+      stats: {
+        total: signals.length,
+        approved,
+        rejected,
+        apiCalls: signals.length,
+      },
     });
   }));
 
