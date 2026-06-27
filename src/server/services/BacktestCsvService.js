@@ -1,6 +1,16 @@
 /**
- * BacktestCsvService — export backtest runs ke CSV
+ * BacktestCsvService — export backtest runs ke CSV (format Trade History admin).
  */
+
+const { formatDuration } = require("../../infrastructure/db/database");
+const {
+  ADMIN_TRADE_EXPORT_COLUMNS,
+  TRADE_EXPORT_COLUMNS,
+  toCsv,
+  buildPerformanceSummaryCsv,
+} = require("../../domain/tradeExportCsv");
+
+const NA = "N/A";
 
 function escapeCsv(val) {
   const s = val == null ? "" : String(val);
@@ -45,28 +55,113 @@ function buildSummaryCsv(records) {
   return lines.join("\n");
 }
 
-function buildTradesCsv(records) {
-  const headers = [
-    "backtest_id", "strategy", "symbol", "trade_date", "side",
-    "entry", "exit", "pnl", "pnl_pct", "fee", "reason",
-  ];
-  const lines = [headers.join(",")];
+/**
+ * Map satu trade backtest → baris export (skema sama mapExportRow / admin Trade History).
+ */
+function mapBacktestTrade(trade, ctx, index) {
+  const entry = trade.entry ?? trade.entryPrice;
+  const exit = trade.exit ?? trade.exitPrice;
+  const fee = Number(trade.fee ?? 0);
+  const funding = Number(trade.funding ?? 0);
+  const grossPnl = trade.grossPnl != null
+    ? Number(trade.grossPnl)
+    : Number(trade.pnl ?? 0) + fee;
+  const pnlNet = trade.pnl != null ? Number(trade.pnl) : grossPnl - fee - funding;
+  const size = trade.size ?? null;
+  const sl = trade.sl ?? null;
+  const tp = trade.tp ?? null;
+
+  const plannedRR =
+    sl != null && tp != null && entry != null && Math.abs(entry - sl) > 0
+      ? parseFloat((Math.abs(tp - entry) / Math.abs(entry - sl)).toFixed(2))
+      : NA;
+  const plannedRisk =
+    sl != null && size != null && entry != null ? Math.abs(entry - sl) * size : null;
+  const actualRR =
+    plannedRisk && plannedRisk > 0
+      ? parseFloat((pnlNet / plannedRisk).toFixed(2))
+      : NA;
+
+  const openTime = trade.openTime ?? trade.openDate ?? trade.date ?? NA;
+  const closeTime = trade.closeTime ?? trade.date ?? NA;
+  let duration = NA;
+  if (openTime !== NA && closeTime !== NA) {
+    const ms = new Date(closeTime).getTime() - new Date(openTime).getTime();
+    duration = ms > 0 ? formatDuration(ms) : NA;
+  }
+
+  const reason = trade.reason ?? NA;
+  const isPartial = /partial/i.test(String(reason));
+
+  return {
+    user: ctx.userLabel ?? "Backtest",
+    id: trade.id ?? `${ctx.backtestId}-${index + 1}`,
+    sessionId: ctx.sessionId ?? `BT-${ctx.backtestId}`,
+    symbol: ctx.symbol,
+    side: trade.side,
+    strategy: ctx.strategy,
+    status: "Closed",
+    entryPrice: entry,
+    exitPrice: exit,
+    sl: sl ?? NA,
+    tp: tp ?? NA,
+    size: size ?? NA,
+    pnl: grossPnl,
+    fee,
+    funding,
+    pnlNet,
+    pnlPct: trade.pnlPct ?? trade.pnl_pct ?? NA,
+    plannedRR,
+    actualRR,
+    duration,
+    reason,
+    dryRun: true,
+    mode: "backtest",
+    exchange: ctx.exchange ?? NA,
+    openTime,
+    closeTime,
+    isPartial,
+    result: pnlNet > 0 ? "win" : "loss",
+  };
+}
+
+function collectTradeRows(records, { adminFormat = true } = {}) {
+  const rows = [];
   for (const rec of records) {
     const trades = rec.trades_data || [];
     const strategy = rec.strategy_key || rec.config?.strategyKey || "";
-    for (const t of trades) {
-      lines.push([
-        rec.id, strategy, rec.symbol, t.date, t.side,
-        t.entry, t.exit, t.pnl, t.pnlPct ?? t.pnl_pct, t.fee, t.reason,
-      ].map(escapeCsv).join(","));
-    }
+    const ctx = {
+      backtestId: rec.id,
+      symbol: rec.symbol,
+      strategy,
+      exchange: rec.config?.exchange ?? rec.exchange ?? NA,
+      sessionId: `BT-${rec.id}`,
+      userLabel: "Backtest",
+    };
+    trades.forEach((t, i) => rows.push(mapBacktestTrade(t, ctx, i)));
   }
-  return lines.join("\n");
+  return rows;
 }
 
-function exportBacktests(records, mode = "summary") {
-  if (mode === "trades") return buildTradesCsv(records);
-  return buildSummaryCsv(records);
+function buildTradesCsv(records, opts = {}) {
+  const { includeSummary = true, adminFormat = true } = opts;
+  const rows = collectTradeRows(records, { adminFormat });
+  const columns = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+  const body = toCsv(rows, columns);
+  if (!includeSummary) return body;
+  const summary = buildPerformanceSummaryCsv(rows);
+  return `${summary}\n${body}`;
 }
 
-module.exports = { exportBacktests, buildSummaryCsv, buildTradesCsv };
+function exportBacktests(records, mode = "trades") {
+  if (mode === "summary") return buildSummaryCsv(records);
+  return buildTradesCsv(records, { includeSummary: true, adminFormat: true });
+}
+
+module.exports = {
+  exportBacktests,
+  buildSummaryCsv,
+  buildTradesCsv,
+  mapBacktestTrade,
+  collectTradeRows,
+};

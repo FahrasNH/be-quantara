@@ -430,7 +430,7 @@ module.exports = function createBacktestRouter(context) {
    * Export CSV single atau multi-run
    */
   router.post("/export-csv", asyncHandler(async (req, res) => {
-    const { ids, mode = "summary" } = req.body;
+    const { ids, mode = "trades" } = req.body;
     if (!ids?.length) {
       return res.status(400).json({ ok: false, error: "ids diperlukan" });
     }
@@ -440,7 +440,7 @@ module.exports = function createBacktestRouter(context) {
     }
     const csv = BacktestCsvService.exportBacktests(records, mode);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="backtest-export-${Date.now()}.csv"`);
+    res.setHeader("Content-Disposition", `attachment; filename="quantara_backtest_trades_${Date.now()}.csv"`);
     res.send(csv);
   }));
 
