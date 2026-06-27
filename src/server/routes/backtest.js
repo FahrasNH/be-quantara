@@ -808,11 +808,45 @@ module.exports = function createBacktestRouter(context) {
       });
     }
 
-    const analysis = await OptimizationAnalysisService.analyzeBacktest(symbol, backtest_id ? parseInt(backtest_id) : null);
+    const analysis = await OptimizationAnalysisService.analyzeBacktest(
+      symbol,
+      backtest_id ? parseInt(backtest_id) : null
+    );
 
     res.json({
       ok: true,
       data: analysis,
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/optimize
+   * Analisis optimasi dari metrik sesi backtest (prioritas) atau arsip DB.
+   * Body: { symbol?, backtest_id?, metrics? }
+   */
+  router.post("/optimize", asyncHandler(async (req, res) => {
+    const { symbol, backtest_id, metrics } = req.body || {};
+
+    if (!metrics && !symbol && !backtest_id) {
+      return res.status(400).json({
+        ok: false,
+        error: "metrics, symbol, or backtest_id is required",
+      });
+    }
+
+    const metricsOverride = metrics
+      ? OptimizationAnalysisService.mapSessionStats(metrics)
+      : null;
+
+    const analysis = await OptimizationAnalysisService.analyzeBacktest(
+      symbol,
+      backtest_id ? parseInt(backtest_id, 10) : null,
+      { metricsOverride }
+    );
+
+    res.json({
+      ok: true,
+      data: { ...analysis, source: metricsOverride ? "session" : "archive" },
     });
   }));
 

@@ -10,9 +10,17 @@ class OptimizationAnalysisService {
   /**
    * Analisis backtest dan berikan rekomendasi
    */
-  static async analyzeBacktest(symbol, backtest_id = null) {
+  static async analyzeBacktest(symbol, backtest_id = null, opts = {}) {
     try {
-      const backtest = await this._getBacktestData(symbol, backtest_id);
+      const { metricsOverride = null } = opts;
+      let backtest;
+
+      if (metricsOverride && typeof metricsOverride === "object") {
+        backtest = { symbol, metrics: metricsOverride };
+      } else {
+        backtest = await this._getBacktestData(symbol, backtest_id);
+      }
+
       const metrics = this._normalizeMetrics(backtest.metrics);
 
       // Hitung scores dan rekomendasi
@@ -290,6 +298,24 @@ class OptimizationAnalysisService {
       win_rate_variance: wr < 50 ? 60 : 30,
       expectancy_risk: metrics.expectancy && metrics.expectancy < 0.05 ? 70 : 20,
       volatility_risk: metrics.roi_pct && metrics.roi_pct > 100 ? 65 : 35,
+    };
+  }
+
+  /**
+   * Map stats dari FE backtest session → metrik analisis
+   */
+  static mapSessionStats(stats = {}) {
+    const winRate = parseFloat(stats.winRate ?? stats.win_rate_pct ?? 0);
+    const maxDd = parseFloat(stats.maxDrawdown ?? stats.max_drawdown_pct ?? 0);
+    return {
+      win_rate_pct: winRate,
+      profit_factor: parseFloat(stats.profitFactor ?? stats.profit_factor ?? 0),
+      max_drawdown_pct: maxDd > 0 ? -maxDd : maxDd,
+      roi_pct: parseFloat(stats.totalReturn ?? stats.roi_pct ?? 0),
+      sharpe_ratio: parseFloat(stats.sharpe ?? stats.sharpe_ratio ?? 0),
+      total_trades: parseInt(stats.totalTrades ?? stats.total_trades ?? 0, 10) || 0,
+      expectancy: parseFloat(stats.expectancy ?? 0),
+      average_r: parseFloat(stats.averageR ?? stats.average_r ?? 0),
     };
   }
 
