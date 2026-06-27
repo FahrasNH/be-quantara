@@ -13,7 +13,7 @@ class OptimizationAnalysisService {
   static async analyzeBacktest(symbol, backtest_id = null) {
     try {
       const backtest = await this._getBacktestData(symbol, backtest_id);
-      const metrics = backtest.metrics;
+      const metrics = this._normalizeMetrics(backtest.metrics);
 
       // Hitung scores dan rekomendasi
       const overallScore = this._calculateOverallScore(metrics);
@@ -33,6 +33,24 @@ class OptimizationAnalysisService {
       console.error(`[OptimizationAnalysis] Error: ${err.message}`);
       throw err;
     }
+  }
+
+  /** Normalisasi metrik FE (camelCase) dan BE (snake_case) */
+  static _normalizeMetrics(raw = {}) {
+    const winRate = parseFloat(raw.win_rate_pct ?? raw.winRate ?? 0);
+    let maxDd = parseFloat(raw.max_drawdown_pct ?? raw.maxDrawdown ?? 0);
+    if (maxDd > 0) maxDd = -maxDd;
+
+    return {
+      win_rate_pct: winRate,
+      profit_factor: parseFloat(raw.profit_factor ?? raw.profitFactor ?? 0),
+      max_drawdown_pct: maxDd,
+      roi_pct: parseFloat(raw.roi_pct ?? raw.totalReturn ?? 0),
+      sharpe_ratio: parseFloat(raw.sharpe_ratio ?? raw.sharpe ?? 0),
+      total_trades: parseInt(raw.total_trades ?? raw.totalTrades ?? 0, 10) || 0,
+      expectancy: parseFloat(raw.expectancy ?? 0),
+      average_r: parseFloat(raw.average_r ?? raw.averageR ?? 0),
+    };
   }
 
   /**
@@ -254,10 +272,22 @@ class OptimizationAnalysisService {
    * Assess risk across different dimensions
    */
   static _assessRisk(metrics) {
+    const dd = Math.abs(metrics.max_drawdown_pct || 0);
+    const wr = metrics.win_rate_pct || 0;
+    const pf = metrics.profit_factor || 0;
+
+    let level = "Moderate";
+    if (dd > 30 || wr < 40 || pf < 1) level = "High";
+    else if (dd < 15 && wr > 55 && pf >= 1.5) level = "Low";
+
+    const summary = `Drawdown ${dd.toFixed(1)}%, win rate ${wr.toFixed(1)}%, profit factor ${pf.toFixed(2)}`;
+
     return {
-      drawdown_risk: Math.min(100, Math.max(0, Math.abs(metrics.max_drawdown_pct || 0) * 2)),
+      level,
+      summary,
+      drawdown_risk: Math.min(100, Math.max(0, dd * 2)),
       concentration_risk: metrics.total_trades > 100 ? 20 : 50,
-      win_rate_variance: metrics.win_rate_pct && metrics.win_rate_pct < 50 ? 60 : 30,
+      win_rate_variance: wr < 50 ? 60 : 30,
       expectancy_risk: metrics.expectancy && metrics.expectancy < 0.05 ? 70 : 20,
       volatility_risk: metrics.roi_pct && metrics.roi_pct > 100 ? 65 : 35,
     };
@@ -269,13 +299,26 @@ class OptimizationAnalysisService {
   static async _getBacktestData(symbol, backtest_id = null) {
     if (backtest_id) {
       const backtest = await BacktestHistoryService.getById(backtest_id);
-      if (!backtest) throw new Error(`Backtest ${backtest_id} not found`);
+      if (!backtest) {
+        const err = new Error(`Backtest ${backtest_id} not found`);
+        err.statusCode = 404;
+        throw err;
+      }
       return backtest;
-    } else {
-      const summary = await BacktestLoader.loadSummary(symbol);
-      if (!summary) throw new Error(`No backtest data found for ${symbol}`);
-      return { symbol, metrics: summary.metrics || {} };
     }
+
+    if (symbol) {
+      const history = await BacktestHistoryService.getHistory(symbol.toUpperCase(), 1);
+      if (history?.length) return history[0];
+    }
+
+    const summary = await BacktestLoader.loadSummary(symbol);
+    if (!summary) {
+      const err = new Error(`No backtest data found for ${symbol}`);
+      err.statusCode = 404;
+      throw err;
+    }
+    return { symbol, metrics: summary.metrics || {} };
   }
 }
 
