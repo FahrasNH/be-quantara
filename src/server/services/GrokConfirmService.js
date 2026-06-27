@@ -328,7 +328,8 @@ class GrokConfirmService {
   }
 
   static async _logInteraction(ctx, prompt, response, parsed, type = "GROK_CONFIRM") {
-    if (cfg.GROK_TRADING_LOG_INTERACTIONS && ctx.userId) {
+    // Backtest mem-fire puluhan interaksi sekaligus — skip persist DB (hemat latency).
+    if (cfg.GROK_TRADING_LOG_INTERACTIONS && ctx.userId && !ctx.backtest) {
       persistAiTradeInteraction({
         userId: ctx.userId,
         botId: ctx.botId,
