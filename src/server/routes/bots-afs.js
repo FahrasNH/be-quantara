@@ -15,7 +15,7 @@ module.exports = function createBotsRouter(helpers) {
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
-  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies, getUserTier } = require("../../services/entitlement");
+  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies, getUserTier, shouldAutoEnableGrokConfirm, getGrokConfirmEntitlement } = require("../../services/entitlement");
   // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
   const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../domain/tierConfig");
   const db = require("../../infrastructure/db/database");
@@ -567,8 +567,7 @@ module.exports = function createBotsRouter(helpers) {
           userId,
           symbol,
           ...botData,
-          // Bot baru: aktifkan Grok Confirm Gate bila server sudah enable (staging).
-          grokConfirmEnabled: envCfg.GROK_CONFIRM_ENABLED === true,
+          grokConfirmEnabled: await shouldAutoEnableGrokConfirm(userId),
         },
       });
 
@@ -691,10 +690,18 @@ module.exports = function createBotsRouter(helpers) {
         tpMode,
       };
 
+      const grokAuto = await shouldAutoEnableGrokConfirm(userId);
+
       // Create if doesn't exist
       if (!bot) {
         bot = await prisma.bot.create({
-          data: { userId, symbol, capital: capital || 500, ...botData },
+          data: {
+            userId,
+            symbol,
+            capital: capital || 500,
+            ...botData,
+            grokConfirmEnabled: grokAuto,
+          },
         });
       } else {
         bot = await prisma.bot.update({
@@ -702,6 +709,7 @@ module.exports = function createBotsRouter(helpers) {
           data: {
             capital: capital || bot.capital,
             ...botData,
+            ...(grokAuto && !bot.grokConfirmEnabled ? { grokConfirmEnabled: true } : {}),
           },
         });
       }
@@ -1426,6 +1434,7 @@ module.exports = function createBotsRouter(helpers) {
     const { isStrategyLiveReady } = require("../../services/entitlement");
 
     const { tier, allowed, locked } = await getStrategyEntitlements(req.userId);
+    const { grokConfirmAvailable, grokConfirmIncluded } = await getGrokConfirmEntitlement(req.userId);
 
     // TASK 3.2: tandai status tiap strategi. Pada flow Multi-Strategy per Coin,
     // SEMUA strategi tier berjalan otomatis — ini hanya untuk display (bukan pilihan).
@@ -1447,6 +1456,8 @@ module.exports = function createBotsRouter(helpers) {
     res.json({
       ok: true,
       tier,
+      grokConfirmAvailable,
+      grokConfirmIncluded,
       // Multi-Strategy per Coin: strategi yang akan jalan OTOMATIS (display-only).
       autoRun: true,
       capitalAllocation: equalWeight ? `${(100 / count).toFixed(0)}% each` : "custom",

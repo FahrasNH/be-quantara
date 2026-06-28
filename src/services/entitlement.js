@@ -167,6 +167,37 @@ async function getStrategyEntitlements(userId) {
 }
 
 /**
+ * Grok Confirm Gate otomatis untuk live bot bila server siap + user berhak (Vault / open mode).
+ * @param {string} userId
+ * @returns {Promise<boolean>}
+ */
+async function shouldAutoEnableGrokConfirm(userId) {
+  try {
+    const GrokConfirmService = require("../server/services/GrokConfirmService");
+    if (!GrokConfirmService.isEnabled()) return false;
+    const access = await GrokConfirmService.canUseGrokConfirm(userId, { backtest: false });
+    return access.allowed === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Status Grok Confirm untuk UI bot (auto-include Vault, ketersediaan server).
+ * @param {string} userId
+ */
+async function getGrokConfirmEntitlement(userId) {
+  try {
+    const GrokConfirmService = require("../server/services/GrokConfirmService");
+    const available = GrokConfirmService.isEnabled();
+    const included = available ? await shouldAutoEnableGrokConfirm(userId) : false;
+    return { grokConfirmAvailable: available, grokConfirmIncluded: included };
+  } catch {
+    return { grokConfirmAvailable: false, grokConfirmIncluded: false };
+  }
+}
+
+/**
  * Daftar strategi yang HARUS dijalankan otomatis untuk user (dari tier-nya).
  * Inti fitur "Auto Multi-Strategy Execution per Coin": user tidak memilih strategi;
  * semua strategi tier dijalankan serentak. Dalam mode "live", strategi yang masih
@@ -215,4 +246,6 @@ module.exports = {
   getTierStrategies,
   isStrategyLiveReady,
   filterStrategiesByMode,
+  shouldAutoEnableGrokConfirm,
+  getGrokConfirmEntitlement,
 };
