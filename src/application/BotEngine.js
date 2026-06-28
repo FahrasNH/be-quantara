@@ -268,6 +268,10 @@ class BotEngine extends EventEmitter {
       lastTick:      null,
       lastPrice:     null,
 
+      // Multi-position tracking (v3.0 — ADAPTIVE_FUSION mode)
+      // Maps componentId (A/B/C) → {side, entry, sl, tp, component, riskAmt, ...}
+      positions:       new Map(),
+
       // Risk management tracking
       dailyTradeCount: 0,        // Jumlah trade hari ini
       dailyLoss:       0,        // Total loss hari ini (dalam USD)
@@ -276,6 +280,10 @@ class BotEngine extends EventEmitter {
       consecLoss:      0,        // Loss berturut-turut
       cooldownUntil:   null,     // Timestamp cooldown selesai
       lastLossSetup:   null,     // "SIDE@entry" trade loss terakhir — guard anti-churn
+
+      // Per-component risk tracking (multi-position mode)
+      componentCooldown: new Map(),  // componentId → cooldownUntil timestamp
+      componentConsecLoss: new Map(), // componentId → consecutive loss count
 
       // HTF trend state
       htfTrend:        "UNKNOWN", // BULLISH / BEARISH / SIDEWAYS / UNKNOWN
@@ -1309,6 +1317,52 @@ class BotEngine extends EventEmitter {
             if (filteredSignal && this.state.lastLossSetup === `${filteredSignal}@${price}`) {
               this._log("info", `[CHURN] Entry diblok — setup identik dengan loss terakhir (${filteredSignal} @ $${price}); tunggu candle baru`);
               filteredSignal = null;
+            }
+
+            // ── MULTI-POSITION MODE (v3.0): ADAPTIVE_FUSION independent components ──
+            if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
+              const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
+              const afStrategy = new AdaptiveFusionStrategy();
+              const multiSignal = afStrategy.detectSignalMulti(indicators, lastIdx, {
+                volatility:           atrPctNow,
+                trend_strength:       trendStr,
+                balance:              this.state.capital,
+                afRejectOnDissent:    this.config.afRejectOnDissent,
+                maxEntryExtensionATR: this.config.maxEntryExtensionATR,
+                htfTrend:             this.state.htfTrend,
+                htfTrendStrength,
+                htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
+                pairTier:             this.config.pairTier,
+                tierOverrides:        this.config.tierOverrides,
+                volSmaMultiplier:     this.config.volSmaMultiplier,
+              });
+
+              // Check each component independently for entry
+              for (const componentId of ["A", "B", "C"]) {
+                const componentSignal = multiSignal[componentId];
+                if (!componentSignal) continue;
+
+                // Check if this component already has an open position
+                if (this.state.positions.has(componentId)) {
+                  continue; // Component already trading
+                }
+
+                // Check component-level risk gates
+                const compCooldown = this.state.componentCooldown.get(componentId);
+                if (compCooldown && Date.now() < compCooldown) {
+                  continue; // Component in cooldown
+                }
+
+                const compConsecLoss = this.state.componentConsecLoss.get(componentId) || 0;
+                if (compConsecLoss >= this.config.maxConsecLoss) {
+                  continue; // Component exceeded max consecutive loss
+                }
+
+                // Multi-position entry
+                await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot);
+              }
+              // Skip single-position logic below for AF in multi-position mode
+              return;
             }
 
             if (filteredSignal && filteredSignal !== this.state.lastSignal) {
@@ -2485,6 +2539,96 @@ class BotEngine extends EventEmitter {
         leverage:   this.config.leverage,
         dryRun:     true,
       });
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // MULTI-POSITION SIGNAL HANDLING (v3.0)
+  // ─────────────────────────────────────────────
+
+  async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot) {
+    if (!signal || !atr) return;
+
+    const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
+    const afStrategy = new AdaptiveFusionStrategy();
+
+    // Calculate risk config for this component
+    const riskCfg = afStrategy.calculateRiskConfig(price, atr, signal, componentId, {
+      marketCond: "NORMAL", // simplified for now
+      strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
+    });
+
+    const baseSlDist = riskCfg.slDistance;
+    const slDist = baseSlDist * (this.config.pairSlMultiplier || 1);
+    const tpDist = riskCfg.tpDistance * (this.config.pairSlMultiplier || 1);
+
+    const sl = signal === "LONG" ? price - slDist : price + slDist;
+    const tp = signal === "LONG" ? price + tpDist : price - tpDist;
+
+    // Validate SL/TP
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      this._log("warn", `[Multi-AF:${componentId}] Invalid SL/TP — sl=${sl} tp=${tp}`);
+      return;
+    }
+    if ((signal === "LONG" && sl >= price) || (signal === "SHORT" && sl <= price)) {
+      this._log("warn", `[Multi-AF:${componentId}] SL on wrong side for ${signal}`);
+      return;
+    }
+
+    // Calculate position size based on risk
+    const riskPerTrade = this.config.riskPerTrade || 0.01;
+    const riskAmt = this.state.capital * riskPerTrade;
+    const dist = Math.abs(tp - sl);
+    const qty = dist > 0 ? riskAmt / dist : 0;
+
+    if (qty <= 0) {
+      this._log("warn", `[Multi-AF:${componentId}] Invalid qty=${qty}`);
+      return;
+    }
+
+    // Create position object
+    const positionId = `${componentId}-${Date.now()}`;
+    const position = {
+      positionId,
+      componentId,
+      symbol: this.config.symbol,
+      side: signal,
+      entry: price,
+      sl,
+      tp,
+      qty,
+      riskAmt,
+      openTime: new Date().toISOString(),
+      openCandle: lastIdx,
+      unrealizedPL: 0,
+    };
+
+    // Store position
+    this.state.positions.set(componentId, position);
+
+    this._log("info",
+      `[Multi-AF:${componentId}] ENTRY ${signal} @ $${price.toFixed(2)} | ` +
+      `SL $${sl.toFixed(2)} TP $${tp.toFixed(2)} | ` +
+      `RR 1:${riskCfg.riskReward.toFixed(2)} | Qty ${qty.toFixed(4)}`
+    );
+
+    // Execute order in live mode
+    if (!this.config.dryRun && this.client) {
+      try {
+        const order = await this.client.createOrder({
+          symbol: this.config.symbol,
+          side: signal,
+          type: "MARKET",
+          quantity: qty,
+          takeProfitPrice: tp,
+          stopLossPrice: sl,
+        });
+        position.orderId = order.id;
+        this._log("info", `[Multi-AF:${componentId}] Order placed: ${order.id}`);
+      } catch (err) {
+        this._log("error", `[Multi-AF:${componentId}] Order failed: ${err.message}`);
+        this.state.positions.delete(componentId);
+      }
     }
   }
 

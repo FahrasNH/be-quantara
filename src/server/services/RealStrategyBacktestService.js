@@ -62,6 +62,281 @@ function isoOf(c) {
  * @param {boolean}  [opts.enableSlippage=false]
  * @returns {{trades:Array, equity:Array, stats:Object, meta:Object}}
  */
+// Multi-position backtest (v3.0): each AF component opens independent positions
+function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
+  const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
+  const startCapital = opts.capital || 1000;
+
+  const indicators = calcIndicators(entryCandles, {
+    emaFast: cfg.emaFast ?? 9,
+    emaSlow: cfg.emaSlow ?? 21,
+    emaTrend: cfg.emaTrend ?? 50,
+    rsiPeriod: cfg.rsiPeriod ?? 14,
+    atrPeriod: cfg.atrPeriod ?? 14,
+  });
+
+  const htfPtr = htfCandles?.length ? buildHtfIndexPointer(entryCandles, htfCandles) : null;
+  const htfTrendCache = new Map();
+
+  function htfTrendAt(i) {
+    if (!htfPtr) return null;
+    const j = htfPtr[i];
+    if (j < 0) return "UNKNOWN";
+    if (htfTrendCache.has(j)) return htfTrendCache.get(j);
+    const window = htfCandles.slice(0, j + 1);
+    const trend = detectHTFTrend(window, {
+      htfEmaFast: cfg.htfEmaFast ?? 9,
+      htfEmaSlow: cfg.htfEmaSlow ?? 21,
+      sidewaysThresholdPct: cfg.sidewaysThresholdPct ?? 0.2,
+    });
+    htfTrendCache.set(j, trend);
+    return trend;
+  }
+
+  const trades = [];
+  const equity = [{ date: isoOf(entryCandles[0]), value: startCapital }];
+
+  // Multi-position state: Map<componentId, { side, entry, sl, tp, size, openIdx, ... }>
+  const positions = new Map();
+  const componentCooldown = new Map();
+  const componentConsecLoss = new Map();
+
+  let capital = startCapital;
+  let dayKey = null;
+  let dailyTradeCount = 0;
+  let dailyLoss = 0;
+  let dailyStartCapital = startCapital;
+
+  const maxConsecLoss = cfg.maxConsecLoss ?? 2;
+  const maxTradesPerDay = cfg.maxTradesPerDay ?? 6;
+  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
+  const atrMinPct = cfg.atrMinMult ?? 0;
+  const atrMaxPct = cfg.atrMaxMult ?? Infinity;
+  const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
+  const riskPerTrade = cfg.riskPerTrade ?? 0.01;
+
+  const warmup = Math.max(cfg.emaSlow ?? 21, cfg.atrPeriod ?? 14, 30) + 2;
+
+  function closePosition(componentId, position, exitPrice, reason, exitIdx) {
+    let px = exitPrice;
+    if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+    const grossPnl = position.side === "LONG"
+      ? (px - position.entry) * position.size
+      : (position.entry - px) * position.size;
+    const fee = feeRate * (position.entry + px) * position.size;
+    const pnl = grossPnl - fee;
+    capital += pnl;
+
+    if (pnl < 0) {
+      const compLoss = (componentConsecLoss.get(componentId) || 0) + 1;
+      componentConsecLoss.set(componentId, compLoss);
+      dailyLoss += Math.abs(pnl);
+      componentCooldown.set(componentId, (entryCandles[exitIdx].timestamp ?? 0) + cooldownMs);
+    } else {
+      componentConsecLoss.set(componentId, 0);
+    }
+
+    const closeTime = isoOf(entryCandles[exitIdx]);
+    trades.push({
+      date: closeTime,
+      openTime: isoOf(entryCandles[position.openIdx]),
+      closeTime,
+      side: position.side,
+      strategy: strategyKey,
+      component: componentId,
+      marketCond: position.marketCond,
+      entry: position.entry,
+      exit: px,
+      sl: position.sl,
+      tp: position.tp,
+      size: position.size,
+      grossPnl,
+      fee,
+      pnl,
+      pnlPct: (pnl / (position.entry * position.size)) * 100,
+      plannedRR: position.plannedRR,
+      reason,
+      result: pnl > 0 ? "win" : "loss",
+    });
+    positions.delete(componentId);
+  }
+
+  // Main loop
+  for (let i = warmup; i < entryCandles.length; i++) {
+    const c = entryCandles[i];
+    const price = c.close;
+    const atr = indicators.atr[i];
+    if (atr == null || price == null) {
+      equity.push({ date: isoOf(c), value: round2(capital) });
+      continue;
+    }
+
+    const dk = (isoOf(c) || "").slice(0, 10);
+    if (dk !== dayKey) {
+      dayKey = dk;
+      dailyTradeCount = 0;
+      dailyLoss = 0;
+      dailyStartCapital = capital;
+    }
+
+    // Monitor all open positions for SL/TP
+    for (const [componentId, pos] of positions.entries()) {
+      const hitSL = pos.side === "LONG" ? c.low <= pos.sl : c.high >= pos.sl;
+      const hitTP = pos.side === "LONG" ? c.high >= pos.tp : c.low <= pos.tp;
+      if (hitSL) {
+        closePosition(componentId, pos, pos.sl, "SL", i);
+      } else if (hitTP) {
+        closePosition(componentId, pos, pos.tp, "TP", i);
+      }
+    }
+
+    // Check market conditions
+    const emaF = indicators.emaFast?.[i];
+    const emaS = indicators.emaSlow?.[i];
+    const volatility = atr && price ? (atr / price) * 100 : 1.0;
+    const emaDelta = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
+    const trendStrength = Math.min(emaDelta * 50, 1.0);
+
+    const htfTrend = htfTrendAt(i);
+    if (htfTrend === "UNKNOWN") continue; // fail-closed
+
+    // Detect multi-component signals (AF v3.0)
+    const multiSignal = strategy.detectSignalMulti(indicators, i, {
+      balance: capital,
+      volatility,
+      trend_strength: trendStrength,
+      htfTrend,
+      maxEntryExtensionATR: cfg.maxEntryExtensionATR,
+      afRejectOnDissent: cfg.afRejectOnDissent,
+      pairTier: cfg.pairTier,
+      tierOverrides: cfg.tierOverrides,
+      volSmaMultiplier: cfg.volSmaMultiplier,
+    });
+
+    // Check each component for independent entry
+    for (const componentId of ["A", "B", "C"]) {
+      const signal = multiSignal[componentId];
+      if (!signal) continue;
+
+      // Skip if component already has open position
+      if (positions.has(componentId)) continue;
+
+      // Skip if component in cooldown
+      const cooldown = componentCooldown.get(componentId);
+      if (cooldown && Date.now() < cooldown) continue; // Note: in backtest, use candle time instead
+
+      // Skip if component exceeded max consecutive loss
+      const compLoss = componentConsecLoss.get(componentId) || 0;
+      if (compLoss >= maxConsecLoss) continue;
+
+      // Check daily limits
+      if (dailyTradeCount >= maxTradesPerDay) continue;
+      const dailyBase = dailyStartCapital || capital;
+      if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) continue;
+
+      // Check ATR gate
+      const atrPct = (atr / price) * 100;
+      if (atrPct < atrMinPct || atrPct > atrMaxPct) continue;
+
+      // Calculate risk config for this component
+      const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
+        marketCond: "NORMAL",
+        strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
+      });
+
+      const slDist = riskCfg.slDistance;
+      const tpDist = riskCfg.tpDistance;
+      const sl = signal === "LONG" ? price - slDist : price + slDist;
+      const tp = signal === "LONG" ? price + tpDist : price - tpDist;
+
+      if (!Number.isFinite(sl) || !Number.isFinite(tp)) continue;
+
+      // Calculate position size
+      const riskAmt = capital * riskPerTrade;
+      const dist = Math.abs(tp - sl);
+      const size = dist > 0 ? riskAmt / dist : 0;
+
+      if (size <= 0) continue;
+
+      // Open position
+      positions.set(componentId, {
+        side: signal,
+        entry: price,
+        sl,
+        tp,
+        size,
+        riskAmt,
+        openIdx: i,
+        component: componentId,
+        marketCond: "NORMAL",
+        plannedRR: riskCfg.riskReward,
+      });
+
+      dailyTradeCount += 1;
+    }
+
+    equity.push({ date: isoOf(c), value: round2(capital) });
+  }
+
+  // Compile stats
+  const wins = trades.filter(t => t.result === "win");
+  const losses = trades.filter(t => t.result === "loss");
+  const totalReturn = ((capital - startCapital) / startCapital) * 100;
+
+  const grossWin = wins.reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+  const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? "Inf" : "0.00");
+
+  const avgWin = wins.length ? grossWin / wins.length : 0;
+  const avgLoss = losses.length ? grossLoss / losses.length : 0;
+  const riskReward = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : "0.00";
+
+  // Max drawdown
+  let peak = startCapital, bal = startCapital, mdd = 0;
+  for (const t of trades) {
+    bal += t.pnl;
+    peak = Math.max(peak, bal);
+    mdd = Math.max(mdd, peak > 0 ? (peak - bal) / peak : 0);
+  }
+
+  // Sharpe
+  const rets = trades.map(t => t.pnl);
+  const avg = rets.length ? rets.reduce((s, r) => s + r, 0) / rets.length : 0;
+  const std = rets.length > 1
+    ? Math.sqrt(rets.reduce((s, r) => s + (r - avg) ** 2, 0) / (rets.length - 1))
+    : 0;
+  const sharpe = std > 0 ? ((avg / std) * Math.sqrt(252)).toFixed(2) : "0.00";
+
+  return {
+    ok: true,
+    trades,
+    equity,
+    stats: {
+      totalTrades: trades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: trades.length > 0 ? (wins.length / trades.length * 100).toFixed(1) : "0.0",
+      totalReturn: totalReturn.toFixed(2),
+      finalCapital: capital.toFixed(2),
+      profitFactor,
+      avgWin: avgWin.toFixed(2),
+      avgLoss: avgLoss.toFixed(2),
+      riskReward,
+      maxDrawdown: (mdd * 100).toFixed(2),
+      sharpe,
+      totalFees: trades.reduce((s, t) => s + (t.fee || 0), 0).toFixed(2),
+    },
+    meta: {
+      strategyKey,
+      entryBars: entryCandles.length,
+      htfBars: htfCandles?.length ?? 0,
+      higherTf: "1h",
+      feeRate: FEE_RATE_PER_SIDE,
+      slippage: slip,
+    },
+  };
+}
+
 function runRealBacktest(opts = {}) {
   const {
     entryCandles = [],
@@ -84,6 +359,13 @@ function runRealBacktest(opts = {}) {
 
   const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
   const slip = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
+
+  // Multi-position mode (v3.0): ADAPTIVE_FUSION opens up to 3 concurrent positions
+  const multiPosMode = opts.useMultiPosition || strategyKey === "ADAPTIVE_FUSION";
+
+  if (multiPosMode) {
+    return _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles);
+  }
 
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
@@ -136,6 +418,13 @@ function runRealBacktest(opts = {}) {
   const higherTf = cfg.higherTf ?? null;
 
   const warmup = Math.max(cfg.emaSlow ?? 21, cfg.atrPeriod ?? 14, 30) + 2;
+
+  // Gate funnel — counts WHY candles don't become trades (diagnose 0-trade runs).
+  const diag = {
+    barsEvaluated: 0, htfUnknownSkip: 0, signalNull: 0, htfDirBlock: 0,
+    cooldownBlock: 0, consecLossBlock: 0, maxTradesBlock: 0, dailyLossBlock: 0,
+    atrGateBlock: 0, validateBlock: 0, opened: 0,
+  };
 
   function closePosition(exitPrice, reason, exitIdx) {
     let px = exitPrice;
@@ -211,6 +500,8 @@ function runRealBacktest(opts = {}) {
       continue;
     }
 
+    diag.barsEvaluated += 1;
+
     // ── 2. Market conditions (mirror AdaptiveStrategyEngine._tick step 4) ───
     const emaF = indicators.emaFast?.[i];
     const emaS = indicators.emaSlow?.[i];
@@ -221,6 +512,7 @@ function runRealBacktest(opts = {}) {
     // ── 3. HTF trend + fail-closed (mirror step 6b/6c) ──────────────────────
     const htfTrend = htfTrendAt(i);
     if (higherTf && htfTrend === "UNKNOWN") {
+      diag.htfUnknownSkip += 1;
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
     }
@@ -237,27 +529,27 @@ function runRealBacktest(opts = {}) {
       pairTier: cfg.pairTier,
       tierOverrides: cfg.tierOverrides,
     });
-    if (!signal) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
-    if (signal === "LONG" && htfTrend === "BEARISH") { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
-    if (signal === "SHORT" && htfTrend === "BULLISH") { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (signal === "LONG" && htfTrend === "BEARISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 6. Risk gates (mirror BotEngine._checkRiskGates) ────────────────────
     const nowMs = c.timestamp ?? 0;
-    if (cooldownUntil && nowMs < cooldownUntil) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
-    if (consecLoss >= maxConsecLoss) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
-    if (dailyTradeCount >= maxTradesPerDay) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (cooldownUntil && nowMs < cooldownUntil) { diag.cooldownBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (consecLoss >= maxConsecLoss) { diag.consecLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (dailyTradeCount >= maxTradesPerDay) { diag.maxTradesBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const dailyBase = dailyStartCapital || capital;
-    if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) { diag.dailyLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const atrPct = (atr / price) * 100;
-    if (atrPct < atrMinPct || atrPct > atrMaxPct) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (atrPct < atrMinPct || atrPct > atrMaxPct) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 7. validateEntry (mirror step 9) ────────────────────────────────────
     if (typeof strategy.validateEntry === "function") {
       try {
         const v = strategy.validateEntry(price, atr, c.volume, indicators.volSMA?.[i] || 0);
-        if (v && v.valid === false) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+        if (v && v.valid === false) { diag.validateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
       } catch { /* degrade open — same as live */ }
     }
 
@@ -297,6 +589,7 @@ function runRealBacktest(opts = {}) {
       plannedRR,
     };
     dailyTradeCount += 1;
+    diag.opened += 1;
 
     equity.push({ date: isoOf(c), value: round2(capital) });
   }
@@ -312,6 +605,7 @@ function runRealBacktest(opts = {}) {
       higherTf,
       feeRate,
       slippage: slip,
+      diagnostics: diag,
     },
   };
 }

@@ -400,6 +400,121 @@ class AdaptiveFusionStrategy extends StrategyBase {
   }
 
   /**
+   * detectSignalMulti — Multi-position mode (v3.0)
+   * Returns {A, B, C} with each component's signal (LONG/SHORT/null) independently.
+   * NO voting consensus — each component that triggers opens its own position.
+   * Gates (market condition, HTF trend, chase guard) applied per-component.
+   */
+  detectSignalMulti(indicators, lastIdx, config = {}) {
+    const result = { A: null, B: null, C: null, meta: {} };
+    if (lastIdx < 30) return result;
+
+    const balance = config.balance || 500;
+    const rsi     = indicators.rsi?.[lastIdx];
+    const atr     = indicators.atr?.[lastIdx];
+    const closes  = indicators.closes || [];
+    const emaFast = indicators.emaFast?.[lastIdx];
+    const emaSlow = indicators.emaSlow?.[lastIdx];
+    const volumes = indicators.volumes || [];
+    const volSMA  = indicators.volSMA  || [];
+
+    if (!rsi || !atr || closes.length < 3) return result;
+
+    const closesConfirmed = closes.slice(0, lastIdx + 1);
+    const marketConditions = {
+      volatility:      config.volatility      || 1.0,
+      trend_strength:  config.trend_strength  || 0.1,
+    };
+
+    // Global gate: DEAD_MARKET blocks all components
+    const marketCond = this.interpretMarketCondition(
+      marketConditions.volatility,
+      marketConditions.trend_strength
+    );
+    if (marketCond === "DEAD_MARKET") return result;
+
+    const htfTrend = config.htfTrend ?? null;
+    if (htfTrend === "UNKNOWN") return result;
+
+    if (config.htfTrendStrengthMin != null && htfTrend && htfTrend !== "SIDEWAYS") {
+      const ts = config.htfTrendStrength;
+      if (ts == null || ts < config.htfTrendStrengthMin) return result;
+    }
+
+    const rankings  = this.rankByMarketConditions(marketConditions);
+    const scoreMap  = Object.fromEntries(rankings.map(r => [r.key, r.score]));
+    const maxExt    = config.maxEntryExtensionATR ?? 0.7;
+
+    // ── Component A ──────────────────────────────────────────────────────────
+    if (balance >= this.SUB_STRATEGIES.A.minCapital && (scoreMap.A ?? 0) >= this.SUB_STRATEGIES.A.minScore) {
+      const vol    = volumes[lastIdx] ?? 0;
+      const vSMA   = volSMA[lastIdx]  ?? 0;
+      let sig = this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0);
+
+      // Apply HTF directional filter
+      if (sig && htfTrend) {
+        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
+        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
+      }
+
+      // Apply chase guard
+      if (sig) {
+        const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
+        if (closeConfirmed != null && emaFast != null && atr > 0 &&
+            Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
+          sig = null;
+        }
+      }
+
+      result.A = sig;
+    }
+
+    // ── Component B ──────────────────────────────────────────────────────────
+    if (balance >= this.SUB_STRATEGIES.B.minCapital && (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore) {
+      const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
+      let sig = this._detectSignalB(rsi, indicators.emaFast || [], indicators.emaSlow || [], emaLong, closesConfirmed, lastIdx, config);
+
+      if (sig && htfTrend) {
+        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
+        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
+      }
+
+      if (sig) {
+        const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
+        if (closeConfirmed != null && emaFast != null && atr > 0 &&
+            Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
+          sig = null;
+        }
+      }
+
+      result.B = sig;
+    }
+
+    // ── Component C ──────────────────────────────────────────────────────────
+    if (balance >= this.SUB_STRATEGIES.C.minCapital && (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore) {
+      let sig = this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed);
+
+      if (sig && htfTrend) {
+        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
+        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
+      }
+
+      if (sig) {
+        const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
+        if (closeConfirmed != null && emaFast != null && atr > 0 &&
+            Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
+          sig = null;
+        }
+      }
+
+      result.C = sig;
+    }
+
+    result.meta = { scoreMap, marketCond, htfTrend };
+    return result;
+  }
+
+  /**
    * Pick the highest-scoring component that agrees with the resolved direction.
    * Used to select the right SL/TP multiplier.
    */
