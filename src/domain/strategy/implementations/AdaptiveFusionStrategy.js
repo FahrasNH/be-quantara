@@ -47,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "2.6.0",
+      version: "3.0.0",
       enabled: true,
       ...config,
     });
@@ -115,18 +115,35 @@ class AdaptiveFusionStrategy extends StrategyBase {
    * Tuneable market condition thresholds.
    * Crypto needs wider ranges than equities.
    */
-  getMarketThresholds() {
+  /**
+   * Regime thresholds. v3.0: TF-aware / config-driven.
+   *
+   * ROOT-CAUSE FIX (2026-06-28): the v2.5 defaults (LOW_VOL 1.4, WEAK_TREND 0.55)
+   * were calibrated for a HIGHER timeframe. On the strategy's actual 15m entry TF,
+   * ATR% averages ~0.5% (never > 1.4) and the EMA-slope trendStrength averages
+   * ~0.17 (never > 0.55) → interpretMarketCondition classified 100% of 15m bars
+   * as DEAD_MARKET → the strategy NEVER traded (0–3 trades over 7 months).
+   *
+   * Defaults below are recalibrated for the 15m entry distribution. Any field can
+   * still be overridden per-call (backtest sweep) via config.marketThresholds, or
+   * globally via the constructor (this.config.marketThresholds) for live tuning.
+   * @param {Object} overrides - per-call threshold overrides
+   */
+  getMarketThresholds(overrides = {}) {
     return {
-      // v2.5 spec (STRATEGIES.md §4): LOW_VOL 1.4, WEAK_TREND 0.55, STRONG_TREND 0.82.
-      LOW_VOL:         1.4,
-      NORMAL_VOL:      2.0,
-      HIGH_VOL:        3.5,
-      WEAK_TREND:      0.55,
-      NORMAL_TREND:    0.65,
-      STRONG_TREND:    0.82,
+      // 15m-calibrated volatility bands (ATR% of price)
+      LOW_VOL:         0.35,
+      NORMAL_VOL:      0.60,
+      HIGH_VOL:        1.20,
+      // 15m-calibrated trend bands (EMA-slope strength 0–1)
+      WEAK_TREND:      0.10,
+      NORMAL_TREND:    0.22,
+      STRONG_TREND:    0.40,
       COMP_A_MIN_SCORE: 38,
       COMP_B_MIN_SCORE: 45,
       COMP_C_MIN_SCORE: 42,
+      ...(this.config?.marketThresholds || {}),
+      ...overrides,
     };
   }
 
@@ -134,8 +151,8 @@ class AdaptiveFusionStrategy extends StrategyBase {
    * Classify market regime into one of four readable states.
    * @returns {"DEAD_MARKET"|"CHOPPY_VOLATILE"|"STRONG_TREND"|"NORMAL"}
    */
-  interpretMarketCondition(volatility, trendStrength) {
-    const t = this.getMarketThresholds();
+  interpretMarketCondition(volatility, trendStrength, overrides = {}) {
+    const t = this.getMarketThresholds(overrides);
     if (volatility <= t.LOW_VOL && trendStrength < t.WEAK_TREND) return "DEAD_MARKET";
     if (volatility > t.HIGH_VOL && trendStrength < t.WEAK_TREND) return "CHOPPY_VOLATILE";
     if (trendStrength > t.STRONG_TREND)                          return "STRONG_TREND";
@@ -144,9 +161,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
   // ── Ranking ───────────────────────────────────────────────────────────────
 
-  rankByMarketConditions(marketConditions = {}) {
+  rankByMarketConditions(marketConditions = {}, overrides = {}) {
     const { volatility = 1.0, trend_strength = 0.1 } = marketConditions;
-    const t = this.getMarketThresholds();
+    const t = this.getMarketThresholds(overrides);
 
     // Component C — Swing (best in strong trends, moderate volatility)
     let scoreC = 50;
@@ -426,10 +443,14 @@ class AdaptiveFusionStrategy extends StrategyBase {
       trend_strength:  config.trend_strength  || 0.1,
     };
 
+    // v3.0: per-call threshold overrides (TF-aware regime calibration / sweeps)
+    const thr = config.marketThresholds || {};
+
     // Global gate: DEAD_MARKET blocks all components
     const marketCond = this.interpretMarketCondition(
       marketConditions.volatility,
-      marketConditions.trend_strength
+      marketConditions.trend_strength,
+      thr
     );
     if (marketCond === "DEAD_MARKET") return result;
 
@@ -441,74 +462,49 @@ class AdaptiveFusionStrategy extends StrategyBase {
       if (ts == null || ts < config.htfTrendStrengthMin) return result;
     }
 
-    const rankings  = this.rankByMarketConditions(marketConditions);
+    const rankings  = this.rankByMarketConditions(marketConditions, thr);
     const scoreMap  = Object.fromEntries(rankings.map(r => [r.key, r.score]));
     const maxExt    = config.maxEntryExtensionATR ?? 0.7;
+    const D = config._diag || null; // optional per-component funnel counters
+
+    // Shared per-component pipeline: raw signal → HTF filter → chase guard.
+    const evalComponent = (key, rawSig) => {
+      if (D) D.evaluated[key] = (D.evaluated[key] || 0) + 1;
+      let sig = rawSig;
+      if (!sig) { if (D) D.signalNull[key] = (D.signalNull[key] || 0) + 1; return null; }
+      if (D) D.rawSignal[key] = (D.rawSignal[key] || 0) + 1;
+      if (htfTrend) {
+        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
+        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
+      }
+      if (!sig) { if (D) D.htfBlock[key] = (D.htfBlock[key] || 0) + 1; return null; }
+      const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
+      if (closeConfirmed != null && emaFast != null && atr > 0 &&
+          Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
+        if (D) D.chaseBlock[key] = (D.chaseBlock[key] || 0) + 1;
+        return null;
+      }
+      if (D) D.fired[key] = (D.fired[key] || 0) + 1;
+      return sig;
+    };
 
     // ── Component A ──────────────────────────────────────────────────────────
     if (balance >= this.SUB_STRATEGIES.A.minCapital && (scoreMap.A ?? 0) >= this.SUB_STRATEGIES.A.minScore) {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
-      let sig = this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0);
-
-      // Apply HTF directional filter
-      if (sig && htfTrend) {
-        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
-        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
-      }
-
-      // Apply chase guard
-      if (sig) {
-        const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
-        if (closeConfirmed != null && emaFast != null && atr > 0 &&
-            Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
-          sig = null;
-        }
-      }
-
-      result.A = sig;
-    }
+      result.A = evalComponent("A", this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0));
+    } else if (D) { D.scoreGate.A = (D.scoreGate.A || 0) + 1; }
 
     // ── Component B ──────────────────────────────────────────────────────────
     if (balance >= this.SUB_STRATEGIES.B.minCapital && (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore) {
       const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
-      let sig = this._detectSignalB(rsi, indicators.emaFast || [], indicators.emaSlow || [], emaLong, closesConfirmed, lastIdx, config);
-
-      if (sig && htfTrend) {
-        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
-        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
-      }
-
-      if (sig) {
-        const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
-        if (closeConfirmed != null && emaFast != null && atr > 0 &&
-            Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
-          sig = null;
-        }
-      }
-
-      result.B = sig;
-    }
+      result.B = evalComponent("B", this._detectSignalB(rsi, indicators.emaFast || [], indicators.emaSlow || [], emaLong, closesConfirmed, lastIdx, config));
+    } else if (D) { D.scoreGate.B = (D.scoreGate.B || 0) + 1; }
 
     // ── Component C ──────────────────────────────────────────────────────────
     if (balance >= this.SUB_STRATEGIES.C.minCapital && (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore) {
-      let sig = this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed);
-
-      if (sig && htfTrend) {
-        if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
-        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
-      }
-
-      if (sig) {
-        const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
-        if (closeConfirmed != null && emaFast != null && atr > 0 &&
-            Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
-          sig = null;
-        }
-      }
-
-      result.C = sig;
-    }
+      result.C = evalComponent("C", this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed));
+    } else if (D) { D.scoreGate.C = (D.scoreGate.C || 0) + 1; }
 
     result.meta = { scoreMap, marketCond, htfTrend };
     return result;
@@ -767,15 +763,15 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
   getRiskConfig() {
     return {
-      // v2.6 spec (STRATEGIES.md §4): risk 0.5%, max 6 trade/hari, cooldown 90 mnt.
+      // v3.0 (2026-06-28): recalibrated for 15m entry TF.
       riskPerTrade:        0.005,
       riskPerTradeStrong:  0.01,
       maxRiskPerTrade:     0.02,
       maxDailyLossPct:     0.035,
-      maxTradesPerDay:     6,
-      cooldownAfterLoss:   90,
-      maxConsecLoss:     2,
-      leverage:          2,
+      maxTradesPerDay:     12,
+      cooldownAfterLoss:   30,
+      maxConsecLoss:       4,
+      leverage:            2,
     };
   }
 

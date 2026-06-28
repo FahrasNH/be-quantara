@@ -211,7 +211,10 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       pairTier: cfg.pairTier,
       tierOverrides: cfg.tierOverrides,
       volSmaMultiplier: cfg.volSmaMultiplier,
+      marketThresholds: cfg.marketThresholds, // v3.0: TF-aware regime calibration
     });
+
+    const nowMs = c.timestamp ?? 0; // backtest "now" = current candle time (NOT wall-clock)
 
     // Check each component for independent entry
     for (const componentId of ["A", "B", "C"]) {
@@ -221,9 +224,9 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       // Skip if component already has open position
       if (positions.has(componentId)) continue;
 
-      // Skip if component in cooldown
+      // Skip if component in cooldown (use candle time, not Date.now())
       const cooldown = componentCooldown.get(componentId);
-      if (cooldown && Date.now() < cooldown) continue; // Note: in backtest, use candle time instead
+      if (cooldown && nowMs < cooldown) continue;
 
       // Skip if component exceeded max consecutive loss
       const compLoss = componentConsecLoss.get(componentId) || 0;
