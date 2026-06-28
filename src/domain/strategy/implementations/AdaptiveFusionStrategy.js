@@ -47,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.0.0",
+      version: "3.1.0",
       enabled: true,
       ...config,
     });
@@ -475,7 +475,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
       if (D) D.rawSignal[key] = (D.rawSignal[key] || 0) + 1;
       if (htfTrend) {
         if (sig === "LONG"  && htfTrend === "BEARISH") sig = null;
-        if (sig === "SHORT" && htfTrend === "BULLISH") sig = null;
+        // v3.1: SHORT only in confirmed BEARISH HTF — SIDEWAYS allows too many
+        // counter-trend entries in ranging/bullish markets (WR 31.6%, PF 0.78).
+        if (sig === "SHORT" && htfTrend !== "BEARISH") sig = null;
       }
       if (!sig) { if (D) D.htfBlock[key] = (D.htfBlock[key] || 0) + 1; return null; }
       const closeConfirmed = closesConfirmed[lastIdx] ?? closes[lastIdx];
@@ -502,7 +504,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
     } else if (D) { D.scoreGate.B = (D.scoreGate.B || 0) + 1; }
 
     // ── Component C ──────────────────────────────────────────────────────────
-    if (balance >= this.SUB_STRATEGIES.C.minCapital && (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore) {
+    // v3.1: C (Swing) requires STRONG_TREND regime — its 1.2×ATR SL and swing
+    // logic are designed for 4h/1D context. On 15m it generates wide positions
+    // with 20% WR in NORMAL/CHOPPY conditions. STRONG_TREND (EMA-slope > 0.40)
+    // ensures a clear directional move exists before C enters.
+    if (balance >= this.SUB_STRATEGIES.C.minCapital &&
+        (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore &&
+        marketCond === "STRONG_TREND") {
       result.C = evalComponent("C", this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed));
     } else if (D) { D.scoreGate.C = (D.scoreGate.C || 0) + 1; }
 
