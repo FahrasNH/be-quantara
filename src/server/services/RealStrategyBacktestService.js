@@ -241,9 +241,13 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       const atrPct = (atr / price) * 100;
       if (atrPct < atrMinPct || atrPct > atrMaxPct) continue;
 
-      // Calculate risk config for this component
+      // Calculate risk config for this component. Pass the REAL regime so
+      // strongTrendTPMult (let winners run in STRONG_TREND) can fire — it was
+      // hardcoded "NORMAL", so the ×1.8 TP extension never applied and every
+      // winner was capped at the base RR.
+      const regime = multiSignal.meta?.marketCond || "NORMAL";
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
-        marketCond: "NORMAL",
+        marketCond: regime,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
       });
 
@@ -254,10 +258,12 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
 
       if (!Number.isFinite(sl) || !Number.isFinite(tp)) continue;
 
-      // Calculate position size
+      // Calculate position size — risk-based: the loss when SL is hit must equal
+      // riskAmt. size = riskAmt / slDist. Dividing by the FULL SL→TP span (as
+      // before) shrank every position ~2.8× → effective risk ~0.18% instead of
+      // the configured 0.5%, which is why return + drawdown were both tiny.
       const riskAmt = capital * riskPerTrade;
-      const dist = Math.abs(tp - sl);
-      const size = dist > 0 ? riskAmt / dist : 0;
+      const size = slDist > 0 ? riskAmt / slDist : 0;
 
       if (size <= 0) continue;
 
@@ -271,7 +277,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
         riskAmt,
         openIdx: i,
         component: componentId,
-        marketCond: "NORMAL",
+        marketCond: regime,
         plannedRR: riskCfg.riskReward,
       });
 

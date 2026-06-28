@@ -1358,8 +1358,8 @@ class BotEngine extends EventEmitter {
                   continue; // Component exceeded max consecutive loss
                 }
 
-                // Multi-position entry
-                await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot);
+                // Multi-position entry (pass the real regime so strong-trend TP can fire)
+                await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot, multiSignal.meta?.marketCond);
               }
               // Skip single-position logic below for AF in multi-position mode
               return;
@@ -2546,15 +2546,16 @@ class BotEngine extends EventEmitter {
   // MULTI-POSITION SIGNAL HANDLING (v3.0)
   // ─────────────────────────────────────────────
 
-  async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot) {
+  async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot, marketCond = "NORMAL") {
     if (!signal || !atr) return;
 
     const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
     const afStrategy = new AdaptiveFusionStrategy();
 
-    // Calculate risk config for this component
+    // Calculate risk config for this component. Pass the real regime so
+    // strongTrendTPMult (let winners run in STRONG_TREND) can fire.
     const riskCfg = afStrategy.calculateRiskConfig(price, atr, signal, componentId, {
-      marketCond: "NORMAL", // simplified for now
+      marketCond: marketCond || "NORMAL",
       strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
     });
 
@@ -2575,11 +2576,12 @@ class BotEngine extends EventEmitter {
       return;
     }
 
-    // Calculate position size based on risk
+    // Calculate position size based on risk — loss when SL hits must equal
+    // riskAmt, so qty = riskAmt / slDist. Dividing by the full SL→TP span (as
+    // before) silently under-sized every position ~2.8×.
     const riskPerTrade = this.config.riskPerTrade || 0.01;
     const riskAmt = this.state.capital * riskPerTrade;
-    const dist = Math.abs(tp - sl);
-    const qty = dist > 0 ? riskAmt / dist : 0;
+    const qty = slDist > 0 ? riskAmt / slDist : 0;
 
     if (qty <= 0) {
       this._log("warn", `[Multi-AF:${componentId}] Invalid qty=${qty}`);
