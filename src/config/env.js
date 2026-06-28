@@ -75,6 +75,8 @@ const cfg = {
   GROK_CONFIRM_FAIL_MODE:            process.env.GROK_CONFIRM_FAIL_MODE || "closed",
   GROK_CONFIRM_PROMPT_LITE:          process.env.GROK_CONFIRM_PROMPT_LITE !== "false",
   GROK_CONFIRM_OPEN:                 process.env.GROK_CONFIRM_OPEN === "true",
+  /** Parallel xAI calls per chunk during backtest Grok Confirm (default 8). */
+  GROK_CONFIRM_CONCURRENCY:          Math.max(1, parseInt(process.env.GROK_CONFIRM_CONCURRENCY, 10) || 8),
 
   // ── Midtrans payment gateway (Sprint 5 / PAY-01) ────────────────────────────
   // Get Server Key & Client Key from the Midtrans dashboard

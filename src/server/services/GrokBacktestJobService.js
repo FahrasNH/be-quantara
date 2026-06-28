@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const GrokConfirmBatchProcessor = require("./GrokConfirmBatchProcessor");
 
 const JOB_TTL_MS = 60 * 60 * 1000;
+const MAX_JOB_LOGS = 200;
 const jobs = new Map();
 /** Dedup job aktif per user+strategi+simbol — cegah double POST saat overload */
 const activeJobIndex = new Map();
@@ -65,6 +66,7 @@ class GrokBacktestJobService {
       status: "queued",
       progress: { done: doneSeed, total: signals.length },
       decisions: { ...seedDecisions },
+      logs: [],
       stats: null,
       error: null,
       createdAt: Date.now(),
@@ -100,6 +102,7 @@ class GrokBacktestJobService {
       status: job.status,
       progress: job.progress,
       ...(Object.keys(job.decisions || {}).length ? { decisions: job.decisions } : {}),
+      ...(Array.isArray(job.logs) && job.logs.length ? { logs: job.logs } : {}),
       ...(job.status === "done" ? { stats: partialStats } : { statsPartial: partialStats }),
       ...(job.error ? { error: job.error } : {}),
     };
@@ -125,9 +128,12 @@ class GrokBacktestJobService {
       tpBandPct: payload.tpBandPct,
       tpRejectAction: payload.tpRejectAction,
       seedDecisions,
-      onProgress: (done, total, decisions) => {
+      onProgress: (done, total, decisions, logEntry) => {
         job.progress = { done, total };
         if (decisions) job.decisions = decisions;
+        if (logEntry) {
+          job.logs = [...(job.logs || []), logEntry].slice(-MAX_JOB_LOGS);
+        }
         job.updatedAt = Date.now();
       },
     });

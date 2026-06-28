@@ -6,7 +6,23 @@ const { STRATEGIES } = require("../../domain/legacyStrategies");
 const GrokConfirmService = require("./GrokConfirmService");
 const cfg = require("../../config/env");
 
-const GROK_CONFIRM_CONCURRENCY = 5;
+const GROK_CONFIRM_CONCURRENCY = cfg.GROK_CONFIRM_CONCURRENCY;
+
+function buildLogEntry(sig, decision) {
+  const id = String(sig.id ?? sig.barIndex);
+  return {
+    time: Date.now(),
+    signalId: id,
+    side: sig.side || null,
+    price: Number(sig.price ?? sig.entry) || null,
+    approved: Boolean(decision.approved),
+    confidence: decision.confidence ?? null,
+    tpMode: decision.tpMode ?? null,
+    tpConfidence: decision.tpConfidence ?? null,
+    reason: String(decision.reason || "").slice(0, 240),
+    failOpen: decision.failOpen ?? false,
+  };
+}
 
 /**
  * @param {object} opts
@@ -17,7 +33,7 @@ const GROK_CONFIRM_CONCURRENCY = 5;
  * @param {boolean} [opts.tpAdjust]
  * @param {number} [opts.tpBandPct]
  * @param {string} [opts.tpRejectAction]
- * @param {(done: number, total: number) => void} [opts.onProgress]
+ * @param {(done: number, total: number, decisions?: object, logEntry?: object) => void} [opts.onProgress]
  */
 async function processBatch({
   userId,
@@ -64,10 +80,11 @@ async function processBatch({
     const slRules = Number(sig.sl ?? sig.sl_rules);
     const tpRules = Number(sig.tp ?? sig.tp_rules);
     if (!side || !Number.isFinite(price) || !Number.isFinite(atr)) {
-      decisions[id] = { approved: false, reason: "invalid signal payload" };
+      const decision = { approved: false, reason: "invalid signal payload" };
+      decisions[id] = decision;
       rejected += 1;
       done += 1;
-      onProgress?.(done, total, decisions);
+      onProgress?.(done, total, decisions, buildLogEntry(sig, decision));
       return;
     }
 
@@ -103,36 +120,45 @@ async function processBatch({
         minRiskReward,
       });
 
-      decisions[id] = {
+      const decision = {
         approved: applied.approved,
         tp: applied.tp,
         tpDist: applied.tpDist,
+        tpMode: applied.tpMode ?? "full",
         reason: applied.reason,
         tpReasoning: applied.tpReasoning,
         confidence: applied.confidence,
         tpConfidence: applied.tpConfidence,
+        tpModeConfidence: applied.tpModeConfidence ?? null,
         failOpen: applied.failOpen ?? false,
       };
+      decisions[id] = decision;
       if (applied.approved) approved += 1;
       else rejected += 1;
+      done += 1;
+      onProgress?.(done, total, decisions, buildLogEntry(sig, decision));
+      return;
     } catch (err) {
+      let decision;
       if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
-        decisions[id] = {
+        decision = {
           approved: true,
           tp: tpRules,
           tpDist: Math.abs(tpRules - price),
+          tpMode: "full",
           reason: `fail-open: ${err.message}`,
           failOpen: true,
         };
         approved += 1;
       } else {
-        decisions[id] = { approved: false, reason: err.message };
+        decision = { approved: false, reason: err.message };
         rejected += 1;
       }
+      decisions[id] = decision;
+      done += 1;
+      onProgress?.(done, total, decisions, buildLogEntry(sig, decision));
+      return;
     }
-
-    done += 1;
-    onProgress?.(done, total, decisions);
   }
 
   for (let i = 0; i < pendingSignals.length; i += GROK_CONFIRM_CONCURRENCY) {
