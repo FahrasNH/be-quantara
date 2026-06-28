@@ -75,8 +75,8 @@ test("legacyStrategies ADAPTIVE_FUSION v3.0 preset", () => {
   assert.strictEqual(preset.maxConsecLoss, 4);
 });
 
-test("AdaptiveFusionStrategy class v3.1", () => {
-  assert.strictEqual(afs.config.version, "3.1.0");
+test("AdaptiveFusionStrategy class v3.2", () => {
+  assert.strictEqual(afs.config.version, "3.2.0");
   const risk = afs.getRiskConfig();
   assert.strictEqual(risk.riskPerTrade, 0.005);
   assert.strictEqual(risk.riskPerTradeStrong, 0.01);
@@ -205,7 +205,51 @@ test("v3.1 LONG still fires normally in BULLISH HTF (not affected by SHORT filte
   const sig = afs.detectSignalMulti(ind, N, {
     balance: 500, volatility: 1.0, trend_strength: 0.5,
     htfTrend: "BULLISH", maxEntryExtensionATR: 1.5,
+    afEnabledComponents: ["A", "B", "C"], // explicitly enable all for this legacy assertion
   });
   // B should fire LONG (uptrend, pullback-resume event)
   assert.strictEqual(sig.B, "LONG", `B must fire LONG in BULLISH HTF, got ${sig.B}`);
+});
+
+// ── v3.2 Fix: component enable-list (default C-only) ─────────────────────────
+
+test("v3.2 preset defaults to C-only (afEnabledComponents)", () => {
+  assert.deepStrictEqual(preset.afEnabledComponents, ["C"]);
+});
+
+test("v3.2 class version 3.2.0", () => {
+  assert.strictEqual(afs.config.version, "3.2.0");
+});
+
+test("v3.2 afEnabledComponents=['C'] blocks A and B even when their signals would fire", () => {
+  // makeUpIndicators makes B fire LONG; with C-only, B must be suppressed
+  const ind = makeUpIndicators();
+  const sig = afs.detectSignalMulti(ind, N, {
+    balance: 500, volatility: 1.0, trend_strength: 0.5,
+    htfTrend: "BULLISH", maxEntryExtensionATR: 1.5,
+    afEnabledComponents: ["C"],
+  });
+  assert.strictEqual(sig.A, null, "A must be null when not in enable-list");
+  assert.strictEqual(sig.B, null, "B must be null when not in enable-list");
+});
+
+test("v3.2 afEnabledComponents=['A','B','C'] re-enables all components", () => {
+  const ind = makeUpIndicators();
+  const sig = afs.detectSignalMulti(ind, N, {
+    balance: 500, volatility: 1.0, trend_strength: 0.5,
+    htfTrend: "BULLISH", maxEntryExtensionATR: 1.5,
+    afEnabledComponents: ["A", "B", "C"],
+  });
+  // B fires LONG when re-enabled (proves the flag, not a permanent block)
+  assert.strictEqual(sig.B, "LONG", "B must fire when explicitly enabled");
+});
+
+test("v3.2 default (no afEnabledComponents passed) enables all (backward compat)", () => {
+  // When the caller omits the flag, fall back to all three (legacy/test behavior)
+  const ind = makeUpIndicators();
+  const sig = afs.detectSignalMulti(ind, N, {
+    balance: 500, volatility: 1.0, trend_strength: 0.5,
+    htfTrend: "BULLISH", maxEntryExtensionATR: 1.5,
+  });
+  assert.strictEqual(sig.B, "LONG", "B fires under backward-compat default (all enabled)");
 });

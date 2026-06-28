@@ -47,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.1.0",
+      version: "3.2.0",
       enabled: true,
       ...config,
     });
@@ -467,6 +467,16 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const maxExt    = config.maxEntryExtensionATR ?? 0.7;
     const D = config._diag || null; // optional per-component funnel counters
 
+    // v3.2 (2026-06-29): component enable-list. Real BNB data (19,969 15m bars,
+    // Dec 2025–Jun 2026) showed A (PF 0.31) and B (PF 0.41) have NEGATIVE edge —
+    // they are EMA-crossover scalp/day designs that whipsaw on real 15m chop.
+    // Only C (Swing, RR 4.5 trend-following: small losses, occasional big wins)
+    // is profitable (PF 1.45). Default to C-only; pass afEnabledComponents to
+    // override (e.g. ["A","B","C"] for research/backtest comparison).
+    const enabled = config.afEnabledComponents
+      || this.config?.afEnabledComponents
+      || ["A", "B", "C"];
+
     // Shared per-component pipeline: raw signal → HTF filter → chase guard.
     const evalComponent = (key, rawSig) => {
       if (D) D.evaluated[key] = (D.evaluated[key] || 0) + 1;
@@ -491,14 +501,16 @@ class AdaptiveFusionStrategy extends StrategyBase {
     };
 
     // ── Component A ──────────────────────────────────────────────────────────
-    if (balance >= this.SUB_STRATEGIES.A.minCapital && (scoreMap.A ?? 0) >= this.SUB_STRATEGIES.A.minScore) {
+    if (enabled.includes("A") &&
+        balance >= this.SUB_STRATEGIES.A.minCapital && (scoreMap.A ?? 0) >= this.SUB_STRATEGIES.A.minScore) {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
       result.A = evalComponent("A", this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0));
     } else if (D) { D.scoreGate.A = (D.scoreGate.A || 0) + 1; }
 
     // ── Component B ──────────────────────────────────────────────────────────
-    if (balance >= this.SUB_STRATEGIES.B.minCapital && (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore) {
+    if (enabled.includes("B") &&
+        balance >= this.SUB_STRATEGIES.B.minCapital && (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore) {
       const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
       result.B = evalComponent("B", this._detectSignalB(rsi, indicators.emaFast || [], indicators.emaSlow || [], emaLong, closesConfirmed, lastIdx, config));
     } else if (D) { D.scoreGate.B = (D.scoreGate.B || 0) + 1; }
@@ -508,7 +520,8 @@ class AdaptiveFusionStrategy extends StrategyBase {
     // logic are designed for 4h/1D context. On 15m it generates wide positions
     // with 20% WR in NORMAL/CHOPPY conditions. STRONG_TREND (EMA-slope > 0.40)
     // ensures a clear directional move exists before C enters.
-    if (balance >= this.SUB_STRATEGIES.C.minCapital &&
+    if (enabled.includes("C") &&
+        balance >= this.SUB_STRATEGIES.C.minCapital &&
         (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore &&
         marketCond === "STRONG_TREND") {
       result.C = evalComponent("C", this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed));

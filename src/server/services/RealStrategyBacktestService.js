@@ -212,6 +212,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       tierOverrides: cfg.tierOverrides,
       volSmaMultiplier: cfg.volSmaMultiplier,
       marketThresholds: cfg.marketThresholds, // v3.0: TF-aware regime calibration
+      afEnabledComponents: cfg.afEnabledComponents, // v3.2: C-only by default
     });
 
     const nowMs = c.timestamp ?? 0; // backtest "now" = current candle time (NOT wall-clock)

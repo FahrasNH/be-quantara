@@ -279,6 +279,10 @@ const STRATEGIES = {
     // afMinVotes retained for legacy single-position path; multi-position ignores it
     afMinVotes:           3,
     afRejectOnDissent:    true,
+    // v3.2 (2026-06-29): real BNB data showed A (PF 0.31) + B (PF 0.41) bleed;
+    // only C (PF 1.45, trend-following RR 4.5) has edge. Run C-only. To re-enable
+    // A/B for research set afEnabledComponents: ["A","B","C"].
+    afEnabledComponents:  ["C"],
 
     leverage:      2,
     interval:      "15m",

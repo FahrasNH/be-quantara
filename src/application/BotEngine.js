@@ -1335,6 +1335,7 @@ class BotEngine extends EventEmitter {
                 pairTier:             this.config.pairTier,
                 tierOverrides:        this.config.tierOverrides,
                 volSmaMultiplier:     this.config.volSmaMultiplier,
+                afEnabledComponents:  this.config.afEnabledComponents, // v3.2: C-only default
               });
 
               // Check each component independently for entry
