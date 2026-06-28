@@ -14,6 +14,7 @@ const OptimizationAnalysisService = require("../services/OptimizationAnalysisSer
 const db = require("../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
+const { runRealBacktest } = require("../services/RealStrategyBacktestService");
 const GrokConfirmService = require("../services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../services/GrokBacktestJobService");
@@ -1080,6 +1081,91 @@ module.exports = function createBacktestRouter(context) {
       ok: true,
       ...result,
       note: "Server-side simplified simulator — bukan BotEngine penuh (Phase 3 foundation)",
+    });
+  }));
+
+  /**
+   * POST /api/v1/backtest/run-real
+   * TRUE 1:1 server-side backtest — replays candles through the REAL strategy
+   * code (AdaptiveFusionStrategy.detectSignal + detectHTFTrend + risk gates),
+   * exactly the path AdaptiveStrategyEngine uses live. Multi-TF: entry TF + HTF
+   * are taken from the strategy's canonical config (AF: 15m entry + 1h HTF),
+   * not from a single user-picked timeframe.
+   *
+   * Body: { symbol|pair, strategy_key, period_id|custom_start|custom_end,
+   *         capital, enable_fees, enable_slippage, parameters,
+   *         entry_timeframe?, htf_timeframe? }
+   */
+  router.post("/run-real", asyncHandler(async (req, res) => {
+    const {
+      symbol, pair,
+      strategy_key: strategyKeyRaw,
+      period_id: periodId,
+      custom_start: customStart,
+      custom_end: customEnd,
+      capital = 1000,
+      enable_fees: enableFees = true,
+      enable_slippage: enableSlippage = false,
+      parameters = {},
+      entry_timeframe: entryTfOverride,
+      htf_timeframe: htfTfOverride,
+    } = req.body;
+
+    const sym = (pair || symbol || "").toUpperCase();
+    const strategyKey = String(strategyKeyRaw || "ADAPTIVE_FUSION").toUpperCase();
+    if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair diperlukan" });
+
+    const cfg = STRATEGIES[strategyKey];
+    if (!cfg) return res.status(400).json({ ok: false, error: `Strategi tidak dikenal: ${strategyKey}` });
+
+    // Multi-TF layout: canonical strategy config decides entry + HTF (1:1 w/ live).
+    const entryTf = entryTfOverride || cfg.interval || "15m";
+    const htfTf = htfTfOverride !== undefined ? htfTfOverride : (cfg.higherTf || null);
+
+    const fetchOpts = { periodId, customStart, customEnd };
+    const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
+      symbol: sym, timeframe: entryTf, ...fetchOpts,
+    });
+    const entryCandles = entryRes.candles || [];
+    if (entryCandles.length < 60) {
+      return res.status(400).json({ ok: false, error: `Data ${entryTf} tidak cukup (${entryCandles.length} bar)` });
+    }
+
+    let htfCandles = null;
+    if (htfTf) {
+      try {
+        const htfRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
+          symbol: sym, timeframe: htfTf, ...fetchOpts,
+        });
+        htfCandles = htfRes.candles || null;
+      } catch (e) {
+        htfCandles = null; // fail-open on HTF fetch error; engine notes higherTf intent
+      }
+    }
+
+    const result = runRealBacktest({
+      entryCandles,
+      htfCandles,
+      strategyKey,
+      capital: Number(capital) || 1000,
+      enableFees: enableFees !== false,
+      enableSlippage: !!enableSlippage,
+      config: parameters,
+    });
+
+    res.json({
+      ok: true,
+      engine: "real-1to1",
+      strategyKey,
+      symbol: sym,
+      entryTimeframe: entryTf,
+      htfTimeframe: htfTf,
+      entryBars: entryCandles.length,
+      htfBars: htfCandles?.length ?? 0,
+      dataStart: entryRes.startDate,
+      dataEnd: entryRes.endDate,
+      source: entryRes.source,
+      ...result,
     });
   }));
 
