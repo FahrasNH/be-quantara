@@ -1799,14 +1799,7 @@ class BotEngine extends EventEmitter {
         ? `TP ${tpRules.toFixed(2)}→${finalTp.toFixed(2)} (Grok adjust)`
         : `TP ${finalTp.toFixed(2)} (rules)`;
 
-      this._log("info",
-        `[GROK CONFIRM] ${this.config.strategyKey} → ${signal} approved ${confirm.confidence}/10 | ` +
-        `${tpModeLabel} (mode conf ${confirm.tp_mode_confidence ?? 0}/10, min 6) | ` +
-        `SL ${slPrice.toFixed(2)} (rules) | ${tpNote} (tp conf ${confirm.tp_confidence ?? 0}/10, min 7) | ` +
-        `HTF ${this.state.htfTrend ?? "N/A"}` +
-        (confirm.reasoning ? ` | ${confirm.reasoning}` : "")
-      );
-
+      // Detail Grok masuk kartu ENTRY terpadu — bukan log INFO terpisah (UX Bot Logs).
       indicatorSnapshot.grokConfirm = {
         confidence: confirm.confidence,
         tp_confidence: confirm.tp_confidence,
@@ -1817,6 +1810,8 @@ class BotEngine extends EventEmitter {
         tp_rules: tpRules,
         tp_final: finalTp,
         sl_rules: slPrice,
+        tp_mode_label: tpModeLabel,
+        tp_note: tpNote,
       };
 
       return { signal, signalOptions: nextOptions };
@@ -2249,6 +2244,18 @@ class BotEngine extends EventEmitter {
       `══ ENTRY ${signal} — ${this.config.symbol} · ${stratLabel(this.config.strategyKey)} ══`,
     ];
     if (why.length) entryLines.push(`Sinyal     : ${why.join(" · ")}`);
+    const grok = indicatorSnapshot?.grokConfirm;
+    if (grok) {
+      const tpModeLabel = grok.tp_mode_label
+        ?? ((grok.tp_mode ?? "full") === "partial" ? "Partial TP" : "Full TP");
+      entryLines.push(
+        `Grok       : conf ${grok.confidence ?? "?"}/10 · ${tpModeLabel}` +
+        (grok.tp_mode_confidence != null ? ` (mode ${grok.tp_mode_confidence}/10)` : "") +
+        (grok.tp_confidence != null ? ` · TP conf ${grok.tp_confidence}/10` : "")
+      );
+      if (grok.reasoning) entryLines.push(`Konfirmasi : ${grok.reasoning}`);
+      if (grok.tp_note) entryLines.push(`TP Grok    : ${grok.tp_note}`);
+    }
     entryLines.push(`Entry      : $${fmtPx(price)}`);
     entryLines.push(`SL / TP    : $${fmtPx(sl)} / $${fmtPx(tp)}${slMult ? `  (${slMult}×/${tpMult}× ATR)` : ""}`);
     entryLines.push(`Size       : ${finalSize} · Risk ${(actualRiskPct * 100).toFixed(2)}%`);
