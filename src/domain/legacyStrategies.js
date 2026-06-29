@@ -289,6 +289,11 @@ const STRATEGIES = {
     afMinAggregateConfidence: 60,
     // SMC Component D lookback (bars to scan for OB/FVG zones)
     smcLookback: 20,
+    // OA-FIX-02: Order Flow Component A knobs
+    // vwapLookback: rolling window for CVD + VWAP computation (bars)
+    vwapLookback: 14,
+    // ofDeltaThreshold: min bar delta for LONG (≥0.60 = close in top 40% of bar range)
+    ofDeltaThreshold: 0.60,
 
     // AF-FIX-11: MACD histogram alignment required for Component B (trend direction confirmation)
     bUseMacd:      true,

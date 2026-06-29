@@ -23,19 +23,27 @@ function uptrendIndicators(lastClose) {
   const closes = mk(N, 104);
   closes[N] = lastClose;
   const rsi = mk(N, 55);
-  rsi[N - 2] = 53; // slope +1.0 (>0.5) → Component A LONG
-  // AF-FIX-14: EMA9 must be RISING for A/B LONG to fire (slope filter).
+  rsi[N - 2] = 53;
   const emaFastArr = mk(N, 103.4);
-  emaFastArr[N] = 103.5; // current EMA9 > previous → rising at lastIdx
+  emaFastArr[N] = 103.5;
+  // OA-FIX-02: highs/lows needed for Order Flow A (deltaPct, CVD, VWAP).
+  // high = close+0.5, low = close-1.0 → deltaPct ≈ 0.667 (>= threshold 0.60).
+  // VWAP stays ≈103.83 regardless of lastClose so close>VWAP holds for all test cases.
+  const highs = mk(N, 104.5);
+  const lows  = mk(N, 103.0);
+  highs[N] = lastClose + 0.5;
+  lows[N]  = lastClose - 1.0;
   return {
     closes,
-    emaFast: emaFastArr, // EMA9, rising at N
-    emaSlow: mk(N, 102.5), // EMA21
-    emaTrend: mk(N, 101.0), // EMA50
+    emaFast: emaFastArr,
+    emaSlow: mk(N, 102.5),
+    emaTrend: mk(N, 101.0),
     rsi,
     atr: mk(N, 0.5),
     volumes: mk(N, 200),
-    volSMA: mk(N, 100), // volRatio 2.0 ≥ 1.5 → A volOk
+    volSMA: mk(N, 100), // volRatio 2.0 ≥ volMult default 2.0 → A volOk
+    highs,
+    lows,
   };
 }
 // v2.5: afMinVotes default 3. Tes anti-chase ini menguji sinyal 2-vote

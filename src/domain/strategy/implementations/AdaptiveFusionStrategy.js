@@ -1,5 +1,5 @@
 /**
- * AdaptiveFusionStrategy.js — v2.6 (Selective & High Probability — STRATEGIES.md §4)
+ * AdaptiveFusionStrategy.js — v3.7.0 (Order Flow Component A replaces RSI-velocity scalp)
  *
  * v2.6 spec changes:
  *  - riskPerTrade 0.005 (0.5%); riskPerTradeStrong 0.01 on STRONG_TREND.
@@ -48,7 +48,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C), " +
         "SMC Order Block + FVG (D). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.6.0",
+      version: "3.7.0",
       enabled: true,
       ...config,
     });
@@ -276,7 +276,12 @@ class AdaptiveFusionStrategy extends StrategyBase {
   // indicators differentiate strong from weak entries.
   getConfidenceWeights() {
     return {
-      A: { emaAlign: 25, closeVsFast: 15, rsiVelocity: 25, rsiLevel: 15, volume: 20 },
+      // OA-FIX-02 (Sprint 8): Order Flow A — OHLCV-approximated microstructure scoring
+      // deltaStrength: bar delta (close-low)/(high-low) absorption strength
+      // cvdAlign: cumulative volume delta direction over lookback
+      // vwapSide: price side vs rolling VWAP (institutional reference)
+      // volumeSurge: volume ratio vs SMA threshold
+      A: { deltaStrength: 35, cvdAlign: 25, vwapSide: 20, volumeSurge: 20 },
       B: { emaStack: 30, closeVsSlow: 15, rsiBand: 20, event: 25, macd: 10 },
       C: { closeVsSlow: 25, emaStructure: 25, rsiBand: 20, trendStrength: 20, proximity: 10 },
       // D: SMC — zone quality (40) + structural confirm via EMA (30) + RSI neutrality (20) + ATR magnitude (10)
@@ -320,6 +325,30 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const closes    = indicators.closes || [];
     const volSMAv   = indicators.volSMA?.[lastIdx] ?? 0;
     const volRatio  = volSMAv > 0 ? (indicators.volumes?.[lastIdx] ?? 0) / volSMAv : 0;
+
+    // OA-FIX-02: Order Flow metrics for Component A confidence scoring.
+    // OHLCV-approximated: no live order book needed for backtest.
+    const highs  = indicators.highs  || [];
+    const lows   = indicators.lows   || [];
+    const vols   = indicators.volumes || [];
+    const vwapLookback = config.vwapLookback ?? 14;
+    const hi = highs[lastIdx], lo = lows[lastIdx], cl = closes[lastIdx];
+    const barRange = (hi != null && lo != null) ? Math.max(hi - lo, 1e-9) : null;
+    const deltaPct = (barRange != null && lo != null && cl != null)
+      ? (cl - lo) / barRange
+      : 0.5; // neutral fallback when no highs/lows data
+    let cvd = 0, sumTV = 0, sumVol = 0;
+    for (let i = Math.max(0, lastIdx - vwapLookback + 1); i <= lastIdx; i++) {
+      const h = highs[i], l = lows[i], c = closes[i], v = vols[i] ?? 0;
+      if (h != null && l != null && c != null) {
+        const r = Math.max(h - l, 1e-9);
+        cvd   += ((c - l) / r - 0.5) * v;
+        sumTV += ((h + l + c) / 3) * v;
+      }
+      sumVol += v;
+    }
+    const vwap = sumVol > 0 ? sumTV / sumVol : (cl ?? null);
+
     return {
       rsi:        rsiCurr,
       rsiSlope,
@@ -336,6 +365,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
       rsiLongMax:  config.rsiLongMax  ?? 68,
       rsiShortMin: config.rsiShortMin ?? 32,
       rsiShortMax: config.rsiShortMax ?? 40,
+      // Order Flow fields
+      deltaPct,
+      cvd,
+      vwap,
+      volLookbackSum: sumVol,
     };
   }
 
@@ -353,14 +387,21 @@ class AdaptiveFusionStrategy extends StrategyBase {
     let score = 0;
 
     if (key === "A") {
-      if (d.emaFast != null && d.emaSlow != null &&
-          (long ? d.emaFast > d.emaSlow : d.emaFast < d.emaSlow)) score += W.emaAlign;
-      if (d.close != null && d.emaFast != null &&
-          (long ? d.close > d.emaFast : d.close < d.emaFast))     score += W.closeVsFast;
-      const slope = d.rsiSlope ?? 0;
-      score += W.rsiVelocity * this._clamp01((long ? slope : -slope) / 2);
-      score += W.rsiLevel    * this._clamp01((long ? (d.rsi - 40) : (60 - d.rsi)) / 30);
-      score += W.volume      * this._clamp01(d.volMult > 0 ? d.volRatio / (d.volMult * 2) : 0);
+      // OA-FIX-02: Order Flow confidence scoring (OHLCV-approximated).
+      // deltaStrength: how strongly the bar closed on buyer/seller side
+      const dp = d.deltaPct ?? 0.5;
+      score += W.deltaStrength * this._clamp01(long ? (dp - 0.5) / 0.5 : (0.5 - dp) / 0.5);
+      // cvdAlign: graded by CVD magnitude vs total lookback volume
+      const maxCVD = (d.volLookbackSum ?? 1) * 0.5 + 1e-9;
+      score += W.cvdAlign * this._clamp01(long ? d.cvd / maxCVD : -d.cvd / maxCVD);
+      // vwapSide: binary — price above or below VWAP
+      if (d.vwap != null && d.close != null) {
+        score += W.vwapSide * (long ? (d.close > d.vwap ? 1 : 0) : (d.close < d.vwap ? 1 : 0));
+      } else {
+        score += W.vwapSide * 0.5; // no VWAP data → neutral
+      }
+      // volumeSurge: graded by ratio vs threshold
+      score += W.volumeSurge * this._clamp01(d.volMult > 0 ? d.volRatio / (d.volMult * 2) : 0);
     } else if (key === "B") {
       let stack = 0;
       if (d.emaFast != null && d.emaSlow != null &&
@@ -509,8 +550,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
       signals.A = this._detectSignalA(
-        indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA,
-        config.volSmaMultiplier ?? 2.0, emaFastPrev
+        closes, indicators.highs || [], indicators.lows || [],
+        indicators.volumes || [], indicators.volSMA || [],
+        emaFast, emaSlow, lastIdx, config
       );
     }
 
@@ -780,7 +822,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
         balance >= this.SUB_STRATEGIES.A.minCapital && (scoreMap.A ?? 0) >= this.SUB_STRATEGIES.A.minScore) {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
-      result.A = evalComponent("A", this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0, emaFastPrev));
+      result.A = evalComponent("A", this._detectSignalA(
+        closes, indicators.highs || [], indicators.lows || [],
+        indicators.volumes || [], indicators.volSMA || [],
+        emaFast, emaSlow, lastIdx, config
+      ));
     } else if (D) { D.scoreGate.A = (D.scoreGate.A || 0) + 1; }
 
     // ── Component B ──────────────────────────────────────────────────────────
@@ -872,58 +918,65 @@ class AdaptiveFusionStrategy extends StrategyBase {
     return this._lastSignalMeta;
   }
 
-  // ── Component A — Momentum Scalping ───────────────────────────────────────
-  // REDESIGN: A now reads RSI *velocity* (momentum acceleration), not absolute
-  // extremes. The old absolute bands (rsi<30 / rsi>70) were mutually exclusive
-  // with B (rsi>50/<50) and C (rsi 35-75) — so A could never join a 2-vote
-  // majority and was effectively dead code. RSI-momentum bands (rising & >40 /
-  // falling & <60) overlap with B and C, letting A confirm trend entries.
-  // Keeps scalp character via EMA alignment + close confirmation + volume.
+  // ── Component A — Order Flow (OA-FIX-01/02, v3.7.0) ──────────────────────
+  // Replaces RSI-velocity scalping with OHLCV-approximated order flow.
+  // No live order book needed — uses candle OHLCV to reconstruct:
+  //   deltaPct  = (close-low) / max(high-low, ε)  — bar buying pressure (1=all buyers)
+  //   cvd       = Σ (deltaPct-0.5)×volume over vwapLookback bars (net demand)
+  //   vwap      = Σ (typicalPrice×volume) / Σ volume (institutional reference)
   //
-  // @param {number[]} rsiSeries - full RSI array
-  // @param {number}   lastIdx   - current bar index (for slope)
-  // @param {number|null} emaFastPrev  EMA9 value at lastIdx-1 (for AF-FIX-14 slope filter)
-  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0, volMult = 2.0, emaFastPrev = null) {
+  // LONG: deltaPct ≥ threshold (buyer absorption) + CVD > 0 + close > VWAP +
+  //       EMA aligned bullish + volume surge
+  // SHORT: mirror — seller domination + CVD < 0 + close < VWAP + EMA bearish + surge
+  //
+  // @param {number[]} closes     full close array (lastIdx=current bar)
+  // @param {number[]} highs      full high array
+  // @param {number[]} lows       full low array
+  // @param {number[]} volumes    full volume array
+  // @param {number[]|number} volSMA  volSMA array (indexed) or scalar
+  // @param {number}   emaFast    current EMA9 scalar
+  // @param {number}   emaSlow    current EMA21 scalar
+  // @param {number}   lastIdx    index of current confirmed bar
+  // @param {Object}   config     strategy config (vwapLookback, ofDeltaThreshold, volSmaMultiplier)
+  _detectSignalA(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config = {}) {
     if (emaFast == null || emaSlow == null) return null;
+    if (!Array.isArray(closes) || !Array.isArray(highs) || !Array.isArray(lows)) return null;
 
-    const rsiCurr  = rsiSeries?.[lastIdx];
-    const rsiPrev2 = rsiSeries?.[lastIdx - 2];
-    if (rsiCurr == null || rsiPrev2 == null) return null;
+    const hi = highs[lastIdx], lo = lows[lastIdx], cl = closes[lastIdx];
+    if (hi == null || lo == null || cl == null) return null;
 
-    const closeCurr  = closes[closes.length - 1];
-    const volRatio   = volSMA > 0 ? volume / volSMA : 0;
-    const volOk      = volRatio >= volMult;
+    const vSMA    = Array.isArray(volSMA) ? (volSMA[lastIdx] ?? 0) : (volSMA ?? 0);
+    const volCurr = Array.isArray(volumes) ? (volumes[lastIdx] ?? 0) : 0;
+    const volMult = config.volSmaMultiplier ?? 2.0;
+    const volOk   = vSMA > 0 && volCurr / vSMA >= volMult;
 
-    // RSI velocity over 2 bars: positive = accelerating up, negative = down
-    const rsiSlope = (rsiCurr - rsiPrev2) / 2;
+    const ofDeltaThreshold = config.ofDeltaThreshold ?? 0.60;
+    const vwapLookback     = config.vwapLookback     ?? 14;
 
-    // AF-FIX-14: EMA9 slope filter — only enter when price mean is moving with the trade.
-    // LONG only if EMA9 is rising; SHORT only if EMA9 is falling. Eliminates chasing
-    // entries after the move already peaked (common source of immediate SL hits).
-    const ema9Rising  = emaFastPrev == null || emaFast > emaFastPrev;
-    const ema9Falling = emaFastPrev == null || emaFast < emaFastPrev;
+    // Bar delta: fraction of bar range that closed above the low
+    const barRange = Math.max(hi - lo, 1e-9);
+    const deltaPct = (cl - lo) / barRange;
 
-    // LONG: RSI accelerating up + above neutral + bullish EMA structure + close>fast + EMA9 rising
-    if (
-      rsiSlope > 0.5 &&
-      rsiCurr > 40 &&
-      closeCurr > emaFast &&
-      emaFast > emaSlow &&
-      volOk &&
-      ema9Rising
-    ) {
+    // Rolling CVD and VWAP over lookback window
+    let cvd = 0, sumTV = 0, sumVol = 0;
+    for (let i = Math.max(0, lastIdx - vwapLookback + 1); i <= lastIdx; i++) {
+      const h = highs[i], l = lows[i], c = closes[i];
+      const v = Array.isArray(volumes) ? (volumes[i] ?? 0) : 0;
+      if (h == null || l == null || c == null) { sumVol += v; continue; }
+      const r = Math.max(h - l, 1e-9);
+      cvd   += ((c - l) / r - 0.5) * v;
+      sumTV += ((h + l + c) / 3) * v;
+      sumVol += v;
+    }
+    const vwap = sumVol > 0 ? sumTV / sumVol : cl;
+
+    // LONG: buyer absorption + net buying pressure + above VWAP + bullish EMA + volume
+    if (deltaPct >= ofDeltaThreshold && cvd > 0 && cl > vwap && emaFast > emaSlow && volOk) {
       return "LONG";
     }
 
-    // SHORT: RSI accelerating down + below neutral + bearish EMA structure + close<fast + EMA9 falling
-    if (
-      rsiSlope < -0.5 &&
-      rsiCurr < 60 &&
-      closeCurr < emaFast &&
-      emaFast < emaSlow &&
-      volOk &&
-      ema9Falling
-    ) {
+    // SHORT: seller absorption + net selling pressure + below VWAP + bearish EMA + volume
+    if (deltaPct <= (1 - ofDeltaThreshold) && cvd < 0 && cl < vwap && emaFast < emaSlow && volOk) {
       return "SHORT";
     }
 

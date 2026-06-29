@@ -31,18 +31,24 @@ function makeUpIndicators() {
   const closes = mkSeries(N, 104);
   closes[N - 1] = 103.4;   // pullback below EMA9 (103.5)
   closes[N]     = 104.1;   // resume above
-  // AF-FIX-14: EMA9 must be rising for LONG to fire (slope filter). Use slightly rising series.
   const emaFastArr = mkSeries(N, 103.4);
-  emaFastArr[N] = 103.5; // current bar EMA9 > previous → rising
+  emaFastArr[N] = 103.5;
+  // OA-FIX-02: highs/lows for Order Flow A — deltaPct≈0.667, VWAP≈103.83 < close=104.1
+  const highs = mkSeries(N, 104.5);
+  highs[N] = 104.6;
+  const lows  = mkSeries(N, 103.0);
+  lows[N]  = 103.1;
   return {
     closes,
-    emaFast:  emaFastArr,          // EMA9  > EMA21, rising at N
-    emaSlow:  mkSeries(N, 102.5),  // EMA21 > EMA50
+    emaFast:  emaFastArr,
+    emaSlow:  mkSeries(N, 102.5),
     emaTrend: mkSeries(N, 101.0),
     rsi:      mkSeries(N, 62),
     atr:      mkSeries(N, 0.5),
     volumes:  mkSeries(N, 100),
     volSMA:   mkSeries(N, 80),
+    highs,
+    lows,
   };
 }
 
@@ -85,7 +91,7 @@ test("legacyStrategies ADAPTIVE_FUSION preset (v3.5 AF-FIX-17)", () => {
 });
 
 test("AdaptiveFusionStrategy class v3.5", () => {
-  assert.strictEqual(afs.config.version, "3.6.0");
+  assert.strictEqual(afs.config.version, "3.7.0");
   const risk = afs.getRiskConfig();
   assert.strictEqual(risk.riskPerTrade, 0.005);
   assert.strictEqual(risk.riskPerTradeStrong, 0.01);
@@ -232,8 +238,8 @@ test("v3.6 (AF-FIX-12/13) preset enables all 4 components including SMC (D)", ()
   assert.strictEqual(preset.afMinAggregateConfidence, 60);
 });
 
-test("v3.6 class version 3.6.0 (AF-FIX-12/13: SMC Component D added)", () => {
-  assert.strictEqual(afs.config.version, "3.6.0");
+test("v3.7 class version 3.7.0 (OA-FIX-02: Order Flow Component A replaces RSI-velocity)", () => {
+  assert.strictEqual(afs.config.version, "3.7.0");
 });
 
 test("v3.2 afEnabledComponents=['C'] blocks A and B even when their signals would fire", () => {

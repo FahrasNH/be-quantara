@@ -30,24 +30,35 @@ const mk  = (n, v) => Array(n + 1).fill(v);
  * pullback-resume event for B (close[N-1] dips to/below EMA9, close[N] resumes).
  * rsi default 62 sits inside B's band [60,68], C's band [45,65] and A's >40.
  */
-function upAllFire({ rsi = 62, rsiPrev2 = 60, vol = 200, volSMA = 100, lastClose = 104 } = {}) {
+// OA-FIX-02: highOffset/lowOffset control bar delta for Order Flow A confidence tests.
+// Default high=104.5 / low=103.0 → deltaPct ≈ 0.667, VWAP ≈ 103.83 (< close=104).
+function upAllFire({ rsi = 62, rsiPrev2 = 60, vol = 200, volSMA = 100, lastClose = 104,
+                     highOffset = 0.5, lowOffset = 1.0 } = {}) {
   const closes = mk(N, 104);
   closes[N - 1] = 103.4;     // pullback below EMA9 (103.5)
   closes[N]     = lastClose; // resume above
   const rsiArr  = mk(N, rsi);
-  rsiArr[N - 2] = rsiPrev2;  // RSI velocity for component A
-  // AF-FIX-14: EMA9 must be rising for A/B LONG to fire. Slightly rising series.
+  rsiArr[N - 2] = rsiPrev2;
   const emaFastArr = mk(N, 103.4);
-  emaFastArr[N] = 103.5; // current bar EMA9 > previous → slope rising
+  emaFastArr[N] = 103.5;
+  // Order Flow A needs highs/lows for deltaPct, CVD, VWAP
+  const highs = mk(N, 104.0 + highOffset);
+  const lows  = mk(N, 104.0 - lowOffset);
+  highs[N] = lastClose + highOffset;
+  lows[N]  = lastClose - lowOffset;
+  highs[N - 1] = 103.4 + highOffset;
+  lows[N - 1]  = 103.4 - lowOffset;
   return {
     closes,
-    emaFast:  emaFastArr,    // EMA9  > EMA21 > EMA50, rising at N
+    emaFast:  emaFastArr,
     emaSlow:  mk(N, 102.5),
     emaTrend: mk(N, 101.0),
     rsi:      rsiArr,
     atr:      mk(N, 0.5),
     volumes:  mk(N, vol),
     volSMA:   mk(N, volSMA),
+    highs,
+    lows,
   };
 }
 
@@ -98,15 +109,19 @@ test("AF-FIX-01: a clean setup scores high (≥60) for the firing direction", ()
 });
 
 test("AF-FIX-01: a marginal component scores below a clean one (gate is meaningful)", () => {
-  // Strong A: fast RSI velocity + strong volume.  Weak A: barely-rising RSI + thin volume.
-  const strong = afs._buildConfidenceContext(
-    upAllFire({ rsi: 58, rsiPrev2: 50, vol: 300, volSMA: 100 }), N,
-    { ...baseCfg, volSmaMultiplier: 1.0 }, { trend_strength: 0.5 });
-  const weak = afs._buildConfidenceContext(
-    upAllFire({ rsi: 41, rsiPrev2: 40, vol: 100, volSMA: 100 }), N,
-    { ...baseCfg, volSmaMultiplier: 1.0 }, { trend_strength: 0.5 });
-  const cStrong = afs._componentConfidence("A", "LONG", strong);
-  const cWeak   = afs._componentConfidence("A", "LONG", weak);
+  // OA-FIX-02: Order Flow A — strong = high deltaPct + large CVD + volume; weak = barely threshold.
+  // Strong context: deltaPct=0.85 (buyer dominance), cvd=490/700=70% of max, high volume ratio.
+  const strongCtx = {
+    deltaPct: 0.85, cvd: 490, vwap: 103.0, close: 104.0,
+    emaFast: 103.5, emaSlow: 102.5, volRatio: 3.0, volMult: 1.0, volLookbackSum: 1400,
+  };
+  // Weak context: deltaPct=0.625 (just above threshold 0.60), cvd=175/700=25% of max, thin volume.
+  const weakCtx = {
+    deltaPct: 0.625, cvd: 175, vwap: 103.93, close: 104.0,
+    emaFast: 103.5, emaSlow: 102.5, volRatio: 1.0, volMult: 1.0, volLookbackSum: 1400,
+  };
+  const cStrong = afs._componentConfidence("A", "LONG", strongCtx);
+  const cWeak   = afs._componentConfidence("A", "LONG", weakCtx);
   assert.ok(cStrong > cWeak, `strong (${cStrong}) > weak (${cWeak})`);
   assert.ok(cWeak < 60, `marginal A (${cWeak}) below gate`);
   assert.ok(cStrong >= 60, `strong A (${cStrong}) clears gate`);
@@ -126,10 +141,12 @@ test("AF-FIX-02 (multi): high-confidence component fires under the gate", () => 
 });
 
 test("AF-FIX-02 (multi): low-confidence component is filtered out", () => {
-  // A fires (RSI slope 0.6 > 0.5, vol at threshold) but only scores ~58 → gated out.
-  const weakA = upAllFire({ rsi: 40.6, rsiPrev2: 39.4, vol: 100, volSMA: 100 });
+  // OA-FIX-02: A fires (deltaPct=0.625 barely ≥ 0.60, thin vol) but scores ~45 → gated out.
+  // highOffset=0.3, lowOffset=0.5 → close=104, high=104.3, low=103.5 → deltaPct≈0.625.
+  // vol=100, volSMA=100, volMult=1.0 → volOk (ratio=1.0 ≥ 1.0), volumeSurge score low.
+  const weakA = upAllFire({ vol: 100, volSMA: 100, highOffset: 0.3, lowOffset: 0.5 });
   const cfg = {
-    balance: 500, volatility: 0.8, trend_strength: 0.25, // NORMAL regime → A eligible
+    balance: 500, volatility: 0.8, trend_strength: 0.25,
     maxEntryExtensionATR: 1.5, htfTrend: "BULLISH", volSmaMultiplier: 1.0,
     afEnabledComponents: ["A"],
   };
