@@ -309,6 +309,6 @@ test("Preset: bUseMacd=true set (AF-FIX-11)", () => {
   assert.strictEqual(STRATEGIES.ADAPTIVE_FUSION.bUseMacd, true);
 });
 
-test("Preset: class version is 3.5.0", () => {
-  assert.strictEqual(afs.config.version, "3.5.0");
+test("Preset: class version is 3.6.0", () => {
+  assert.strictEqual(afs.config.version, "3.6.0");
 });

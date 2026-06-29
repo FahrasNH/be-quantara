@@ -1109,6 +1109,7 @@ module.exports = function createBacktestRouter(context) {
       parameters = {},
       entry_timeframe: entryTfOverride,
       htf_timeframe: htfTfOverride,
+      debug: debugMode = false,
     } = req.body;
 
     const sym = (pair || symbol || "").toUpperCase();
@@ -1153,6 +1154,7 @@ module.exports = function createBacktestRouter(context) {
       enableFees: enableFees !== false,
       enableSlippage: !!enableSlippage,
       config: parameters,
+      debug: !!debugMode,
     });
     const elapsedMs = Date.now() - startMs;
 

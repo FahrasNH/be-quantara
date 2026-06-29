@@ -44,10 +44,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
       name: "ADAPTIVE_FUSION",
       label: "Adaptive Fusion Strategy",
       description:
-        "Market-aware system combining 3 sub-strategies: " +
-        "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
+        "Market-aware system combining 4 sub-strategies: " +
+        "Aggressive Scalping (A), Day Trading (B), Swing Trading (C), " +
+        "SMC Order Block + FVG (D). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.5.0",
+      version: "3.6.0",
       enabled: true,
       ...config,
     });
@@ -102,6 +103,20 @@ class AdaptiveFusionStrategy extends StrategyBase {
         maxTradesPerDay: 3,
         minCapital: 20,
         minScore: 42,
+      },
+      // AF-FIX-12/13 (Sprint 8): Smart Money Concepts — Order Block + Fair Value Gap
+      D: {
+        name: "SMC_ORDER_BLOCK",
+        label: "SMC Order Block + FVG",
+        htf: "1h",
+        entryTf: "15m",
+        // SL = 1.5× ATR (wider — OB is a zone, not a line), TP = 2.7× ATR → RR 1:1.8
+        slMultiplier: 1.5,
+        tpMultiplier: 2.7,
+        riskPerTrade: 0.01,
+        maxTradesPerDay: 4,
+        minCapital: 20,
+        minScore: 35,
       },
     };
 
@@ -264,6 +279,8 @@ class AdaptiveFusionStrategy extends StrategyBase {
       A: { emaAlign: 25, closeVsFast: 15, rsiVelocity: 25, rsiLevel: 15, volume: 20 },
       B: { emaStack: 30, closeVsSlow: 15, rsiBand: 20, event: 25, macd: 10 },
       C: { closeVsSlow: 25, emaStructure: 25, rsiBand: 20, trendStrength: 20, proximity: 10 },
+      // D: SMC — zone quality (40) + structural confirm via EMA (30) + RSI neutrality (20) + ATR magnitude (10)
+      D: { zoneQuality: 40, emaStructure: 30, rsiNeutral: 20, atrMagnitude: 10 },
     };
   }
 
@@ -387,6 +404,28 @@ class AdaptiveFusionStrategy extends StrategyBase {
         score += W.proximity * this._clamp01(1 - ext / 2);
       } else {
         score += W.proximity * 0.5;
+      }
+    } else if (key === "D") {
+      // zoneQuality: graded by how well price is inside the zone (EMA distance proxy)
+      if (d.close != null && d.emaSlow != null && d.atr > 0) {
+        const dist = Math.abs(d.close - d.emaSlow) / d.atr;
+        score += W.zoneQuality * this._clamp01(1 - dist / 3);
+      } else {
+        score += W.zoneQuality * 0.5;
+      }
+      // emaStructure: EMA9 and EMA21 aligned with trade direction
+      if (d.emaFast != null && d.emaSlow != null) {
+        const aligned = long ? d.emaFast > d.emaSlow : d.emaFast < d.emaSlow;
+        score += W.emaStructure * (aligned ? 1 : 0);
+      }
+      // rsiNeutral: RSI near 50 is ideal for SMC (fresh structure, not overextended)
+      if (d.rsi != null) {
+        score += W.rsiNeutral * this._clamp01(1 - Math.abs(d.rsi - 50) / 30);
+      }
+      // atrMagnitude: higher ATR → bigger OB/FVG zones → more meaningful levels
+      if (d.atr != null && d.close != null && d.close > 0) {
+        const atrPct = (d.atr / d.close) * 100;
+        score += W.atrMagnitude * this._clamp01(atrPct / 2);
       }
     }
     return Math.round(this._clamp01(score / 100) * 100);
@@ -634,7 +673,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
    * Gates (market condition, HTF trend, chase guard) applied per-component.
    */
   detectSignalMulti(indicators, lastIdx, config = {}) {
-    const result = { A: null, B: null, C: null, meta: {} };
+    const result = { A: null, B: null, C: null, D: null, meta: {} };
     if (lastIdx < 30) return result;
 
     const balance = config.balance || 500;
@@ -684,7 +723,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const minComponentConf =
       config.afMinComponentConfidence ?? this.config?.afMinComponentConfidence ?? null;
     const confCtx     = this._buildConfidenceContext(indicators, lastIdx, config, marketConditions);
-    const confidence  = { A: null, B: null, C: null };
+    const confidence  = { A: null, B: null, C: null, D: null };
 
     // v3.2 (2026-06-29): component enable-list. Real BNB data (19,969 15m bars,
     // Dec 2025–Jun 2026) showed A (PF 0.31) and B (PF 0.41) have NEGATIVE edge —
@@ -694,7 +733,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
     // override (e.g. ["A","B","C"] for research/backtest comparison).
     const enabled = config.afEnabledComponents
       || this.config?.afEnabledComponents
-      || ["A", "B", "C"];
+      || ["A", "B", "C", "D"];
 
     // AF-FIX-14: previous EMA9 for slope filter; AF-FIX-11: MACD histogram for B
     const emaFastPrev    = indicators.emaFast?.[lastIdx - 1] ?? null;
@@ -764,12 +803,25 @@ class AdaptiveFusionStrategy extends StrategyBase {
       result.C = evalComponent("C", this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed));
     } else if (D) { D.scoreGate.C = (D.scoreGate.C || 0) + 1; }
 
+    // ── Component D (SMC) ────────────────────────────────────────────────────
+    // Fires on Order Block / FVG retrace with EMA macro-alignment.
+    // Allowed in NORMAL + STRONG_TREND (SMC levels work in both, not in chop).
+    if (enabled.includes("D") &&
+        balance >= this.SUB_STRATEGIES.D.minCapital &&
+        (marketCond === "STRONG_TREND" || marketCond === "NORMAL")) {
+      const highs = indicators.highs || [];
+      const lows  = indicators.lows  || [];
+      result.D = evalComponent("D", this._detectSignalD(
+        closesConfirmed, highs, lows, emaFast, emaSlow, lastIdx, config
+      ));
+    } else if (D) { D.scoreGate.D = (D.scoreGate.D || 0) + 1; }
+
     // AF-FIX-03 (live path fix): aggregate confidence gate mirrors detectSignal().
     // Without this, afMinAggregateConfidence was dead code in the primary live path.
     const minAgg = config.afMinAggregateConfidence ?? this.config?.afMinAggregateConfidence ?? null;
     if (minAgg != null) {
       for (const dir of ["LONG", "SHORT"]) {
-        const fired = ["A", "B", "C"].filter(k => result[k] === dir && confidence[k] != null);
+        const fired = ["A", "B", "C", "D"].filter(k => result[k] === dir && confidence[k] != null);
         if (!fired.length) continue;
         const avgConf = fired.reduce((s, k) => s + confidence[k], 0) / fired.length;
         if (avgConf < minAgg) {
@@ -1008,6 +1060,106 @@ class AdaptiveFusionStrategy extends StrategyBase {
     if (closeCurr < emaSlow && emaFast < emaSlow && rsi < 55 && rsi > 35) {
       return "SHORT";
     }
+
+    return null;
+  }
+
+  // ── Component D — SMC (Smart Money Concepts) ─────────────────────────────
+  // AF-FIX-12/13 (Sprint 8): institutional-level price zones.
+  //
+  // Theory:
+  //   Fair Value Gap (FVG): 3-bar pattern with a price gap (imbalance zone). Price
+  //   tends to "fill" the gap when it retraces, offering a high-probability entry.
+  //     Bullish FVG: candle[i-2].high < candle[i].low  (gap UP — buy zone when filled)
+  //     Bearish FVG: candle[i-2].low > candle[i].high  (gap DOWN — sell zone when filled)
+  //
+  //   Order Block (OB): the last candle of the opposite colour before an impulse move.
+  //   Smart money leaves footprints here. When price returns to this zone it often
+  //   reverses again, giving a second-chance entry.
+  //     Bullish OB: last bearish candle before bullish impulse (buy zone on retrace)
+  //     Bearish OB: last bullish candle before bearish impulse (sell zone on retrace)
+  //
+  //   EMA confirmation (not SMC-pure, added for filter): EMA9 vs EMA21 alignment
+  //   ensures the OB/FVG is IN the direction of the macro trend, not counter-trend.
+
+  /**
+   * Detect Fair Value Gaps in the candle array.
+   * Scans the last `lookback` bars.
+   * @returns {{ bullish: Array<{top,bottom,idx}>, bearish: Array<{top,bottom,idx}> }}
+   */
+  _detectFVG(highs, lows, lastIdx, lookback = 20) {
+    const bullish = [], bearish = [];
+    const start = Math.max(2, lastIdx - lookback + 1);
+    for (let i = start; i <= lastIdx - 1; i++) {
+      const h2 = highs[i - 2], l_i = lows[i];   // gap UP: prev-prev high < current low
+      if (h2 != null && l_i != null && l_i > h2) {
+        bullish.push({ top: l_i, bottom: h2, idx: i });
+      }
+      const l2 = lows[i - 2], h_i = highs[i];   // gap DOWN: prev-prev low > current high
+      if (l2 != null && h_i != null && h_i < l2) {
+        bearish.push({ top: l2, bottom: h_i, idx: i });
+      }
+    }
+    return { bullish, bearish };
+  }
+
+  /**
+   * Detect Order Blocks — last candle before an impulse in the opposite direction.
+   * Returns the MOST RECENT bullish and bearish OB within `lookback` bars.
+   * @returns {{ bullish: {top,bottom,idx}|null, bearish: {top,bottom,idx}|null }}
+   */
+  _detectOrderBlocks(closes, highs, lows, lastIdx, lookback = 20) {
+    let bullishOB = null, bearishOB = null;
+    const start = Math.max(1, lastIdx - lookback);
+    for (let i = start; i <= lastIdx - 2; i++) {
+      const prevClose = closes[i - 1];
+      if (prevClose == null || closes[i] == null || closes[i + 1] == null) continue;
+
+      // Require the NEXT candle to be an impulse (body > 50% of its range)
+      const nextRange = (highs[i + 1] ?? 0) - (lows[i + 1] ?? 0);
+      const nextBody  = Math.abs(closes[i + 1] - closes[i]);
+      if (nextRange <= 0 || nextBody / nextRange < 0.5) continue;
+
+      // Bullish OB: this candle bearish (close < prevClose) + next candle bullish
+      if (closes[i] < prevClose && closes[i + 1] > closes[i]) {
+        bullishOB = { top: highs[i], bottom: lows[i], idx: i };
+      }
+      // Bearish OB: this candle bullish (close > prevClose) + next candle bearish
+      if (closes[i] > prevClose && closes[i + 1] < closes[i]) {
+        bearishOB = { top: highs[i], bottom: lows[i], idx: i };
+      }
+    }
+    return { bullish: bullishOB, bearish: bearishOB };
+  }
+
+  /**
+   * Component D — SMC signal.
+   * Fires when the current bar retraces INTO a valid OB or FVG zone,
+   * with EMA9/EMA21 confirming the macro direction.
+   * @returns {"LONG"|"SHORT"|null}
+   */
+  _detectSignalD(closes, highs, lows, emaFast, emaSlow, lastIdx, config = {}) {
+    if (!closes || !highs || !lows || lastIdx < 20) return null;
+    if (emaFast == null || emaSlow == null) return null;
+
+    const lookback = config.smcLookback ?? 20;
+    const close = closes[lastIdx];
+    const high  = highs[lastIdx];
+    const low   = lows[lastIdx];
+    if (close == null) return null;
+
+    const fvg = this._detectFVG(highs, lows, lastIdx, lookback);
+    const ob  = this._detectOrderBlocks(closes, highs, lows, lastIdx, lookback);
+
+    // LONG: price retraces into a bullish FVG or bullish OB + EMA uptrend
+    const inBullFVG = fvg.bullish.some(z => low <= z.top && close >= z.bottom);
+    const inBullOB  = ob.bullish != null && low <= ob.bullish.top && close >= ob.bullish.bottom;
+    if ((inBullFVG || inBullOB) && emaFast > emaSlow) return "LONG";
+
+    // SHORT: price retraces into a bearish FVG or bearish OB + EMA downtrend
+    const inBearFVG = fvg.bearish.some(z => high >= z.bottom && close <= z.top);
+    const inBearOB  = ob.bearish != null && high >= ob.bearish.bottom && close <= ob.bearish.top;
+    if ((inBearFVG || inBearOB) && emaFast < emaSlow) return "SHORT";
 
     return null;
   }

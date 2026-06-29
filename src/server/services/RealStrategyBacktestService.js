@@ -63,6 +63,7 @@ function isoOf(c) {
  * @returns {{trades:Array, equity:Array, stats:Object, meta:Object}}
  */
 // Multi-position backtest (v3.0): each AF component opens independent positions
+// Pass opts.debug=true to get a per-bar rejection log (capped at 500 entries).
 function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
@@ -117,6 +118,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
 
   const trades = [];
   const equity = [{ date: isoOf(entryCandles[0]), value: startCapital }];
+  const debugLog = opts.debug ? [] : null; // per-bar rejection log (debug mode only)
 
   // Multi-position state: Map<componentId, { side, entry, sl, tp, size, openIdx, ... }>
   const positions = new Map();
@@ -244,8 +246,47 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
 
     const nowMs = c.timestamp ?? 0; // backtest "now" = current candle time (NOT wall-clock)
 
+    // Debug: log rejection reason for each bar (capped at 500 to avoid huge responses)
+    if (debugLog != null && debugLog.length < 500) {
+      const anyFired = ["A", "B", "C", "D"].some(k => multiSignal[k]);
+      if (!anyFired) {
+        const blockReasons = [];
+        const mc = multiSignal.meta?.marketCond;
+        if (mc === "DEAD_MARKET")     blockReasons.push("DEAD_MARKET");
+        if (mc === "CHOPPY_VOLATILE") blockReasons.push("CHOPPY_VOLATILE");
+        if (htfTrend === "UNKNOWN")   blockReasons.push("htfTrend=UNKNOWN");
+        const conf = multiSignal.meta?.confidence || {};
+        const compSigs = {};
+        // Re-run with gate off to see what the raw signal would have been
+        const rawMulti = strategy.detectSignalMulti(indicators, i, {
+          balance: capital, volatility, trend_strength: trendStrength,
+          htfTrend, htfTrendStrength: htfStrengthAt(i),
+          maxEntryExtensionATR: cfg.maxEntryExtensionATR,
+          afEnabledComponents: cfg.afEnabledComponents,
+          // gates OFF for diagnosis:
+          afMinComponentConfidence: 0, afMinAggregateConfidence: 0,
+        });
+        for (const k of ["A", "B", "C", "D"]) {
+          compSigs[k] = rawMulti[k] ?? "null";
+          if (rawMulti[k] && !multiSignal[k]) {
+            const c_ = conf[k];
+            if (c_ != null && c_ < (cfg.afMinComponentConfidence ?? 60)) {
+              blockReasons.push(`${k}: conf=${c_}<${cfg.afMinComponentConfidence ?? 60}`);
+            } else {
+              blockReasons.push(`${k}: htf/chase/netEdge block`);
+            }
+          }
+        }
+        debugLog.push({
+          date: isoOf(c), bar: i, marketCond: mc, htfTrend,
+          volatility: +volatility.toFixed(3), trendStrength: +trendStrength.toFixed(3),
+          rawSignals: compSigs, confidence: conf, blockReasons,
+        });
+      }
+    }
+
     // Check each component for independent entry
-    for (const componentId of ["A", "B", "C"]) {
+    for (const componentId of ["A", "B", "C", "D"]) {
       const signal = multiSignal[componentId];
       if (!signal) continue;
 
@@ -350,6 +391,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
     ok: true,
     trades,
     equity,
+    debugLog: debugLog ?? undefined, // only present when opts.debug=true
     stats: {
       totalTrades: trades.length,
       wins: wins.length,

@@ -282,5 +282,5 @@ test("AF-FIX-09: preset ships the gate enabled at 60 for live + backtest", () =>
   const p = STRATEGIES.ADAPTIVE_FUSION;
   assert.strictEqual(p.afMinComponentConfidence, 60);
   assert.strictEqual(p.afMinAggregateConfidence, 60);
-  assert.deepStrictEqual(p.afEnabledComponents, ["A", "B", "C"]);
+  assert.deepStrictEqual(p.afEnabledComponents, ["A", "B", "C", "D"]);
 });

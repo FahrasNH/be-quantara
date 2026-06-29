@@ -280,12 +280,15 @@ const STRATEGIES = {
     // ("semua komponen berjalan dengan normal"); the gate removes the low-quality
     // fires that were the source of the bleed. NOTE: promote to live only after
     // the Quant apple-to-apple backtest gate (AF-FIX-06/07/08) confirms the edge.
-    afEnabledComponents:  ["A", "B", "C"],
+    // AF-FIX-12/13 (Sprint 8): Component D (SMC) added — enable all 4 components.
+    afEnabledComponents:  ["A", "B", "C", "D"],
     // AF-FIX-02: a component may vote/fire only if its confidence ≥ this.
     afMinComponentConfidence: 60,
     // AF-FIX-03: resolved entry rejected unless mean confidence of agreeing
     // components ≥ this (blocks weak reversal/"Signal" entries that only pay fees).
     afMinAggregateConfidence: 60,
+    // SMC Component D lookback (bars to scan for OB/FVG zones)
+    smcLookback: 20,
 
     // AF-FIX-11: MACD histogram alignment required for Component B (trend direction confirmation)
     bUseMacd:      true,

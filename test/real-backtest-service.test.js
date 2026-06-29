@@ -59,7 +59,7 @@ test("exits are SL/TP only — no 'Signal' reversal exit (live AF parity)", () =
 test("SL/TP are component-aware (RR matches a real component, ~2.1–2.5)", () => {
   const r = runRealBacktest({ entryCandles: entry, htfCandles: htf, strategyKey: "ADAPTIVE_FUSION", capital: 1000, config: { afMinVotes: 2, volSmaMultiplier: 1.0 } });
   for (const t of r.trades) {
-    assert.ok(["A", "B", "C"].includes(t.component), `bad component ${t.component}`);
+    assert.ok(["A", "B", "C", "D"].includes(t.component), `bad component ${t.component}`);
     // RR from component presets: A 1.5, B 2.125, C 2.5 (×1.8 if STRONG_TREND)
     assert.ok(t.plannedRR >= 1.4 && t.plannedRR <= 5.0, `RR out of range: ${t.plannedRR}`);
   }

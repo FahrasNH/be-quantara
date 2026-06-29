@@ -85,7 +85,7 @@ test("legacyStrategies ADAPTIVE_FUSION preset (v3.5 AF-FIX-17)", () => {
 });
 
 test("AdaptiveFusionStrategy class v3.5", () => {
-  assert.strictEqual(afs.config.version, "3.5.0");
+  assert.strictEqual(afs.config.version, "3.6.0");
   const risk = afs.getRiskConfig();
   assert.strictEqual(risk.riskPerTrade, 0.005);
   assert.strictEqual(risk.riskPerTradeStrong, 0.01);
@@ -224,16 +224,16 @@ test("v3.1 LONG still fires normally in BULLISH HTF (not affected by SHORT filte
 
 // ── v3.2 Fix: component enable-list (default C-only) ─────────────────────────
 
-test("v3.3 (AF-FIX) preset re-enables all components behind the confidence gate", () => {
-  // v3.2 ran C-only because UNGATED A/B bled on 15m chop. AF-FIX-01/02 adds a
-  // ≥60 conviction gate, so all three are re-enabled ("semua komponen berjalan").
-  assert.deepStrictEqual(preset.afEnabledComponents, ["A", "B", "C"]);
+test("v3.6 (AF-FIX-12/13) preset enables all 4 components including SMC (D)", () => {
+  // AF-FIX-12/13 (Sprint 8): Component D (SMC Order Block + FVG) added to the
+  // enable-list behind the same ≥60 confidence gate as A/B/C.
+  assert.deepStrictEqual(preset.afEnabledComponents, ["A", "B", "C", "D"]);
   assert.strictEqual(preset.afMinComponentConfidence, 60);
   assert.strictEqual(preset.afMinAggregateConfidence, 60);
 });
 
-test("v3.5 class version 3.5.0 (AF-FIX-17: wider RSI bands, C in NORMAL, LOOKBACK 5)", () => {
-  assert.strictEqual(afs.config.version, "3.5.0");
+test("v3.6 class version 3.6.0 (AF-FIX-12/13: SMC Component D added)", () => {
+  assert.strictEqual(afs.config.version, "3.6.0");
 });
 
 test("v3.2 afEnabledComponents=['C'] blocks A and B even when their signals would fire", () => {
