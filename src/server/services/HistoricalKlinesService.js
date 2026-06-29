@@ -32,7 +32,7 @@ const PAGE_SIZE = 500;
 const PAUSE_MS = 120;
 const MEM_CACHE_TTL_MS = Number(process.env.BACKTEST_KLINES_CACHE_TTL_MS) || 3_600_000;
 /** Batas bar per request — cegah OOM + timeout gateway pada rentang besar (mis. max × 15m). */
-const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 20_000;
+const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 50_000;  // v3.3: 20K → 50K (supports ~2 years 1h data)
 /** Deadline fetch exchange agar request gagal rapi sebelum nginx 504 (default 240s). */
 const FETCH_DEADLINE_MS = Number(process.env.BACKTEST_KLINES_FETCH_DEADLINE_MS) || 240_000;
 const MIN_CACHE_COVERAGE = 0.85;

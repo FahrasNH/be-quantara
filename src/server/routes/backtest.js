@@ -1143,6 +1143,8 @@ module.exports = function createBacktestRouter(context) {
       }
     }
 
+    // v3.3: Add timing info for progress feedback (50K+ bars can take 15-30s)
+    const startMs = Date.now();
     const result = runRealBacktest({
       entryCandles,
       htfCandles,
@@ -1152,6 +1154,7 @@ module.exports = function createBacktestRouter(context) {
       enableSlippage: !!enableSlippage,
       config: parameters,
     });
+    const elapsedMs = Date.now() - startMs;
 
     res.json({
       ok: true,
@@ -1165,6 +1168,7 @@ module.exports = function createBacktestRouter(context) {
       dataStart: entryRes.startDate,
       dataEnd: entryRes.endDate,
       source: entryRes.source,
+      computeTimeMs: elapsedMs,  // v3.3: show user how long backtest took
       ...result,
     });
   }));
