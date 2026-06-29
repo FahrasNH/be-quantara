@@ -248,7 +248,7 @@ const STRATEGIES = {
     higherTf:      "4h",        // v3.3: changed from 1h → 4h (proper swing context)
     htfEmaFast:    9,
     htfEmaSlow:    21,
-    htfTrendStrengthMin: 0.75,
+    htfTrendStrengthMin: 0.25, // v3.3: lowered from 0.75; backtest was always null → gate blocked all BULLISH/BEARISH entries
     sidewaysThresholdPct: 0.2,
 
     sidewaysRangeLookback:   20,
@@ -271,10 +271,20 @@ const STRATEGIES = {
     // afMinVotes retained for legacy single-position path; multi-position ignores it
     afMinVotes:           3,
     afRejectOnDissent:    true,
-    // v3.2 (2026-06-29): real BNB data showed A (PF 0.31) + B (PF 0.41) bleed;
-    // only C (PF 1.45, trend-following RR 4.5) has edge. Run C-only. To re-enable
-    // A/B for research set afEnabledComponents: ["A","B","C"].
-    afEnabledComponents:  ["C"],
+    // ── Sprint 7 (AF-FIX, 2026-06-29): confidence-gated multi-component ──────────
+    // v3.2 disabled A/B (C-only) because, UNGATED, their EMA-crossover designs
+    // bled on real 15m chop (A PF 0.31, B PF 0.41). AF-FIX-01/02 adds a 0–100
+    // conviction score per component + a ≥60 entry gate, so A/B now fire ONLY on
+    // high-confidence setups. All three components are re-enabled behind the gate
+    // ("semua komponen berjalan dengan normal"); the gate removes the low-quality
+    // fires that were the source of the bleed. NOTE: promote to live only after
+    // the Quant apple-to-apple backtest gate (AF-FIX-06/07/08) confirms the edge.
+    afEnabledComponents:  ["A", "B", "C"],
+    // AF-FIX-02: a component may vote/fire only if its confidence ≥ this.
+    afMinComponentConfidence: 60,
+    // AF-FIX-03: resolved entry rejected unless mean confidence of agreeing
+    // components ≥ this (blocks weak reversal/"Signal" entries that only pay fees).
+    afMinAggregateConfidence: 60,
 
     leverage:      2,
     interval:      "1h",        // v3.3: changed from 15m → 1h (pullback-to-EMA needs proper swing TF)

@@ -47,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.2.0",
+      version: "3.3.0",
       enabled: true,
       ...config,
     });
@@ -242,6 +242,143 @@ class AdaptiveFusionStrategy extends StrategyBase {
     };
   }
 
+  // ── AF-FIX-01: Per-Component Confidence Scoring (0–100) ───────────────────
+  //
+  // Sprint 7 (2026-06-29). Each component A/B/C now carries an EXPLICIT
+  // indicator→weight mapping (sums to 100) so a fired signal is graded by
+  // CONVICTION rather than treated as a binary yes/no. A component that BARELY
+  // qualifies (weak RSI momentum, volume at threshold, price over-extended)
+  // scores low and is filtered out by the ≥60% entry gate (AF-FIX-02); a clean
+  // setup scores ~80–95.
+  //
+  // Indicator→weight table (the AF-FIX-01 deliverable):
+  //   A (Aggressive Scalp):  emaAlign 25 · closeVsFast 15 · rsiVelocity 25 · rsiLevel 15 · volume 20
+  //   B (Balanced Day):      emaStack 30 · closeVsSlow 15 · rsiBand   20 · event    25 · macd   10
+  //   C (Swing):             closeVsSlow 25 · emaStructure 25 · rsiBand 20 · trendStrength 20 · proximity 10
+  //
+  // Structural conditions (EMA alignment, close-vs-EMA, fresh event) are already
+  // TRUE when the component fired, so they contribute full weight; the graded
+  // indicators differentiate strong from weak entries.
+  getConfidenceWeights() {
+    return {
+      A: { emaAlign: 25, closeVsFast: 15, rsiVelocity: 25, rsiLevel: 15, volume: 20 },
+      B: { emaStack: 30, closeVsSlow: 15, rsiBand: 20, event: 25, macd: 10 },
+      C: { closeVsSlow: 25, emaStructure: 25, rsiBand: 20, trendStrength: 20, proximity: 10 },
+    };
+  }
+
+  _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+  /** Band membership score: 1.0 at the band centre, 0.5 at the edges, 0 outside. */
+  _bandScore(v, lo, hi) {
+    if (v == null || v < lo || v > hi) return 0;
+    const mid  = (lo + hi) / 2;
+    const half = (hi - lo) / 2 || 1;
+    return 0.5 + 0.5 * (1 - Math.abs(v - mid) / half);
+  }
+
+  /**
+   * Assemble the indicator context used by _componentConfidence from the raw
+   * indicator arrays at `lastIdx`. Shared by detectSignal (voting) and
+   * detectSignalMulti so the two paths score identically.
+   */
+  _buildConfidenceContext(indicators, lastIdx, config = {}, marketConditions = {}) {
+    const rsiSeries = indicators.rsi || [];
+    const rsiCurr   = rsiSeries[lastIdx];
+    const rsiPrev2  = rsiSeries[lastIdx - 2];
+    const rsiSlope  = (rsiCurr != null && rsiPrev2 != null) ? (rsiCurr - rsiPrev2) / 2 : 0;
+    const closes    = indicators.closes || [];
+    const volSMAv   = indicators.volSMA?.[lastIdx] ?? 0;
+    const volRatio  = volSMAv > 0 ? (indicators.volumes?.[lastIdx] ?? 0) / volSMAv : 0;
+    return {
+      rsi:        rsiCurr,
+      rsiSlope,
+      emaFast:    indicators.emaFast?.[lastIdx]  ?? null,
+      emaSlow:    indicators.emaSlow?.[lastIdx]  ?? null,
+      emaTrend:   indicators.emaTrend?.[lastIdx] ?? null,
+      close:      closes[lastIdx],
+      atr:        indicators.atr?.[lastIdx] ?? 0,
+      volRatio,
+      volMult:    config.volSmaMultiplier ?? 2.0,
+      trendStrength: marketConditions?.trend_strength ?? 0,
+      macdHist:   indicators.macdHistogram?.[lastIdx] ?? null,
+      rsiLongMin:  config.rsiLongMin  ?? 60,
+      rsiLongMax:  config.rsiLongMax  ?? 68,
+      rsiShortMin: config.rsiShortMin ?? 32,
+      rsiShortMax: config.rsiShortMax ?? 40,
+    };
+  }
+
+  /**
+   * Compute a 0–100 confidence score for a component that fired `direction`.
+   * @param {"A"|"B"|"C"} key
+   * @param {"LONG"|"SHORT"|null} direction
+   * @param {Object} d  context from _buildConfidenceContext
+   */
+  _componentConfidence(key, direction, d = {}) {
+    if (!direction) return 0;
+    const W = this.getConfidenceWeights()[key];
+    if (!W) return 0;
+    const long = direction === "LONG";
+    let score = 0;
+
+    if (key === "A") {
+      if (d.emaFast != null && d.emaSlow != null &&
+          (long ? d.emaFast > d.emaSlow : d.emaFast < d.emaSlow)) score += W.emaAlign;
+      if (d.close != null && d.emaFast != null &&
+          (long ? d.close > d.emaFast : d.close < d.emaFast))     score += W.closeVsFast;
+      const slope = d.rsiSlope ?? 0;
+      score += W.rsiVelocity * this._clamp01((long ? slope : -slope) / 2);
+      score += W.rsiLevel    * this._clamp01((long ? (d.rsi - 40) : (60 - d.rsi)) / 30);
+      score += W.volume      * this._clamp01(d.volMult > 0 ? d.volRatio / (d.volMult * 2) : 0);
+    } else if (key === "B") {
+      let stack = 0;
+      if (d.emaFast != null && d.emaSlow != null &&
+          (long ? d.emaFast > d.emaSlow : d.emaFast < d.emaSlow)) stack += 0.5;
+      // Fix: null emaTrend → neutral 0.25, not full 0.5 (no data ≠ confirmation)
+      if (d.emaTrend == null) stack += 0.25;
+      else if (long ? d.emaSlow > d.emaTrend : d.emaSlow < d.emaTrend) stack += 0.5;
+      score += W.emaStack * stack;
+      if (d.close != null && d.emaSlow != null &&
+          (long ? d.close > d.emaSlow : d.close < d.emaSlow)) score += W.closeVsSlow;
+      const lo = long ? d.rsiLongMin  : d.rsiShortMin;
+      const hi = long ? d.rsiLongMax  : d.rsiShortMax;
+      score += W.rsiBand * this._bandScore(d.rsi, lo, hi);
+      score += W.event;  // a fired B implies a fresh cross / pullback-resume event
+      if (d.macdHist == null) score += W.macd * 0.5;
+      else score += W.macd * (long ? (d.macdHist > 0 ? 1 : 0) : (d.macdHist < 0 ? 1 : 0));
+    } else if (key === "C") {
+      // Fix: tautological binary checks replaced with graded distance metrics so
+      // marginal C fires (barely above emaSlow, thin EMA spread) score below 60.
+      // closeVsSlow: full score within 1 ATR of emaSlow, decays to 0 at 4+ ATR.
+      if (d.close != null && d.emaSlow != null && d.atr > 0) {
+        const dist = Math.abs(d.close - d.emaSlow) / d.atr;
+        score += W.closeVsSlow * this._clamp01(1 - Math.max(0, dist - 1) / 3);
+      } else if (d.close != null && d.emaSlow != null) {
+        score += W.closeVsSlow * 0.5;
+      }
+      // emaStructure: graded by EMA separation / ATR — wider spread = stronger trend.
+      if (d.emaFast != null && d.emaSlow != null && d.atr > 0) {
+        const sep = Math.abs(d.emaFast - d.emaSlow) / d.atr;
+        score += W.emaStructure * this._clamp01(sep / 3);
+      } else if (d.emaFast != null && d.emaSlow != null) {
+        score += W.emaStructure * 0.5;
+      }
+      const lo = long ? 45 : 35;
+      const hi = long ? 65 : 55;
+      score += W.rsiBand * this._bandScore(d.rsi, lo, hi);
+      const strongRef = this.getMarketThresholds().STRONG_TREND || 0.4;
+      score += W.trendStrength * this._clamp01((d.trendStrength ?? 0) / strongRef);
+      if (d.close != null && d.emaFast != null && d.atr > 0) {
+        const ext = Math.abs(d.close - d.emaFast) / d.atr;
+        score += W.proximity * this._clamp01(1 - ext / 2);
+      } else {
+        score += W.proximity * 0.5;
+      }
+    }
+    return Math.round(this._clamp01(score / 100) * 100);
+  }
+
   // ── Main Signal Detection ─────────────────────────────────────────────────
 
   /**
@@ -350,14 +487,40 @@ class AdaptiveFusionStrategy extends StrategyBase {
       signals.C = this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed);
     }
 
+    // AF-FIX-01/02 (Sprint 7): score every fired component (0–100) and gate the
+    // vote by confidence. Only components clearing afMinComponentConfidence (60)
+    // may vote; if fewer than 2 valid components remain → no-entry. Backward
+    // compatible: when the knob is absent (legacy unit tests) the gate is OFF and
+    // voting runs over all fired components exactly as before.
+    const minComponentConf =
+      config.afMinComponentConfidence ?? this.config?.afMinComponentConfidence ?? null;
+    const confCtx     = this._buildConfidenceContext(indicators, lastIdx, config, marketConditions);
+    const confidences = {};
+    const validSignals = {};
+    for (const k of ["A", "B", "C"]) {
+      if (!signals[k]) continue;
+      const conf = this._componentConfidence(k, signals[k], confCtx);
+      confidences[k] = conf;
+      if (minComponentConf == null || conf >= minComponentConf) validSignals[k] = signals[k];
+    }
+
     // PAIR-TIER-07 / v2.3: respect votingThresholdOverride from pair tier
     // (STABLE 0.60, SEMI_VOLATILE 0.70, VOLATILE 0.78 — lihat PairClassifier).
     const votingThresholdOverride = config.tierOverrides?.votingThresholdOverride ?? null;
-    let resolved = this._resolveSignalConflict(signals, votingThresholdOverride, {
+    const voteOpts = {
       rejectOnDissent: config.afRejectOnDissent ?? true,
       // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
       minVotes:        config.afMinVotes ?? 3,
-    });
+    };
+    let resolved;
+    if (minComponentConf != null) {
+      // AF-FIX-02: <2 komponen lolos threshold → skip bar.
+      resolved = Object.keys(validSignals).length < 2
+        ? null
+        : this._resolveSignalConflict(validSignals, votingThresholdOverride, voteOpts);
+    } else {
+      resolved = this._resolveSignalConflict(signals, votingThresholdOverride, voteOpts);
+    }
 
     // v2.3: HTF directional alignment WAJIB — buang sinyal yang melawan tren HTF.
     // LONG hanya valid bila HTF bukan BEARISH; SHORT hanya bila HTF bukan BULLISH.
@@ -387,6 +550,30 @@ class AdaptiveFusionStrategy extends StrategyBase {
       }
     }
 
+    // AF-FIX-03 (Sprint 7): block low-conviction reversal/"Signal" entries. Live
+    // post-mortem: the majority of losing entries were weak reversals that only
+    // paid fees. Require the AGGREGATE confidence (mean of components backing the
+    // resolved direction) to clear afMinAggregateConfidence (60). The HTF
+    // directional filter above already enforces regime alignment; together they
+    // satisfy "block reversal unless confidence ≥60% AND aligned with HTF".
+    let aggregateConfidence = null;
+    if (resolved) {
+      // Fix: use gate-cleared validSignals (not all fired signals) when component gate active
+      const sigMap = minComponentConf != null ? validSignals : signals;
+      const agreeing = ["A", "B", "C"].filter(k => sigMap[k] === resolved && confidences[k] != null);
+      if (agreeing.length) {
+        aggregateConfidence = Math.round(
+          agreeing.reduce((s, k) => s + confidences[k], 0) / agreeing.length
+        );
+      }
+      const minAgg =
+        config.afMinAggregateConfidence ?? this.config?.afMinAggregateConfidence ?? null;
+      if (minAgg != null && (aggregateConfidence == null || aggregateConfidence < minAgg)) {
+        this._lastConfidenceReject = { signal: resolved, aggregate: aggregateConfidence, minAgg };
+        resolved = null;
+      }
+    }
+
     if (resolved) {
       // P6: Store which component(s) fired for SL/TP selection
       let winningComponent = this._pickBestComponent(signals, resolved, scoreMap);
@@ -408,6 +595,10 @@ class AdaptiveFusionStrategy extends StrategyBase {
         forcedComponent,
         votes:       signals,
         scores:      scoreMap,
+        // AF-FIX-01/03: per-component + aggregate confidence (for logs / trade record).
+        confidence:           confidences,
+        componentConfidence:  confidences[winningComponent] ?? null,
+        aggregateConfidence,
         marketCond,
         htfTrend,
       };
@@ -467,6 +658,14 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const maxExt    = config.maxEntryExtensionATR ?? 0.7;
     const D = config._diag || null; // optional per-component funnel counters
 
+    // AF-FIX-01/02 (Sprint 7): per-component confidence gate. A component fires
+    // only if its conviction score (0–100) clears afMinComponentConfidence (60).
+    // Backward compatible: knob absent → gate OFF (legacy unit-test behaviour).
+    const minComponentConf =
+      config.afMinComponentConfidence ?? this.config?.afMinComponentConfidence ?? null;
+    const confCtx     = this._buildConfidenceContext(indicators, lastIdx, config, marketConditions);
+    const confidence  = { A: null, B: null, C: null };
+
     // v3.2 (2026-06-29): component enable-list. Real BNB data (19,969 15m bars,
     // Dec 2025–Jun 2026) showed A (PF 0.31) and B (PF 0.41) have NEGATIVE edge —
     // they are EMA-crossover scalp/day designs that whipsaw on real 15m chop.
@@ -494,6 +693,14 @@ class AdaptiveFusionStrategy extends StrategyBase {
       if (closeConfirmed != null && emaFast != null && atr > 0 &&
           Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
         if (D) D.chaseBlock[key] = (D.chaseBlock[key] || 0) + 1;
+        return null;
+      }
+      // AF-FIX-02: conviction gate — score the (HTF-aligned, non-chasing) signal
+      // and drop it if confidence is below threshold. "Trade lebih confidence".
+      const conf = this._componentConfidence(key, sig, confCtx);
+      confidence[key] = conf;
+      if (minComponentConf != null && conf < minComponentConf) {
+        if (D) { D.confBlock = D.confBlock || {}; D.confBlock[key] = (D.confBlock[key] || 0) + 1; }
         return null;
       }
       if (D) D.fired[key] = (D.fired[key] || 0) + 1;
@@ -527,7 +734,21 @@ class AdaptiveFusionStrategy extends StrategyBase {
       result.C = evalComponent("C", this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed));
     } else if (D) { D.scoreGate.C = (D.scoreGate.C || 0) + 1; }
 
-    result.meta = { scoreMap, marketCond, htfTrend };
+    // AF-FIX-03 (live path fix): aggregate confidence gate mirrors detectSignal().
+    // Without this, afMinAggregateConfidence was dead code in the primary live path.
+    const minAgg = config.afMinAggregateConfidence ?? this.config?.afMinAggregateConfidence ?? null;
+    if (minAgg != null) {
+      for (const dir of ["LONG", "SHORT"]) {
+        const fired = ["A", "B", "C"].filter(k => result[k] === dir && confidence[k] != null);
+        if (!fired.length) continue;
+        const avgConf = fired.reduce((s, k) => s + confidence[k], 0) / fired.length;
+        if (avgConf < minAgg) {
+          for (const k of fired) result[k] = null;
+        }
+      }
+    }
+
+    result.meta = { scoreMap, marketCond, htfTrend, confidence, minComponentConfidence: minComponentConf };
     return result;
   }
 

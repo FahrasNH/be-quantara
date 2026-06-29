@@ -217,6 +217,10 @@ class AdaptiveStrategyEngine extends BotEngine {
         maxEntryExtensionATR: this.config.maxEntryExtensionATR,
         afRejectOnDissent:    this.config.afRejectOnDissent,
         afMinVotes:           this.config.afMinVotes,
+        // AF-FIX-02/03 (Sprint 7): conviction gate also applies to the multi-strategy
+        // single-position voting path used by this engine.
+        afMinComponentConfidence: this.config.afMinComponentConfidence,
+        afMinAggregateConfidence: this.config.afMinAggregateConfidence,
         // v2.3: tier pair + override agar voting threshold, regime filter, dan
         // SL komponen-C (VOLATILE/SEMI_VOLATILE) aktif di multi-strategy engine.
         pairTier:             this.config.pairTier,
@@ -377,12 +381,15 @@ class AdaptiveStrategyEngine extends BotEngine {
         indicatorSnapshot.afComponent  = meta.component;
         indicatorSnapshot.afVotes      = meta.votes;
         indicatorSnapshot.afMarketCond = meta.marketCond;
+        indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;          // AF-FIX-01
+        indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null; // AF-FIX-03
         const tpMultNote = riskCfg.strongTrendTPApplied
           ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
           : "";
+        const confNote = meta.aggregateConfidence != null ? ` | Conf ${meta.aggregateConfidence}%` : "";
         console.log(
           `[${this.config.symbol}] [AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
-          `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}`
+          `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}${confNote}`
         );
       }
 

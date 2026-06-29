@@ -181,7 +181,8 @@ function makeLiveBot(clientOverrides = {}) {
     bot.config.maxConsecLoss = 3; bot.config.maxTradesPerDay = 10; bot.config.maxDailyLossPct = 0.04;
     bot.state.consecLoss = 0; bot.state.dailyTradeCount = 0; bot.state.dailyLoss = 0;
     bot.state.dailyStartCapital = 1000; bot.state.capital = 1000; bot.state.openPositions = [];
-    const g = bot._checkRiskGates(1, 100); // ATR 1% → dalam rentang filter
+    bot.config.atrMinMult = 0; // isolate ATR gate; this test is about other gates
+    const g = bot._checkRiskGates(1, 100);
     assert(g.ok === true, `gate harus OK, dapat: ${g.reason}`);
   });
 

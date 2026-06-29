@@ -24,7 +24,7 @@
  * first = conservative). No opposite-signal exit.
  */
 
-const { calcIndicators, detectHTFTrend } = require("../../domain/indicators");
+const { calcIndicators, detectHTFTrend, calcEMA, calcATR } = require("../../domain/indicators");
 const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 
@@ -77,6 +77,28 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
 
   const htfPtr = htfCandles?.length ? buildHtfIndexPointer(entryCandles, htfCandles) : null;
   const htfTrendCache = new Map();
+
+  // Pre-compute HTF EMA fast/slow + ATR arrays for htfTrendStrength (mirrors BotEngine live calc)
+  let htfEmaFastArr = null, htfEmaSlowArr = null, htfAtrArr = null;
+  if (htfCandles?.length) {
+    const htfCloses = htfCandles.map(c => c.close);
+    const htfHighs  = htfCandles.map(c => c.high);
+    const htfLows   = htfCandles.map(c => c.low);
+    htfEmaFastArr = calcEMA(htfCloses, cfg.htfEmaFast ?? 9);
+    htfEmaSlowArr = calcEMA(htfCloses, cfg.htfEmaSlow ?? 21);
+    htfAtrArr     = calcATR(htfHighs, htfLows, htfCloses, cfg.atrPeriod ?? 14);
+  }
+
+  function htfStrengthAt(i) {
+    if (!htfPtr || !htfEmaFastArr) return null;
+    const j = htfPtr[i];
+    if (j < 0) return null;
+    const hEmaF = htfEmaFastArr[j];
+    const hEmaS = htfEmaSlowArr[j];
+    const hAtr  = htfAtrArr[j];
+    if (hEmaF == null || hEmaS == null || hAtr == null || hAtr <= 0) return null;
+    return Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+  }
 
   function htfTrendAt(i) {
     if (!htfPtr) return null;
@@ -155,6 +177,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       pnl,
       pnlPct: (pnl / (position.entry * position.size)) * 100,
       plannedRR: position.plannedRR,
+      confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
       reason,
       result: pnl > 0 ? "win" : "loss",
     });
@@ -206,6 +229,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       volatility,
       trend_strength: trendStrength,
       htfTrend,
+      htfTrendStrength: htfStrengthAt(i), // v3.3 fix: was missing → htfTrendStrengthMin gate blocked all
       maxEntryExtensionATR: cfg.maxEntryExtensionATR,
       afRejectOnDissent: cfg.afRejectOnDissent,
       pairTier: cfg.pairTier,
@@ -213,6 +237,8 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       volSmaMultiplier: cfg.volSmaMultiplier,
       marketThresholds: cfg.marketThresholds, // v3.0: TF-aware regime calibration
       afEnabledComponents: cfg.afEnabledComponents, // v3.2: C-only by default
+      afMinComponentConfidence: cfg.afMinComponentConfidence, // AF-FIX-02 conviction gate
+      afMinAggregateConfidence: cfg.afMinAggregateConfidence, // AF-FIX-03
     });
 
 
@@ -281,6 +307,8 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
         component: componentId,
         marketCond: regime,
         plannedRR: riskCfg.riskReward,
+        // AF-FIX-01: conviction score that cleared the entry gate (for reporting).
+        confidence: multiSignal.meta?.confidence?.[componentId] ?? null,
       });
 
       dailyTradeCount += 1;
@@ -341,7 +369,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       strategyKey,
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
-      higherTf: "1h",
+      higherTf: cfg.higherTf || null,
       feeRate: FEE_RATE_PER_SIDE,
       slippage: slip,
     },
@@ -474,6 +502,7 @@ function runRealBacktest(opts = {}) {
       pnl,
       pnlPct: (pnl / (position.entry * position.size)) * 100,
       plannedRR: position.plannedRR,
+      confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
       reason,
       result: pnl > 0 ? "win" : "loss",
     });
@@ -537,6 +566,8 @@ function runRealBacktest(opts = {}) {
       maxEntryExtensionATR: cfg.maxEntryExtensionATR,
       afRejectOnDissent: cfg.afRejectOnDissent,
       afMinVotes: cfg.afMinVotes,
+      afMinComponentConfidence: cfg.afMinComponentConfidence, // AF-FIX-02
+      afMinAggregateConfidence: cfg.afMinAggregateConfidence, // AF-FIX-03
       pairTier: cfg.pairTier,
       tierOverrides: cfg.tierOverrides,
     });
@@ -566,7 +597,7 @@ function runRealBacktest(opts = {}) {
 
     // ── 8. Component-aware SL/TP (mirror step 11d) ──────────────────────────
     const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
-    let slDist, tpDist, component = "B", marketCond = null, plannedRR = null;
+    let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     if (meta && typeof strategy.calculateRiskConfig === "function") {
       const rc = strategy.calculateRiskConfig(price, atr, signal, meta.component, {
         marketCond: meta.marketCond,
@@ -577,6 +608,8 @@ function runRealBacktest(opts = {}) {
       component = meta.component;
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
+      // AF-FIX-01/03: conviction behind this entry (component or aggregate score).
+      confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
     } else {
       slDist = atr * (cfg.atrMultiplier ?? 1.4);
       tpDist = slDist * (cfg.riskReward ?? 2);
@@ -598,6 +631,7 @@ function runRealBacktest(opts = {}) {
       component,
       marketCond,
       plannedRR,
+      confidence,
     };
     dailyTradeCount += 1;
     diag.opened += 1;

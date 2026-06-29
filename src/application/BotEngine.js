@@ -1336,6 +1336,8 @@ class BotEngine extends EventEmitter {
                 tierOverrides:        this.config.tierOverrides,
                 volSmaMultiplier:     this.config.volSmaMultiplier,
                 afEnabledComponents:  this.config.afEnabledComponents, // v3.2: C-only default
+                afMinComponentConfidence: this.config.afMinComponentConfidence, // AF-FIX-02
+                afMinAggregateConfidence: this.config.afMinAggregateConfidence, // AF-FIX-03
               });
 
               // Check each component independently for entry
@@ -1360,7 +1362,7 @@ class BotEngine extends EventEmitter {
                 }
 
                 // Multi-position entry (pass the real regime so strong-trend TP can fire)
-                await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot, multiSignal.meta?.marketCond);
+                await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot, multiSignal.meta?.marketCond, multiSignal.meta?.confidence?.[componentId]);
               }
               // Skip single-position logic below for AF in multi-position mode
               return;
@@ -1401,12 +1403,15 @@ class BotEngine extends EventEmitter {
                   indicatorSnapshot.afComponent  = meta.component;
                   indicatorSnapshot.afVotes      = meta.votes;
                   indicatorSnapshot.afMarketCond = meta.marketCond;
+                  indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;          // AF-FIX-01
+                  indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null; // AF-FIX-03
                   const tpMultNote = riskCfg.strongTrendTPApplied
                     ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
                     : "";
+                  const confNote = meta.aggregateConfidence != null ? ` | Conf ${meta.aggregateConfidence}%` : "";
                   this._log("info",
                     `[AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
-                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}`
+                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}${confNote}`
                   );
                 }
               } else if (this.config.signalType === "BREAKOUT_RETEST") {
@@ -2547,7 +2552,7 @@ class BotEngine extends EventEmitter {
   // MULTI-POSITION SIGNAL HANDLING (v3.0)
   // ─────────────────────────────────────────────
 
-  async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot, marketCond = "NORMAL") {
+  async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot, marketCond = "NORMAL", confidence = null) {
     if (!signal || !atr) return;
 
     const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
@@ -2604,15 +2609,17 @@ class BotEngine extends EventEmitter {
       openTime: new Date().toISOString(),
       openCandle: lastIdx,
       unrealizedPL: 0,
+      confidence: confidence ?? null, // AF-FIX-01: entry conviction (0–100)
     };
 
     // Store position
     this.state.positions.set(componentId, position);
 
+    const confNote = confidence != null ? ` | Conf ${confidence}%` : "";
     this._log("info",
       `[Multi-AF:${componentId}] ENTRY ${signal} @ $${price.toFixed(2)} | ` +
       `SL $${sl.toFixed(2)} TP $${tp.toFixed(2)} | ` +
-      `RR 1:${riskCfg.riskReward.toFixed(2)} | Qty ${qty.toFixed(4)}`
+      `RR 1:${riskCfg.riskReward.toFixed(2)} | Qty ${qty.toFixed(4)}${confNote}`
     );
 
     // Execute order in live mode

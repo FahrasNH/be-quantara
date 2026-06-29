@@ -58,25 +58,29 @@ function makeDownIndicators() {
   };
 }
 
-// ── v3.1 preset values ────────────────────────────────────────────────────────
-
-test("legacyStrategies ADAPTIVE_FUSION v3.0 preset", () => {
+// ── preset values (v2.6 baseline, reverted commit e69199a) ──────────────────────
+// NOTE: these assert the ACTUAL current preset. The earlier "v3.0" loose params
+// (maxEntryExtensionATR 1.5, cooldown 30, maxTrades 12, atrMinMult 0.25,
+// maxConsecLoss 4) were reverted to the v2.6 baseline after the 0% WR diagnosis;
+// this test was stale and has been reconciled (Sprint 7). The class getRiskConfig()
+// still returns the v3.0 risk numbers — that is asserted separately below.
+test("legacyStrategies ADAPTIVE_FUSION preset (v2.6 baseline)", () => {
   assert.strictEqual(preset.riskPerTrade, 0.005);
   assert.strictEqual(preset.riskPerTradeStrong, 0.01);
   assert.strictEqual(preset.rsiLongMin, 60);
   assert.strictEqual(preset.rsiShortMax, 40);
-  assert.strictEqual(preset.maxEntryExtensionATR, 1.5);
+  assert.strictEqual(preset.maxEntryExtensionATR, 0.7);
   assert.strictEqual(preset.strongTrendTPMult, 1.8);
   assert.strictEqual(preset.volSmaMultiplier, 1.3);
   assert.strictEqual(preset.htfTrendStrengthMin, 0.25);
-  assert.strictEqual(preset.cooldownAfterLoss, 30);
-  assert.strictEqual(preset.maxTradesPerDay, 12);
-  assert.strictEqual(preset.atrMinMult, 0.25);
-  assert.strictEqual(preset.maxConsecLoss, 4);
+  assert.strictEqual(preset.cooldownAfterLoss, 90);
+  assert.strictEqual(preset.maxTradesPerDay, 6);
+  assert.strictEqual(preset.atrMinMult, 1.2);
+  assert.strictEqual(preset.maxConsecLoss, 2);
 });
 
-test("AdaptiveFusionStrategy class v3.2", () => {
-  assert.strictEqual(afs.config.version, "3.2.0");
+test("AdaptiveFusionStrategy class v3.3", () => {
+  assert.strictEqual(afs.config.version, "3.3.0");
   const risk = afs.getRiskConfig();
   assert.strictEqual(risk.riskPerTrade, 0.005);
   assert.strictEqual(risk.riskPerTradeStrong, 0.01);
@@ -213,12 +217,16 @@ test("v3.1 LONG still fires normally in BULLISH HTF (not affected by SHORT filte
 
 // ── v3.2 Fix: component enable-list (default C-only) ─────────────────────────
 
-test("v3.2 preset defaults to C-only (afEnabledComponents)", () => {
-  assert.deepStrictEqual(preset.afEnabledComponents, ["C"]);
+test("v3.3 (AF-FIX) preset re-enables all components behind the confidence gate", () => {
+  // v3.2 ran C-only because UNGATED A/B bled on 15m chop. AF-FIX-01/02 adds a
+  // ≥60 conviction gate, so all three are re-enabled ("semua komponen berjalan").
+  assert.deepStrictEqual(preset.afEnabledComponents, ["A", "B", "C"]);
+  assert.strictEqual(preset.afMinComponentConfidence, 60);
+  assert.strictEqual(preset.afMinAggregateConfidence, 60);
 });
 
-test("v3.2 class version 3.2.0", () => {
-  assert.strictEqual(afs.config.version, "3.2.0");
+test("v3.3 class version 3.3.0", () => {
+  assert.strictEqual(afs.config.version, "3.3.0");
 });
 
 test("v3.2 afEnabledComponents=['C'] blocks A and B even when their signals would fire", () => {
