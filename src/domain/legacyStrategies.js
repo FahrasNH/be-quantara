@@ -227,7 +227,8 @@ const STRATEGIES = {
     emaSlow:       21,
     emaTrend:      50,
 
-    rsiPeriod:     14,
+    // AF-FIX-14: RSI period 14→21 reduces sideways noise (Grok analysis recommendation)
+    rsiPeriod:     21,
     rsiOverbought: 72,
     rsiOversold:   28,
     rsiLongMin:    60,
@@ -237,11 +238,8 @@ const STRATEGIES = {
 
     atrPeriod:     14,
     atrMultiplier: 1.4,
-    riskReward:    2.5,
-    // ── v3.2 REVISION (2026-06-29): Back to v2.6 baseline after 0% WR diagnosis
-    // v3.0 was TOO LOOSE on parameters; backtest showed all trades hitting SL immediately.
-    // Reverting to v2.6 baseline until entry logic is fixed. Component C is STRONG_TREND
-    // gated, so v2.6 gates (atrMinMult 1.2, htfTrendStrengthMin 0.75) won't block valid C trades.
+    // AF-FIX-14: RR 2.5→1.8 (more realistic targets on 1h TF; avoids TP never hit)
+    riskReward:    1.8,
     atrMinMult:    1.2,
     atrMaxMult:    3.5,
 
@@ -285,6 +283,12 @@ const STRATEGIES = {
     // AF-FIX-03: resolved entry rejected unless mean confidence of agreeing
     // components ≥ this (blocks weak reversal/"Signal" entries that only pay fees).
     afMinAggregateConfidence: 60,
+
+    // AF-FIX-11: MACD histogram alignment required for Component B (trend direction confirmation)
+    bUseMacd:      true,
+    // AF-FIX-04: net-edge filter — skip entry when ATR/price < k × feePct
+    netEdgeK:      2.0,   // need 2× fee as minimum expected move
+    feePct:        0.0012, // 0.12% roundtrip (taker both legs)
 
     leverage:      2,
     interval:      "1h",        // v3.3: changed from 15m → 1h (pullback-to-EMA needs proper swing TF)

@@ -47,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.3.0",
+      version: "3.4.0",
       enabled: true,
       ...config,
     });
@@ -78,9 +78,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
         emaSlow: 21,
         emaLong: 50,
         rsi: 14,
-        // v2.5: SL = 1.6× ATR, TP = 3.4× ATR → RR 1:2.1
+        // AF-FIX-14: SL = 1.6× ATR, TP = 2.88× ATR → RR 1:1.8 (was 3.4 → RR 2.1, target too far)
         slMultiplier: 1.6,
-        tpMultiplier: 3.4,
+        tpMultiplier: 2.88,
         riskPerTrade: 0.015,
         maxTradesPerDay: 8,
         minCapital: 20,
@@ -95,9 +95,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
         emaSlow: 50,
         emaLong: 200,
         rsi: 14,
-        // v2.5: SL = 1.2× ATR, TP = 3.0× ATR → RR 1:2.5
+        // AF-FIX-14: SL = 1.2× ATR, TP = 2.16× ATR → RR 1:1.8 (was 3.0 → RR 2.5, target too far on 1h)
         slMultiplier: 1.2,
-        tpMultiplier: 3.0,
+        tpMultiplier: 2.16,
         riskPerTrade: 0.015,
         maxTradesPerDay: 3,
         minCapital: 20,
@@ -268,6 +268,19 @@ class AdaptiveFusionStrategy extends StrategyBase {
   }
 
   _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+  /**
+   * AF-FIX-04: Net-edge filter — skip entry when expected move < k× fee.
+   * feePct  = 0.12% roundtrip (taker, both legs)
+   * k       = 2.0  (need 2× fee as minimum edge; configurable)
+   * Knob-gated: OFF when config.netEdgeK is absent (backward compat).
+   */
+  _netEdgeCheck(atr, price, config = {}) {
+    const k = config.netEdgeK ?? this.config?.netEdgeK ?? null;
+    if (k == null || !atr || !price) return true; // gate OFF
+    const feePct = config.feePct ?? this.config?.feePct ?? 0.0012;
+    return (atr / price) >= k * feePct;
+  }
 
   /** Band membership score: 1.0 at the band centre, 0.5 at the edges, 0 outside. */
   _bandScore(v, lo, hi) {
@@ -446,6 +459,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
 
     const signals = {};
 
+    // AF-FIX-14: previous EMA9 value for slope filter in A and B
+    const emaFastPrev = indicators.emaFast?.[lastIdx - 1] ?? null;
+
     // Component A — only run if balance sufficient AND score meets threshold
     if (
       balance >= this.SUB_STRATEGIES.A.minCapital &&
@@ -453,21 +469,18 @@ class AdaptiveFusionStrategy extends StrategyBase {
     ) {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
-      // Pass full RSI array + index so A can compute RSI velocity (momentum)
       signals.A = this._detectSignalA(
         indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA,
-        config.volSmaMultiplier ?? 2.0
+        config.volSmaMultiplier ?? 2.0, emaFastPrev
       );
     }
 
     // Component B — only run if balance sufficient AND score meets threshold
-    // Teruskan emaLong (EMA50) agar B bisa pakai 3-EMA alignment (Day Trading intent)
     if (
       balance >= this.SUB_STRATEGIES.B.minCapital &&
       (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore
     ) {
       const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
-      // P8: B butuh series EMA (bukan scalar) untuk deteksi event crossover/pullback
       signals.B = this._detectSignalB(
         rsi,
         indicators.emaFast || [],
@@ -475,7 +488,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         emaLong,
         closesConfirmed,
         lastIdx,
-        config
+        { ...config, macdHistogram: indicators.macdHistogram?.[lastIdx] ?? null }
       );
     }
 
@@ -548,6 +561,13 @@ class AdaptiveFusionStrategy extends StrategyBase {
         this._lastChaseReject = { signal: resolved, extension: ext, maxExt };
         resolved = null;
       }
+    }
+
+    // AF-FIX-04: net-edge filter — skip entry when ATR/price < k × feePct.
+    // Eliminates micro-edge trades where fees eat the expected profit.
+    if (resolved && !this._netEdgeCheck(atr, closes[lastIdx] ?? closes[closes.length - 1], config)) {
+      this._lastNetEdgeReject = { signal: resolved, atr, price: closes[lastIdx] };
+      resolved = null;
     }
 
     // AF-FIX-03 (Sprint 7): block low-conviction reversal/"Signal" entries. Live
@@ -676,7 +696,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
       || this.config?.afEnabledComponents
       || ["A", "B", "C"];
 
-    // Shared per-component pipeline: raw signal → HTF filter → chase guard.
+    // AF-FIX-14: previous EMA9 for slope filter; AF-FIX-11: MACD histogram for B
+    const emaFastPrev    = indicators.emaFast?.[lastIdx - 1] ?? null;
+    const macdHistCurr   = indicators.macdHistogram?.[lastIdx] ?? null;
+
+    // Shared per-component pipeline: raw signal → HTF filter → chase guard → net-edge.
     const evalComponent = (key, rawSig) => {
       if (D) D.evaluated[key] = (D.evaluated[key] || 0) + 1;
       let sig = rawSig;
@@ -693,6 +717,11 @@ class AdaptiveFusionStrategy extends StrategyBase {
       if (closeConfirmed != null && emaFast != null && atr > 0 &&
           Math.abs(closeConfirmed - emaFast) / atr > maxExt) {
         if (D) D.chaseBlock[key] = (D.chaseBlock[key] || 0) + 1;
+        return null;
+      }
+      // AF-FIX-04: net-edge filter — same gate as detectSignal() voting path
+      if (!this._netEdgeCheck(atr, closeConfirmed ?? closes[lastIdx], config)) {
+        if (D) { D.netEdgeBlock = D.netEdgeBlock || {}; D.netEdgeBlock[key] = (D.netEdgeBlock[key] || 0) + 1; }
         return null;
       }
       // AF-FIX-02: conviction gate — score the (HTF-aligned, non-chasing) signal
@@ -712,14 +741,14 @@ class AdaptiveFusionStrategy extends StrategyBase {
         balance >= this.SUB_STRATEGIES.A.minCapital && (scoreMap.A ?? 0) >= this.SUB_STRATEGIES.A.minScore) {
       const vol    = volumes[lastIdx] ?? 0;
       const vSMA   = volSMA[lastIdx]  ?? 0;
-      result.A = evalComponent("A", this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0));
+      result.A = evalComponent("A", this._detectSignalA(indicators.rsi || [], lastIdx, emaFast, emaSlow, closes, vol, vSMA, config.volSmaMultiplier ?? 2.0, emaFastPrev));
     } else if (D) { D.scoreGate.A = (D.scoreGate.A || 0) + 1; }
 
     // ── Component B ──────────────────────────────────────────────────────────
     if (enabled.includes("B") &&
         balance >= this.SUB_STRATEGIES.B.minCapital && (scoreMap.B ?? 0) >= this.SUB_STRATEGIES.B.minScore) {
       const emaLong = indicators.emaTrend?.[lastIdx] ?? null;
-      result.B = evalComponent("B", this._detectSignalB(rsi, indicators.emaFast || [], indicators.emaSlow || [], emaLong, closesConfirmed, lastIdx, config));
+      result.B = evalComponent("B", this._detectSignalB(rsi, indicators.emaFast || [], indicators.emaSlow || [], emaLong, closesConfirmed, lastIdx, { ...config, macdHistogram: macdHistCurr }));
     } else if (D) { D.scoreGate.B = (D.scoreGate.B || 0) + 1; }
 
     // ── Component C ──────────────────────────────────────────────────────────
@@ -800,7 +829,8 @@ class AdaptiveFusionStrategy extends StrategyBase {
   //
   // @param {number[]} rsiSeries - full RSI array
   // @param {number}   lastIdx   - current bar index (for slope)
-  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0, volMult = 2.0) {
+  // @param {number|null} emaFastPrev  EMA9 value at lastIdx-1 (for AF-FIX-14 slope filter)
+  _detectSignalA(rsiSeries, lastIdx, emaFast, emaSlow, closes, volume = 0, volSMA = 0, volMult = 2.0, emaFastPrev = null) {
     if (emaFast == null || emaSlow == null) return null;
 
     const rsiCurr  = rsiSeries?.[lastIdx];
@@ -814,24 +844,32 @@ class AdaptiveFusionStrategy extends StrategyBase {
     // RSI velocity over 2 bars: positive = accelerating up, negative = down
     const rsiSlope = (rsiCurr - rsiPrev2) / 2;
 
-    // LONG: RSI accelerating up + above neutral + bullish EMA structure + close>fast
+    // AF-FIX-14: EMA9 slope filter — only enter when price mean is moving with the trade.
+    // LONG only if EMA9 is rising; SHORT only if EMA9 is falling. Eliminates chasing
+    // entries after the move already peaked (common source of immediate SL hits).
+    const ema9Rising  = emaFastPrev == null || emaFast > emaFastPrev;
+    const ema9Falling = emaFastPrev == null || emaFast < emaFastPrev;
+
+    // LONG: RSI accelerating up + above neutral + bullish EMA structure + close>fast + EMA9 rising
     if (
       rsiSlope > 0.5 &&
       rsiCurr > 40 &&
       closeCurr > emaFast &&
       emaFast > emaSlow &&
-      volOk
+      volOk &&
+      ema9Rising
     ) {
       return "LONG";
     }
 
-    // SHORT: RSI accelerating down + below neutral + bearish EMA structure + close<fast
+    // SHORT: RSI accelerating down + below neutral + bearish EMA structure + close<fast + EMA9 falling
     if (
       rsiSlope < -0.5 &&
       rsiCurr < 60 &&
       closeCurr < emaFast &&
       emaFast < emaSlow &&
-      volOk
+      volOk &&
+      ema9Falling
     ) {
       return "SHORT";
     }
@@ -906,24 +944,41 @@ class AdaptiveFusionStrategy extends StrategyBase {
       return false;
     };
 
-    // LONG: EMA9 > EMA21 > EMA50 + price > EMA21 + RSI band + EVENT segar
+    // AF-FIX-14: EMA9 slope — ensures the mean is moving with the trade direction.
+    const ema9Prev    = emaFastArr[lastIdx - 1];
+    const ema9Rising  = ema9Prev == null || emaFast > ema9Prev;
+    const ema9Falling = ema9Prev == null || emaFast < ema9Prev;
+
+    // AF-FIX-11: MACD histogram direction confirmation. When available, require MACD
+    // histogram to agree with the trade direction — eliminates entries against momentum.
+    // Knob-gated via config.bUseMacd (default true when set in preset).
+    const useMacd   = config.bUseMacd ?? false;
+    const macdHist  = config.macdHistogram ?? null;
+    const macdLongOk  = !useMacd || macdHist == null || macdHist > 0;
+    const macdShortOk = !useMacd || macdHist == null || macdHist < 0;
+
+    // LONG: EMA9 > EMA21 > EMA50 + price > EMA21 + RSI band + EVENT segar + slope ↑ + MACD ↑
     if (
       emaFast > emaSlow &&
       (emaLong == null || emaSlow > emaLong) &&
       closeCurr > emaSlow &&
       rsi > rsiLongMin && rsi < rsiLongMax &&
-      (hasFreshCross("LONG") || hasPullbackResume("LONG"))
+      (hasFreshCross("LONG") || hasPullbackResume("LONG")) &&
+      ema9Rising &&
+      macdLongOk
     ) {
       return "LONG";
     }
 
-    // SHORT: EMA9 < EMA21 < EMA50 + price < EMA21 + RSI band + EVENT segar
+    // SHORT: EMA9 < EMA21 < EMA50 + price < EMA21 + RSI band + EVENT segar + slope ↓ + MACD ↓
     if (
       emaFast < emaSlow &&
       (emaLong == null || emaSlow < emaLong) &&
       closeCurr < emaSlow &&
       rsi < rsiShortMax && rsi > rsiShortMin &&
-      (hasFreshCross("SHORT") || hasPullbackResume("SHORT"))
+      (hasFreshCross("SHORT") || hasPullbackResume("SHORT")) &&
+      ema9Falling &&
+      macdShortOk
     ) {
       return "SHORT";
     }

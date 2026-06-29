@@ -31,9 +31,12 @@ function makeUpIndicators() {
   const closes = mkSeries(N, 104);
   closes[N - 1] = 103.4;   // pullback below EMA9 (103.5)
   closes[N]     = 104.1;   // resume above
+  // AF-FIX-14: EMA9 must be rising for LONG to fire (slope filter). Use slightly rising series.
+  const emaFastArr = mkSeries(N, 103.4);
+  emaFastArr[N] = 103.5; // current bar EMA9 > previous → rising
   return {
     closes,
-    emaFast:  mkSeries(N, 103.5),  // EMA9  > EMA21
+    emaFast:  emaFastArr,          // EMA9  > EMA21, rising at N
     emaSlow:  mkSeries(N, 102.5),  // EMA21 > EMA50
     emaTrend: mkSeries(N, 101.0),
     rsi:      mkSeries(N, 62),
@@ -79,8 +82,8 @@ test("legacyStrategies ADAPTIVE_FUSION preset (v2.6 baseline)", () => {
   assert.strictEqual(preset.maxConsecLoss, 2);
 });
 
-test("AdaptiveFusionStrategy class v3.3", () => {
-  assert.strictEqual(afs.config.version, "3.3.0");
+test("AdaptiveFusionStrategy class v3.4", () => {
+  assert.strictEqual(afs.config.version, "3.4.0");
   const risk = afs.getRiskConfig();
   assert.strictEqual(risk.riskPerTrade, 0.005);
   assert.strictEqual(risk.riskPerTradeStrong, 0.01);
@@ -225,8 +228,8 @@ test("v3.3 (AF-FIX) preset re-enables all components behind the confidence gate"
   assert.strictEqual(preset.afMinAggregateConfidence, 60);
 });
 
-test("v3.3 class version 3.3.0", () => {
-  assert.strictEqual(afs.config.version, "3.3.0");
+test("v3.4 class version 3.4.0", () => {
+  assert.strictEqual(afs.config.version, "3.4.0");
 });
 
 test("v3.2 afEnabledComponents=['C'] blocks A and B even when their signals would fire", () => {

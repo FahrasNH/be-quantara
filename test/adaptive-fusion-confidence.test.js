@@ -36,9 +36,12 @@ function upAllFire({ rsi = 62, rsiPrev2 = 60, vol = 200, volSMA = 100, lastClose
   closes[N]     = lastClose; // resume above
   const rsiArr  = mk(N, rsi);
   rsiArr[N - 2] = rsiPrev2;  // RSI velocity for component A
+  // AF-FIX-14: EMA9 must be rising for A/B LONG to fire. Slightly rising series.
+  const emaFastArr = mk(N, 103.4);
+  emaFastArr[N] = 103.5; // current bar EMA9 > previous → slope rising
   return {
     closes,
-    emaFast:  mk(N, 103.5),  // EMA9  > EMA21 > EMA50
+    emaFast:  emaFastArr,    // EMA9  > EMA21 > EMA50, rising at N
     emaSlow:  mk(N, 102.5),
     emaTrend: mk(N, 101.0),
     rsi:      rsiArr,
