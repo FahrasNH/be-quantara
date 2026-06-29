@@ -245,7 +245,7 @@ const STRATEGIES = {
     atrMinMult:    1.2,
     atrMaxMult:    3.5,
 
-    higherTf:      "1h",
+    higherTf:      "4h",        // v3.3: changed from 1h → 4h (proper swing context)
     htfEmaFast:    9,
     htfEmaSlow:    21,
     htfTrendStrengthMin: 0.75,
@@ -277,7 +277,7 @@ const STRATEGIES = {
     afEnabledComponents:  ["C"],
 
     leverage:      2,
-    interval:      "15m",
+    interval:      "1h",        // v3.3: changed from 15m → 1h (pullback-to-EMA needs proper swing TF)
     checkInterval: 60000,
 
     grokConfirmMinEntry: 8,
