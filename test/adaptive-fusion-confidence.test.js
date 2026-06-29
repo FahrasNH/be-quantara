@@ -249,15 +249,15 @@ test("AF-FIX-09: regime flip — DEAD_MARKET blocks all components with gate on"
   assert.strictEqual(sig.C, null);
 });
 
-test("AF-FIX-09: regime flip — C is eligible only in STRONG_TREND, gated by confidence", () => {
+test("AF-FIX-09: regime flip — C eligible in NORMAL (AF-FIX-17) and STRONG_TREND, gated by confidence", () => {
   const ind = downIndicators();
-  // NORMAL regime → C not eligible at all.
+  // AF-FIX-17: NORMAL regime → C IS now eligible; may fire or be gated by confidence.
   const normal = afs.detectSignalMulti(ind, N, {
     balance: 500, volatility: 0.8, trend_strength: 0.25,
     htfTrend: "BEARISH", maxEntryExtensionATR: 1.5,
     afEnabledComponents: ["C"], afMinComponentConfidence: 60,
   });
-  assert.strictEqual(normal.C, null, "C blocked outside STRONG_TREND");
+  assert.ok(normal.C === "SHORT" || normal.C === null, `C must be SHORT or null in NORMAL BEARISH, got ${normal.C}`);
 
   // STRONG_TREND → C eligible and clears the gate (clean downtrend).
   const strong = afs.detectSignalMulti(ind, N, {

@@ -47,7 +47,7 @@ class AdaptiveFusionStrategy extends StrategyBase {
         "Market-aware system combining 3 sub-strategies: " +
         "Aggressive Scalping (A), Day Trading (B), Swing Trading (C). " +
         "Selects best strategy by market conditions with score-based filtering.",
-      version: "3.4.0",
+      version: "3.5.0",
       enabled: true,
       ...config,
     });
@@ -752,14 +752,15 @@ class AdaptiveFusionStrategy extends StrategyBase {
     } else if (D) { D.scoreGate.B = (D.scoreGate.B || 0) + 1; }
 
     // ── Component C ──────────────────────────────────────────────────────────
-    // v3.1: C (Swing) requires STRONG_TREND regime — its 1.2×ATR SL and swing
-    // logic are designed for 4h/1D context. On 15m it generates wide positions
-    // with 20% WR in NORMAL/CHOPPY conditions. STRONG_TREND (EMA-slope > 0.40)
-    // ensures a clear directional move exists before C enters.
+    // v3.1: C (Swing) was restricted to STRONG_TREND only — calibrated for 15m entry.
+    // AF-FIX-17: Now on 1h TF, allow C in NORMAL too. STRONG_TREND restriction caused
+    // C to fire 0 times in NORMAL/BULL markets (trendStrength rarely > 0.40 on 1h).
+    // Confidence gate (afMinComponentConfidence: 60) serves as the quality guard.
+    // CHOPPY_VOLATILE still blocked (wide ATR + low trend = bad swing entry).
     if (enabled.includes("C") &&
         balance >= this.SUB_STRATEGIES.C.minCapital &&
         (scoreMap.C ?? 0) >= this.SUB_STRATEGIES.C.minScore &&
-        marketCond === "STRONG_TREND") {
+        (marketCond === "STRONG_TREND" || marketCond === "NORMAL")) {
       result.C = evalComponent("C", this._detectSignalC(rsi, emaFast, emaSlow, closesConfirmed));
     } else if (D) { D.scoreGate.C = (D.scoreGate.C || 0) + 1; }
 
@@ -917,7 +918,9 @@ class AdaptiveFusionStrategy extends StrategyBase {
     const closeCurr = closes[lastIdx] ?? closes[closes.length - 1];
     if (closeCurr == null) return null;
 
-    const LOOKBACK = 3; // event harus terjadi dalam 3 candle confirmed terakhir
+    // AF-FIX-17: Extended from 3→5. On 1h TF a pullback can take 4–5 candles to complete;
+    // 3-bar window expired before RSI recovered to band → B almost never fired.
+    const LOOKBACK = 5; // event harus terjadi dalam 5 candle confirmed terakhir
 
     // Event 1: fresh EMA9×EMA21 crossover dalam lookback window
     const hasFreshCross = (dir) => {

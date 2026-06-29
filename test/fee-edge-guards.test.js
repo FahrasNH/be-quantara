@@ -24,9 +24,12 @@ function uptrendIndicators(lastClose) {
   closes[N] = lastClose;
   const rsi = mk(N, 55);
   rsi[N - 2] = 53; // slope +1.0 (>0.5) → Component A LONG
+  // AF-FIX-14: EMA9 must be RISING for A/B LONG to fire (slope filter).
+  const emaFastArr = mk(N, 103.4);
+  emaFastArr[N] = 103.5; // current EMA9 > previous → rising at lastIdx
   return {
     closes,
-    emaFast: mk(N, 103.5), // EMA9
+    emaFast: emaFastArr, // EMA9, rising at N
     emaSlow: mk(N, 102.5), // EMA21
     emaTrend: mk(N, 101.0), // EMA50
     rsi,

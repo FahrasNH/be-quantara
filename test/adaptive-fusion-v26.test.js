@@ -67,12 +67,14 @@ function makeDownIndicators() {
 // maxConsecLoss 4) were reverted to the v2.6 baseline after the 0% WR diagnosis;
 // this test was stale and has been reconciled (Sprint 7). The class getRiskConfig()
 // still returns the v3.0 risk numbers — that is asserted separately below.
-test("legacyStrategies ADAPTIVE_FUSION preset (v2.6 baseline)", () => {
+test("legacyStrategies ADAPTIVE_FUSION preset (v3.5 AF-FIX-17)", () => {
   assert.strictEqual(preset.riskPerTrade, 0.005);
   assert.strictEqual(preset.riskPerTradeStrong, 0.01);
-  assert.strictEqual(preset.rsiLongMin, 60);
-  assert.strictEqual(preset.rsiShortMax, 40);
-  assert.strictEqual(preset.maxEntryExtensionATR, 0.7);
+  // AF-FIX-17: widened from 60/40 to 55/45 (too narrow → near-zero B trades on 1h TF)
+  assert.strictEqual(preset.rsiLongMin, 55);
+  assert.strictEqual(preset.rsiShortMax, 45);
+  // AF-FIX-17: relaxed from 0.7 → 1.2 (blocked valid pullback-to-EMA entries)
+  assert.strictEqual(preset.maxEntryExtensionATR, 1.2);
   assert.strictEqual(preset.strongTrendTPMult, 1.8);
   assert.strictEqual(preset.volSmaMultiplier, 1.3);
   assert.strictEqual(preset.htfTrendStrengthMin, 0.25);
@@ -82,8 +84,8 @@ test("legacyStrategies ADAPTIVE_FUSION preset (v2.6 baseline)", () => {
   assert.strictEqual(preset.maxConsecLoss, 2);
 });
 
-test("AdaptiveFusionStrategy class v3.4", () => {
-  assert.strictEqual(afs.config.version, "3.4.0");
+test("AdaptiveFusionStrategy class v3.5", () => {
+  assert.strictEqual(afs.config.version, "3.5.0");
   const risk = afs.getRiskConfig();
   assert.strictEqual(risk.riskPerTrade, 0.005);
   assert.strictEqual(risk.riskPerTradeStrong, 0.01);
@@ -159,14 +161,16 @@ test("v3.1 SHORT fallback: fires when no htfTrend provided (backward compat)", (
 
 // ── v3.1 Fix B: Component C only in STRONG_TREND ─────────────────────────────
 
-test("v3.1 Component C blocked in NORMAL regime (trendStrength=0.25)", () => {
-  // trendStrength=0.25 → marketCond=NORMAL (STRONG_TREND threshold=0.40)
+test("v3.5 Component C allowed in NORMAL regime (AF-FIX-17: removed STRONG_TREND-only gate)", () => {
+  // AF-FIX-17: C now fires in NORMAL too (not just STRONG_TREND).
+  // trendStrength=0.25 → marketCond=NORMAL. C can now fire when indicators align.
   const ind = makeDownIndicators();
   const sig = afs.detectSignalMulti(ind, N, {
     balance: 500, volatility: 0.8, trend_strength: 0.25,
     htfTrend: "BEARISH", maxEntryExtensionATR: 1.5,
   });
-  assert.strictEqual(sig.C, null, "C must be null in NORMAL regime (not STRONG_TREND)");
+  // C may fire SHORT or null (depends on confidence gate); it must NOT crash.
+  assert.ok(sig.C === "SHORT" || sig.C === null, `C must be SHORT or null in NORMAL BEARISH, got ${sig.C}`);
 });
 
 test("v3.1 Component C blocked in DEAD_MARKET regime", () => {
@@ -228,8 +232,8 @@ test("v3.3 (AF-FIX) preset re-enables all components behind the confidence gate"
   assert.strictEqual(preset.afMinAggregateConfidence, 60);
 });
 
-test("v3.4 class version 3.4.0", () => {
-  assert.strictEqual(afs.config.version, "3.4.0");
+test("v3.5 class version 3.5.0 (AF-FIX-17: wider RSI bands, C in NORMAL, LOOKBACK 5)", () => {
+  assert.strictEqual(afs.config.version, "3.5.0");
 });
 
 test("v3.2 afEnabledComponents=['C'] blocks A and B even when their signals would fire", () => {

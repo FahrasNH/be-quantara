@@ -231,10 +231,12 @@ const STRATEGIES = {
     rsiPeriod:     21,
     rsiOverbought: 72,
     rsiOversold:   28,
-    rsiLongMin:    60,
-    rsiLongMax:    68,
-    rsiShortMin:   32,
-    rsiShortMax:   40,
+    // AF-FIX-17: Widen Component B RSI bands (was 60-68/32-40 — too narrow, rarely satisfied
+    // simultaneously with pullback event + EMA alignment + MACD on 1h TF → near-zero B trades)
+    rsiLongMin:    55,
+    rsiLongMax:    75,
+    rsiShortMin:   25,
+    rsiShortMax:   45,
 
     atrPeriod:     14,
     atrMultiplier: 1.4,
@@ -263,7 +265,8 @@ const STRATEGIES = {
     cooldownAfterLoss:   90,
     maxConsecLoss:       2,
 
-    maxEntryExtensionATR: 0.7,
+    // AF-FIX-17: Relaxed from 0.7 (too tight — blocked valid pullback-to-EMA entries on 1h TF)
+    maxEntryExtensionATR: 1.2,
     minEdgeFeeMultiple:   7,
     strongTrendTPMult:    1.8,
     // afMinVotes retained for legacy single-position path; multi-position ignores it
