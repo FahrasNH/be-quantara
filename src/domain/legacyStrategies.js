@@ -292,8 +292,9 @@ const STRATEGIES = {
     // OA-FIX-02: Order Flow Component A knobs
     // vwapLookback: rolling window for CVD + VWAP computation (bars)
     vwapLookback: 14,
-    // ofDeltaThreshold: min bar delta for LONG (≥0.60 = close in top 40% of bar range)
-    ofDeltaThreshold: 0.60,
+    // ofDeltaThreshold: min bar delta for LONG entry (≥0.55 = close in top 45% of bar range).
+    // 0.55 is calibrated for 1h TF; 0.60 was designed for <5m scalping and produced 0 trades/year on 1h.
+    ofDeltaThreshold: 0.55,
 
     // AF-FIX-11: MACD histogram alignment required for Component B (trend direction confirmation)
     bUseMacd:      true,

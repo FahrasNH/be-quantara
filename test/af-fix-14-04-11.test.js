@@ -121,20 +121,27 @@ test("AF-FIX-14 (B): SHORT blocked when EMA9 is rising (counter-momentum)", () =
   assert.strictEqual(sig.B, null, "rising EMA9 → B SHORT blocked (would be counter-trend)");
 });
 
-// ── EMA9 slope in Component A ─────────────────────────────────────────────
+// ── Order Flow delta in Component A (OA-FIX-02: A is now Order Flow, not RSI-velocity) ──
 
-function aLongFixture(ema9Slope = "rising") {
-  const rsiArr = mk(N, 55);
-  rsiArr[N - 2] = 53; // slope = (55-53)/2 = 1 > 0.5 → A fires
-  const closes  = mk(N, 104);
-  const emaFastArr = mk(N, 103.4);
-  if (ema9Slope === "rising")  emaFastArr[N] = 103.5;
-  if (ema9Slope === "flat")    emaFastArr[N] = 103.4;
-  if (ema9Slope === "falling") emaFastArr[N] = 103.3;
+// deltaBullish=true:  last bar high=104.5, low=103.0 → deltaPct=(104-103)/1.5=0.667 ≥ 0.55 → fires
+// deltaBullish=false: last bar high=107.0, low=103.0 → deltaPct=(104-103)/4.0=0.25 < 0.55 → blocked
+function aLongFixture({ deltaBullish = true } = {}) {
+  const closes = mk(N, 104);
+  const highs  = mk(N, 104.5);  // lookback bars: all high=104.5 (CVD rolls up)
+  const lows   = mk(N, 103.0);
+  highs[N] = 104.5;
+  lows[N]  = deltaBullish ? 103.0 : 103.8; // 0.667 vs (104-103.8)/(104.5-103.8)=0.2/0.7=0.286
   return {
-    closes, rsi: rsiArr,
-    emaFast: emaFastArr, emaSlow: mk(N, 102.5), emaTrend: mk(N, 101.0),
-    atr: mk(N, 0.5), volumes: mk(N, 300), volSMA: mk(N, 100),
+    closes,
+    emaFast:  mk(N, 103.5),   // EMA9 > EMA21 (always aligned — new A checks alignment, not slope)
+    emaSlow:  mk(N, 102.5),
+    emaTrend: mk(N, 101.0),
+    rsi:      mk(N, 55),
+    atr:      mk(N, 0.5),
+    volumes:  mk(N, 300),
+    volSMA:   mk(N, 100),
+    highs,
+    lows,
   };
 }
 
@@ -144,16 +151,16 @@ const aCfg = {
   afEnabledComponents: ["A"],
 };
 
-test("AF-FIX-14 (A): LONG fires when EMA9 is rising", () => {
-  const sig = afs.detectSignalMulti(aLongFixture("rising"), N, aCfg);
-  assert.strictEqual(sig.A, "LONG", "rising EMA9 → A LONG fires");
+test("AF-FIX-14 (A): LONG fires when close occupies ≥55% of bar range (strong deltaPct)", () => {
+  // OA-FIX-02: A is now Order Flow. close=104, high=104.5, low=103.0 → deltaPct=0.667 ≥ 0.55
+  const sig = afs.detectSignalMulti(aLongFixture({ deltaBullish: true }), N, aCfg);
+  assert.strictEqual(sig.A, "LONG", "strong deltaPct (0.667) → A LONG fires");
 });
 
-test("AF-FIX-14 (A): LONG blocked when EMA9 is flat or falling", () => {
-  const flat    = afs.detectSignalMulti(aLongFixture("flat"),    N, aCfg);
-  const falling = afs.detectSignalMulti(aLongFixture("falling"), N, aCfg);
-  assert.strictEqual(flat.A,    null, "flat EMA9 → A LONG blocked");
-  assert.strictEqual(falling.A, null, "falling EMA9 → A LONG blocked");
+test("AF-FIX-14 (A): LONG blocked when close occupies <55% of bar range (weak deltaPct)", () => {
+  // close=104, high=104.5, low=103.8 → deltaPct=0.286 < 0.55 (seller dominated bar) → blocked
+  const sig = afs.detectSignalMulti(aLongFixture({ deltaBullish: false }), N, aCfg);
+  assert.strictEqual(sig.A, null, "weak deltaPct (0.286) → A LONG blocked");
 });
 
 // ── RR 1.8 assertion ─────────────────────────────────────────────────────
@@ -309,6 +316,6 @@ test("Preset: bUseMacd=true set (AF-FIX-11)", () => {
   assert.strictEqual(STRATEGIES.ADAPTIVE_FUSION.bUseMacd, true);
 });
 
-test("Preset: class version is 3.6.0", () => {
-  assert.strictEqual(afs.config.version, "3.6.0");
+test("Preset: class version is 3.7.0", () => {
+  assert.strictEqual(afs.config.version, "3.7.0");
 });

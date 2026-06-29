@@ -115,7 +115,7 @@ test("AF-FIX-01: a marginal component scores below a clean one (gate is meaningf
     deltaPct: 0.85, cvd: 490, vwap: 103.0, close: 104.0,
     emaFast: 103.5, emaSlow: 102.5, volRatio: 3.0, volMult: 1.0, volLookbackSum: 1400,
   };
-  // Weak context: deltaPct=0.625 (just above threshold 0.60), cvd=175/700=25% of max, thin volume.
+  // Weak context: deltaPct=0.625 (just above threshold 0.55), cvd=175/700=25% of max, thin volume.
   const weakCtx = {
     deltaPct: 0.625, cvd: 175, vwap: 103.93, close: 104.0,
     emaFast: 103.5, emaSlow: 102.5, volRatio: 1.0, volMult: 1.0, volLookbackSum: 1400,
@@ -141,7 +141,7 @@ test("AF-FIX-02 (multi): high-confidence component fires under the gate", () => 
 });
 
 test("AF-FIX-02 (multi): low-confidence component is filtered out", () => {
-  // OA-FIX-02: A fires (deltaPct=0.625 barely ≥ 0.60, thin vol) but scores ~45 → gated out.
+  // OA-FIX-02: A fires (deltaPct=0.625 ≥ threshold 0.55, thin vol) but scores ~45 → gated out.
   // highOffset=0.3, lowOffset=0.5 → close=104, high=104.3, low=103.5 → deltaPct≈0.625.
   // vol=100, volSMA=100, volMult=1.0 → volOk (ratio=1.0 ≥ 1.0), volumeSurge score low.
   const weakA = upAllFire({ vol: 100, volSMA: 100, highOffset: 0.3, lowOffset: 0.5 });

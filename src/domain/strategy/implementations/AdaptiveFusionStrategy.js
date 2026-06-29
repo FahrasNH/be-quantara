@@ -970,13 +970,18 @@ class AdaptiveFusionStrategy extends StrategyBase {
     }
     const vwap = sumVol > 0 ? sumTV / sumVol : cl;
 
-    // LONG: buyer absorption + net buying pressure + above VWAP + bullish EMA + volume
-    if (deltaPct >= ofDeltaThreshold && cvd > 0 && cl > vwap && emaFast > emaSlow && volOk) {
+    // LONG: buyer absorption (deltaPct ≥ threshold = close in top portion of range) +
+    //       net buying pressure (CVD > 0) + bullish EMA structure + volume confirmed.
+    // NOTE: close > VWAP is intentionally NOT required here — it acts as a soft filter
+    // via the confidence gate instead (vwapSide adds 20 pts; without it score drops ~20,
+    // making counter-VWAP entries very likely fall below the 60-confidence threshold).
+    // This keeps signal frequency viable on 1h TF without sacrificing quality gating.
+    if (deltaPct >= ofDeltaThreshold && cvd > 0 && emaFast > emaSlow && volOk) {
       return "LONG";
     }
 
-    // SHORT: seller absorption + net selling pressure + below VWAP + bearish EMA + volume
-    if (deltaPct <= (1 - ofDeltaThreshold) && cvd < 0 && cl < vwap && emaFast < emaSlow && volOk) {
+    // SHORT: seller absorption + net selling pressure + bearish EMA + volume
+    if (deltaPct <= (1 - ofDeltaThreshold) && cvd < 0 && emaFast < emaSlow && volOk) {
       return "SHORT";
     }
 
