@@ -215,6 +215,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       afEnabledComponents: cfg.afEnabledComponents, // v3.2: C-only by default
     });
 
+
     const nowMs = c.timestamp ?? 0; // backtest "now" = current candle time (NOT wall-clock)
 
     // Check each component for independent entry

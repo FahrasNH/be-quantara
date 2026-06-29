@@ -238,42 +238,34 @@ const STRATEGIES = {
     atrPeriod:     14,
     atrMultiplier: 1.4,
     riskReward:    2.5,
-    // ── v3.0 ROOT-CAUSE FIX (2026-06-28): 15m-timeframe recalibration ─────────
-    // The v2.6 gates below were calibrated for a HIGHER timeframe but AF runs on
-    // a 15m entry. On 15m, ATR% averages ~0.5% and HTF trend-strength rarely hits
-    // 0.75 → these gates blocked ~100% of bars (0–3 trades over 7 months). Each
-    // value is now sized to the 15m entry distribution. See real-backtest funnel.
-    //   atrMinMult 1.2 → 0.25 (15m avg ATR% 0.49; 1.2 rejected every bar)
-    atrMinMult:    0.25,
+    // ── v3.2 REVISION (2026-06-29): Back to v2.6 baseline after 0% WR diagnosis
+    // v3.0 was TOO LOOSE on parameters; backtest showed all trades hitting SL immediately.
+    // Reverting to v2.6 baseline until entry logic is fixed. Component C is STRONG_TREND
+    // gated, so v2.6 gates (atrMinMult 1.2, htfTrendStrengthMin 0.75) won't block valid C trades.
+    atrMinMult:    1.2,
     atrMaxMult:    3.5,
 
     higherTf:      "1h",
     htfEmaFast:    9,
     htfEmaSlow:    21,
-    // htfTrendStrengthMin 0.75 → 0.25 (1h slope-strength rarely reaches 0.75)
-    htfTrendStrengthMin: 0.25,
+    htfTrendStrengthMin: 0.75,
     sidewaysThresholdPct: 0.2,
 
     sidewaysRangeLookback:   20,
     sidewaysBreakoutVolMult: 1.5,
     sidewaysBreakoutBufMult: 0.3,
 
-    // volSmaMultiplier 2.0 → 1.3 (2.0 killed component A entirely: 0 raw signals)
     volSmaMultiplier: 1.3,
 
     // v2.6: risk 0.5% default; 1% saat STRONG_TREND (riskPerTradeStrong).
     riskPerTrade:        0.005,
     riskPerTradeStrong:  0.01,
     maxDailyLossPct:     0.035,
-    // maxTradesPerDay 6 → 12 (multi-position A+B+C needs headroom)
-    maxTradesPerDay:     12,
-    // cooldownAfterLoss 90 → 30 (90m = 6 bars lockout on 15m, too long)
-    cooldownAfterLoss:   30,
-    // maxConsecLoss 2 → 4 (now PER-COMPONENT in multi-position mode)
-    maxConsecLoss:       4,
+    maxTradesPerDay:     6,
+    cooldownAfterLoss:   90,
+    maxConsecLoss:       2,
 
-    // maxEntryExtensionATR 0.7 → 1.5 (0.7 chase-guard blocked valid entries)
-    maxEntryExtensionATR: 1.5,
+    maxEntryExtensionATR: 0.7,
     minEdgeFeeMultiple:   7,
     strongTrendTPMult:    1.8,
     // afMinVotes retained for legacy single-position path; multi-position ignores it
