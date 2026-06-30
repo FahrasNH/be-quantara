@@ -364,6 +364,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     customEnd,
     autoListing = false,
     allowClamp = false,
+    maxBarsOverride,  // per-component cap (e.g. 90k for Scalping 1m)
     onProgress,
     abortSignal,
   } = opts;
@@ -410,6 +411,14 @@ async function fetchHistoricalKlines(userId, opts = {}) {
   const listingMs = await detectListingTimestamp(exchange, client, marketSymbol, timeframe);
   const clamped = clampDateRange({ startMs, endMs, listingMs, autoListing });
   const barLimit = enforceBarLimit(clamped.startMs, clamped.endMs, timeframe, periodId, allowClamp);
+
+  // Per-component bar cap: keep only the most recent N bars (Scalping 1m → 90k ≈ 62 days)
+  if (maxBarsOverride && barLimit.bars > maxBarsOverride) {
+    const tfMs2 = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
+    barLimit.startMs = Math.max(barLimit.startMs, barLimit.endMs - maxBarsOverride * tfMs2);
+    barLimit.clamped = true;
+  }
+
   const effectiveStart = barLimit.startMs;
   const effectiveEnd = barLimit.endMs;
 

@@ -1283,6 +1283,15 @@ const TYPE_TF = {
   Swing:    { entry: "4h",  trend: "1w"  },
 };
 
+// Cap bars per entry TF so short-TF components don't fetch millions of bars.
+// 1m → 90k bars ≈ 62 days (enough for Scalping pattern validation, avoids timeout)
+// 5m → 150k bars ≈ 521 days (Intraday covers full 12-month periods at 5m)
+// 4h+ → no cap needed (Swing candles are few by nature)
+const TYPE_MAX_BARS = {
+  "1m":  90_000,
+  "5m": 150_000,
+};
+
 async function _runBacktestJobAsync(job, userId, opts) {
   const {
     sym, strategyKey, strategyCfg,
@@ -1309,8 +1318,10 @@ async function _runBacktestJobAsync(job, userId, opts) {
       job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `Fetching ${type} candles (${tfs.entry})…`, pct: 0 });
 
       try {
+        const typeMaxBars = TYPE_MAX_BARS[tfs.entry]; // undefined for 4h+ (no cap)
         const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
           symbol: sym, timeframe: tfs.entry, ...fetchOpts, allowClamp: true, abortSignal,
+          ...(typeMaxBars ? { maxBarsOverride: typeMaxBars } : {}),
           onProgress: (loaded, total) => {
             const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
             job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `${type} (${tfs.entry}): ${loaded.toLocaleString()} / ${total.toLocaleString()} bars`, pct });
