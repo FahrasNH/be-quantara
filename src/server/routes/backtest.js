@@ -14,7 +14,7 @@ const OptimizationAnalysisService = require("../services/OptimizationAnalysisSer
 const db = require("../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
-const { runRealBacktest } = require("../services/RealStrategyBacktestService");
+const { runRealBacktest, runTripleTypeBacktest } = require("../services/RealStrategyBacktestService");
 const GrokConfirmService = require("../services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../services/GrokBacktestJobService");
@@ -1116,14 +1116,72 @@ module.exports = function createBacktestRouter(context) {
     const strategyKey = String(strategyKeyRaw || "ADAPTIVE_FUSION").toUpperCase();
     if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair diperlukan" });
 
-    const cfg = STRATEGIES[strategyKey];
-    if (!cfg) return res.status(400).json({ ok: false, error: `Strategi tidak dikenal: ${strategyKey}` });
-
-    // Multi-TF layout: canonical strategy config decides entry + HTF (1:1 w/ live).
-    const entryTf = entryTfOverride || cfg.interval || "15m";
-    const htfTf = htfTfOverride !== undefined ? htfTfOverride : (cfg.higherTf || null);
+    const cfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
+    if (!cfg && !["AF_SAC"].includes(strategyKey)) {
+      return res.status(400).json({ ok: false, error: `Strategi tidak dikenal: ${strategyKey}` });
+    }
 
     const fetchOpts = { periodId, customStart, customEnd };
+    const startMs = Date.now();
+
+    // AF_SAC: Triple-timeframe mode — each trade type runs on its own TF candles
+    const AF_SAC_KEYS = new Set(["AF_SAC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+    if (AF_SAC_KEYS.has(strategyKey) && !entryTfOverride) {
+      // Fetch entry + trend candles for each trade type
+      const TYPE_TF = {
+        Scalping: { entry: "1m",  trend: "15m" },
+        Intraday: { entry: "5m",  trend: "4h"  },
+        Swing:    { entry: "4h",  trend: "1d"  },
+      };
+
+      const entryCandles = {};
+      const htfCandles   = {};
+      const dataInfo     = {};
+
+      await Promise.all(Object.entries(TYPE_TF).map(async ([type, tfs]) => {
+        try {
+          const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
+            symbol: sym, timeframe: tfs.entry, ...fetchOpts,
+          });
+          entryCandles[type] = entryRes.candles || [];
+          dataInfo[type]     = { entryBars: entryCandles[type].length, startDate: entryRes.startDate, endDate: entryRes.endDate };
+        } catch { entryCandles[type] = []; }
+
+        try {
+          const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
+            symbol: sym, timeframe: tfs.trend, ...fetchOpts,
+          });
+          htfCandles[type] = trendRes.candles || [];
+        } catch { htfCandles[type] = []; }
+      }));
+
+      const result = runTripleTypeBacktest({
+        entryCandles,
+        htfCandles,
+        strategyKey,
+        capital: Number(capital) || 1000,
+        enableFees: enableFees !== false,
+        enableSlippage: !!enableSlippage,
+        config: parameters,
+      });
+      const elapsedMs = Date.now() - startMs;
+
+      return res.json({
+        ok: true,
+        engine: "real-1to1-triple-tf",
+        strategyKey,
+        symbol: sym,
+        mode: "Scalping (1m/15m) + Intraday (5m/4h) + Swing (4h/1d)",
+        dataInfo,
+        computeTimeMs: elapsedMs,
+        ...result,
+      });
+    }
+
+    // Single-TF mode (all other strategies, or explicit override)
+    const entryTf = entryTfOverride || cfg?.interval || "15m";
+    const htfTf   = htfTfOverride !== undefined ? htfTfOverride : (cfg?.higherTf || null);
+
     const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
       symbol: sym, timeframe: entryTf, ...fetchOpts,
     });
@@ -1140,12 +1198,10 @@ module.exports = function createBacktestRouter(context) {
         });
         htfCandles = htfRes.candles || null;
       } catch (e) {
-        htfCandles = null; // fail-open on HTF fetch error; engine notes higherTf intent
+        htfCandles = null;
       }
     }
 
-    // v3.3: Add timing info for progress feedback (50K+ bars can take 15-30s)
-    const startMs = Date.now();
     const result = runRealBacktest({
       entryCandles,
       htfCandles,
@@ -1170,7 +1226,7 @@ module.exports = function createBacktestRouter(context) {
       dataStart: entryRes.startDate,
       dataEnd: entryRes.endDate,
       source: entryRes.source,
-      computeTimeMs: elapsedMs,  // v3.3: show user how long backtest took
+      computeTimeMs: elapsedMs,
       ...result,
     });
   }));

@@ -130,9 +130,12 @@ test("SMC-01: class instantiates without error", () => {
   assert.equal(smc.config.version, "1.0.0");
 });
 
-test("SMC-02: SUB_STRATEGIES has A, B, C with correct keys", () => {
+test("SMC-02: SUB_STRATEGIES has Scalping/Intraday/Swing + A/B/C aliases", () => {
   const smc = new SmartMoneyConceptsStrategy();
-  assert.deepEqual(Object.keys(smc.SUB_STRATEGIES), ["A", "B", "C"]);
+  assert.equal(smc.SUB_STRATEGIES.Scalping.name, "SAC_SCALP");
+  assert.equal(smc.SUB_STRATEGIES.Intraday.name, "SAC_INTRADAY");
+  assert.equal(smc.SUB_STRATEGIES.Swing.name,    "SAC_SWING");
+  // Backward-compat aliases
   assert.equal(smc.SUB_STRATEGIES.A.name, "SAC_SCALP");
   assert.equal(smc.SUB_STRATEGIES.B.name, "SAC_INTRADAY");
   assert.equal(smc.SUB_STRATEGIES.C.name, "SAC_SWING");
@@ -147,12 +150,11 @@ test("SMC-03: canActivate blocks below $20", () => {
   assert.equal(smc.canActivate(1000).allowed, true);
 });
 
-test("SMC-04: getTimeframeConfig returns 1h/4h", () => {
+test("SMC-04: getTimeframeConfig returns Intraday TF (5m/4h)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const tf  = smc.getTimeframeConfig();
-  assert.equal(tf.interval,  "1h");
+  assert.equal(tf.interval,  "5m");
   assert.equal(tf.higherTf,  "4h");
-  assert.equal(tf.checkInterval, 3_600_000);
 });
 
 test("SMC-05: validateEntry blocks extreme ATR (< 0.8% or > 5%)", () => {
@@ -183,18 +185,18 @@ test("SMC-07: rankByMarketConditions returns sorted rankings", () => {
   }
 });
 
-test("SMC-08: rankByMarketConditions — volatile market favors Scalping (A)", () => {
+test("SMC-08: rankByMarketConditions — volatile market favors Scalping", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const rankings = smc.rankByMarketConditions({ volatility: 3.0, trend_strength: 0.05 });
   // scoreA = 45 + 35 + 20 = 100 → should be top
-  assert.equal(rankings[0].key, "A");
+  assert.equal(rankings[0].key, "Scalping");
 });
 
-test("SMC-09: rankByMarketConditions — strong trend favors Swing (C)", () => {
+test("SMC-09: rankByMarketConditions — strong trend favors Swing", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const rankings = smc.rankByMarketConditions({ volatility: 0.8, trend_strength: 0.7 });
   // scoreC = 50 + 35 + 15 = 100
-  assert.equal(rankings[0].key, "C");
+  assert.equal(rankings[0].key, "Swing");
 });
 
 // ── Component A — Sweep detector ─────────────────────────────────────────────

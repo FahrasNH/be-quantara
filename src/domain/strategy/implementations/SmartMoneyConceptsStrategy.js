@@ -1,14 +1,14 @@
 /**
- * SmartMoneyConceptsStrategy.js — v1.0.0 (SAC: Smart Money Concepts)
+ * SmartMoneyConceptsStrategy.js — v2.0.0 (SAC: Smart Money Concepts)
  *
- * FOUNDRY Tier — 3-Component SAC Architecture:
- *   Component A — Scalping  : Liquidity sweep + Order Block entry + CVD (1h bars)
- *   Component B — Intraday  : CHoCH + Order Block + EMA trend (1h bars)
- *   Component C — Swing     : FVG + Displacement + Premium/Discount zone (1h bars)
+ * FOUNDRY Tier — 3 Trade Types, each on its own timeframe stack:
+ *   Scalping  (type A) : Liquidity sweep + OB + CVD  | entry 1m, confirm 5m,  trend 15m
+ *   Intraday  (type B) : CHoCH + OB + EMA trend      | entry 5m, confirm 15m, trend 4h
+ *   Swing     (type C) : FVG + Displacement + P/D     | entry 4h, confirm 1d,  trend 1W
  *
- * All three components vote. An entry fires when at least 1 component reaches its
- * confidence threshold (A: ≥60, B: ≥65, C: ≥65) AND the highest-scoring component
- * direction matches HTF regime.
+ * All three types use the SAME SMC indicators (Liquidity, BOS, CHoCH, OB, FVG,
+ * displacement, premium/discount). What differentiates them is the TIMEFRAME.
+ * All three run CONCURRENTLY — up to 3 independent open trades simultaneously.
  *
  * References:
  *   FOUNDRY_SAC_COMPLETE_SPECIFICATION.md (2026-06-30)
@@ -35,12 +35,26 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       ...config,
     });
 
-    // ── Sub-strategy RR/SL/TP multipliers ─────────────────────────────────────
-    this.SUB_STRATEGIES = {
-      A: { name: "SAC_SCALP",    label: "Scalp (Sweep+OB)",     slMultiplier: 0.8,  tpMultiplier: 1.5  },
-      B: { name: "SAC_INTRADAY", label: "Intraday (CHoCH+OB)",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
-      C: { name: "SAC_SWING",    label: "Swing (FVG+Disp)",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
+    // ── Trade type TF configuration (each type runs on its own TF stack) ─────
+    this.TRADE_TYPE_TF_CONFIG = {
+      Scalping: { entryTf: "1m",  confirmTf: "5m",  trendTf: "15m" },
+      Intraday: { entryTf: "5m",  confirmTf: "15m", trendTf: "4h"  },
+      Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w"  },
     };
+
+    // ── Sub-strategy RR/SL/TP multipliers (keyed by type name AND legacy letter) ─
+    this.SUB_STRATEGIES = {
+      Scalping: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 0.8,  tpMultiplier: 1.5  },
+      Intraday: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
+      Swing:    { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
+      // Backward-compat aliases (old code that passes "A"/"B"/"C")
+      A: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 0.8,  tpMultiplier: 1.5  },
+      B: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
+      C: { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
+    };
+
+    // Legacy letter → type name
+    this.COMPONENT_TO_TYPE = { A: "Scalping", B: "Intraday", C: "Swing" };
 
     this._lastSignalMeta = null;
   }
@@ -72,9 +86,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (volatility > 2.5)         scoreC -= 10;
 
     return [
-      { key: "A", label: this.SUB_STRATEGIES.A.label, score: this.clamp(scoreA, 0, 100) },
-      { key: "B", label: this.SUB_STRATEGIES.B.label, score: this.clamp(scoreB, 0, 100) },
-      { key: "C", label: this.SUB_STRATEGIES.C.label, score: this.clamp(scoreC, 0, 100) },
+      { key: "Scalping", label: "Scalping", score: this.clamp(scoreA, 0, 100) },
+      { key: "Intraday", label: "Intraday", score: this.clamp(scoreB, 0, 100) },
+      { key: "Swing",    label: "Swing",    score: this.clamp(scoreC, 0, 100) },
     ].sort((a, b) => b.score - a.score);
   }
 
@@ -86,11 +100,28 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   getTimeframeConfig() {
+    // Default returns Intraday TF (primary trade type)
     return {
-      interval:      "1h",
+      interval:      "5m",
       higherTf:      "4h",
-      checkInterval: 3600000,
+      checkInterval: 300000,
     };
+  }
+
+  /** Return TF config for a specific trade type ("Scalping"|"Intraday"|"Swing"|"A"|"B"|"C"). */
+  getTradeTypeTfConfig(typeOrLetter) {
+    const type = this.COMPONENT_TO_TYPE[typeOrLetter] || typeOrLetter;
+    return this.TRADE_TYPE_TF_CONFIG[type] || null;
+  }
+
+  /** Map component letter or type name to display label. */
+  getTradeTypeLabel(componentKey) {
+    return this.COMPONENT_TO_TYPE[componentKey] || componentKey;
+  }
+
+  /** Returns all 3 trade type TF configs for the multi-TF backtest engine. */
+  getAllTradeTypeTfConfigs() {
+    return this.TRADE_TYPE_TF_CONFIG;
   }
 
   validateEntry(price, atr, volume, volSMA) {
@@ -607,23 +638,25 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
 
-    const result = { A: null, B: null, C: null };
+    // Primary keys are type names; A/B/C kept as backward-compat aliases
+    const result = { Scalping: null, Intraday: null, Swing: null, A: null, B: null, C: null };
 
     if (marketCond === "DEAD_MARKET") {
-      const ctx = this._buildConfidenceContext(indicators, lastIdx, config);
-      result.meta = { confidence: { A: 0, B: 0, C: 0 }, aggregateConfidence: 0, marketCond };
+      const confZ = { Scalping: 0, Intraday: 0, Swing: 0, A: 0, B: 0, C: 0 };
+      result.meta = { confidence: confZ, aggregateConfidence: 0, marketCond };
       this._lastSignalMeta = result.meta;
       return result;
     }
 
     // ── Raw signal detection ─────────────────────────────────────────────────
-    const rawA = enabled.includes("A")
+    const enabledNorm = enabled.map(k => this.COMPONENT_TO_TYPE[k] || k);
+    const rawA = (enabled.includes("A") || enabledNorm.includes("Scalping"))
       ? this._detectSignalA(closes, highs, lows, volumes, volSMA, lastIdx, config)
       : null;
-    const rawB = enabled.includes("B")
+    const rawB = (enabled.includes("B") || enabledNorm.includes("Intraday"))
       ? this._detectSignalB(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config)
       : null;
-    const rawC = enabled.includes("C")
+    const rawC = (enabled.includes("C") || enabledNorm.includes("Swing"))
       ? this._detectSignalC(closes, highs, lows, volumes, volSMA, lastIdx, config)
       : null;
 
@@ -634,17 +667,22 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
 
     // ── Gate + HTF filter ────────────────────────────────────────────────────
-    if (rawA && confA >= minConf.A && !this._htfDirectionBlocked(rawA, htfTrend)) result.A = rawA;
-    if (rawB && confB >= minConf.B && !this._htfDirectionBlocked(rawB, htfTrend)) result.B = rawB;
-    if (rawC && confC >= minConf.C && !this._htfDirectionBlocked(rawC, htfTrend)) result.C = rawC;
+    const sigScalping = (rawA && confA >= minConf.A && !this._htfDirectionBlocked(rawA, htfTrend)) ? rawA : null;
+    const sigIntraday = (rawB && confB >= minConf.B && !this._htfDirectionBlocked(rawB, htfTrend)) ? rawB : null;
+    const sigSwing    = (rawC && confC >= minConf.C && !this._htfDirectionBlocked(rawC, htfTrend)) ? rawC : null;
 
-    const aggVotes = [result.A, result.B, result.C].filter(Boolean);
+    // Set both type names and legacy letter aliases
+    result.Scalping = sigScalping; result.A = sigScalping;
+    result.Intraday = sigIntraday; result.B = sigIntraday;
+    result.Swing    = sigSwing;    result.C = sigSwing;
+
+    const aggVotes = [sigScalping, sigIntraday, sigSwing].filter(Boolean);
     const aggConf  = aggVotes.length > 0
       ? [confA, confB, confC].filter(c => c > 0).reduce((a, b) => a + b, 0) / Math.max(aggVotes.length, 1)
       : 0;
 
     result.meta = {
-      confidence: { A: confA, B: confB, C: confC },
+      confidence: { Scalping: confA, Intraday: confB, Swing: confC, A: confA, B: confB, C: confC },
       aggregateConfidence: Math.round(aggConf),
       marketCond,
     };
@@ -661,7 +699,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const minVotes = config.sacMinVotes ?? 1;
     const minAgg   = config.sacMinAggregateConfidence ?? 0;
 
-    const signals = [multi.A, multi.B, multi.C].filter(Boolean);
+    const signals = [multi.Scalping, multi.Intraday, multi.Swing].filter(Boolean);
     const long  = signals.filter(s => s === "LONG").length;
     const short = signals.filter(s => s === "SHORT").length;
     const total = long + short;

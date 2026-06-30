@@ -161,13 +161,19 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
     }
 
     const closeTime = isoOf(entryCandles[exitIdx]);
+    // Use human-readable trade type label if strategy supports it
+    const tradeTypeLabel = typeof strategy.getTradeTypeLabel === "function"
+      ? strategy.getTradeTypeLabel(componentId)
+      : componentId;
+
     trades.push({
       date: closeTime,
       openTime: isoOf(entryCandles[position.openIdx]),
       closeTime,
       side: position.side,
       strategy: strategyKey,
-      component: componentId,
+      component: tradeTypeLabel,
+      tradeType: tradeTypeLabel,
       marketCond: position.marketCond,
       entry: position.entry,
       exit: px,
@@ -248,7 +254,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
 
     // Debug: log rejection reason for each bar (capped at 500 to avoid huge responses)
     if (debugLog != null && debugLog.length < 500) {
-      const anyFired = ["A", "B", "C", "D"].some(k => multiSignal[k]);
+      const anyFired = ["Scalping", "Intraday", "Swing"].some(k => multiSignal[k]);
       if (!anyFired) {
         const blockReasons = [];
         const mc = multiSignal.meta?.marketCond;
@@ -266,7 +272,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
           // gates OFF for diagnosis:
           afMinComponentConfidence: 0, afMinAggregateConfidence: 0,
         });
-        for (const k of ["A", "B", "C", "D"]) {
+        for (const k of ["Scalping", "Intraday", "Swing"]) {
           compSigs[k] = rawMulti[k] ?? "null";
           if (rawMulti[k] && !multiSignal[k]) {
             const c_ = conf[k];
@@ -285,8 +291,9 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       }
     }
 
-    // Check each component for independent entry
-    for (const componentId of ["A", "B", "C", "D"]) {
+    // Check each trade type for independent entry (type names + legacy letters deduped by position Map)
+    const tradeTypeKeys = ["Scalping", "Intraday", "Swing"];
+    for (const componentId of tradeTypeKeys) {
       const signal = multiSignal[componentId];
       if (!signal) continue;
 
@@ -415,6 +422,129 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       feeRate: FEE_RATE_PER_SIDE,
       slippage: slip,
     },
+  };
+}
+
+/**
+ * Run AF_SAC triple-timeframe backtest:
+ * Each trade type (Scalping/Intraday/Swing) runs on its own candle set independently.
+ * Results are merged and sorted by open time.
+ *
+ * @param {Object} opts
+ * @param {{ Scalping: Array, Intraday: Array, Swing: Array }} opts.entryCandles - candles per type
+ * @param {{ Scalping: Array, Intraday: Array, Swing: Array }} opts.htfCandles   - HTF candles per type
+ * @param {string}  opts.strategyKey
+ * @param {number}  opts.capital
+ * @param {Object}  [opts.config]
+ * @param {boolean} [opts.enableFees]
+ * @param {boolean} [opts.enableSlippage]
+ */
+function runTripleTypeBacktest(opts = {}) {
+  const { strategyKey = "AF_SAC", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
+
+  const validation = strategyRegistry.validate(strategyKey);
+  if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
+  const strategy = validation.strategy;
+
+  const base = STRATEGIES[strategyKey] || {};
+  const cfg = { ...base, ...(opts.config || {}) };
+  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
+
+  const typeOrder = ["Scalping", "Intraday", "Swing"];
+  const allTrades = [];
+  const perTypeStats = {};
+
+  // Capital is shared across types (concurrent risk)
+  // Each type uses its own candle set but all draw from the same capital pool
+  // For simplicity in backtest: run each type independently on full capital,
+  // but size each position at 1/3 risk so combined max loss = configured riskPerTrade
+  const typeConfig = { ...cfg, riskPerTrade: (cfg.riskPerTrade ?? 0.01) / typeOrder.length };
+
+  for (const tradeType of typeOrder) {
+    const entryCandles = opts.entryCandles?.[tradeType];
+    const htfCandles   = opts.htfCandles?.[tradeType];
+
+    if (!entryCandles?.length || entryCandles.length < 60) {
+      perTypeStats[tradeType] = { skipped: true, reason: "Insufficient candles" };
+      continue;
+    }
+
+    const typeResult = _runMultiPositionBacktest(
+      { ...opts, strategyKey, config: typeConfig, debug: false },
+      strategy,
+      typeConfig,
+      feeRate,
+      slip,
+      entryCandles,
+      htfCandles || null,
+    );
+
+    // Tag each trade with its type (overwrite component field)
+    for (const t of typeResult.trades) {
+      allTrades.push({ ...t, component: tradeType, tradeType });
+    }
+    perTypeStats[tradeType] = {
+      trades: typeResult.trades.length,
+      wins: typeResult.trades.filter(t => t.result === "win").length,
+      entryBars: entryCandles.length,
+      htfBars: htfCandles?.length ?? 0,
+    };
+  }
+
+  // Sort all trades by openTime
+  allTrades.sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
+
+  // Recalculate equity + stats from merged trades on shared capital
+  let capital = startCapital;
+  const firstDate = allTrades[0]?.openTime || allTrades[0]?.date;
+  const equity = [{ date: firstDate, value: startCapital }];
+  for (const t of allTrades) {
+    capital += t.pnl;
+    equity.push({ date: t.closeTime || t.date, value: round2(capital) });
+  }
+
+  const wins   = allTrades.filter(t => t.result === "win");
+  const losses = allTrades.filter(t => t.result === "loss");
+  const grossWin  = wins.reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+
+  let peak = startCapital, mdd = 0, bal = startCapital;
+  for (const t of allTrades) {
+    bal  += t.pnl;
+    peak  = Math.max(peak, bal);
+    mdd   = Math.max(mdd, peak > 0 ? (peak - bal) / peak : 0);
+  }
+
+  const rets = allTrades.map(t => t.pnl);
+  const avg  = rets.length ? rets.reduce((s, r) => s + r, 0) / rets.length : 0;
+  const std  = rets.length > 1
+    ? Math.sqrt(rets.reduce((s, r) => s + (r - avg) ** 2, 0) / (rets.length - 1))
+    : 0;
+
+  return {
+    ok: true,
+    trades: allTrades,
+    equity,
+    perTypeStats,
+    stats: {
+      totalTrades: allTrades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: allTrades.length > 0 ? (wins.length / allTrades.length * 100).toFixed(1) : "0.0",
+      totalReturn: ((capital - startCapital) / startCapital * 100).toFixed(2),
+      finalCapital: capital.toFixed(2),
+      profitFactor: grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? "Inf" : "0.00"),
+      avgWin:  wins.length   ? (grossWin  / wins.length).toFixed(2)   : "0.00",
+      avgLoss: losses.length ? (grossLoss / losses.length).toFixed(2) : "0.00",
+      riskReward: (losses.length && wins.length)
+        ? ((grossWin / wins.length) / (grossLoss / losses.length)).toFixed(2)
+        : "0.00",
+      maxDrawdown: (mdd * 100).toFixed(2),
+      sharpe: std > 0 ? ((avg / std) * Math.sqrt(252)).toFixed(2) : "0.00",
+      totalFees: allTrades.reduce((s, t) => s + (t.fee || 0), 0).toFixed(2),
+    },
+    meta: { strategyKey, mode: "triple-timeframe", perTypeStats },
   };
 }
 
@@ -740,4 +870,4 @@ function buildStats(trades, startCapital, endCapital) {
   };
 }
 
-module.exports = { runRealBacktest };
+module.exports = { runRealBacktest, runTripleTypeBacktest };
