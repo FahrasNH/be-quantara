@@ -610,7 +610,7 @@ const STRATEGIES = {
 
     // Sweep detector
     sacSwingLookback:  5,
-    sacSweepScanBars:  30,
+    sacSweepScanBars:  50,   // was 30 — scan further back (50 bars) for recent swing lows on 1m
     sacSweepVolMult:   1.1,  // was 1.3 — lower vol requirement for 1m noise
 
     // Order block

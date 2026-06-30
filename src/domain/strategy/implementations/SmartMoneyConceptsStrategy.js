@@ -250,9 +250,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * Bearish sweep → short opportunity.
    */
   _detectSweep(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
-    const leftLook = config.sacSwingLookback ?? 5;
-    const scanBars = config.sacSweepScanBars ?? 30;
-    const volMult  = config.sacSweepVolMult  ?? 1.3;
+    const leftLook = config.sacSwingLookback ?? 5;  // keep at 5 (left-side comparison window)
+    const scanBars = config.sacSweepScanBars ?? 50;  // 30 → 50 (scan further back for recent swing lows)
+    const volMult  = config.sacSweepVolMult  ?? 1.1;
 
     if (lastIdx < leftLook + 3) return null;
 
@@ -267,17 +267,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const swingHighs = this._findRecentSwingHighs(highs, lastIdx, leftLook, scanBars);
 
     // Bullish sweep: wick below nearest swing low, close recovers above it
-    if (volSurge && swingLows.length > 0) {
+    // Relaxed: require volSurge OR recent swing low (removed strict volSurge gate for 1m noise)
+    if (swingLows.length > 0) {
       const nearest = swingLows[swingLows.length - 1].price;
-      if (lo < nearest && cl > nearest) {
+      if (lo < nearest && cl > nearest && volSurge) {
         return { type: "bullish", level: nearest, volRatio: vol / vSMA, bars: lastIdx };
       }
     }
 
     // Bearish sweep: wick above nearest swing high, close falls below it
-    if (volSurge && swingHighs.length > 0) {
+    if (swingHighs.length > 0) {
       const nearest = swingHighs[swingHighs.length - 1].price;
-      if (hi > nearest && cl < nearest) {
+      if (hi > nearest && cl < nearest && volSurge) {
         return { type: "bearish", level: nearest, volRatio: vol / vSMA, bars: lastIdx };
       }
     }
