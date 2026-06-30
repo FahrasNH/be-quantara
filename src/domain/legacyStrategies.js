@@ -642,7 +642,26 @@ const STRATEGIES = {
     winrate: "Target 52–60%",
     risk:    "Rendah-Sedang",
   },
+
+  // ─────────────────────────────────────────────
+  // v2.0 UMBRELLA/COMPONENT KEYS
+  // These mirror the primary presets above with updated name + signalType.
+  // BotEngine resolves these via StrategyRegistry.get(signalType).
+  // ─────────────────────────────────────────────
+
+  AF_SAC: null, // populated below — avoids copy-paste drift
+  TS_TM:  null,
+  MD_MR:  null,
+  BS_BR:  null,
 };
+
+// Populate component-key aliases from their parent presets
+STRATEGIES.AF_SAC = { ...STRATEGIES.SMART_MONEY_CONCEPTS, name: "AF_SAC", label: "Adaptive Fusion (AF_SAC)", signalType: "AF_SAC" };
+STRATEGIES.TS_TM  = { ...STRATEGIES.TREND_MOMENTUM,       name: "TS_TM",  label: "Trend Surge (TS_TM)",     signalType: "TS_TM"  };
+STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,       name: "MD_MR",  label: "Mean Drift (MD_MR)",      signalType: "MD_MR"  };
+STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST,      name: "BS_BR",  label: "Breakout Storm (BS_BR)",  signalType: "BS_BR"  };
+
+const _EMPTY = undefined; // remove null sentinels (already overwritten above)
 
 function getStrategy(overrideKey = null) {
   const key = (overrideKey || "B").toUpperCase();

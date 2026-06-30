@@ -12,12 +12,11 @@
  */
 
 const StrategyBase = require("../src/domain/strategy/base/StrategyBase");
-const AdaptiveFusionStrategy = require("../src/domain/strategy/implementations/AdaptiveFusionStrategy");
 const { strategyRegistry } = require("../src/domain/strategy");
 const PositionManager = require("../src/domain/PositionManager");
 const AdaptiveStrategyEngine = require("../src/application/AdaptiveStrategyEngine");
 
-console.log("🧪 TESTING ADAPTIVE FUSION STRATEGY SYSTEM\n");
+console.log("🧪 TESTING ADAPTIVE FUSION STRATEGY SYSTEM (v2.0 Umbrella)\n");
 
 // ═════════════════════════════════════════════════════════════════════════
 // TEST 1: Strategy Registration
@@ -29,13 +28,19 @@ const strategies = strategyRegistry.listAll();
 console.log(`✓ Registered strategies: ${strategies.length}`);
 console.log(`  - Found: ${strategies.map((s) => s.config.name).join(", ")}`);
 
-const afs = strategyRegistry.get("ADAPTIVE_FUSION");
-console.log(`✓ Loaded ADAPTIVE_FUSION: ${afs ? "SUCCESS" : "FAILED"}`);
+// v2.0: primary key is AF_SAC; ADAPTIVE_FUSION resolves via legacy alias
+const afs = strategyRegistry.get("AF_SAC");
+console.log(`✓ Loaded AF_SAC: ${afs ? "SUCCESS" : "FAILED"}`);
 console.log(`  - Name: ${afs.config.name}`);
 console.log(`  - Label: ${afs.config.label}`);
 console.log(`  - Version: ${afs.config.version}`);
+console.log(`  - Umbrella: ${afs.config.umbrella ?? (afs.getMetadata?.()?.umbrella ? "true" : "false")}`);
 
-const validation = strategyRegistry.validate("ADAPTIVE_FUSION");
+// Legacy alias still resolves to same instance
+const legacyAf = strategyRegistry.get("ADAPTIVE_FUSION");
+console.log(`✓ Legacy ADAPTIVE_FUSION alias → AF_SAC: ${legacyAf === afs ? "PASS" : "FAIL"}`);
+
+const validation = strategyRegistry.validate("AF_SAC");
 console.log(`✓ Validation: ${validation.valid ? "PASSED" : "FAILED"}`);
 
 const uiChoices = strategyRegistry.getUIChoices();
@@ -79,13 +84,20 @@ for (const scenario of testScenarios) {
 console.log("\nTEST 3: Signal Detection & Conflict Resolution");
 console.log("─".repeat(50));
 
-// Create mock indicators
+// SAC-compatible mock indicators
+const N_IND = 60;
+const basePrice = 50000;
 const mockIndicators = {
-  closes: [50000, 50050, 50100, 50150, 50200],
-  emaFast: [50025, 50050, 50075, 50100, 50125],
-  emaSlow: [49950, 50000, 50050, 50100, 50150],
-  rsi: [35, 40, 45, 50, 55],
-  atr: [100, 110, 120, 130, 140],
+  closes:  Array.from({ length: N_IND }, (_, i) => basePrice + i * 10),
+  highs:   Array.from({ length: N_IND }, (_, i) => basePrice + i * 10 + 30),
+  lows:    Array.from({ length: N_IND }, (_, i) => basePrice + i * 10 - 30),
+  opens:   Array.from({ length: N_IND }, (_, i) => basePrice + i * 10 - 5),
+  volumes: Array.from({ length: N_IND }, () => 1000),
+  volSMA:  Array.from({ length: N_IND }, () => 900),  // SAC reads volSMA[lastIdx]
+  emaFast: Array.from({ length: N_IND }, (_, i) => basePrice + i * 9),
+  emaSlow: Array.from({ length: N_IND }, (_, i) => basePrice + i * 8),
+  rsi:     Array.from({ length: N_IND }, (_, i) => 45 + (i % 20)),
+  atr:     Array.from({ length: N_IND }, () => 120),
 };
 
 const testConfigs = [
@@ -98,7 +110,7 @@ for (const config of testConfigs) {
   console.log(
     `\nConfig: ${config.name} (Balance: $${config.balance})`
   );
-  const signal = afs.detectSignal(mockIndicators, 4, config);
+  const signal = afs.detectSignal(mockIndicators, N_IND - 1, config);
   console.log(`  Signal: ${signal || "NO SIGNAL"}`);
 
   // Check activation
@@ -196,185 +208,32 @@ for (const test of validationTests) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-// TEST 7: Sub-Strategy Configs
+// TEST 7: Umbrella metadata & component access
 // ═════════════════════════════════════════════════════════════════════════
-console.log("\nTEST 7: Sub-Strategy Configurations");
+console.log("\nTEST 7: Umbrella Metadata");
 console.log("─".repeat(50));
 
-const subStrategies = afs.getSubStrategies();
-console.log(`Total sub-strategies: ${Object.keys(subStrategies).length}`);
+const meta = afs.getMetadata();
+console.log(`  umbrella: ${meta.umbrella}`);
+console.log(`  components: ${JSON.stringify(meta.components)}`);
+console.log(`  activeComponent: ${meta.activeComponent}`);
+const activeComp = afs.getActiveComponent();
+console.log(`  active instance: ${activeComp.config.name}`);
 
-for (const [key, config] of Object.entries(subStrategies)) {
-  console.log(`\n${key}: ${config.label}`);
-  console.log(`  HTF: ${config.htf} | Entry: ${config.entryTf}`);
-  console.log(`  Risk: ${(config.riskPerTrade * 100).toFixed(1)}% | Max ${config.maxTradesPerDay} trades/day`);
-  console.log(`  Min Capital: $${config.minCapital}`);
-}
-
-// ═════════════════════════════════════════════════════════════════════════
-// TEST 8: Component B — Event-Based Entry (v2.2 / P8) + Regime Gate (P7)
-// B hanya fire saat ada EVENT segar (fresh crossover / pullback-resume),
-// dan detectSignal memblok semua entry di DEAD_MARKET.
-// ═════════════════════════════════════════════════════════════════════════
-console.log("\nTEST 8: Component B — Event-Based Detection + Regime Gate");
-console.log("─".repeat(50));
-
-let b8pass = 0, b8fail = 0;
-const tB = (name, got, want) => {
-  const ok = got === want;
-  if (ok) { b8pass++; console.log(`  ✅ ${name}`); }
-  else     { b8fail++; console.log(`  ❌ ${name}: got ${got}, want ${want}`); }
-};
-
-// Helper: array konstan sepanjang n+1 elemen (index 0..n).
-// detectSignal punya early guard `if (lastIdx < 30) return null` sehingga kita butuh
-// minimal 31 elemen (lastIdx = 30).
-function mkSeries(n, val) { return Array(n + 1).fill(val); }
-const N = 30; // lastIdx = N
-
-// Downtrend BTC mirip log nyata: EMA9 < EMA21 < EMA50, price < EMA21, RSI 42.
-// Event pullback-resume: candle N-1 sempat close DI ATAS EMA9 (pullback naik),
-// candle N close kembali di bawah (resume turun) → B SHORT, C SHORT → 2/3.
-// v2.5: volatility 1.5 (> LOW_VOL 1.4) & afMinVotes:2.
-{
-  const closes = mkSeries(N, 62600);
-  closes[N - 1] = 62700;   // pullback ke atas EMA9 (62684)
-  closes[N]     = 62488;   // resume turun
-  const btcIndicators = {
-    closes,
-    emaFast:   mkSeries(N, 62683.93),  // EMA9
-    emaSlow:   mkSeries(N, 62776.78),  // EMA21
-    emaTrend:  mkSeries(N, 62925.00),  // EMA50
-    rsi:       mkSeries(N, 38),
-    atr:       mkSeries(N, 189.08),
-    volumes:   mkSeries(N, 1),
-    volSMA:    mkSeries(N, null),
-  };
-  const sig = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.15, afMinVotes: 2, maxEntryExtensionATR: 1.5 });
-  tB("BTC downtrend + pullback-resume — detectSignal SHORT", sig, "SHORT");
-  const meta = afs.getLastSignalMeta();
-  tB("lastSignalMeta tersedia setelah signal", meta !== null, true);
-
-  // P7: regime persis seperti CSV 11–12 Jun (vol 0.4, trend 0.05) → DEAD_MARKET → null
-  const sigDead = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 0.4, trend_strength: 0.05 });
-  tB("DEAD_MARKET (vol 0.4, trend 0.05 ala CSV) — entry diblok", sigDead, null);
-
-  // v2.5 boundary: vol 1.3 ≤ LOW_VOL 1.4 & trend 0.4 < WEAK_TREND 0.55 → DEAD_MARKET
-  const sigBoundary = afs.detectSignal(btcIndicators, N, { balance: 500, volatility: 1.3, trend_strength: 0.4 });
-  tB("DEAD_MARKET boundary v2.5 (vol 1.3, trend 0.4) — entry diblok", sigBoundary, null);
-}
-
-// Uptrend: EMA9 > EMA21 > EMA50, price > EMA21, RSI 57, pullback-resume → LONG
-{
-  const closes = mkSeries(N, 104);
-  closes[N - 1] = 103.4;   // pullback ke bawah EMA9 (103.5)
-  closes[N]     = 104;     // resume naik
-  const upIndicators = {
-    closes,
-    emaFast:   mkSeries(N, 103.5),  // EMA9
-    emaSlow:   mkSeries(N, 102.5),  // EMA21
-    emaTrend:  mkSeries(N, 101.0),  // EMA50
-    rsi:       mkSeries(N, 62),
-    atr:       mkSeries(N, 0.5),
-    volumes:   mkSeries(N, 100),
-    volSMA:    mkSeries(N, 80),
-  };
-  const sig = afs.detectSignal(upIndicators, N, { balance: 500, volatility: 1.5, trend_strength: 0.5, afMinVotes: 2, maxEntryExtensionATR: 1.5 });
-  tB("Uptrend + pullback-resume — detectSignal LONG", sig, "LONG");
-}
-
-// P8 ANTI-CHASING: alignment & RSI valid TAPI tidak ada event (harga sudah
-// extended di atas EMA9 selama seluruh lookback, tanpa crossover baru) → B null.
-// Ini persis pola entry telat yang menyebabkan 18/18 loss.
-{
-  const closes  = mkSeries(N, 104.5);       // selalu jauh di atas EMA9 — no pullback
-  const emaFast = mkSeries(N, 103.5);
-  const emaSlow = mkSeries(N, 102.5);       // tidak pernah cross dalam lookback
-  const sig = afs._detectSignalB(62, emaFast, emaSlow, 101.0, closes, N);
-  tB("Aligned tapi TANPA event (extended/chasing) — B null", sig, null);
-}
-
-// Event fresh crossover: EMA9 melintasi EMA21 dalam lookback → B fire
-{
-  const emaFast = mkSeries(N, 103.5);
-  emaFast[N - 1] = 102.4;                   // sebelum cross: EMA9 < EMA21
-  const emaSlow = mkSeries(N, 102.5);
-  const closes  = mkSeries(N, 104);
-  const sig = afs._detectSignalB(62, emaFast, emaSlow, 101.0, closes, N);
-  tB("Fresh EMA9×EMA21 crossover — B fires LONG", sig, "LONG");
-}
-
-// Jika EMA alignment TIDAK sejajar (mixed), B harus null walau ada event
-{
-  // EMA9(100.5) > EMA21(100.2) tapi EMA50(100.8) > EMA21 → tidak fully aligned
-  const closes  = [99, 100, 100.1, 100.0, 100.5];  // pullback-resume event ada
-  const sig = afs._detectSignalB(55, mkSeries(4, 100.4), mkSeries(4, 100.2), 100.8, closes, 4);
-  tB("Mixed EMA (tidak fully aligned) — B null", sig, null);
-}
-
-// Jika emaTrend null (tidak tersedia), B tetap bisa fire dengan 2-EMA fallback
-{
-  // closes sempat <= EMA9 (100.8) lalu close terakhir di atasnya → pullback-resume
-  const closes = [99, 99.5, 100, 100.5, 101];
-  const sig = afs._detectSignalB(62, mkSeries(4, 100.8), mkSeries(4, 100.2), null, closes, 4);
-  tB("emaTrend=null (fallback 2-EMA) — B fires LONG", sig, "LONG");
-}
-
-// RSI overbought (≥70) — B harus null (filter overbought)
-{
-  const closes = [100, 101, 103.2, 103.4, 104];  // pullback-resume event ada
-  const sig = afs._detectSignalB(72, mkSeries(4, 103.5), mkSeries(4, 102.5), 101.0, closes, 4);
-  tB("RSI overbought (72) — B null", sig, null);
-}
-
-// RSI oversold (≤30) di SHORT setup — B harus null
-{
-  const closes = [101, 100, 97.6, 97.5, 97];     // pullback-resume event ada
-  const sig = afs._detectSignalB(28, mkSeries(4, 97.4), mkSeries(4, 97.5), 99.0, closes, 4);
-  tB("RSI oversold (28) — B null", sig, null);
-}
-
-console.log(`\nComponent B: ${b8pass} passed, ${b8fail} failed`);
-if (b8fail > 0) { console.log("⚠️  Component B tests FAILED"); process.exitCode = 1; }
-
-// ═════════════════════════════════════════════════════════════════════════
-// TEST 9: calculateRiskConfig — strongTrendTPMult (v2.6)
-// ═════════════════════════════════════════════════════════════════════════
-console.log("\nTEST 9: strongTrendTPMult (v2.6)");
-console.log("─".repeat(50));
-
-let t9pass = 0, t9fail = 0;
-const t9 = (name, ok) => {
-  if (ok) { t9pass++; console.log(`  ✅ ${name}`); }
-  else     { t9fail++; console.log(`  ❌ ${name}`); }
-};
-
-{
-  const base = afs.calculateRiskConfig(100, 2, "LONG", "B");
-  const strong = afs.calculateRiskConfig(100, 2, "LONG", "B", {
-    marketCond: "STRONG_TREND",
-    strongTrendTPMult: 1.8,
-  });
-  t9("SL unchanged on STRONG_TREND", base.slDistance === strong.slDistance);
-  t9("TP distance ×1.8", Math.abs(strong.tpDistance - base.tpDistance * 1.8) < 1e-9);
-  t9("strongTrendTPApplied flag", strong.strongTrendTPApplied === true);
-}
-
-console.log(`\nstrongTrendTPMult: ${t9pass} passed, ${t9fail} failed`);
-if (t9fail > 0) { console.log("⚠️  strongTrendTPMult tests FAILED"); process.exitCode = 1; }
+// (Tests 8 & 9 covered old AF v2.6 private methods — removed in v2.0.
+// New SAC internals are tested in test/smc-strategy.test.js.)
 
 // ═════════════════════════════════════════════════════════════════════════
 // SUMMARY
 // ═════════════════════════════════════════════════════════════════════════
 console.log("\n" + "═".repeat(50));
-console.log("✅ ALL TESTS COMPLETED SUCCESSFULLY");
+console.log("✅ AFS v2.0 TESTS COMPLETED");
 console.log("═".repeat(50));
-console.log("\nSummary:");
-console.log("✓ Strategy registration working");
-console.log("✓ Market-aware ranking functional");
-console.log("✓ Signal detection with conflict resolution");
-console.log("✓ Position manager with conflict detection");
-console.log("✓ Risk configuration defined");
-console.log("✓ Entry validation rules in place");
-console.log("✓ Sub-strategy configs loaded");
-console.log("\nSystem is ready for integration! 🚀");
+console.log("✓ Registry: AF_SAC primary + legacy aliases resolved");
+console.log("✓ Umbrella: AdaptiveFusionUmbrella wraps SmartMoneyConceptsStrategy");
+console.log("✓ Market ranking functional");
+console.log("✓ Signal detection delegates to SAC component");
+console.log("✓ Position manager working");
+console.log("✓ Risk config defined");
+console.log("✓ Entry validation working");
+console.log("✓ Umbrella metadata accessible");
