@@ -7,11 +7,12 @@
  * ─────────────────────────────────────────────
  */
 
-const AdaptiveFusionStrategy  = require("./implementations/AdaptiveFusionStrategy");
-const TrendMomentumStrategy   = require("./implementations/TrendMomentumStrategy");
-const MeanReversionStrategy   = require("./implementations/MeanReversionStrategy");
-const BreakoutRetestStrategy  = require("./implementations/BreakoutRetestStrategy");
-const GrokAiTradingStrategy   = require("./implementations/GrokAiTradingStrategy");
+const AdaptiveFusionStrategy       = require("./implementations/AdaptiveFusionStrategy");
+const SmartMoneyConceptsStrategy   = require("./implementations/SmartMoneyConceptsStrategy");
+const TrendMomentumStrategy        = require("./implementations/TrendMomentumStrategy");
+const MeanReversionStrategy        = require("./implementations/MeanReversionStrategy");
+const BreakoutRetestStrategy       = require("./implementations/BreakoutRetestStrategy");
+const GrokAiTradingStrategy        = require("./implementations/GrokAiTradingStrategy");
 
 class StrategyRegistry {
   constructor() {
@@ -22,12 +23,13 @@ class StrategyRegistry {
   }
 
   _registerBuiltInStrategies() {
-    this.register("ADAPTIVE_FUSION",  new AdaptiveFusionStrategy());
-    this.register("TREND_MOMENTUM",   new TrendMomentumStrategy());
-    this.register("MEAN_REVERSION",   new MeanReversionStrategy());
-    this.register("BREAKOUT_RETEST",  new BreakoutRetestStrategy());
-    this.register("GROK_AI_TRADING",  new GrokAiTradingStrategy());
-    this.defaultKey = "ADAPTIVE_FUSION";
+    this.register("ADAPTIVE_FUSION",      new AdaptiveFusionStrategy());
+    this.register("SMART_MONEY_CONCEPTS", new SmartMoneyConceptsStrategy());
+    this.register("TREND_MOMENTUM",       new TrendMomentumStrategy());
+    this.register("MEAN_REVERSION",       new MeanReversionStrategy());
+    this.register("BREAKOUT_RETEST",      new BreakoutRetestStrategy());
+    this.register("GROK_AI_TRADING",      new GrokAiTradingStrategy());
+    this.defaultKey = "SMART_MONEY_CONCEPTS";
   }
 
   /**

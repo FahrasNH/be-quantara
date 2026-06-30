@@ -1,0 +1,698 @@
+/**
+ * SmartMoneyConceptsStrategy.js — v1.0.0 (SAC: Smart Money Concepts)
+ *
+ * FOUNDRY Tier — 3-Component SAC Architecture:
+ *   Component A — Scalping  : Liquidity sweep + Order Block entry + CVD (1h bars)
+ *   Component B — Intraday  : CHoCH + Order Block + EMA trend (1h bars)
+ *   Component C — Swing     : FVG + Displacement + Premium/Discount zone (1h bars)
+ *
+ * All three components vote. An entry fires when at least 1 component reaches its
+ * confidence threshold (A: ≥60, B: ≥65, C: ≥65) AND the highest-scoring component
+ * direction matches HTF regime.
+ *
+ * References:
+ *   FOUNDRY_SAC_COMPLETE_SPECIFICATION.md (2026-06-30)
+ *   SAC-FIX-05 / SAC-FIX-06 / SAC-FIX-07 / SAC-FIX-08
+ */
+
+"use strict";
+
+const StrategyBase = require("../base/StrategyBase");
+
+const EPSILON = 1e-9;
+
+class SmartMoneyConceptsStrategy extends StrategyBase {
+  constructor(config = {}) {
+    super({
+      name: "SMART_MONEY_CONCEPTS",
+      label: "Smart Money Concepts (SAC)",
+      description:
+        "3-component SMC strategy: Scalping (sweep+OB+CVD), " +
+        "Intraday (CHoCH+OB+trend), Swing (FVG+displacement+premium/discount). " +
+        "Votes on directional confluence; blocks counter-HTF entries.",
+      version: "1.0.0",
+      enabled: true,
+      ...config,
+    });
+
+    // ── Sub-strategy RR/SL/TP multipliers ─────────────────────────────────────
+    this.SUB_STRATEGIES = {
+      A: { name: "SAC_SCALP",    label: "Scalp (Sweep+OB)",     slMultiplier: 0.8,  tpMultiplier: 1.5  },
+      B: { name: "SAC_INTRADAY", label: "Intraday (CHoCH+OB)",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
+      C: { name: "SAC_SWING",    label: "Swing (FVG+Disp)",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
+    };
+
+    this._lastSignalMeta = null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Public interface (matches AdaptiveFusionStrategy for drop-in compatibility)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // ── Abstract method implementations (required by StrategyBase) ───────────────
+
+  rankByMarketConditions(marketConditions = {}) {
+    const { volatility = 1.0, trend_strength = 0.1 } = marketConditions;
+
+    // Scalping thrives in choppy/high-vol markets (sweeps happen in noise)
+    let scoreA = 45;
+    if (volatility > 1.5)         scoreA += 35;
+    if (trend_strength < 0.15)    scoreA += 20;
+    if (volatility < 0.5)         scoreA -= 30;
+
+    // Intraday best in moderate trending conditions
+    let scoreB = 65;
+    if (trend_strength >= 0.2 && trend_strength < 0.6) scoreB += 20;
+    if (volatility > 2.0)         scoreB -= 15;
+
+    // Swing best in strong directional trends with clear structure
+    let scoreC = 50;
+    if (trend_strength >= 0.4)    scoreC += 35;
+    if (volatility < 1.5)         scoreC += 15;
+    if (volatility > 2.5)         scoreC -= 10;
+
+    return [
+      { key: "A", label: this.SUB_STRATEGIES.A.label, score: this.clamp(scoreA, 0, 100) },
+      { key: "B", label: this.SUB_STRATEGIES.B.label, score: this.clamp(scoreB, 0, 100) },
+      { key: "C", label: this.SUB_STRATEGIES.C.label, score: this.clamp(scoreC, 0, 100) },
+    ].sort((a, b) => b.score - a.score);
+  }
+
+  canActivate(balance) {
+    if (balance < 20) {
+      return { allowed: false, reason: `Insufficient capital: need min $20, have $${balance}` };
+    }
+    return { allowed: true, reason: "Smart Money Concepts strategy can activate" };
+  }
+
+  getTimeframeConfig() {
+    return {
+      interval:      "1h",
+      higherTf:      "4h",
+      checkInterval: 3600000,
+    };
+  }
+
+  validateEntry(price, atr, volume, volSMA) {
+    const atrPct   = (atr / price) * 100;
+    const volRatio = volSMA > 0 ? volume / volSMA : 0;
+    if (atrPct < 0.8 || atrPct > 5.0) {
+      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside range (0.8–5%)` };
+    }
+    if (volRatio < 0.5) {
+      return { valid: false, reason: `Volume ratio ${volRatio.toFixed(2)}× below threshold (0.5×)` };
+    }
+    return { valid: true, reason: "Entry conditions met" };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  getRiskConfig() {
+    return {
+      riskPerTrade:       0.005,
+      riskPerTradeStrong: 0.01,
+      maxTradesPerDay:    8,
+      cooldownAfterLoss:  60,
+      maxConsecLoss:      3,
+    };
+  }
+
+  getConfidenceWeights() {
+    return {
+      A: { sweep: 30, cvdAlign: 25, obZone: 25, volSurge: 20 },
+      B: { choch: 30, trendAlign: 25, obStrength: 25, cvdAlign: 20 },
+      C: { fvgQuality: 30, displacement: 25, obConfluence: 25, cvdAccum: 20 },
+    };
+  }
+
+  getLastSignalMeta() {
+    return this._lastSignalMeta;
+  }
+
+  calculateRiskConfig(entryPrice, atr, signal, component = "B", opts = {}) {
+    const sub      = this.SUB_STRATEGIES[component] ?? this.SUB_STRATEGIES.B;
+    const mul      = opts.strongTrendTPMult ?? 1.0;
+    const isStrong = opts.marketCond === "STRONG_TREND" && mul > 1;
+
+    const slDist = atr * sub.slMultiplier;
+    let   tpDist = atr * sub.tpMultiplier;
+    if (isStrong) tpDist *= mul;
+
+    const stopLoss   = signal === "LONG" ? entryPrice - slDist : entryPrice + slDist;
+    const takeProfit = signal === "LONG" ? entryPrice + tpDist : entryPrice - tpDist;
+
+    return {
+      stopLoss:    parseFloat(stopLoss.toFixed(8)),
+      takeProfit:  parseFloat(takeProfit.toFixed(8)),
+      riskReward:  parseFloat((tpDist / slDist).toFixed(2)),
+      slMultiplier: sub.slMultiplier,
+      tpMultiplier: isStrong ? parseFloat((sub.tpMultiplier * mul).toFixed(4)) : sub.tpMultiplier,
+      slDistance:  slDist,
+      tpDistance:  tpDist,
+      component,
+      strongTrendTPApplied: isStrong,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SMC Indicator Helpers (all return scalar or null — pure functions)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _calcCVD(closes, highs, lows, volumes, lastIdx, lookback = 14) {
+    let cvd = 0;
+    const start = Math.max(0, lastIdx - lookback + 1);
+    for (let i = start; i <= lastIdx; i++) {
+      const cl = closes[i] ?? 0;
+      const hi = highs[i]  ?? cl;
+      const lo = lows[i]   ?? cl;
+      const range = Math.max(hi - lo, EPSILON);
+      const dp = (cl - lo) / range; // 0=bottom, 1=top of bar
+      cvd += (dp - 0.5) * (volumes[i] ?? 0);
+    }
+    return cvd;
+  }
+
+  _calcVWAP(closes, highs, lows, volumes, lastIdx, lookback = 14) {
+    let sumTPV = 0, sumVol = 0;
+    const start = Math.max(0, lastIdx - lookback + 1);
+    for (let i = start; i <= lastIdx; i++) {
+      const tp = ((highs[i] ?? 0) + (lows[i] ?? 0) + (closes[i] ?? 0)) / 3;
+      const v = volumes[i] ?? 0;
+      sumTPV += tp * v;
+      sumVol += v;
+    }
+    return sumVol > 0 ? sumTPV / sumVol : (closes[lastIdx] ?? 0);
+  }
+
+  // Recent swing highs/lows (left-side only; right-side lookback = leftLook)
+  _findRecentSwingHighs(highs, lastIdx, leftLook = 5, scanBars = 30) {
+    const out = [];
+    const scanStart = Math.max(leftLook, lastIdx - scanBars);
+    for (let i = scanStart; i < lastIdx - leftLook; i++) {
+      const h = highs[i];
+      let ok = true;
+      for (let j = Math.max(0, i - leftLook); j < i && ok; j++) {
+        if (highs[j] >= h) ok = false;
+      }
+      if (ok) out.push({ idx: i, price: h });
+    }
+    return out;
+  }
+
+  _findRecentSwingLows(lows, lastIdx, leftLook = 5, scanBars = 30) {
+    const out = [];
+    const scanStart = Math.max(leftLook, lastIdx - scanBars);
+    for (let i = scanStart; i < lastIdx - leftLook; i++) {
+      const l = lows[i];
+      let ok = true;
+      for (let j = Math.max(0, i - leftLook); j < i && ok; j++) {
+        if (lows[j] <= l) ok = false;
+      }
+      if (ok) out.push({ idx: i, price: l });
+    }
+    return out;
+  }
+
+  /**
+   * Liquidity sweep: current bar wick exceeds swing level, close snaps back.
+   * Bullish sweep → long opportunity (smart money swept lows, absorbed sellers).
+   * Bearish sweep → short opportunity.
+   */
+  _detectSweep(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
+    const leftLook = config.sacSwingLookback ?? 5;
+    const scanBars = config.sacSweepScanBars ?? 30;
+    const volMult  = config.sacSweepVolMult  ?? 1.3;
+
+    if (lastIdx < leftLook + 3) return null;
+
+    const cl  = closes[lastIdx];
+    const hi  = highs[lastIdx];
+    const lo  = lows[lastIdx];
+    const vol = volumes[lastIdx] ?? 0;
+    const vSMA = volSMA[lastIdx] ?? 1;
+    const volSurge = vol > vSMA * volMult;
+
+    const swingLows  = this._findRecentSwingLows(lows,  lastIdx, leftLook, scanBars);
+    const swingHighs = this._findRecentSwingHighs(highs, lastIdx, leftLook, scanBars);
+
+    // Bullish sweep: wick below nearest swing low, close recovers above it
+    if (volSurge && swingLows.length > 0) {
+      const nearest = swingLows[swingLows.length - 1].price;
+      if (lo < nearest && cl > nearest) {
+        return { type: "bullish", level: nearest, volRatio: vol / vSMA, bars: lastIdx };
+      }
+    }
+
+    // Bearish sweep: wick above nearest swing high, close falls below it
+    if (volSurge && swingHighs.length > 0) {
+      const nearest = swingHighs[swingHighs.length - 1].price;
+      if (hi > nearest && cl < nearest) {
+        return { type: "bearish", level: nearest, volRatio: vol / vSMA, bars: lastIdx };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Order Block: last reversal candle before a displacement move.
+   * Bullish OB = last bearish candle before big bullish volume surge.
+   * Bearish OB = last bullish candle before big bearish volume surge.
+   * Returns OB bounds + whether current price is inside the zone.
+   */
+  _detectOrderBlock(closes, highs, lows, opens, volumes, volSMA, lastIdx, direction, config = {}) {
+    const lookback  = config.sacOBLookback ?? 15;
+    const dispMult  = config.sacOBDispMult ?? 1.8;
+
+    if (lastIdx < lookback + 3) return null;
+
+    const cl = closes[lastIdx];
+
+    if (direction === "LONG") {
+      for (let i = lastIdx - 2; i >= Math.max(1, lastIdx - lookback); i--) {
+        const open = opens ? (opens[i] ?? closes[i - 1] ?? closes[i]) : closes[i];
+        const isBearishOB = closes[i] < open;
+        const nextVol = volumes[i + 1] ?? 0;
+        const nextVSMA = volSMA[i + 1] ?? 1;
+        const nextBull = closes[i + 1] > closes[i] && nextVol > nextVSMA * dispMult;
+        if (isBearishOB && nextBull) {
+          const obHigh = highs[i], obLow = lows[i];
+          return {
+            type: "bullish_OB", high: obHigh, low: obLow, idx: i,
+            inZone: cl >= obLow * 0.999 && cl <= obHigh * 1.001,
+            strength: nextVol / nextVSMA,
+          };
+        }
+      }
+    }
+
+    if (direction === "SHORT") {
+      for (let i = lastIdx - 2; i >= Math.max(1, lastIdx - lookback); i--) {
+        const open = opens ? (opens[i] ?? closes[i - 1] ?? closes[i]) : closes[i];
+        const isBullishOB = closes[i] > open;
+        const nextVol = volumes[i + 1] ?? 0;
+        const nextVSMA = volSMA[i + 1] ?? 1;
+        const nextBear = closes[i + 1] < closes[i] && nextVol > nextVSMA * dispMult;
+        if (isBullishOB && nextBear) {
+          const obHigh = highs[i], obLow = lows[i];
+          return {
+            type: "bearish_OB", high: obHigh, low: obLow, idx: i,
+            inZone: cl >= obLow * 0.999 && cl <= obHigh * 1.001,
+            strength: nextVol / nextVSMA,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * CHoCH (Change of Character):
+   * Bullish CHoCH: market was making lower lows, then current close breaks above
+   *   a prior swing high → structural reversal to bullish.
+   * Bearish CHoCH: market was making higher highs, then close breaks below
+   *   a prior swing low → structural reversal to bearish.
+   */
+  _detectCHoCH(closes, highs, lows, lastIdx, config = {}) {
+    const lookback = config.sacChochLookback ?? 20;
+    if (lastIdx < lookback * 2 + 2) return null;
+
+    const half = Math.floor(lookback / 2);
+    const cl = closes[lastIdx];
+
+    // Slice older vs recent half of lookback
+    const olderH = highs.slice(lastIdx - lookback, lastIdx - half);
+    const olderL = lows.slice(lastIdx - lookback, lastIdx - half);
+    const recentL = lows.slice(lastIdx - half, lastIdx);
+
+    const prevSwingHigh = Math.max(...olderH);
+    const prevSwingLow  = Math.min(...olderL);
+    const recentLow     = Math.min(...recentL);
+
+    // Bullish CHoCH: older period had lower lows (downtrend), now close > prev swing high
+    if (recentLow < prevSwingLow * 1.005 && cl > prevSwingHigh) {
+      return { type: "bullish", swingHigh: prevSwingHigh, prevLow: prevSwingLow };
+    }
+
+    const recentH = highs.slice(lastIdx - half, lastIdx);
+    const prevSwingLowH = Math.min(...olderL);
+    const recentHigh = Math.max(...recentH);
+
+    // Bearish CHoCH: older period had higher highs (uptrend), now close < prev swing low
+    if (recentHigh > prevSwingHigh * 0.995 && cl < prevSwingLowH) {
+      return { type: "bearish", swingLow: prevSwingLowH, prevHigh: prevSwingHigh };
+    }
+
+    return null;
+  }
+
+  /**
+   * FVG (Fair Value Gap): gap between three consecutive candles where
+   * price is expected to return.
+   * Bullish FVG: lows[i] > highs[i-2]  (gap above i-2's high)
+   * Bearish FVG: highs[i] < lows[i-2]  (gap below i-2's low)
+   * Returns most recent qualifying FVG that is still "open" (price hasn't filled it).
+   */
+  _detectFVG(closes, highs, lows, lastIdx, config = {}) {
+    const minGapPct = config.sacFvgMinGap  ?? 0.003;
+    const scanBars  = config.sacFvgScanBars ?? 30;
+
+    const cl = closes[lastIdx];
+    const recentFVGs = [];
+
+    for (let i = Math.max(2, lastIdx - scanBars); i <= lastIdx; i++) {
+      const refClose = closes[i - 1] || closes[i] || 1;
+
+      // Bullish FVG
+      const bullGap = (lows[i] - highs[i - 2]) / refClose;
+      if (bullGap > minGapPct) {
+        const top = lows[i], bottom = highs[i - 2];
+        const midpoint = (top + bottom) / 2;
+        const filled = cl < bottom; // price already traded below gap bottom
+        recentFVGs.push({ type: "bullish", top, bottom, midpoint, size: bullGap, idx: i, filled });
+      }
+
+      // Bearish FVG
+      const bearGap = (lows[i - 2] - highs[i]) / refClose;
+      if (bearGap > minGapPct) {
+        const top = lows[i - 2], bottom = highs[i];
+        const midpoint = (top + bottom) / 2;
+        const filled = cl > top; // price already traded above gap top
+        recentFVGs.push({ type: "bearish", top, bottom, midpoint, size: bearGap, idx: i, filled });
+      }
+    }
+
+    // Return the most recent unfilled FVG for each direction
+    const lastBull = [...recentFVGs].reverse().find(f => f.type === "bullish" && !f.filled);
+    const lastBear = [...recentFVGs].reverse().find(f => f.type === "bearish" && !f.filled);
+
+    return { bullish: lastBull || null, bearish: lastBear || null };
+  }
+
+  /**
+   * Displacement candle: high volume + wide range = conviction move.
+   * Returns most recent displacement within scanBars.
+   */
+  _detectDisplacement(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
+    const scanBars = config.sacDispScanBars ?? 25;
+    const volMult  = config.sacDispVolMult  ?? 2.0;
+    const rangePct = config.sacDispRangePct ?? 0.012; // 1.2% min range
+
+    for (let i = lastIdx; i >= Math.max(1, lastIdx - scanBars); i--) {
+      const cl  = closes[i];
+      const hi  = highs[i];
+      const lo  = lows[i];
+      const vol = volumes[i] ?? 0;
+      const vSMA = volSMA[i] ?? 1;
+      const range = (hi - lo) / (cl || 1);
+      if (range > rangePct && vol > vSMA * volMult) {
+        return {
+          bullish: closes[i] > (closes[i - 1] ?? closes[i]),
+          bearish: closes[i] < (closes[i - 1] ?? closes[i]),
+          idx: i,
+          barsAgo: lastIdx - i,
+          range,
+          volRatio: vol / vSMA,
+        };
+      }
+    }
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Component A — Scalping (Sweep + OB + CVD)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _detectSignalA(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
+    if (lastIdx < 30) return null;
+
+    const sweep = this._detectSweep(closes, highs, lows, volumes, volSMA, lastIdx, config);
+    if (!sweep) return null;
+
+    const cvd = this._calcCVD(closes, highs, lows, volumes, lastIdx, config.vwapLookback ?? 14);
+
+    if (sweep.type === "bullish" && cvd > 0) return "LONG";
+    if (sweep.type === "bearish" && cvd < 0) return "SHORT";
+
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Component B — Intraday (CHoCH + OB + EMA trend)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _detectSignalB(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config = {}) {
+    if (lastIdx < 40) return null;
+
+    const choch = this._detectCHoCH(closes, highs, lows, lastIdx, config);
+    if (!choch) return null;
+
+    const fast = emaFast[lastIdx] ?? 0;
+    const slow = emaSlow[lastIdx] ?? 0;
+
+    if (choch.type === "bullish" && fast > slow) return "LONG";
+    if (choch.type === "bearish" && fast < slow) return "SHORT";
+
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Component C — Swing (FVG + Displacement + price in discount/premium zone)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _detectSignalC(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
+    if (lastIdx < 30) return null;
+
+    const cl = closes[lastIdx];
+    const fvgs = this._detectFVG(closes, highs, lows, lastIdx, config);
+    const disp = this._detectDisplacement(closes, highs, lows, volumes, volSMA, lastIdx, config);
+
+    if (!disp) return null;
+
+    // LONG: bullish displacement + bullish FVG exists + price at or below FVG midpoint (discount)
+    if (disp.bullish && fvgs.bullish) {
+      const fvg = fvgs.bullish;
+      if (cl <= fvg.midpoint * 1.002 && cl >= fvg.bottom * 0.998) return "LONG";
+    }
+
+    // SHORT: bearish displacement + bearish FVG exists + price at or above FVG midpoint (premium)
+    if (disp.bearish && fvgs.bearish) {
+      const fvg = fvgs.bearish;
+      if (cl >= fvg.midpoint * 0.998 && cl <= fvg.top * 1.002) return "SHORT";
+    }
+
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Confidence scoring
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _buildConfidenceContext(indicators, lastIdx, config, extraState = {}) {
+    const { closes, highs, lows, volumes, volSMA, emaFast, emaSlow } = indicators;
+    const opens = indicators.opens;
+    const lookback = config.vwapLookback ?? 14;
+
+    const cvd  = this._calcCVD(closes, highs, lows, volumes, lastIdx, lookback);
+    const vwap = this._calcVWAP(closes, highs, lows, volumes, lastIdx, lookback);
+    const cl   = closes[lastIdx];
+    const maxCVD = (volumes[lastIdx] ?? 100) * lookback * 0.5;
+
+    const sweep = this._detectSweep(closes, highs, lows, volumes, volSMA, lastIdx, config);
+    const choch = this._detectCHoCH(closes, highs, lows, lastIdx, config);
+    const fvgs  = this._detectFVG(closes, highs, lows, lastIdx, config);
+    const disp  = this._detectDisplacement(closes, highs, lows, volumes, volSMA, lastIdx, config);
+    const obL   = this._detectOrderBlock(closes, highs, lows, opens, volumes, volSMA, lastIdx, "LONG",  config);
+    const obS   = this._detectOrderBlock(closes, highs, lows, opens, volumes, volSMA, lastIdx, "SHORT", config);
+
+    const fast = (emaFast ?? [])[lastIdx] ?? 0;
+    const slow = (emaSlow ?? [])[lastIdx] ?? 0;
+
+    const vol = (volumes ?? [])[lastIdx] ?? 0;
+    const vSMA = (volSMA ?? [])[lastIdx] ?? 1;
+
+    return {
+      close: cl, vwap, cvd, maxCVD,
+      emaFast: fast, emaSlow: slow,
+      volRatio: vol / Math.max(vSMA, EPSILON),
+      sweep, choch, fvgBull: fvgs.bullish, fvgBear: fvgs.bearish, disp,
+      obLong: obL, obShort: obS,
+    };
+  }
+
+  _componentConfidence(key, dir, ctx) {
+    if (!dir) return 0;
+    const W = this.getConfidenceWeights()[key];
+    if (!W) return 0;
+
+    const { sweep, choch, fvgBull, fvgBear, disp, obLong, obShort, cvd, maxCVD, volRatio } = ctx;
+
+    const cvdNorm = Math.min(Math.max(Math.abs(cvd) / Math.max(maxCVD, EPSILON), 0), 1);
+
+    if (key === "A") {
+      const hasSweep = sweep && (
+        (dir === "LONG"  && sweep.type === "bullish") ||
+        (dir === "SHORT" && sweep.type === "bearish")
+      );
+      const cvdAlign = (dir === "LONG" ? cvd > 0 : cvd < 0) ? W.cvdAlign * (0.5 + 0.5 * cvdNorm) : 0;
+      const sweepScore = hasSweep ? W.sweep * Math.min(sweep.volRatio / 2.5, 1) : 0;
+      const ob = dir === "LONG" ? obLong : obShort;
+      const obScore = ob ? (ob.inZone ? W.obZone : W.obZone * 0.4) : 0;
+      const volScore = W.volSurge * Math.min(Math.max((volRatio - 1) / 1.5, 0), 1);
+      return Math.min(Math.round(sweepScore + cvdAlign + obScore + volScore), 100);
+    }
+
+    if (key === "B") {
+      const hasChoch = choch && (
+        (dir === "LONG"  && choch.type === "bullish") ||
+        (dir === "SHORT" && choch.type === "bearish")
+      );
+      const { emaFast: fast, emaSlow: slow } = ctx;
+      const trendOk = (dir === "LONG" ? fast > slow : fast < slow);
+      const ob = dir === "LONG" ? obLong : obShort;
+      const chochScore = hasChoch ? W.choch : 0;
+      const trendScore = trendOk ? W.trendAlign : 0;
+      const obScore    = ob ? W.obStrength * Math.min(ob.strength / 3, 1) : 0;
+      const cvdScore   = (dir === "LONG" ? cvd > 0 : cvd < 0) ? W.cvdAlign * (0.5 + 0.5 * cvdNorm) : 0;
+      return Math.min(Math.round(chochScore + trendScore + obScore + cvdScore), 100);
+    }
+
+    if (key === "C") {
+      const fvg = dir === "LONG" ? fvgBull : fvgBear;
+      const dispOk = disp && (dir === "LONG" ? disp.bullish : disp.bearish);
+      const fvgScore  = fvg ? W.fvgQuality * Math.min(fvg.size / 0.01, 1) : 0;
+      const dispScore = dispOk ? W.displacement * Math.min(disp.volRatio / 4, 1) : 0;
+      const ob = dir === "LONG" ? obLong : obShort;
+      const obConflScore = (fvg && ob) ? W.obConfluence : (fvg || ob ? W.obConfluence * 0.4 : 0);
+      const cvdScore = (dir === "LONG" ? cvd > 0 : cvd < 0) ? W.cvdAccum * (0.5 + 0.5 * cvdNorm) : 0;
+      return Math.min(Math.round(fvgScore + dispScore + obConflScore + cvdScore), 100);
+    }
+
+    return 0;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Market regime helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _getMarketCondition(config) {
+    const vol = config.volatility ?? 1;
+    const trend = config.trend_strength ?? 0;
+    if (vol < 0.4 && trend < 0.1) return "DEAD_MARKET";
+    if (trend >= 0.40) return "STRONG_TREND";
+    if (vol >= 1.0)    return "VOLATILE";
+    return "NORMAL";
+  }
+
+  _htfDirectionBlocked(dir, htfTrend) {
+    if (!htfTrend) return false;
+    if (dir === "LONG"  && htfTrend === "BEARISH") return true;
+    if (dir === "SHORT" && htfTrend !== "BEARISH")  return true;
+    return false;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // detectSignalMulti — per-component results + meta
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  detectSignalMulti(indicators, lastIdx, config = {}) {
+    const { closes, highs, lows, volumes, volSMA, emaFast, emaSlow } = indicators;
+    const opens = indicators.opens;
+    const htfTrend = config.htfTrend ?? null;
+    const enabled  = config.sacEnabledComponents ?? ["A", "B", "C"];
+    const minConfA = config.sacMinConfidenceA ?? 60;
+    const minConfB = config.sacMinConfidenceB ?? 65;
+    const minConfC = config.sacMinConfidenceC ?? 65;
+    const minConf  = { A: minConfA, B: minConfB, C: minConfC };
+    const marketCond = this._getMarketCondition(config);
+
+    const result = { A: null, B: null, C: null };
+
+    if (marketCond === "DEAD_MARKET") {
+      const ctx = this._buildConfidenceContext(indicators, lastIdx, config);
+      result.meta = { confidence: { A: 0, B: 0, C: 0 }, aggregateConfidence: 0, marketCond };
+      this._lastSignalMeta = result.meta;
+      return result;
+    }
+
+    // ── Raw signal detection ─────────────────────────────────────────────────
+    const rawA = enabled.includes("A")
+      ? this._detectSignalA(closes, highs, lows, volumes, volSMA, lastIdx, config)
+      : null;
+    const rawB = enabled.includes("B")
+      ? this._detectSignalB(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config)
+      : null;
+    const rawC = enabled.includes("C")
+      ? this._detectSignalC(closes, highs, lows, volumes, volSMA, lastIdx, config)
+      : null;
+
+    // ── Confidence scoring ───────────────────────────────────────────────────
+    const ctx = this._buildConfidenceContext(indicators, lastIdx, config, { marketCond });
+    const confA = rawA ? this._componentConfidence("A", rawA, ctx) : 0;
+    const confB = rawB ? this._componentConfidence("B", rawB, ctx) : 0;
+    const confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
+
+    // ── Gate + HTF filter ────────────────────────────────────────────────────
+    if (rawA && confA >= minConf.A && !this._htfDirectionBlocked(rawA, htfTrend)) result.A = rawA;
+    if (rawB && confB >= minConf.B && !this._htfDirectionBlocked(rawB, htfTrend)) result.B = rawB;
+    if (rawC && confC >= minConf.C && !this._htfDirectionBlocked(rawC, htfTrend)) result.C = rawC;
+
+    const aggVotes = [result.A, result.B, result.C].filter(Boolean);
+    const aggConf  = aggVotes.length > 0
+      ? [confA, confB, confC].filter(c => c > 0).reduce((a, b) => a + b, 0) / Math.max(aggVotes.length, 1)
+      : 0;
+
+    result.meta = {
+      confidence: { A: confA, B: confB, C: confC },
+      aggregateConfidence: Math.round(aggConf),
+      marketCond,
+    };
+    this._lastSignalMeta = result.meta;
+    return result;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // detectSignal — voting path (compatible with single-position BotEngine)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  detectSignal(indicators, lastIdx, config = {}) {
+    const multi = this.detectSignalMulti(indicators, lastIdx, config);
+    const minVotes = config.sacMinVotes ?? 1;
+    const minAgg   = config.sacMinAggregateConfidence ?? 0;
+
+    const signals = [multi.A, multi.B, multi.C].filter(Boolean);
+    const long  = signals.filter(s => s === "LONG").length;
+    const short = signals.filter(s => s === "SHORT").length;
+    const total = long + short;
+
+    if (total < minVotes) return null;
+    if (long > 0 && short > 0) return null; // conflict
+
+    const dir = long > 0 ? "LONG" : "SHORT";
+    const agg = multi.meta?.aggregateConfidence ?? 0;
+    if (minAgg > 0 && agg < minAgg) return null;
+
+    return dir;
+  }
+
+  // Kept for backward compat with fee-edge-guards tests
+  _resolveSignalConflict(signals = {}, htfTrend = null, opts = {}) {
+    const minVotes = opts.minVotes ?? 2;
+    const rejectOnDissent = opts.rejectOnDissent !== false;
+
+    const dirs = Object.values(signals).filter(Boolean);
+    const long  = dirs.filter(d => d === "LONG").length;
+    const short = dirs.filter(d => d === "SHORT").length;
+
+    if (rejectOnDissent && long > 0 && short > 0) return null;
+    const total = rejectOnDissent ? (long > 0 ? long : short) : dirs.length;
+    if (total < minVotes) return null;
+
+    const dir = long >= short ? "LONG" : "SHORT";
+    if (htfTrend && this._htfDirectionBlocked(dir, htfTrend)) return null;
+    return dir;
+  }
+}
+
+module.exports = SmartMoneyConceptsStrategy;

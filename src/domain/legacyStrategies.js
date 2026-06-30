@@ -551,6 +551,97 @@ const STRATEGIES = {
     winrate:       "N/A (AI-driven)",
     risk:          "Sedang",
   },
+
+  // ─────────────────────────────────────────────
+  // SMART_MONEY_CONCEPTS — SAC v1.0 (FOUNDRY tier)
+  //
+  //   Komponen A — Scalping  : Liquidity sweep + Order Block + CVD (1h bars)
+  //   Komponen B — Intraday  : CHoCH + Order Block + EMA trend (1h bars)
+  //   Komponen C — Swing     : FVG + Displacement + Premium/Discount (1h bars)
+  //   HTF Filter             : 4h regime (BULLISH/BEARISH/NEUTRAL)
+  //
+  //   Minimum 1 komponen harus lolos gate (A≥60, B≥65, C≥65).
+  //   Tidak ada konflik arah (LONG vs SHORT secara bersamaan → skip).
+  // ─────────────────────────────────────────────
+  SMART_MONEY_CONCEPTS: {
+    name:          "SMART_MONEY_CONCEPTS",
+    label:         "Smart Money Concepts (SAC)",
+    description:   "3-komponen SMC: Sweep+OB+CVD (scalping), CHoCH+OB+trend (intraday), FVG+displacement (swing). Blok entry berlawanan HTF.",
+
+    // EMA untuk HTF trend (dipakai BotEngine)
+    emaFast:       9,
+    emaSlow:       21,
+    emaTrend:      50,
+
+    rsiPeriod:     14,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    45,
+    rsiLongMax:    75,
+    rsiShortMin:   25,
+    rsiShortMax:   55,
+
+    atrPeriod:     14,
+    atrMultiplier: 1.2,
+    riskReward:    2.0,
+    atrMinMult:    0.8,
+    atrMaxMult:    5.0,
+
+    higherTf:      "4h",
+    htfEmaFast:    9,
+    htfEmaSlow:    21,
+    sidewaysThresholdPct: 0.15,
+
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:        0.005,
+    maxDailyLossPct:     0.03,
+    maxTradesPerDay:     8,
+    cooldownAfterLoss:   60,
+    maxConsecLoss:       3,
+
+    // SAC-specific knobs
+    sacEnabledComponents: ["A", "B", "C"],
+    sacMinVotes:           1,            // 1 = any qualifying component can fire
+    sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
+    sacMinConfidenceA:     60,
+    sacMinConfidenceB:     65,
+    sacMinConfidenceC:     65,
+
+    // Sweep detector
+    sacSwingLookback:  5,
+    sacSweepScanBars:  30,
+    sacSweepVolMult:   1.3,
+
+    // Order block
+    sacOBLookback:     15,
+    sacOBDispMult:     1.8,
+
+    // CHoCH
+    sacChochLookback:  20,
+
+    // FVG
+    sacFvgMinGap:      0.003,
+    sacFvgScanBars:    30,
+
+    // Displacement
+    sacDispScanBars:   25,
+    sacDispVolMult:    2.0,
+    sacDispRangePct:   0.012,
+
+    // CVD / VWAP lookback
+    vwapLookback:      14,
+
+    leverage:      3,
+    interval:      "1h",
+    checkInterval: 3_600_000,
+
+    signalType:    "SMART_MONEY_CONCEPTS",
+
+    trades:  "~3–8 trade/hari (1h eval)",
+    winrate: "Target 52–60%",
+    risk:    "Rendah-Sedang",
+  },
 };
 
 function getStrategy(overrideKey = null) {
