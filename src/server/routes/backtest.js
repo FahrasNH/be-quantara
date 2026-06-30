@@ -1283,14 +1283,41 @@ const TYPE_TF = {
   Swing:    { entry: "4h",  trend: "1w"  },
 };
 
-// Cap bars per entry TF so short-TF components don't fetch millions of bars.
-// 1m → 90k bars ≈ 62 days (enough for Scalping pattern validation, avoids timeout)
-// 5m → 150k bars ≈ 521 days (Intraday covers full 12-month periods at 5m)
-// 4h+ → no cap needed (Swing candles are few by nature)
+// Per-TF period caps: limit how far back short TFs fetch (avoids timeout).
+// Scalping 1m: pattern recognition (sweep/OB) is short-term, 90 days max
+// Intraday 5m: mid-term mean reversion, 150 days covers seasonal patterns
+// Swing 4h+: no limit (few bars by nature)
+const TYPE_MAX_PERIOD = {
+  "1m":  "90d",     // Scalping: 90 days = 129.6k 1m bars
+  "5m": "150d",     // Intraday: 150 days = 43.2k 5m bars
+};
+
+// Safety: extra bar cap per TF (period cap is primary, this is backup)
 const TYPE_MAX_BARS = {
   "1m":  90_000,
   "5m": 150_000,
 };
+
+function getEffectivePeriod(userPeriodId, timeframe) {
+  const maxPeriod = TYPE_MAX_PERIOD[timeframe];
+  if (!maxPeriod) return userPeriodId; // no cap for this TF
+
+  // Map user period to days
+  const userDays = {
+    "3m": 90,
+    "6m": 180,
+    "12m": 365,
+    "max": 3650,
+  }[userPeriodId] || null;
+
+  if (!userDays) return userPeriodId; // custom/unknown, pass through
+
+  const maxDays = parseInt(maxPeriod);
+  if (userDays > maxDays) {
+    return `${maxDays}d`;  // return synthetic period like "90d"
+  }
+  return userPeriodId;  // user period is shorter, use it
+}
 
 async function _runBacktestJobAsync(job, userId, opts) {
   const {
@@ -1318,9 +1345,11 @@ async function _runBacktestJobAsync(job, userId, opts) {
       job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `Fetching ${type} candles (${tfs.entry})…`, pct: 0 });
 
       try {
+        // Adjust period for this TF: Scalping 1m with user's 12m → use 90d instead
+        const effectivePeriod = getEffectivePeriod(fetchOpts.periodId, tfs.entry);
         const typeMaxBars = TYPE_MAX_BARS[tfs.entry]; // undefined for 4h+ (no cap)
         const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-          symbol: sym, timeframe: tfs.entry, ...fetchOpts, allowClamp: true, abortSignal,
+          symbol: sym, timeframe: tfs.entry, ...fetchOpts, periodId: effectivePeriod, allowClamp: true, abortSignal,
           ...(typeMaxBars ? { maxBarsOverride: typeMaxBars } : {}),
           onProgress: (loaded, total) => {
             const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
@@ -1337,8 +1366,9 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
       job.progress({ phase: "fetch", type, timeframe: tfs.trend, message: `Fetching ${type} HTF candles (${tfs.trend})…`, pct: 0 });
       try {
+        const effectiveHtfPeriod = getEffectivePeriod(fetchOpts.periodId, tfs.trend);
         const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-          symbol: sym, timeframe: tfs.trend, ...fetchOpts, allowClamp: true, abortSignal,
+          symbol: sym, timeframe: tfs.trend, ...fetchOpts, periodId: effectiveHtfPeriod, allowClamp: true, abortSignal,
         });
         htfCandles[type] = trendRes.candles || [];
       } catch (e) {
