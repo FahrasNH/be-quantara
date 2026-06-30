@@ -32,9 +32,9 @@ const PAGE_SIZE = 500;
 const PAUSE_MS = 120;
 const MEM_CACHE_TTL_MS = Number(process.env.BACKTEST_KLINES_CACHE_TTL_MS) || 3_600_000;
 /** Batas bar per request — cegah OOM + timeout gateway pada rentang besar (mis. max × 15m). */
-const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 50_000;  // v3.3: 20K → 50K (supports ~2 years 1h data)
-/** Deadline fetch exchange agar request gagal rapi sebelum nginx 504 (default 240s). */
-const FETCH_DEADLINE_MS = Number(process.env.BACKTEST_KLINES_FETCH_DEADLINE_MS) || 240_000;
+const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 500_000; // v3.4: 50K → 500K (supports ~1 year 1m data)
+/** Fetch deadline — 15 min covers ~1000 API pages for 500k 1m candles on first load (DB cache after). */
+const FETCH_DEADLINE_MS = Number(process.env.BACKTEST_KLINES_FETCH_DEADLINE_MS) || 900_000;
 const MIN_CACHE_COVERAGE = 0.85;
 
 const clientCache = new Map();
@@ -57,7 +57,7 @@ function getPublicClient(exchangeType) {
 
 function toMarketSymbol(symbol) {
   const sym = String(symbol || "").toUpperCase().trim();
-  if (!sym) throw new Error("symbol diperlukan");
+  if (!sym) throw new Error("symbol is required");
   return sym.includes("/") ? sym : `${sym.replace(/USDT$/, "")}/USDT:USDT`;
 }
 
@@ -171,8 +171,8 @@ function enforceBarLimit(startMs, endMs, timeframe, periodId, allowClamp = false
   }
 
   const e = new Error(
-    `Rentang terlalu besar (~${bars.toLocaleString("en-US")} bar, maks ${MAX_BARS.toLocaleString("en-US")}). ` +
-    "Gunakan timeframe lebih tinggi (mis. 1h/1d) atau periode lebih pendek."
+    `Date range too large (~${bars.toLocaleString("en-US")} bars, max ${MAX_BARS.toLocaleString("en-US")}). ` +
+    "Use a higher timeframe (e.g. 1h/1d) or a shorter period."
   );
   e.statusCode = 400;
   e.code = "TOO_MANY_BARS";
@@ -254,19 +254,26 @@ function findMissingRanges(candles, startMs, endMs, timeframe) {
 }
 
 async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs, endMs, opts = {}) {
-  const { onProgress, deadlineMs = Date.now() + FETCH_DEADLINE_MS } = opts;
+  const { onProgress, deadlineMs = Date.now() + FETCH_DEADLINE_MS, abortSignal } = opts;
   const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
-  if (!tfMs) throw new Error(`Timeframe tidak didukung: ${timeframe}`);
+  if (!tfMs) throw new Error(`Unsupported timeframe: ${timeframe}`);
 
   const byTs = new Map();
   let cursor = startMs;
   const maxIters = Math.ceil((endMs - startMs) / (tfMs * PAGE_SIZE)) + 10;
   let guard = 0;
 
+  const totalEstimated = Math.ceil((endMs - startMs) / tfMs);
+
   while (cursor < endMs && guard++ < maxIters) {
+    if (abortSignal?.aborted) {
+      const e = new Error("Backtest cancelled");
+      e.code = "CANCELLED";
+      throw e;
+    }
     if (Date.now() > deadlineMs) {
       const e = new Error(
-        "Fetch klines melebihi batas waktu. Coba periode lebih pendek, timeframe lebih tinggi, atau ulangi nanti (cache mungkin sudah terisi sebagian)."
+        "Candle fetch timed out. Try a shorter period, higher timeframe, or retry (partial cache may already be saved)."
       );
       e.statusCode = 504;
       e.code = "KLINES_FETCH_TIMEOUT";
@@ -301,7 +308,7 @@ async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs
     if (!Number.isFinite(lastTs) || lastTs <= cursor) break;
     cursor = lastTs + tfMs;
 
-    if (onProgress) onProgress(byTs.size);
+    if (onProgress) onProgress(byTs.size, totalEstimated);
     if (PAUSE_MS) await sleep(PAUSE_MS);
     if (lastTs >= endMs) break;
   }
@@ -357,24 +364,26 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     customEnd,
     autoListing = false,
     allowClamp = false,
+    onProgress,
+    abortSignal,
   } = opts;
 
   const sym = String(symbol || "").toUpperCase().trim();
   if (!sym) {
-    const e = new Error("symbol diperlukan");
+    const e = new Error("symbol is required");
     e.statusCode = 400;
     throw e;
   }
 
   const exchange = await getConnectedExchange(userId);
   if (!exchange) {
-    const e = new Error("Belum ada exchange yang terhubung. Hubungkan exchange di Settings.");
+    const e = new Error("No exchange connected. Connect an exchange in Settings.");
     e.statusCode = 400;
     e.code = "NO_EXCHANGE_CONNECTED";
     throw e;
   }
   if (!SUPPORTED.has(exchange)) {
-    const e = new Error(`Exchange "${exchange}" belum didukung untuk backtest.`);
+    const e = new Error(`Exchange "${exchange}" is not yet supported for backtesting.`);
     e.statusCode = 400;
     e.code = "EXCHANGE_NOT_SUPPORTED";
     throw e;
@@ -386,7 +395,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
     const range = periodToRange(periodId, customStart, customEnd);
     if (!range) {
-      const e = new Error("periodId atau start/end diperlukan");
+      const e = new Error("periodId or start/end date is required");
       e.statusCode = 400;
       throw e;
     }
@@ -416,7 +425,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
   const coverage = coverageRatio(candles, effectiveStart, effectiveEnd, timeframe);
 
   if (!candles?.length || coverage < MIN_CACHE_COVERAGE) {
-    const fetchOpts = { deadlineMs };
+    const fetchOpts = { deadlineMs, onProgress, abortSignal };
     if (candles?.length && coverage >= 0.3) {
       const missing = findMissingRanges(candles, effectiveStart, effectiveEnd, timeframe);
       if (missing.length) {
@@ -430,13 +439,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
       }
     } else {
       candles = await fetchPaginated(
-        exchange,
-        client,
-        marketSymbol,
-        timeframe,
-        effectiveStart,
-        effectiveEnd,
-        fetchOpts
+        exchange, client, marketSymbol, timeframe, effectiveStart, effectiveEnd, fetchOpts
       );
       source = "exchange";
     }
@@ -447,7 +450,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
   }
 
   if (!candles?.length) {
-    const e = new Error(`Tidak ada data klines untuk ${sym} (${timeframe}) pada rentang yang diminta.`);
+    const e = new Error(`No klines data found for ${sym} (${timeframe}) in the requested range.`);
     e.statusCode = 404;
     e.code = "KLINES_NOT_FOUND";
     throw e;
@@ -495,7 +498,7 @@ async function getDataSourceStatus(userId) {
       connected: false,
       exchange: null,
       exchangeLabel: null,
-      message: "Belum ada exchange yang terhubung. Backtest real membutuhkan API key di Settings.",
+      message: "No exchange connected. Backtest real requires API keys in Settings.",
     };
   }
   const meta = EXCHANGE_META[exchange] || EXCHANGE_META.bitget;

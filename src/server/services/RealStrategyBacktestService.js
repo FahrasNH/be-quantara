@@ -192,8 +192,16 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
     positions.delete(componentId);
   }
 
+  const totalBars = entryCandles.length;
+  const progressEvery = Math.max(500, Math.floor(totalBars / 100));
+
   // Main loop
   for (let i = warmup; i < entryCandles.length; i++) {
+    // Abort check + progress emit
+    if (opts.abortSignal?.aborted) break;
+    if (i % progressEvery === 0 && opts.onProgress) {
+      opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
+    }
     const c = entryCandles[i];
     const price = c.close;
     const atr = indicators.atr[i];
@@ -483,7 +491,17 @@ function runTripleTypeBacktest(opts = {}) {
     }
 
     const typeResult = _runMultiPositionBacktest(
-      { ...opts, strategyKey, config: typeConfig, debug: false, activeComponents: [tradeType] },
+      {
+        ...opts,
+        strategyKey,
+        config: typeConfig,
+        debug: false,
+        activeComponents: [tradeType],
+        abortSignal: opts.abortSignal,
+        onProgress: opts.onProgress
+          ? (pct, bar, total) => opts.onProgress(pct, bar, total, tradeType)
+          : undefined,
+      },
       strategy,
       typeConfig,
       feeRate,

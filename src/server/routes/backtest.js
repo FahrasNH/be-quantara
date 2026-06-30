@@ -4,6 +4,8 @@
  */
 
 const express = require("express");
+const { EventEmitter } = require("events");
+const crypto = require("crypto");
 const { asyncHandler } = require("../../middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
 const BacktestHistoryService = require("../services/BacktestHistoryService");
@@ -19,6 +21,61 @@ const GrokConfirmService = require("../services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../services/GrokBacktestJobService");
 const cfg = require("../../config/env");
+
+// ─── Backtest Job Store ────────────────────────────────────────────────────────
+// Each job runs async on the server; clients subscribe via SSE.
+// Jobs survive client disconnects — the computation keeps running on the server.
+class BacktestJob extends EventEmitter {
+  constructor(id) {
+    super();
+    this.setMaxListeners(20);
+    this.id = id;
+    this.status = "pending"; // pending | running | done | error | cancelled
+    this.createdAt = Date.now();
+    this.result = null;
+    this.error = null;
+    this.aborted = false;
+    this.progressLog = []; // replay buffer for reconnecting clients
+    this.abortController = new AbortController();
+  }
+
+  progress(data) {
+    const ev = { ...data, ts: Date.now() };
+    this.progressLog.push(ev);
+    if (this.progressLog.length > 300) this.progressLog.shift();
+    this.emit("progress", ev);
+  }
+
+  done(result) {
+    this.status = "done";
+    this.result = result;
+    this.emit("result", result);
+  }
+
+  fail(errMsg) {
+    this.status = "error";
+    this.error = errMsg;
+    this.emit("jobError", errMsg);
+  }
+
+  cancel() {
+    if (this.aborted) return;
+    this.aborted = true;
+    this.status = "cancelled";
+    this.abortController.abort();
+    this.emit("cancelled");
+  }
+}
+
+const jobStore = new Map();
+
+// Cleanup jobs older than 30 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 30 * 60_000;
+  for (const [id, job] of jobStore) {
+    if (job.createdAt < cutoff) jobStore.delete(id);
+  }
+}, 5 * 60_000).unref?.();
 
 const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const GROK_CONFIRM_STRATEGIES = new Set(USER_STRATEGY_KEYS);
@@ -1086,11 +1143,9 @@ module.exports = function createBacktestRouter(context) {
 
   /**
    * POST /api/v1/backtest/run-real
-   * TRUE 1:1 server-side backtest — replays candles through the REAL strategy
-   * code (AdaptiveFusionStrategy.detectSignal + detectHTFTrend + risk gates),
-   * exactly the path AdaptiveStrategyEngine uses live. Multi-TF: entry TF + HTF
-   * are taken from the strategy's canonical config (AF: 15m entry + 1h HTF),
-   * not from a single user-picked timeframe.
+   * Starts an async backtest job and returns { ok, jobId }.
+   * Subscribe to GET /stream/:jobId for SSE progress + result.
+   * Cancel with DELETE /cancel/:jobId.
    *
    * Body: { symbol|pair, strategy_key, period_id|custom_start|custom_end,
    *         capital, enable_fees, enable_slippage, parameters,
@@ -1114,97 +1169,163 @@ module.exports = function createBacktestRouter(context) {
 
     const sym = (pair || symbol || "").toUpperCase();
     const strategyKey = String(strategyKeyRaw || "ADAPTIVE_FUSION").toUpperCase();
-    if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair diperlukan" });
+    if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair is required" });
 
-    const cfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
-    if (!cfg && !["AF_SAC"].includes(strategyKey)) {
-      return res.status(400).json({ ok: false, error: `Strategi tidak dikenal: ${strategyKey}` });
+    const strategyCfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
+    if (!strategyCfg && !["AF_SAC"].includes(strategyKey)) {
+      return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
     }
 
-    const fetchOpts = { periodId, customStart, customEnd };
-    const startMs = Date.now();
+    // Create job
+    const jobId = crypto.randomUUID();
+    const job = new BacktestJob(jobId);
+    jobStore.set(jobId, job);
 
-    // AF_SAC: Triple-timeframe mode — each trade type runs on its own TF candles
-    const AF_SAC_KEYS = new Set(["AF_SAC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
-    if (AF_SAC_KEYS.has(strategyKey) && !entryTfOverride) {
-      // Fetch entry + trend candles for each trade type.
-      // Short TFs (1m, 5m) use allowClamp=true so MAX_BARS is clamped to the most
-      // recent window rather than throwing — 1m → last ~35 days, 5m → last ~174 days.
-      const TYPE_TF = {
-        Scalping: { entry: "1m",  trend: "15m" },
-        Intraday: { entry: "5m",  trend: "4h"  },
-        Swing:    { entry: "4h",  trend: "1w"  }, // weekly HTF for Swing (more stable trend filter)
-      };
-
-      const entryCandles = {};
-      const htfCandles   = {};
-      const dataInfo     = {};
-
-      await Promise.all(Object.entries(TYPE_TF).map(async ([type, tfs]) => {
-        try {
-          const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
-            symbol: sym, timeframe: tfs.entry, ...fetchOpts, allowClamp: true,
-          });
-          entryCandles[type] = entryRes.candles || [];
-          dataInfo[type]     = { entryBars: entryCandles[type].length, startDate: entryRes.startDate, endDate: entryRes.endDate, clamped: entryRes.clamped || false };
-        } catch (e) { entryCandles[type] = []; dataInfo[type] = { error: e.message }; }
-
-        try {
-          const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
-            symbol: sym, timeframe: tfs.trend, ...fetchOpts, allowClamp: true,
-          });
-          htfCandles[type] = trendRes.candles || [];
-        } catch { htfCandles[type] = []; }
-      }));
-
-      const result = runTripleTypeBacktest({
-        entryCandles,
-        htfCandles,
-        strategyKey,
-        capital: Number(capital) || 1000,
-        enableFees: enableFees !== false,
-        enableSlippage: !!enableSlippage,
-        config: parameters,
-      });
-      const elapsedMs = Date.now() - startMs;
-
-      return res.json({
-        ok: true,
-        engine: "real-1to1-triple-tf",
-        strategyKey,
-        symbol: sym,
-        mode: "Scalping (1m/15m) + Intraday (5m/4h) + Swing (4h/1w)",
-        dataInfo,
-        computeTimeMs: elapsedMs,
-        ...result,
-      });
-    }
-
-    // Single-TF mode (all other strategies, or explicit override)
-    const entryTf = entryTfOverride || cfg?.interval || "15m";
-    const htfTf   = htfTfOverride !== undefined ? htfTfOverride : (cfg?.higherTf || null);
-
-    const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
-      symbol: sym, timeframe: entryTf, ...fetchOpts,
+    // Run async — client subscribes via SSE, server keeps running even if client disconnects
+    _runBacktestJobAsync(job, req.userId, {
+      sym, strategyKey, strategyCfg,
+      periodId, customStart, customEnd,
+      capital, enableFees, enableSlippage,
+      parameters, entryTfOverride, htfTfOverride, debugMode,
+    }).catch((err) => {
+      if (job.status !== "cancelled") job.fail(err.message || "Backtest failed");
     });
-    const entryCandles = entryRes.candles || [];
-    if (entryCandles.length < 60) {
-      return res.status(400).json({ ok: false, error: `Data ${entryTf} tidak cukup (${entryCandles.length} bar)` });
-    }
 
-    let htfCandles = null;
-    if (htfTf) {
+    return res.json({ ok: true, jobId });
+  }));
+
+  /**
+   * GET /api/v1/backtest/stream/:jobId
+   * Server-Sent Events stream for backtest progress and result.
+   * Re-connect safe: replays progress log on reconnect; sends cached result if already done.
+   */
+  router.get("/stream/:jobId", (req, res) => {
+    const job = jobStore.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job not found or expired (30-min TTL)" });
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // disable nginx proxy buffering
+    res.flushHeaders();
+
+    const send = (event, data) => {
+      if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Replay progress log for reconnecting clients
+    for (const p of job.progressLog) send("progress", p);
+
+    // If already settled, send final event and close
+    if (job.status === "done")      { send("result", job.result); res.end(); return; }
+    if (job.status === "error")     { send("jobError", { message: job.error }); res.end(); return; }
+    if (job.status === "cancelled") { send("cancelled", {}); res.end(); return; }
+
+    // Heartbeat every 20 s to prevent proxy/browser timeouts
+    const ping = setInterval(() => { if (!res.writableEnded) res.write(":ping\n\n"); }, 20_000);
+
+    const onProgress  = (d) => send("progress", d);
+    const onResult    = (d) => { send("result", d); res.end(); };
+    const onError     = (m) => { send("jobError", { message: m }); res.end(); };
+    const onCancelled = ()  => { send("cancelled", {}); res.end(); };
+
+    job.on("progress",   onProgress);
+    job.on("result",     onResult);
+    job.on("jobError",   onError);
+    job.on("cancelled",  onCancelled);
+
+    req.on("close", () => {
+      clearInterval(ping);
+      job.off("progress",  onProgress);
+      job.off("result",    onResult);
+      job.off("jobError",  onError);
+      job.off("cancelled", onCancelled);
+    });
+  });
+
+  /**
+   * DELETE /api/v1/backtest/cancel/:jobId
+   * Abort a running or pending backtest job.
+   */
+  router.delete("/cancel/:jobId", asyncHandler(async (req, res) => {
+    const job = jobStore.get(req.params.jobId);
+    if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
+    job.cancel();
+    return res.json({ ok: true, message: "Backtest cancelled" });
+  }));
+
+  return router;
+};
+
+// ─── Async job runner ─────────────────────────────────────────────────────────
+const AF_SAC_KEYS = new Set(["AF_SAC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+const TYPE_TF = {
+  Scalping: { entry: "1m",  trend: "15m" },
+  Intraday: { entry: "5m",  trend: "4h"  },
+  Swing:    { entry: "4h",  trend: "1w"  },
+};
+
+async function _runBacktestJobAsync(job, userId, opts) {
+  const {
+    sym, strategyKey, strategyCfg,
+    periodId, customStart, customEnd,
+    capital, enableFees, enableSlippage,
+    parameters, entryTfOverride, htfTfOverride, debugMode,
+  } = opts;
+
+  job.status = "running";
+  const startMs = Date.now();
+  const fetchOpts = { periodId, customStart, customEnd };
+  const abortSignal = job.abortController.signal;
+
+  if (AF_SAC_KEYS.has(strategyKey) && !entryTfOverride) {
+    // Triple-TF mode: each type fetches its own candles, runs only its own component
+    const entryCandles = {};
+    const htfCandles   = {};
+    const dataInfo     = {};
+    const typeOrder    = Object.keys(TYPE_TF); // ["Scalping","Intraday","Swing"]
+
+    for (const [type, tfs] of Object.entries(TYPE_TF)) {
+      if (abortSignal.aborted) throw new Error("Cancelled");
+
+      job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `Fetching ${type} candles (${tfs.entry})…`, pct: 0 });
+
       try {
-        const htfRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
-          symbol: sym, timeframe: htfTf, ...fetchOpts,
+        const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+          symbol: sym, timeframe: tfs.entry, ...fetchOpts, allowClamp: true, abortSignal,
+          onProgress: (loaded, total) => {
+            const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
+            job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `${type} (${tfs.entry}): ${loaded.toLocaleString()} / ${total.toLocaleString()} bars`, pct });
+          },
         });
-        htfCandles = htfRes.candles || null;
+        entryCandles[type] = entryRes.candles || [];
+        dataInfo[type] = { entryBars: entryCandles[type].length, startDate: entryRes.startDate, endDate: entryRes.endDate, clamped: entryRes.clamped || false };
       } catch (e) {
-        htfCandles = null;
+        if (e.code === "CANCELLED") throw e;
+        entryCandles[type] = [];
+        dataInfo[type] = { error: e.message };
+      }
+
+      job.progress({ phase: "fetch", type, timeframe: tfs.trend, message: `Fetching ${type} HTF candles (${tfs.trend})…`, pct: 0 });
+      try {
+        const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+          symbol: sym, timeframe: tfs.trend, ...fetchOpts, allowClamp: true, abortSignal,
+        });
+        htfCandles[type] = trendRes.candles || [];
+      } catch (e) {
+        if (e.code === "CANCELLED") throw e;
+        htfCandles[type] = [];
       }
     }
 
-    const result = runRealBacktest({
+    if (abortSignal.aborted) throw new Error("Cancelled");
+
+    job.progress({ phase: "compute", message: "Running triple-TF simulation…", pct: 0 });
+
+    const typeTotal = typeOrder.length;
+    let typesDone = 0;
+
+    const result = runTripleTypeBacktest({
       entryCandles,
       htfCandles,
       strategyKey,
@@ -1212,26 +1333,85 @@ module.exports = function createBacktestRouter(context) {
       enableFees: enableFees !== false,
       enableSlippage: !!enableSlippage,
       config: parameters,
-      debug: !!debugMode,
+      abortSignal,
+      onProgress: (pct, _bar, _total, type) => {
+        const basePct = Math.round(typesDone / typeTotal * 100);
+        const typePct = Math.round(pct / typeTotal);
+        job.progress({ phase: "compute", type, message: `Computing ${type} signals… ${pct}%`, pct: basePct + typePct });
+        if (pct >= 100) typesDone++;
+      },
     });
-    const elapsedMs = Date.now() - startMs;
 
-    res.json({
+    job.done({
       ok: true,
-      engine: "real-1to1",
+      engine: "real-1to1-triple-tf",
       strategyKey,
       symbol: sym,
-      entryTimeframe: entryTf,
-      htfTimeframe: htfTf,
-      entryBars: entryCandles.length,
-      htfBars: htfCandles?.length ?? 0,
-      dataStart: entryRes.startDate,
-      dataEnd: entryRes.endDate,
-      source: entryRes.source,
-      computeTimeMs: elapsedMs,
+      mode: "Scalping (1m/15m) + Intraday (5m/4h) + Swing (4h/1w)",
+      dataInfo,
+      computeTimeMs: Date.now() - startMs,
       ...result,
     });
-  }));
+    return;
+  }
 
-  return router;
-};
+  // Single-TF mode
+  const entryTf = entryTfOverride || strategyCfg?.interval || "15m";
+  const htfTf   = htfTfOverride !== undefined ? htfTfOverride : (strategyCfg?.higherTf || null);
+
+  job.progress({ phase: "fetch", timeframe: entryTf, message: `Fetching ${entryTf} candles…`, pct: 0 });
+
+  const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+    symbol: sym, timeframe: entryTf, ...fetchOpts, abortSignal,
+    onProgress: (loaded, total) => {
+      const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
+      job.progress({ phase: "fetch", timeframe: entryTf, message: `Loading ${entryTf} candles: ${loaded.toLocaleString()} / ${total.toLocaleString()}`, pct });
+    },
+  });
+  const entryCandles = entryRes.candles || [];
+  if (entryCandles.length < 60) {
+    throw new Error(`Insufficient ${entryTf} data (${entryCandles.length} bars)`);
+  }
+
+  let htfCandles = null;
+  if (htfTf) {
+    job.progress({ phase: "fetch", timeframe: htfTf, message: `Fetching HTF candles (${htfTf})…`, pct: 0 });
+    try {
+      const htfRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+        symbol: sym, timeframe: htfTf, ...fetchOpts, abortSignal,
+      });
+      htfCandles = htfRes.candles || null;
+    } catch { htfCandles = null; }
+  }
+
+  job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
+
+  const result = runRealBacktest({
+    entryCandles,
+    htfCandles,
+    strategyKey,
+    capital: Number(capital) || 1000,
+    enableFees: enableFees !== false,
+    enableSlippage: !!enableSlippage,
+    config: parameters,
+    debug: !!debugMode,
+    abortSignal,
+    onProgress: (pct) => job.progress({ phase: "compute", message: `Simulating… ${pct}%`, pct }),
+  });
+
+  job.done({
+    ok: true,
+    engine: "real-1to1",
+    strategyKey,
+    symbol: sym,
+    entryTimeframe: entryTf,
+    htfTimeframe: htfTf,
+    entryBars: entryCandles.length,
+    htfBars: htfCandles?.length ?? 0,
+    dataStart: entryRes.startDate,
+    dataEnd: entryRes.endDate,
+    source: entryRes.source,
+    computeTimeMs: Date.now() - startMs,
+    ...result,
+  });
+}
