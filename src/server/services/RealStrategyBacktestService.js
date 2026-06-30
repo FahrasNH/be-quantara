@@ -208,6 +208,9 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       dailyTradeCount = 0;
       dailyLoss = 0;
       dailyStartCapital = capital;
+      // Daily reset: consecutive loss counters reset each day (mirrors live bot daily restart).
+      // Prevents one bad day from permanently blocking a component across months of backtest.
+      componentConsecLoss.clear();
     }
 
     // Monitor all open positions for SL/TP
@@ -455,11 +458,18 @@ function runTripleTypeBacktest(opts = {}) {
   const allTrades = [];
   const perTypeStats = {};
 
-  // Capital is shared across types (concurrent risk)
-  // Each type uses its own candle set but all draw from the same capital pool
-  // For simplicity in backtest: run each type independently on full capital,
-  // but size each position at 1/3 risk so combined max loss = configured riskPerTrade
-  const typeConfig = { ...cfg, riskPerTrade: (cfg.riskPerTrade ?? 0.01) / typeOrder.length };
+  // Capital is shared across types (concurrent risk).
+  // Each type runs independently on full capital but sized at 1/3 risk so
+  // combined max loss = configured riskPerTrade.
+  // cooldownAfterLoss=0: in backtest candle time, cooldown in real minutes is meaningless.
+  // maxConsecLoss raised: daily reset already handles this in _runMultiPositionBacktest;
+  // the higher cap prevents intra-day blocking during heavy drawdown periods.
+  const typeConfig = {
+    ...cfg,
+    riskPerTrade:     (cfg.riskPerTrade ?? 0.01) / typeOrder.length,
+    cooldownAfterLoss: 0,
+    maxConsecLoss:    Math.max(cfg.maxConsecLoss ?? 2, 5),
+  };
 
   for (const tradeType of typeOrder) {
     const entryCandles = opts.entryCandles?.[tradeType];
