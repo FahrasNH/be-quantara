@@ -153,8 +153,9 @@ function estimateBarCount(startMs, endMs, timeframe) {
 /**
  * Tolak/clamp rentang yang melebihi MAX_BARS.
  * periodId=max → clamp start (bukan error); custom/3m/6m/12m → error jika terlalu besar.
+ * allowClamp=true → selalu clamp (digunakan oleh triple-TF backtest untuk TF pendek).
  */
-function enforceBarLimit(startMs, endMs, timeframe, periodId) {
+function enforceBarLimit(startMs, endMs, timeframe, periodId, allowClamp = false) {
   const bars = estimateBarCount(startMs, endMs, timeframe);
   if (bars <= MAX_BARS) {
     return { startMs, endMs, bars, clamped: false };
@@ -165,7 +166,7 @@ function enforceBarLimit(startMs, endMs, timeframe, periodId) {
   const clampedStart = Math.max(startMs, endMs - maxRangeMs);
   const clampedBars = estimateBarCount(clampedStart, endMs, timeframe);
 
-  if (String(periodId || "").toLowerCase() === "max") {
+  if (String(periodId || "").toLowerCase() === "max" || allowClamp) {
     return { startMs: clampedStart, endMs, bars: clampedBars, clamped: true };
   }
 
@@ -355,6 +356,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     customStart,
     customEnd,
     autoListing = false,
+    allowClamp = false,
   } = opts;
 
   const sym = String(symbol || "").toUpperCase().trim();
@@ -398,7 +400,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
 
   const listingMs = await detectListingTimestamp(exchange, client, marketSymbol, timeframe);
   const clamped = clampDateRange({ startMs, endMs, listingMs, autoListing });
-  const barLimit = enforceBarLimit(clamped.startMs, clamped.endMs, timeframe, periodId);
+  const barLimit = enforceBarLimit(clamped.startMs, clamped.endMs, timeframe, periodId, allowClamp);
   const effectiveStart = barLimit.startMs;
   const effectiveEnd = barLimit.endMs;
 

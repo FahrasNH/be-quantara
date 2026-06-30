@@ -294,8 +294,10 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
       }
     }
 
-    // Check each trade type for independent entry (type names + legacy letters deduped by position Map)
-    const tradeTypeKeys = ["Scalping", "Intraday", "Swing"];
+    // Check each trade type for independent entry (type names + legacy letters deduped by position Map).
+    // opts.activeComponents restricts which components can open (used by triple-TF backtest so each
+    // trade-type run only opens its own component on the correct TF data).
+    const tradeTypeKeys = opts.activeComponents ?? ["Scalping", "Intraday", "Swing"];
     for (const componentId of tradeTypeKeys) {
       const signal = multiSignal[componentId];
       if (!signal) continue;
@@ -481,7 +483,7 @@ function runTripleTypeBacktest(opts = {}) {
     }
 
     const typeResult = _runMultiPositionBacktest(
-      { ...opts, strategyKey, config: typeConfig, debug: false },
+      { ...opts, strategyKey, config: typeConfig, debug: false, activeComponents: [tradeType] },
       strategy,
       typeConfig,
       feeRate,

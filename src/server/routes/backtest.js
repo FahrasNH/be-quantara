@@ -1127,11 +1127,13 @@ module.exports = function createBacktestRouter(context) {
     // AF_SAC: Triple-timeframe mode — each trade type runs on its own TF candles
     const AF_SAC_KEYS = new Set(["AF_SAC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
     if (AF_SAC_KEYS.has(strategyKey) && !entryTfOverride) {
-      // Fetch entry + trend candles for each trade type
+      // Fetch entry + trend candles for each trade type.
+      // Short TFs (1m, 5m) use allowClamp=true so MAX_BARS is clamped to the most
+      // recent window rather than throwing — 1m → last ~35 days, 5m → last ~174 days.
       const TYPE_TF = {
         Scalping: { entry: "1m",  trend: "15m" },
         Intraday: { entry: "5m",  trend: "4h"  },
-        Swing:    { entry: "4h",  trend: "1d"  },
+        Swing:    { entry: "4h",  trend: "1w"  }, // weekly HTF for Swing (more stable trend filter)
       };
 
       const entryCandles = {};
@@ -1141,15 +1143,15 @@ module.exports = function createBacktestRouter(context) {
       await Promise.all(Object.entries(TYPE_TF).map(async ([type, tfs]) => {
         try {
           const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
-            symbol: sym, timeframe: tfs.entry, ...fetchOpts,
+            symbol: sym, timeframe: tfs.entry, ...fetchOpts, allowClamp: true,
           });
           entryCandles[type] = entryRes.candles || [];
-          dataInfo[type]     = { entryBars: entryCandles[type].length, startDate: entryRes.startDate, endDate: entryRes.endDate };
-        } catch { entryCandles[type] = []; }
+          dataInfo[type]     = { entryBars: entryCandles[type].length, startDate: entryRes.startDate, endDate: entryRes.endDate, clamped: entryRes.clamped || false };
+        } catch (e) { entryCandles[type] = []; dataInfo[type] = { error: e.message }; }
 
         try {
           const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(req.userId, {
-            symbol: sym, timeframe: tfs.trend, ...fetchOpts,
+            symbol: sym, timeframe: tfs.trend, ...fetchOpts, allowClamp: true,
           });
           htfCandles[type] = trendRes.candles || [];
         } catch { htfCandles[type] = []; }
@@ -1171,7 +1173,7 @@ module.exports = function createBacktestRouter(context) {
         engine: "real-1to1-triple-tf",
         strategyKey,
         symbol: sym,
-        mode: "Scalping (1m/15m) + Intraday (5m/4h) + Swing (4h/1d)",
+        mode: "Scalping (1m/15m) + Intraday (5m/4h) + Swing (4h/1w)",
         dataInfo,
         computeTimeMs: elapsedMs,
         ...result,
