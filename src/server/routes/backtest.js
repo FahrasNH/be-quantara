@@ -1244,6 +1244,24 @@ module.exports = function createBacktestRouter(context) {
   });
 
   /**
+   * GET /api/v1/backtest/job-status/:jobId
+   * Polling-based alternative to SSE stream. Returns current job state + all progress logs.
+   * Client polls every ~1s until status is "done", "error", or "cancelled".
+   */
+  router.get("/job-status/:jobId", asyncHandler(async (req, res) => {
+    const job = jobStore.get(req.params.jobId);
+    if (!job) return res.status(404).json({ ok: false, error: "Job not found or expired (30-min TTL)" });
+
+    return res.json({
+      ok: true,
+      status: job.status,           // "pending"|"running"|"done"|"error"|"cancelled"
+      progress: job.progressLog,    // all progress events accumulated so far
+      result: job.result || null,
+      error: job.error || null,
+    });
+  }));
+
+  /**
    * DELETE /api/v1/backtest/cancel/:jobId
    * Abort a running or pending backtest job.
    */
