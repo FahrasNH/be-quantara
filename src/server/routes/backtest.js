@@ -1284,11 +1284,11 @@ const TYPE_TF = {
 };
 
 // Per-TF period caps: limit how far back short TFs fetch (avoids timeout).
-// Scalping 1m: pattern recognition (sweep/OB) is short-term, 90 days max
+// Scalping 1m: recent liquidity patterns only (1 month = ~30k bars, ~3 sec fetch)
 // Intraday 5m: mid-term mean reversion, 150 days covers seasonal patterns
 // Swing 4h+: no limit (few bars by nature)
 const TYPE_MAX_PERIOD = {
-  "1m":  "90d",     // Scalping: 90 days = 129.6k 1m bars
+  "1m":  "30d",     // Scalping: 30 days max (liquidity sweeps are recent, 12m unnecessary)
   "5m": "150d",     // Intraday: 150 days = 43.2k 5m bars
 };
 

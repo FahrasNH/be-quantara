@@ -502,16 +502,20 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     if (!disp) return null;
 
-    // LONG: bullish displacement + bullish FVG exists + price at or below FVG midpoint (discount)
+    // LONG: bullish displacement + bullish FVG exists + price in 25-50% FVG area (discount zone)
     if (disp.bullish && fvgs.bullish) {
       const fvg = fvgs.bullish;
-      if (cl <= fvg.midpoint * 1.002 && cl >= fvg.bottom * 0.998) return "LONG";
+      const fvg25 = fvg.bottom + 0.25 * (fvg.top - fvg.bottom);
+      const fvg50 = fvg.bottom + 0.50 * (fvg.top - fvg.bottom);
+      if (cl >= fvg25 * 0.998 && cl <= fvg50 * 1.002) return "LONG";
     }
 
-    // SHORT: bearish displacement + bearish FVG exists + price at or above FVG midpoint (premium)
+    // SHORT: bearish displacement + bearish FVG exists + price in 50-75% FVG area (premium zone)
     if (disp.bearish && fvgs.bearish) {
       const fvg = fvgs.bearish;
-      if (cl >= fvg.midpoint * 0.998 && cl <= fvg.top * 1.002) return "SHORT";
+      const fvg50 = fvg.top - 0.50 * (fvg.top - fvg.bottom);
+      const fvg75 = fvg.top - 0.25 * (fvg.top - fvg.bottom);
+      if (cl >= fvg50 * 0.998 && cl <= fvg75 * 1.002) return "SHORT";
     }
 
     return null;
@@ -663,14 +667,20 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // ── Confidence scoring ───────────────────────────────────────────────────
     const ctx = this._buildConfidenceContext(indicators, lastIdx, config, { marketCond });
-    const confA = rawA ? this._componentConfidence("A", rawA, ctx) : 0;
-    const confB = rawB ? this._componentConfidence("B", rawB, ctx) : 0;
-    const confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
+    let confA = rawA ? this._componentConfidence("A", rawA, ctx) : 0;
+    let confB = rawB ? this._componentConfidence("B", rawB, ctx) : 0;
+    let confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
 
-    // ── Gate + HTF filter ────────────────────────────────────────────────────
-    const sigScalping = (rawA && confA >= minConf.A && !this._htfDirectionBlocked(rawA, htfTrend)) ? rawA : null;
-    const sigIntraday = (rawB && confB >= minConf.B && !this._htfDirectionBlocked(rawB, htfTrend)) ? rawB : null;
-    const sigSwing    = (rawC && confC >= minConf.C && !this._htfDirectionBlocked(rawC, htfTrend)) ? rawC : null;
+    // ── HTF filter: soft scoring penalty (−15 pts) instead of hard block ────
+    // Allows neutral HTF entries, but penalizes entries against HTF trend
+    if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
+    if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
+    if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
+
+    // ── Gate: check confidence vs min threshold ─────────────────────────────
+    const sigScalping = (rawA && confA >= minConf.A) ? rawA : null;
+    const sigIntraday = (rawB && confB >= minConf.B) ? rawB : null;
+    const sigSwing    = (rawC && confC >= minConf.C) ? rawC : null;
 
     // Set both type names and legacy letter aliases
     result.Scalping = sigScalping; result.A = sigScalping;

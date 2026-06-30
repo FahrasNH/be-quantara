@@ -604,18 +604,18 @@ const STRATEGIES = {
     sacEnabledComponents: ["A", "B", "C"],
     sacMinVotes:           1,            // 1 = any qualifying component can fire
     sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
-    sacMinConfidenceA:     45,  // Scalping 1m: noisy data, 60 was too strict (0 trades)
-    sacMinConfidenceB:     55,  // Intraday 5m: loosened from 65 to get 5-15 trades/6mo
-    sacMinConfidenceC:     60,  // Swing 4h: was 65, slight relax to avoid blocking good setups
+    sacMinConfidenceA:     45,  // Scalping 1m
+    sacMinConfidenceB:     55,  // Intraday 5m
+    sacMinConfidenceC:     55,  // Swing 4h (was 60 → 55 for wider entry zone)
 
     // Sweep detector
     sacSwingLookback:  5,
-    sacSweepScanBars:  50,   // was 30 — scan further back (50 bars) for recent swing lows on 1m
-    sacSweepVolMult:   1.1,  // was 1.3 — lower vol requirement for 1m noise
+    sacSweepScanBars:  50,
+    sacSweepVolMult:   0.9,  // 1.1 → 0.9 (even lower for crypto sparse volume on 1m)
 
     // Order block
     sacOBLookback:     15,
-    sacOBDispMult:     1.8,
+    sacOBDispMult:     1.3,  // 1.8 → 1.3 (wider OB detection for more setups)
 
     // CHoCH
     sacChochLookback:  20,
