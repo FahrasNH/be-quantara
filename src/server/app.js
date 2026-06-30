@@ -115,13 +115,18 @@ const limiter = rateLimit({
   max: API_MAX,
   standardHeaders: true,  // kirim RateLimit-* headers agar FE bisa baca sisa kuota
   legacyHeaders: false,
-  message: { ok: false, statusCode: 429, message: "Terlalu banyak permintaan. Tunggu beberapa saat lalu coba lagi." },
-  skip: () => process.env.NODE_ENV !== "production",
+  message: { ok: false, statusCode: 429, message: "Too many requests. Please wait a moment and try again." },
+  skip: (req) => {
+    if (process.env.NODE_ENV !== "production") return true;
+    // Exempt backtest polling — called every few seconds during long-running jobs
+    if (req.method === "GET" && req.path.startsWith("/backtest/job-status/")) return true;
+    return false;
+  },
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: AUTH_MAX,
-  message: { ok: false, statusCode: 429, message: "Terlalu banyak permintaan. Tunggu beberapa saat lalu coba lagi." },
+  message: { ok: false, statusCode: 429, message: "Too many requests. Please wait a moment and try again." },
   skip: (req) => {
     // Rate limiting only in production
     if (process.env.NODE_ENV !== "production") return true;
