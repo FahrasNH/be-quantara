@@ -534,7 +534,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   /** 0-100 confidence for a completed SMC sequence. */
   _scoreSequence(indicators, lastIdx, ctx) {
     const { closes, highs, lows, volumes, volSMA } = indicators;
-    const { isLong, fvg, dispIdx, sweepIdx } = ctx;
+    const { isLong, fvg, dispIdx, chochIdx, sweepIdx } = ctx;
     let score = 45;
 
     // Sweep conviction: volume surge on the sweep bar
@@ -546,6 +546,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
     score += Math.min(15, dRange * 600); // ~2.5% range → +15
 
+    // Displacement volume confirmation — weak displacement = premature entry (AF-FIX-06)
+    // If the FVG-origin bar had below-average volume, the "displacement" may be noise.
+    const dVol = volumes[dispIdx] ?? 0, dVSMA = volSMA[dispIdx] ?? 1;
+    const dispVolRatio = dVSMA > 0 ? dVol / dVSMA : 1;
+    if (dispVolRatio < 1.2) score -= 12; // penalise weak-volume displacement
+
     // FVG size (bigger imbalance = stronger)
     score += Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
 
@@ -555,6 +561,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       ? (fvg.midpoint - cl) / Math.max(fvg.midpoint - fvg.bottom, 1e-9)
       : (cl - fvg.midpoint) / Math.max(fvg.top - fvg.midpoint, 1e-9);
     score += Math.max(0, Math.min(15, depth * 15));
+
+    // Sequence freshness — stale setups produce whipsaws (AF-FIX-06: 0% WR on <2h trades)
+    // Reward recent sweeps (≤20 bars = setup is still "alive"), penalise very old ones.
+    const sweepAge = lastIdx - sweepIdx;
+    if      (sweepAge <= 20) score += 8;   // fresh: full bonus
+    else if (sweepAge <= 40) score += 3;   // acceptable
+    else                     score -= 8;   // stale: risk of whipsaw
 
     return Math.round(this.clamp(score, 0, 100));
   }

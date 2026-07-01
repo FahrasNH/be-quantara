@@ -604,9 +604,9 @@ const STRATEGIES = {
     sacEnabledComponents: ["A", "B", "C"],
     sacMinVotes:           1,            // 1 = any qualifying component can fire
     sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
-    sacMinConfidenceA:     50,  // Scalping — sequence engine score gate
-    sacMinConfidenceB:     50,  // Intraday
-    sacMinConfidenceC:     50,  // Swing
+    sacMinConfidenceA:     65,  // Scalping — raised 50→65 (AF-FIX-06: too many false entries)
+    sacMinConfidenceB:     65,  // Intraday
+    sacMinConfidenceC:     65,  // Swing
 
     // ── Event-driven SMC sequence engine (v3.0) ──────────────────────────────
     // sweep → CHoCH → displacement/FVG → mitigation → entry (causal, cross-bar)
@@ -631,7 +631,7 @@ const STRATEGIES = {
 
     // Displacement
     sacDispScanBars:   25,
-    sacDispVolMult:    1.6,              // 2.0 → 1.6: displacement legs on crypto often <2× vol
+    sacDispVolMult:    1.8,              // 2.0 → 1.6 → 1.8: AF-FIX-06 tighter displacement confirmation
     sacDispRangePct:   0.008,            // 1.2% → 0.8%: lower range bar for displacement
 
     // CVD / VWAP lookback

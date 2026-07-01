@@ -127,7 +127,7 @@ function fvgLongIndicators() {
 test("SMC-01: class instantiates without error", () => {
   const smc = new SmartMoneyConceptsStrategy();
   assert.equal(smc.config.name, "SMART_MONEY_CONCEPTS");
-  assert.equal(smc.config.version, "1.0.0");
+  assert.equal(smc.config.version, "3.0.0");
 });
 
 test("SMC-02: SUB_STRATEGIES has Scalping/Intraday/Swing + A/B/C aliases", () => {
