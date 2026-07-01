@@ -101,7 +101,7 @@ function validateGrokConfirmPayload(body) {
     return {
       error: {
         status: 400,
-        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, AF_SAC, SMART_MONEY_CONCEPTS, TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT_RETEST",
+        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, SMART_MONEY_CONCEPTS, TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT_RETEST",
       },
     };
   }
