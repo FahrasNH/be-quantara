@@ -37,9 +37,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // ── Trade type TF configuration (each type runs on its own TF stack) ─────
     this.TRADE_TYPE_TF_CONFIG = {
-      Scalping: { entryTf: "1m",  confirmTf: "5m",  trendTf: "15m" },
-      Intraday: { entryTf: "5m",  confirmTf: "15m", trendTf: "4h"  },
-      Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w"  },
+      Scalping: { entryTf: "5m",  confirmTf: "15m", trendTf: "1h" },  // v3.0: 1m→5m for SMC sequence
+      Intraday: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },  // v3.0: 5m→15m entry
+      Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w" },
     };
 
     // ── Sub-strategy RR/SL/TP multipliers (keyed by type name AND legacy letter) ─
@@ -452,8 +452,113 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return null;
   }
 
+  // ═════════════════════════════════════════════════════════════════════════════
+  // EVENT-DRIVEN SMC SEQUENCE DETECTOR (v3.0)
+  //
+  // Real institutional SMC is a CAUSAL SEQUENCE across bars, not 3 independent
+  // single-bar indicator checks. This detector backward-chains from the current
+  // (mitigation) bar and verifies the full ordered sequence:
+  //
+  //   liquidity sweep  →  CHoCH/MSS  →  displacement (FVG)  →  mitigation  →  ENTRY
+  //
+  // It only does the expensive backward scan when the current bar is actually
+  // sitting inside an unfilled FVG (mitigation) — so the vast majority of bars
+  // exit cheaply. Returns { signal, meta } where meta carries the structural
+  // levels (sweep extreme, FVG zone) + a 0-100 confidence score.
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  _detectSMCSequence(indicators, lastIdx, config = {}) {
+    const { closes, highs, lows, volumes, volSMA } = indicators;
+    const win = config.sacSeqWindow ?? 60;
+    if (lastIdx < 25) return { signal: null, meta: null };
+
+    const cl = closes[lastIdx];
+
+    // ── STEP 1: current bar must be mitigating an unfilled FVG ────────────────
+    const fvgs = this._detectFVG(closes, highs, lows, lastIdx, config);
+
+    // Try LONG then SHORT; return the first valid completed sequence.
+    for (const dir of ["LONG", "SHORT"]) {
+      const isLong = dir === "LONG";
+      const fvg = isLong ? fvgs.bullish : fvgs.bearish;
+      if (!fvg) continue;
+
+      // Mitigation: price returned into the FVG zone.
+      //   LONG  → pullback into discount half [bottom .. midpoint]
+      //   SHORT → pullback into premium half  [midpoint .. top]
+      const inMitigation = isLong
+        ? (cl >= fvg.bottom * 0.999 && cl <= fvg.midpoint * 1.002)
+        : (cl <= fvg.top * 1.001    && cl >= fvg.midpoint * 0.998);
+      if (!inMitigation) continue;
+
+      // The FVG is the footprint of the displacement leg. Its origin bar:
+      const dispIdx = fvg.idx;
+
+      // ── STEP 2: a CHoCH in our direction must precede the displacement ──────
+      let chochIdx = -1;
+      for (let b = dispIdx; b >= Math.max(25, dispIdx - win); b--) {
+        const choch = this._detectCHoCH(closes, highs, lows, b, config);
+        if (choch && choch.type === (isLong ? "bullish" : "bearish")) { chochIdx = b; break; }
+      }
+      if (chochIdx < 0) continue;
+
+      // ── STEP 3: a liquidity sweep must precede the CHoCH ────────────────────
+      let sweepIdx = -1, sweepExtreme = null;
+      for (let b = chochIdx; b >= Math.max(15, chochIdx - win); b--) {
+        const sweep = this._detectSweep(closes, highs, lows, volumes, volSMA, b, config);
+        if (sweep && sweep.type === (isLong ? "bullish" : "bearish")) {
+          sweepIdx = b;
+          sweepExtreme = isLong ? lows[b] : highs[b];
+          break;
+        }
+      }
+      if (sweepIdx < 0) continue;
+
+      // Causal order guaranteed by construction: sweepIdx ≤ chochIdx ≤ dispIdx ≤ now.
+      // ── Confidence score from the quality of each leg ──────────────────────
+      const score = this._scoreSequence(indicators, lastIdx, {
+        isLong, fvg, dispIdx, chochIdx, sweepIdx, config,
+      });
+
+      return {
+        signal: dir,
+        meta: { sweepIdx, chochIdx, dispIdx, fvg, sweepExtreme, score },
+      };
+    }
+
+    return { signal: null, meta: null };
+  }
+
+  /** 0-100 confidence for a completed SMC sequence. */
+  _scoreSequence(indicators, lastIdx, ctx) {
+    const { closes, highs, lows, volumes, volSMA } = indicators;
+    const { isLong, fvg, dispIdx, sweepIdx } = ctx;
+    let score = 45;
+
+    // Sweep conviction: volume surge on the sweep bar
+    const sVol = volumes[sweepIdx] ?? 0, sVSMA = volSMA[sweepIdx] ?? 1;
+    const sweepVolRatio = sVSMA > 0 ? sVol / sVSMA : 1;
+    score += Math.min(15, (sweepVolRatio - 1) * 15);
+
+    // Displacement strength: range of the FVG-origin bar
+    const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
+    score += Math.min(15, dRange * 600); // ~2.5% range → +15
+
+    // FVG size (bigger imbalance = stronger)
+    score += Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
+
+    // Mitigation depth: deeper into the zone = better entry
+    const cl = closes[lastIdx];
+    const depth = isLong
+      ? (fvg.midpoint - cl) / Math.max(fvg.midpoint - fvg.bottom, 1e-9)
+      : (cl - fvg.midpoint) / Math.max(fvg.top - fvg.midpoint, 1e-9);
+    score += Math.max(0, Math.min(15, depth * 15));
+
+    return Math.round(this.clamp(score, 0, 100));
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
-  // Component A — Scalping (Sweep + OB + CVD)
+  // Component A — Scalping (Sweep + OB + CVD)  [LEGACY single-bar path]
   // ─────────────────────────────────────────────────────────────────────────────
 
   _detectSignalA(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
@@ -654,22 +759,40 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     }
 
     // ── Raw signal detection ─────────────────────────────────────────────────
-    const enabledNorm = enabled.map(k => this.COMPONENT_TO_TYPE[k] || k);
-    const rawA = (enabled.includes("A") || enabledNorm.includes("Scalping"))
-      ? this._detectSignalA(closes, highs, lows, volumes, volSMA, lastIdx, config)
-      : null;
-    const rawB = (enabled.includes("B") || enabledNorm.includes("Intraday"))
-      ? this._detectSignalB(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config)
-      : null;
-    const rawC = (enabled.includes("C") || enabledNorm.includes("Swing"))
-      ? this._detectSignalC(closes, highs, lows, volumes, volSMA, lastIdx, config)
-      : null;
+    // ── EVENT-DRIVEN SEQUENCE ENGINE (v3.0, default ON) ──────────────────────
+    // Replaces the three independent single-bar checks with one causal SMC
+    // sequence (sweep → CHoCH → displacement/FVG → mitigation → entry). Each
+    // trade type runs the SAME sequence on its own timeframe candles (Scalping
+    // 5m, Intraday 15m/5m, Swing 4h) via the triple-TF harness. Set
+    // sacUseSequenceEngine=false to fall back to the legacy single-bar logic.
+    const useSequence = config.sacUseSequenceEngine !== false;
 
-    // ── Confidence scoring ───────────────────────────────────────────────────
-    const ctx = this._buildConfidenceContext(indicators, lastIdx, config, { marketCond });
-    let confA = rawA ? this._componentConfidence("A", rawA, ctx) : 0;
-    let confB = rawB ? this._componentConfidence("B", rawB, ctx) : 0;
-    let confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
+    const enabledNorm = enabled.map(k => this.COMPONENT_TO_TYPE[k] || k);
+    const wantA = enabled.includes("A") || enabledNorm.includes("Scalping");
+    const wantB = enabled.includes("B") || enabledNorm.includes("Intraday");
+    const wantC = enabled.includes("C") || enabledNorm.includes("Swing");
+
+    let rawA, rawB, rawC, confA, confB, confC;
+
+    if (useSequence) {
+      const seq = this._detectSMCSequence(indicators, lastIdx, config);
+      const sig = seq.signal;
+      const score = seq.meta?.score ?? 0;
+      this._lastSequenceMeta = seq.meta; // structural levels for SL placement
+      rawA = wantA ? sig : null; confA = rawA ? score : 0;
+      rawB = wantB ? sig : null; confB = rawB ? score : 0;
+      rawC = wantC ? sig : null; confC = rawC ? score : 0;
+    } else {
+      rawA = wantA ? this._detectSignalA(closes, highs, lows, volumes, volSMA, lastIdx, config) : null;
+      rawB = wantB ? this._detectSignalB(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config) : null;
+      rawC = wantC ? this._detectSignalC(closes, highs, lows, volumes, volSMA, lastIdx, config) : null;
+
+      // ── Confidence scoring (legacy per-component) ──────────────────────────
+      const ctx = this._buildConfidenceContext(indicators, lastIdx, config, { marketCond });
+      confA = rawA ? this._componentConfidence("A", rawA, ctx) : 0;
+      confB = rawB ? this._componentConfidence("B", rawB, ctx) : 0;
+      confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
+    }
 
     // ── HTF filter: soft scoring penalty (−15 pts) instead of hard block ────
     // Allows neutral HTF entries, but penalizes entries against HTF trend

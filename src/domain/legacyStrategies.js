@@ -604,30 +604,35 @@ const STRATEGIES = {
     sacEnabledComponents: ["A", "B", "C"],
     sacMinVotes:           1,            // 1 = any qualifying component can fire
     sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
-    sacMinConfidenceA:     45,  // Scalping 1m
-    sacMinConfidenceB:     55,  // Intraday 5m
-    sacMinConfidenceC:     55,  // Swing 4h (was 60 → 55 for wider entry zone)
+    sacMinConfidenceA:     50,  // Scalping — sequence engine score gate
+    sacMinConfidenceB:     50,  // Intraday
+    sacMinConfidenceC:     50,  // Swing
+
+    // ── Event-driven SMC sequence engine (v3.0) ──────────────────────────────
+    // sweep → CHoCH → displacement/FVG → mitigation → entry (causal, cross-bar)
+    sacUseSequenceEngine: true,          // false = legacy independent single-bar checks
+    sacSeqWindow:      60,               // max bars back to assemble the full sequence
 
     // Sweep detector
     sacSwingLookback:  5,
     sacSweepScanBars:  50,
-    sacSweepVolMult:   0.9,  // 1.1 → 0.9 (even lower for crypto sparse volume on 1m)
+    sacSweepVolMult:   0.9,
 
     // Order block
     sacOBLookback:     15,
-    sacOBDispMult:     1.3,  // 1.8 → 1.3 (wider OB detection for more setups)
+    sacOBDispMult:     1.3,
 
     // CHoCH
     sacChochLookback:  20,
 
-    // FVG
-    sacFvgMinGap:      0.003,
-    sacFvgScanBars:    30,
+    // FVG (mitigation zone for the sequence engine)
+    sacFvgMinGap:      0.0015,           // 0.3% → 0.15%: catch smaller imbalances (more mitigations)
+    sacFvgScanBars:    40,
 
     // Displacement
     sacDispScanBars:   25,
-    sacDispVolMult:    2.0,
-    sacDispRangePct:   0.012,
+    sacDispVolMult:    1.6,              // 2.0 → 1.6: displacement legs on crypto often <2× vol
+    sacDispRangePct:   0.008,            // 1.2% → 0.8%: lower range bar for displacement
 
     // CVD / VWAP lookback
     vwapLookback:      14,

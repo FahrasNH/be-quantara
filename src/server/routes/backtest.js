@@ -1278,24 +1278,26 @@ module.exports = function createBacktestRouter(context) {
 // ─── Async job runner ─────────────────────────────────────────────────────────
 const AF_SAC_KEYS = new Set(["AF_SAC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
 const TYPE_TF = {
-  Scalping: { entry: "1m",  trend: "15m" },
-  Intraday: { entry: "5m",  trend: "4h"  },
-  Swing:    { entry: "4h",  trend: "1w"  },
+  Scalping: { entry: "5m",  trend: "1h" },  // v3.0: 1m→5m — SMC sequence needs stable structure
+  Intraday: { entry: "15m", trend: "4h" },  // v3.0: 5m→15m entry, 4h HTF bias
+  Swing:    { entry: "4h",  trend: "1w" },
 };
 
 // Per-TF period caps: limit how far back short TFs fetch (avoids timeout).
-// Scalping 1m: recent liquidity patterns only (1 month = ~30k bars, ~3 sec fetch)
-// Intraday 5m: mid-term mean reversion, 150 days covers seasonal patterns
-// Swing 4h+: no limit (few bars by nature)
+// 5m: 150 days covers multiple regimes without huge fetch
+// 15m: 365 days fits comfortably (~35k bars)
+// 4h+: no limit (few bars by nature)
 const TYPE_MAX_PERIOD = {
-  "1m":  "30d",     // Scalping: 30 days max (liquidity sweeps are recent, 12m unnecessary)
-  "5m": "150d",     // Intraday: 150 days = 43.2k 5m bars
+  "1m":  "30d",     // (legacy fallback if sequence engine off)
+  "5m": "180d",     // Scalping entry now 5m: 180 days ≈ 51.8k bars
+  "15m": "365d",    // Intraday entry now 15m: 365 days ≈ 35k bars
 };
 
 // Safety: extra bar cap per TF (period cap is primary, this is backup)
 const TYPE_MAX_BARS = {
   "1m":  90_000,
-  "5m": 150_000,
+  "5m": 120_000,
+  "15m": 60_000,
 };
 
 function getEffectivePeriod(userPeriodId, timeframe) {
@@ -1406,7 +1408,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
       engine: "real-1to1-triple-tf",
       strategyKey,
       symbol: sym,
-      mode: "Scalping (1m/15m) + Intraday (5m/4h) + Swing (4h/1w)",
+      mode: "SMC Sequence — Scalping (5m/1h) + Intraday (15m/4h) + Swing (4h/1w)",
       dataInfo,
       computeTimeMs: Date.now() - startMs,
       ...result,
