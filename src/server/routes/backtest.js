@@ -1165,6 +1165,7 @@ module.exports = function createBacktestRouter(context) {
       entry_timeframe: entryTfOverride,
       htf_timeframe: htfTfOverride,
       debug: debugMode = false,
+      grok_gate: grokGate = false,
     } = req.body;
 
     const sym = (pair || symbol || "").toUpperCase();
@@ -1186,7 +1187,7 @@ module.exports = function createBacktestRouter(context) {
       sym, strategyKey, strategyCfg,
       periodId, customStart, customEnd,
       capital, enableFees, enableSlippage,
-      parameters, entryTfOverride, htfTfOverride, debugMode,
+      parameters, entryTfOverride, htfTfOverride, debugMode, grokGate,
     }).catch((err) => {
       if (job.status !== "cancelled") job.fail(err.message || "Backtest failed");
     });
@@ -1326,7 +1327,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     sym, strategyKey, strategyCfg,
     periodId, customStart, customEnd,
     capital, enableFees, enableSlippage,
-    parameters, entryTfOverride, htfTfOverride, debugMode,
+    parameters, entryTfOverride, htfTfOverride, debugMode, grokGate,
   } = opts;
 
   job.status = "running";
@@ -1402,6 +1403,13 @@ async function _runBacktestJobAsync(job, userId, opts) {
       enableSlippage: !!enableSlippage,
       config: parameters,
       abortSignal,
+      // Grok Confirm Gate (AI) — post-hoc filter over produced trades
+      grokGate: !!grokGate,
+      userId,
+      symbol: sym,
+      onGrokProgress: (done, total) => {
+        job.progress({ phase: "grok", message: `Grok Confirm Gate: ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
+      },
       onProgress: (pct, _bar, _total, type) => {
         const basePct = Math.round(typesDone / typeTotal * 100);
         const typePct = Math.round(pct / typeTotal);

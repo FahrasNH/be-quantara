@@ -186,6 +186,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       pnlPct: (pnl / (position.entry * position.size)) * 100,
       plannedRR: position.plannedRR,
       confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
+      // GROK-FIX: entry-context snapshot forwarded for post-hoc Grok Confirm Gate.
+      atr: position.atr ?? null,
+      entryRsi: position.entryRsi ?? null,
+      htfTrend: position.htfTrend ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
     });
@@ -383,6 +387,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         plannedRR: riskCfg.riskReward,
         // AF-FIX-01: conviction score that cleared the entry gate (for reporting).
         confidence: multiSignal.meta?.confidence?.[componentId] ?? null,
+        // GROK-FIX: entry-context snapshot so the trade can be Grok-confirmed post-hoc.
+        atr,
+        entryRsi: indicators.rsi?.[i] ?? null,
+        htfTrend,
       });
 
       dailyTradeCount += 1;
@@ -452,6 +460,152 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 }
 
 /**
+ * Compute equity curve + summary stats purely from a (chronological) trades array.
+ * Extracted so the Grok Confirm Gate can filter trades and recompute stats identically.
+ */
+function _computeTripleStats(trades, startCapital) {
+  let capital = startCapital;
+  const firstDate = trades[0]?.openTime || trades[0]?.date;
+  const equity = [{ date: firstDate, value: startCapital }];
+  for (const t of trades) {
+    capital += t.pnl;
+    equity.push({ date: t.closeTime || t.date, value: round2(capital) });
+  }
+
+  const wins   = trades.filter(t => t.result === "win");
+  const losses = trades.filter(t => t.result === "loss");
+  const grossWin  = wins.reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+
+  let peak = startCapital, mdd = 0, bal = startCapital;
+  for (const t of trades) {
+    bal  += t.pnl;
+    peak  = Math.max(peak, bal);
+    mdd   = Math.max(mdd, peak > 0 ? (peak - bal) / peak : 0);
+  }
+
+  const rets = trades.map(t => t.pnl);
+  const avg  = rets.length ? rets.reduce((s, r) => s + r, 0) / rets.length : 0;
+  const std  = rets.length > 1
+    ? Math.sqrt(rets.reduce((s, r) => s + (r - avg) ** 2, 0) / (rets.length - 1))
+    : 0;
+
+  return {
+    equity,
+    stats: {
+      totalTrades: trades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: trades.length > 0 ? (wins.length / trades.length * 100).toFixed(1) : "0.0",
+      totalReturn: ((capital - startCapital) / startCapital * 100).toFixed(2),
+      finalCapital: capital.toFixed(2),
+      profitFactor: grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? "Inf" : "0.00"),
+      avgWin:  wins.length   ? (grossWin  / wins.length).toFixed(2)   : "0.00",
+      avgLoss: losses.length ? (grossLoss / losses.length).toFixed(2) : "0.00",
+      riskReward: (losses.length && wins.length)
+        ? ((grossWin / wins.length) / (grossLoss / losses.length)).toFixed(2)
+        : "0.00",
+      maxDrawdown: (mdd * 100).toFixed(2),
+      sharpe: std > 0 ? ((avg / std) * Math.sqrt(252)).toFixed(2) : "0.00",
+      totalFees: trades.reduce((s, t) => s + (t.fee || 0), 0).toFixed(2),
+    },
+  };
+}
+
+// AF_SAC/SMART_MONEY_CONCEPTS are aliases; Grok prompt/validation only knows ADAPTIVE_FUSION.
+const GROK_KEY_ALIAS = {
+  AF_SAC: "ADAPTIVE_FUSION",
+  SMART_MONEY_CONCEPTS: "ADAPTIVE_FUSION",
+};
+
+/**
+ * Post-hoc Grok Confirm Gate for the real (triple-TF) engine.
+ * Each produced trade's ENTRY is sent to Grok; rejected entries are dropped, then
+ * stats are recomputed over the survivors. Fail-open: any Grok error keeps the trade
+ * (a backtest must never break because the AI is slow/unavailable).
+ *
+ * @param {Array}  trades          chronological trades from the engine
+ * @param {Object} ctx
+ * @param {string} ctx.strategyKey
+ * @param {string} [ctx.symbol]
+ * @param {string} [ctx.userId]
+ * @param {Function} [ctx.grokConfirmFn] injectable `(signals) => Promise<{decisions,stats}>` (for tests)
+ * @param {Function} [ctx.onGrokProgress]
+ * @returns {Promise<{trades:Array, rejected:number, logs:Array, stats:Object}>}
+ */
+async function _applyGrokGate(trades, ctx = {}) {
+  const grokKey = GROK_KEY_ALIAS[ctx.strategyKey] || ctx.strategyKey;
+
+  // Map each trade → the signal shape the Grok batch processor expects.
+  const signals = trades.map((t, idx) => ({
+    id: idx,
+    side: t.side,
+    price: t.entry,
+    entry: t.entry,
+    atr: t.atr,
+    sl: t.sl,
+    tp: t.tp,
+    rsi: t.entryRsi ?? undefined,
+    htfTrend: t.htfTrend ?? undefined,
+    confidence: t.confidence ?? undefined,
+    signalReason: `${t.tradeType || t.component} real-engine entry`,
+  }));
+
+  const confirmFn = ctx.grokConfirmFn || (async (sigs) => {
+    // Lazy require avoids a load-time cycle (batch → GrokConfirmService → config).
+    const GrokConfirmBatchProcessor = require("./GrokConfirmBatchProcessor");
+    return GrokConfirmBatchProcessor.processBatch({
+      userId: ctx.userId,
+      strategyKey: grokKey,
+      symbol: ctx.symbol || "BACKTEST",
+      signals: sigs,
+      onProgress: ctx.onGrokProgress,
+    });
+  });
+
+  let decisions = {};
+  try {
+    const res = await confirmFn(signals);
+    decisions = res?.decisions || {};
+  } catch (err) {
+    // Fail-open: keep every trade, surface the reason in a single log entry.
+    return {
+      trades,
+      rejected: 0,
+      logs: [{ error: true, message: `Grok gate failed (fail-open): ${err.message}` }],
+      stats: { total: trades.length, approved: trades.length, rejected: 0, apiCalls: 0, failOpen: true },
+    };
+  }
+
+  const kept = [];
+  const logs = [];
+  let approved = 0, rejected = 0;
+  trades.forEach((t, idx) => {
+    const d = decisions[String(idx)];
+    // No decision (e.g. seeded/skipped) → fail-open keep.
+    const isApproved = d ? Boolean(d.approved) : true;
+    logs.push({
+      time: new Date(t.openTime || t.date).getTime() || idx,
+      symbol: ctx.symbol || "BACKTEST",
+      side: t.side,
+      tradeType: t.tradeType || t.component,
+      approved: isApproved,
+      confidence: d?.confidence ?? t.confidence ?? null,
+      reason: d?.reason ?? (d ? null : "no-decision (kept)"),
+    });
+    if (isApproved) { kept.push(t); approved += 1; }
+    else rejected += 1;
+  });
+
+  return {
+    trades: kept,
+    rejected,
+    logs,
+    stats: { total: trades.length, approved, rejected, apiCalls: approved + rejected },
+  };
+}
+
+/**
  * Run AF_SAC triple-timeframe backtest:
  * Each trade type (Scalping/Intraday/Swing) runs on its own candle set independently.
  * Results are merged and sorted by open time.
@@ -464,6 +618,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
  * @param {Object}  [opts.config]
  * @param {boolean} [opts.enableFees]
  * @param {boolean} [opts.enableSlippage]
+ * @param {boolean} [opts.grokGate]     - post-hoc Grok Confirm Gate over produced trades
+ * @param {string}  [opts.userId]
+ * @param {string}  [opts.symbol]
+ * @param {Function}[opts.grokConfirmFn]- injectable confirm fn (tests)
+ * @param {Function}[opts.onGrokProgress]
  */
 async function runTripleTypeBacktest(opts = {}) {
   const { strategyKey = "AF_SAC", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
@@ -538,56 +697,34 @@ async function runTripleTypeBacktest(opts = {}) {
   // Sort all trades by openTime
   allTrades.sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
 
-  // Recalculate equity + stats from merged trades on shared capital
-  let capital = startCapital;
-  const firstDate = allTrades[0]?.openTime || allTrades[0]?.date;
-  const equity = [{ date: firstDate, value: startCapital }];
-  for (const t of allTrades) {
-    capital += t.pnl;
-    equity.push({ date: t.closeTime || t.date, value: round2(capital) });
+  // ── GROK CONFIRM GATE (post-hoc, AF real engine) ──────────────────────────
+  // Send each produced entry to Grok; drop rejected trades, then recompute stats
+  // over the survivors. This is what makes the "Grok Confirm Gate (AI)" toggle
+  // actually affect Adaptive Fusion (previously bypassed).
+  let grokResult = null;
+  if (opts.grokGate) {
+    grokResult = await _applyGrokGate(allTrades, {
+      strategyKey,
+      symbol: opts.symbol,
+      userId: opts.userId,
+      grokConfirmFn: opts.grokConfirmFn,
+      onGrokProgress: opts.onGrokProgress,
+    });
   }
+  const finalTrades = grokResult ? grokResult.trades : allTrades;
 
-  const wins   = allTrades.filter(t => t.result === "win");
-  const losses = allTrades.filter(t => t.result === "loss");
-  const grossWin  = wins.reduce((s, t) => s + t.pnl, 0);
-  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
-
-  let peak = startCapital, mdd = 0, bal = startCapital;
-  for (const t of allTrades) {
-    bal  += t.pnl;
-    peak  = Math.max(peak, bal);
-    mdd   = Math.max(mdd, peak > 0 ? (peak - bal) / peak : 0);
-  }
-
-  const rets = allTrades.map(t => t.pnl);
-  const avg  = rets.length ? rets.reduce((s, r) => s + r, 0) / rets.length : 0;
-  const std  = rets.length > 1
-    ? Math.sqrt(rets.reduce((s, r) => s + (r - avg) ** 2, 0) / (rets.length - 1))
-    : 0;
+  const { equity, stats } = _computeTripleStats(finalTrades, startCapital);
 
   return {
     ok: true,
-    trades: allTrades,
+    trades: finalTrades,
     equity,
     perTypeStats,
-    stats: {
-      totalTrades: allTrades.length,
-      wins: wins.length,
-      losses: losses.length,
-      winRate: allTrades.length > 0 ? (wins.length / allTrades.length * 100).toFixed(1) : "0.0",
-      totalReturn: ((capital - startCapital) / startCapital * 100).toFixed(2),
-      finalCapital: capital.toFixed(2),
-      profitFactor: grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? "Inf" : "0.00"),
-      avgWin:  wins.length   ? (grossWin  / wins.length).toFixed(2)   : "0.00",
-      avgLoss: losses.length ? (grossLoss / losses.length).toFixed(2) : "0.00",
-      riskReward: (losses.length && wins.length)
-        ? ((grossWin / wins.length) / (grossLoss / losses.length)).toFixed(2)
-        : "0.00",
-      maxDrawdown: (mdd * 100).toFixed(2),
-      sharpe: std > 0 ? ((avg / std) * Math.sqrt(252)).toFixed(2) : "0.00",
-      totalFees: allTrades.reduce((s, t) => s + (t.fee || 0), 0).toFixed(2),
-    },
-    meta: { strategyKey, mode: "triple-timeframe", perTypeStats },
+    stats,
+    grokGate: !!opts.grokGate,
+    grokStats: grokResult?.stats ?? null,
+    grokLogs: grokResult?.logs ?? null,
+    meta: { strategyKey, mode: "triple-timeframe", perTypeStats, grokGate: !!opts.grokGate },
   };
 }
 
@@ -913,4 +1050,4 @@ function buildStats(trades, startCapital, endCapital) {
   };
 }
 
-module.exports = { runRealBacktest, runTripleTypeBacktest };
+module.exports = { runRealBacktest, runTripleTypeBacktest, _computeTripleStats, _applyGrokGate };
