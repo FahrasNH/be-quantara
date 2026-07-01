@@ -78,7 +78,12 @@ setInterval(() => {
 }, 5 * 60_000).unref?.();
 
 const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
-const GROK_CONFIRM_STRATEGIES = new Set(USER_STRATEGY_KEYS);
+// GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SAC runs real engine w/ server-side gate)
+const GROK_CONFIRM_STRATEGIES = new Set([
+  ...USER_STRATEGY_KEYS,
+  "AF_SAC",
+  "SMART_MONEY_CONCEPTS",
+]);
 const GROK_CONFIRM_MAX_SIGNALS = 500;
 
 function validateGrokConfirmPayload(body) {
@@ -96,7 +101,7 @@ function validateGrokConfirmPayload(body) {
     return {
       error: {
         status: 400,
-        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT_RETEST",
+        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, AF_SAC, SMART_MONEY_CONCEPTS, TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT_RETEST",
       },
     };
   }
