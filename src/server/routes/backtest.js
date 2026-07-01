@@ -1413,7 +1413,9 @@ async function _runBacktestJobAsync(job, userId, opts) {
       userId,
       symbol: sym,
       onGrokProgress: (done, total) => {
-        job.progress({ phase: "grok", message: `Grok Confirm Gate: ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
+        // phase:"grok" is routed by the FE to the right-hand Grok drawer (not the
+        // inline stream log); done/total let the drawer show an accurate progress bar.
+        job.progress({ phase: "grok", done, total, message: `Grok Confirm Gate: ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
       },
       onProgress: (pct, _bar, _total, type) => {
         const basePct = Math.round(typesDone / typeTotal * 100);
