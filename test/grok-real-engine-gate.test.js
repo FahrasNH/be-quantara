@@ -53,7 +53,7 @@ function trade(i, pnl, side = "LONG") {
       return { decisions, stats: { total: signals.length } };
     };
 
-    const res = await _applyGrokGate(trades, { strategyKey: "AF_SAC", grokConfirmFn: confirmFn });
+    const res = await _applyGrokGate(trades, { strategyKey: "AF_SMC", grokConfirmFn: confirmFn });
     assert.strictEqual(res.trades.length, 3, "keeps 3 approved trades");
     assert.strictEqual(res.rejected, 2, "rejects 2");
     assert.strictEqual(res.stats.approved, 3);
@@ -70,7 +70,7 @@ function trade(i, pnl, side = "LONG") {
   // ── 2. Fail-open: confirm fn throws → all trades kept ─────────────────────
   {
     const boom = async () => { throw new Error("xAI 503"); };
-    const res = await _applyGrokGate(trades, { strategyKey: "AF_SAC", grokConfirmFn: boom });
+    const res = await _applyGrokGate(trades, { strategyKey: "AF_SMC", grokConfirmFn: boom });
     assert.strictEqual(res.trades.length, 5, "fail-open keeps all trades");
     assert.strictEqual(res.stats.failOpen, true);
     assert.ok(res.logs[0].error, "surfaces the failure as a log entry");
@@ -84,7 +84,7 @@ function trade(i, pnl, side = "LONG") {
       decisions["0"] = { approved: false, reason: "weak" };
       return { decisions };
     };
-    const res = await _applyGrokGate(trades, { strategyKey: "AF_SAC", grokConfirmFn: partial });
+    const res = await _applyGrokGate(trades, { strategyKey: "AF_SMC", grokConfirmFn: partial });
     assert.strictEqual(res.trades.length, 4, "only the explicitly-rejected entry dropped");
     assert.strictEqual(res.rejected, 1);
   }

@@ -78,10 +78,10 @@ setInterval(() => {
 }, 5 * 60_000).unref?.();
 
 const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
-// GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SAC runs real engine w/ server-side gate)
+// GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SMC runs real engine w/ server-side gate)
 const GROK_CONFIRM_STRATEGIES = new Set([
   ...USER_STRATEGY_KEYS,
-  "AF_SAC",
+  "AF_SMC",
   "SMART_MONEY_CONCEPTS",
 ]);
 const GROK_CONFIRM_MAX_SIGNALS = 500;
@@ -1178,7 +1178,7 @@ module.exports = function createBacktestRouter(context) {
     if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair is required" });
 
     const strategyCfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
-    if (!strategyCfg && !["AF_SAC"].includes(strategyKey)) {
+    if (!strategyCfg && !["AF_SMC"].includes(strategyKey)) {
       return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
     }
 
@@ -1282,7 +1282,7 @@ module.exports = function createBacktestRouter(context) {
 };
 
 // ─── Async job runner ─────────────────────────────────────────────────────────
-const AF_SAC_KEYS = new Set(["AF_SAC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+const AF_SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
 const TYPE_TF = {
   Scalping: { entry: "5m",  trend: "1h" },  // v3.0: 1m→5m — SMC sequence needs stable structure
   Intraday: { entry: "15m", trend: "4h" },  // v3.0: 5m→15m entry, 4h HTF bias
@@ -1340,7 +1340,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
   const fetchOpts = { periodId, customStart, customEnd };
   const abortSignal = job.abortController.signal;
 
-  if (AF_SAC_KEYS.has(strategyKey) && !entryTfOverride) {
+  if (AF_SMC_KEYS.has(strategyKey) && !entryTfOverride) {
     // Triple-TF mode: each type fetches its own candles, runs only its own component
     const entryCandles = {};
     const htfCandles   = {};

@@ -21,7 +21,7 @@ const TIERS = {
     umbrella: "ADAPTIVE_FUSION",
     color:    "#9D84B7",
 
-    strategies: { active: ["AF_SAC"], future: ["AF_LS", "AF_OBR"] },
+    strategies: { active: ["AF_SMC"], future: ["AF_LS", "AF_OBR"] },
 
     capabilities: {
       maxConcurrentBots:     1,

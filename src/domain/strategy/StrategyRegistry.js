@@ -2,8 +2,8 @@
  * StrategyRegistry.js — Factory Pattern for Strategy Management
  *
  * v2.0 — Umbrella architecture.
- * Primary keys  : AF_SAC · TS_TM · MD_MR · BS_BR · GROK_AI_TRADING
- * Legacy aliases : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SAC
+ * Primary keys  : AF_SMC · TS_TM · MD_MR · BS_BR · GROK_AI_TRADING
+ * Legacy aliases : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SMC
  *                  TREND_MOMENTUM                          → TS_TM
  *                  MEAN_REVERSION                          → MD_MR
  *                  BREAKOUT_RETEST                         → BS_BR
@@ -36,7 +36,7 @@ class StrategyRegistry {
     const bs = new BreakoutStormUmbrella();
     const ga = new GrokAiTradingStrategy();
 
-    this.register("AF_SAC",          af);
+    this.register("AF_SMC",          af);
     this.register("TS_TM",           ts);
     this.register("MD_MR",           md);
     this.register("BS_BR",           bs);
@@ -49,7 +49,7 @@ class StrategyRegistry {
     this.strategies.set("MEAN_REVERSION",       md);
     this.strategies.set("BREAKOUT_RETEST",      bs);
 
-    this.defaultKey = "AF_SAC";
+    this.defaultKey = "AF_SMC";
   }
 
   /**

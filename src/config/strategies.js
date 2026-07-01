@@ -19,7 +19,7 @@ const UMBRELLA_STRATEGIES = {
 
 const COMPONENT_STRATEGIES = {
   // ADAPTIVE_FUSION — FOUNDRY Tier
-  AF_SAC: "AF_SAC",   // Smart Money Concepts  ✅ LIVE
+  AF_SMC: "AF_SMC",   // Smart Money Concepts  ✅ LIVE
   AF_LS:  "AF_LS",    // Liquidity Sweep        ⏳ Sprint 9
   AF_OBR: "AF_OBR",   // Order Block Retest     ⏳ Sprint 9
 
@@ -41,11 +41,14 @@ const COMPONENT_STRATEGIES = {
 
 // ─── Migration map: old key → new key ────────────────────────────────────────
 // Used by StrategyRegistry and Prisma migration script.
+// Primary keys: AF_SMC, TS_TM, MD_MR, BS_BR
+// Legacy aliases redirect to primary keys.
 
 const STRATEGY_MIGRATION_MAP = {
-  ADAPTIVE_FUSION:      "AF_SAC",
-  SAC:                  "AF_SAC",
-  SMART_MONEY_CONCEPTS: "AF_SAC",
+  AF_SMC:               "AF_SMC",  // primary: Adaptive Fusion - Smart Money Concepts
+  ADAPTIVE_FUSION:      "AF_SMC",  // legacy: old user name
+  SAC:                  "AF_SMC",  // legacy: old abbreviation (SAC = Smart Money Concepts Abbreviation — confusing)
+  SMART_MONEY_CONCEPTS: "AF_SMC",  // legacy: descriptor
   TREND_MOMENTUM:       "TS_TM",
   TM:                   "TS_TM",
   MEAN_REVERSION:       "MD_MR",
@@ -57,11 +60,12 @@ const STRATEGY_MIGRATION_MAP = {
 // ─── Abbreviated labels (for UI display) ─────────────────────────────────────
 
 const STRATEGY_ABBREV = {
-  AF_SAC: "AF",
-  TS_TM:  "TS",
-  MD_MR:  "MD",
-  BS_BR:  "BS",
+  AF_SMC:               "AF",
+  TS_TM:                "TS",
+  MD_MR:                "MD",
+  BS_BR:                "BS",
   // Legacy backward compat
+  ADAPTIVE_FUSION:      "AF",
   SMART_MONEY_CONCEPTS: "AF",
   TREND_MOMENTUM:       "TS",
   MEAN_REVERSION:       "MD",
@@ -71,7 +75,7 @@ const STRATEGY_ABBREV = {
 // ─── Tier → component mapping ─────────────────────────────────────────────────
 
 const TIER_COMPONENT_MAP = {
-  FOUNDRY: { active: ["AF_SAC"], umbrella: "ADAPTIVE_FUSION", abbrev: "AF" },
+  FOUNDRY: { active: ["AF_SMC"], umbrella: "ADAPTIVE_FUSION", abbrev: "AF" },
   FORGE:   { active: ["TS_TM"],  umbrella: "TREND_SURGE",     abbrev: "TS" },
   MINT:    { active: ["MD_MR"],  umbrella: "MEAN_DRIFT",      abbrev: "MD" },
   VAULT:   { active: ["BS_BR"],  umbrella: "BREAKOUT_STORM",  abbrev: "BS" },
@@ -98,7 +102,7 @@ function getActiveComponentsForTier(tier) {
  * Check if a key is a currently live component (not future).
  */
 function isActiveComponent(key) {
-  const liveKeys = ["AF_SAC", "TS_TM", "MD_MR", "BS_BR", "GROK_AI_TRADING"];
+  const liveKeys = ["AF_SMC", "TS_TM", "MD_MR", "BS_BR", "GROK_AI_TRADING"];
   return liveKeys.includes(key);
 }
 

@@ -512,9 +512,9 @@ function _computeTripleStats(trades, startCapital) {
   };
 }
 
-// AF_SAC/SMART_MONEY_CONCEPTS are aliases; Grok prompt/validation only knows ADAPTIVE_FUSION.
+// AF_SMC/SMART_MONEY_CONCEPTS are aliases; Grok prompt/validation only knows ADAPTIVE_FUSION.
 const GROK_KEY_ALIAS = {
-  AF_SAC: "ADAPTIVE_FUSION",
+  AF_SMC: "ADAPTIVE_FUSION",
   SMART_MONEY_CONCEPTS: "ADAPTIVE_FUSION",
 };
 
@@ -606,7 +606,7 @@ async function _applyGrokGate(trades, ctx = {}) {
 }
 
 /**
- * Run AF_SAC triple-timeframe backtest:
+ * Run AF_SMC triple-timeframe backtest:
  * Each trade type (Scalping/Intraday/Swing) runs on its own candle set independently.
  * Results are merged and sorted by open time.
  *
@@ -625,7 +625,7 @@ async function _applyGrokGate(trades, ctx = {}) {
  * @param {Function}[opts.onGrokProgress]
  */
 async function runTripleTypeBacktest(opts = {}) {
-  const { strategyKey = "AF_SAC", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
+  const { strategyKey = "AF_SMC", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
 
   const validation = strategyRegistry.validate(strategyKey);
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);

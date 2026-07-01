@@ -28,9 +28,9 @@ const strategies = strategyRegistry.listAll();
 console.log(`✓ Registered strategies: ${strategies.length}`);
 console.log(`  - Found: ${strategies.map((s) => s.config.name).join(", ")}`);
 
-// v2.0: primary key is AF_SAC; ADAPTIVE_FUSION resolves via legacy alias
-const afs = strategyRegistry.get("AF_SAC");
-console.log(`✓ Loaded AF_SAC: ${afs ? "SUCCESS" : "FAILED"}`);
+// v2.0: primary key is AF_SMC; ADAPTIVE_FUSION resolves via legacy alias
+const afs = strategyRegistry.get("AF_SMC");
+console.log(`✓ Loaded AF_SMC: ${afs ? "SUCCESS" : "FAILED"}`);
 console.log(`  - Name: ${afs.config.name}`);
 console.log(`  - Label: ${afs.config.label}`);
 console.log(`  - Version: ${afs.config.version}`);
@@ -38,9 +38,9 @@ console.log(`  - Umbrella: ${afs.config.umbrella ?? (afs.getMetadata?.()?.umbrel
 
 // Legacy alias still resolves to same instance
 const legacyAf = strategyRegistry.get("ADAPTIVE_FUSION");
-console.log(`✓ Legacy ADAPTIVE_FUSION alias → AF_SAC: ${legacyAf === afs ? "PASS" : "FAIL"}`);
+console.log(`✓ Legacy ADAPTIVE_FUSION alias → AF_SMC: ${legacyAf === afs ? "PASS" : "FAIL"}`);
 
-const validation = strategyRegistry.validate("AF_SAC");
+const validation = strategyRegistry.validate("AF_SMC");
 console.log(`✓ Validation: ${validation.valid ? "PASSED" : "FAILED"}`);
 
 const uiChoices = strategyRegistry.getUIChoices();
@@ -229,7 +229,7 @@ console.log(`  active instance: ${activeComp.config.name}`);
 console.log("\n" + "═".repeat(50));
 console.log("✅ AFS v2.0 TESTS COMPLETED");
 console.log("═".repeat(50));
-console.log("✓ Registry: AF_SAC primary + legacy aliases resolved");
+console.log("✓ Registry: AF_SMC primary + legacy aliases resolved");
 console.log("✓ Umbrella: AdaptiveFusionUmbrella wraps SmartMoneyConceptsStrategy");
 console.log("✓ Market ranking functional");
 console.log("✓ Signal detection delegates to SAC component");

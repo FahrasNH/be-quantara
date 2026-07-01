@@ -1,8 +1,8 @@
 /**
  * AdaptiveFusionUmbrella.js — FOUNDRY Tier umbrella strategy
  *
- * Umbrella key : AF_SAC
- * Active now   : AF_SAC (SmartMoneyConceptsStrategy)
+ * Umbrella key : AF_SMC
+ * Active now   : AF_SMC (SmartMoneyConceptsStrategy)
  * Future       : AF_LS, AF_OBR
  *
  * Delegates all signal generation to its active component.
@@ -16,7 +16,7 @@ const SmartMoneyConceptsStrategy = require("../implementations/SmartMoneyConcept
 class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   constructor() {
     super({
-      name:        "AF_SAC",
+      name:        "AF_SMC",
       label:       "Adaptive Fusion",
       description: "Smart Money Concepts: Liquidity Sweep · Order Block · FVG (Scalping / Intraday / Swing)",
       version:     "2.0.0",
@@ -25,7 +25,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       votingThreshold: 0.60,
     });
 
-    this.addComponent("AF_SAC", new SmartMoneyConceptsStrategy());
+    this.addComponent("AF_SMC", new SmartMoneyConceptsStrategy());
   }
 }
 
