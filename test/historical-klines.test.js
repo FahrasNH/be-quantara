@@ -125,4 +125,32 @@ const {
   assert.ok(ratio >= 0.85, "9/10 bars = 90% coverage");
 }
 
+// ── gap-fill restores uniform index↔time spacing (SAC-FIX cross-exchange) ─────
+// The sequence engine reasons on ARRAY INDICES (freshness: sweepAge = lastIdx-sweepIdx),
+// which is only valid if bar[i+1].timestamp - bar[i].timestamp == tfMs for every i.
+// This guards the fix that removed the ">10k bars → skip gap-fill" shortcut, which had
+// left index/time misaligned differently per exchange (root of Binance/Bitget/OKX divergence).
+{
+  const tfMs = CANDLE_INTERVAL_MS["5m"];
+  // Sparse series with two gaps (missing bars 2-4 and 6)
+  const sparse = [0, 1, 5, 7, 8].map((i) => ({
+    timestamp: i * tfMs, open: 100, high: 101, low: 99, close: 100, volume: 5,
+  }));
+  const filled = fillGaps(sparse, "5m");
+  // Every adjacent pair must be exactly tfMs apart — uniform spacing restored
+  for (let i = 1; i < filled.length; i++) {
+    assert.strictEqual(
+      filled[i].timestamp - filled[i - 1].timestamp, tfMs,
+      `bar ${i} not uniformly spaced after gap-fill`
+    );
+  }
+  // Span 0..8 = 9 slots → 9 bars
+  assert.strictEqual(filled.length, 9, "gap-fill produces contiguous 9-bar series");
+  // Filled bars are flat + zero-volume so the strategy ignores them (no fake signals)
+  const synthetic = filled.filter((c) => c.filled);
+  assert.ok(synthetic.length === 4, "4 synthetic bars inserted");
+  assert.ok(synthetic.every((c) => c.volume === 0), "synthetic bars are zero-volume");
+  assert.ok(synthetic.every((c) => c.high === c.low && c.open === c.close), "synthetic bars are flat");
+}
+
 console.log("✓ historical-klines tests passed");

@@ -473,11 +473,24 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     throw e;
   }
 
+  const validated = dedupeAndValidate(candles);
+  const realBars = validated.length;
+
+  // ── Data coverage (cross-exchange comparability) ──────────────────────────
+  // Backtests run per-exchange, and Binance/Bitget/OKX return DIFFERENT amounts
+  // of BTC history for the same window (listing depth, rate-limit truncation,
+  // exchange downtime). Reasoning happens on ARRAY INDICES that assume uniform
+  // time spacing, so unfilled gaps make index-distance ≠ time-distance — which
+  // corrupts indicator windows and the sequence-engine freshness score, and does
+  // so DIFFERENTLY per exchange. That is the root of the divergence seen across
+  // Binance/Bitget/OKX. We therefore ALWAYS gap-fill (flat zero-volume bars keep
+  // the index↔time alignment; the strategy ignores them — no volatility, no vol)
+  // and surface a coverage ratio so partial data is visible, not silent.
+  const expectedBars = estimateBarCount(effectiveStart, effectiveEnd, timeframe);
+  const dataCoverage = expectedBars > 0 ? realBars / expectedBars : 1;
+
   const gapsBefore = candles.length;
-  // Gap-fill mahal pada dataset besar — skip jika >10k bar (backtest tetap valid).
-  candles = candles.length > 10_000
-    ? dedupeAndValidate(candles)
-    : fillGaps(dedupeAndValidate(candles), timeframe);
+  candles = fillGaps(validated, timeframe);
   const gapsFilled = candles.length - gapsBefore;
 
   const meta = EXCHANGE_META[exchange] || EXCHANGE_META.bitget;
@@ -494,6 +507,9 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     listingMs,
     listingDate: new Date(listingMs).toISOString(),
     bars: candles.length,
+    realBars,
+    expectedBars,
+    coverage: Number(dataCoverage.toFixed(4)),
     estimatedBars: barLimit.bars,
     maxBars: MAX_BARS,
     rangeClamped: barLimit.clamped,

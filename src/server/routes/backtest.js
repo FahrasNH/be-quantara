@@ -1359,7 +1359,14 @@ async function _runBacktestJobAsync(job, userId, opts) {
           },
         });
         entryCandles[type] = entryRes.candles || [];
-        dataInfo[type] = { entryBars: entryCandles[type].length, startDate: entryRes.startDate, endDate: entryRes.endDate, clamped: entryRes.clamped || false };
+        dataInfo[type] = {
+          entryBars: entryCandles[type].length,
+          realBars: entryRes.realBars,
+          coverage: entryRes.coverage,
+          startDate: entryRes.startDate,
+          endDate: entryRes.endDate,
+          clamped: entryRes.clamped || false,
+        };
       } catch (e) {
         if (e.code === "CANCELLED") throw e;
         entryCandles[type] = [];
