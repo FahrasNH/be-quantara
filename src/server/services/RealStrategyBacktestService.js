@@ -64,7 +64,7 @@ function isoOf(c) {
  */
 // Multi-position backtest (v3.0): each AF component opens independent positions
 // Pass opts.debug=true to get a per-bar rejection log (capped at 500 entries).
-function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
+async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
 
@@ -202,6 +202,12 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
+    // BT-FIX: yield the event loop every 2000 bars so concurrent job-status polls
+    // get served during heavy compute. Without this, large ranges ("max") block
+    // Node's single thread → poll requests hang → FE aborts at 10s → "Request timed out".
+    if (i % 2000 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     const c = entryCandles[i];
     const price = c.close;
     const atr = indicators.atr[i];
@@ -244,6 +250,11 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
 
     // Detect multi-component signals (AF v3.0)
     const multiSignal = strategy.detectSignalMulti(indicators, i, {
+      // BT-FIX: spread full strategy config so SAC knobs (sacMinConfidenceA/B/C,
+      // sacEnabledComponents, sacSweepVolMult, sacOBDispMult, …) actually reach
+      // the detector. Previously only af* keys were forwarded, so detectSignalMulti
+      // used its internal `?? 60` defaults and ignored our tuned gates → Scalping 0.
+      ...cfg,
       balance: capital,
       volatility,
       trend_strength: trendStrength,
@@ -276,11 +287,13 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
         const compSigs = {};
         // Re-run with gate off to see what the raw signal would have been
         const rawMulti = strategy.detectSignalMulti(indicators, i, {
+          ...cfg,
           balance: capital, volatility, trend_strength: trendStrength,
           htfTrend, htfTrendStrength: htfStrengthAt(i),
           maxEntryExtensionATR: cfg.maxEntryExtensionATR,
           afEnabledComponents: cfg.afEnabledComponents,
           // gates OFF for diagnosis:
+          sacMinConfidenceA: 0, sacMinConfidenceB: 0, sacMinConfidenceC: 0,
           afMinComponentConfidence: 0, afMinAggregateConfidence: 0,
         });
         for (const k of ["Scalping", "Intraday", "Swing"]) {
@@ -452,7 +465,7 @@ function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCand
  * @param {boolean} [opts.enableFees]
  * @param {boolean} [opts.enableSlippage]
  */
-function runTripleTypeBacktest(opts = {}) {
+async function runTripleTypeBacktest(opts = {}) {
   const { strategyKey = "AF_SAC", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
 
   const validation = strategyRegistry.validate(strategyKey);
@@ -490,7 +503,7 @@ function runTripleTypeBacktest(opts = {}) {
       continue;
     }
 
-    const typeResult = _runMultiPositionBacktest(
+    const typeResult = await _runMultiPositionBacktest(
       {
         ...opts,
         strategyKey,
@@ -578,7 +591,7 @@ function runTripleTypeBacktest(opts = {}) {
   };
 }
 
-function runRealBacktest(opts = {}) {
+async function runRealBacktest(opts = {}) {
   const {
     entryCandles = [],
     htfCandles = null,
@@ -605,7 +618,7 @@ function runRealBacktest(opts = {}) {
   const multiPosMode = opts.useMultiPosition || strategyKey === "ADAPTIVE_FUSION";
 
   if (multiPosMode) {
-    return _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles);
+    return await _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles);
   }
 
   const indicators = calcIndicators(entryCandles, {

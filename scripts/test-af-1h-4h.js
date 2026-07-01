@@ -55,7 +55,7 @@ async function main() {
   console.log(`   (Old: 15m entry = ${Math.floor(120*24*60/15)} bars, 1h HTF = ${Math.floor(120*24*60/60)} bars)`);
   console.log(`   (New: 1h entry = ${entryCandles.length} bars, 4h HTF = ${htfCandles.length} bars)\n`);
 
-  const { trades, stats, meta } = runRealBacktest({
+  const { trades, stats, meta } = await runRealBacktest({
     entryCandles,
     htfCandles,
     strategyKey: "ADAPTIVE_FUSION",

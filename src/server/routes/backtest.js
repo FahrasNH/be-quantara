@@ -1384,7 +1384,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     const typeTotal = typeOrder.length;
     let typesDone = 0;
 
-    const result = runTripleTypeBacktest({
+    const result = await runTripleTypeBacktest({
       entryCandles,
       htfCandles,
       strategyKey,
@@ -1445,7 +1445,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
   job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
 
-  const result = runRealBacktest({
+  const result = await runRealBacktest({
     entryCandles,
     htfCandles,
     strategyKey,

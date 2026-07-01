@@ -50,8 +50,8 @@ const useChop = process.argv.includes("--chop");
 const entry = gen(180, 15, 42, useChop);
 const htf   = gen(180, 60, 42, useChop);
 
-function run(label, config) {
-  const r = runRealBacktest({ entryCandles: entry, htfCandles: htf, strategyKey: "ADAPTIVE_FUSION", capital: 1000, config });
+async function run(label, config) {
+  const r = await runRealBacktest({ entryCandles: entry, htfCandles: htf, strategyKey: "ADAPTIVE_FUSION", capital: 1000, config });
   const s = r.stats;
   const confs = r.trades.map(t => t.confidence).filter(c => c != null);
   const avgConf = confs.length ? (confs.reduce((a, b) => a + b, 0) / confs.length).toFixed(1) : "n/a";
@@ -69,9 +69,9 @@ function run(label, config) {
 const common = { afMinVotes: 2, volSmaMultiplier: 1.0 };
 
 const rows = [
-  run("(1) C-only, no gate (v3.2 baseline)", { ...common, afEnabledComponents: ["C"] }),
-  run("(2) A/B/C, NO confidence gate",        { ...common, afEnabledComponents: ["A", "B", "C"] }),
-  run("(3) A/B/C, confidence gate = 60 (AF-FIX)", { ...common, afEnabledComponents: ["A", "B", "C"], afMinComponentConfidence: 60, afMinAggregateConfidence: 60 }),
+  await run("(1) C-only, no gate (v3.2 baseline)", { ...common, afEnabledComponents: ["C"] }),
+  await run("(2) A/B/C, NO confidence gate",        { ...common, afEnabledComponents: ["A", "B", "C"] }),
+  await run("(3) A/B/C, confidence gate = 60 (AF-FIX)", { ...common, afEnabledComponents: ["A", "B", "C"], afMinComponentConfidence: 60, afMinAggregateConfidence: 60 }),
 ];
 
 console.log(`\nADAPTIVE_FUSION confidence-gate comparison — dataset: ${DATASET} (180d / 15m, identical candles)\n`);

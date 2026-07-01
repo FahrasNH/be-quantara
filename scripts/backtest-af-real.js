@@ -90,7 +90,7 @@ async function main() {
   const htfCandles = HTF && HTF !== "none" ? await loadCandles(HTF) : null;
   console.log(`📊 entry bars: ${entryCandles.length}  |  HTF bars: ${htfCandles?.length ?? 0}\n`);
 
-  const { trades, stats, meta } = runRealBacktest({
+  const { trades, stats, meta } = await runRealBacktest({
     entryCandles, htfCandles, strategyKey: STRAT, capital: CAPITAL,
     enableFees: true, enableSlippage: false,
   });
