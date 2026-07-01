@@ -25,12 +25,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "SMART_MONEY_CONCEPTS",
-      label: "Smart Money Concepts (SAC)",
+      label: "Smart Money Concepts (SAC) v3.0",
       description:
-        "3-component SMC strategy: Scalping (sweep+OB+CVD), " +
-        "Intraday (CHoCH+OB+trend), Swing (FVG+displacement+premium/discount). " +
-        "Votes on directional confluence; blocks counter-HTF entries.",
-      version: "1.0.0",
+        "Event-driven SMC sequence engine (v3.0): " +
+        "sweep → CHoCH/MSS → displacement/FVG → mitigation → entry. " +
+        "Causal, cross-bar structure replicates institutional market reading. " +
+        "3 independent trade types: Scalping (5m/1h), Intraday (15m/4h), Swing (4h/1w). " +
+        "HTF directional bias; sacUseSequenceEngine flag (default on) for fallback.",
+      version: "3.0.0",
       enabled: true,
       ...config,
     });
