@@ -1457,17 +1457,44 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
   job.progress({ phase: "fetch", timeframe: entryTf, message: `Fetching ${entryTf} candles…`, pct: 0 });
 
-  const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-    symbol: sym, timeframe: entryTf, ...fetchOpts, periodId: entryEffectivePeriod, allowClamp: true, abortSignal,
-    ...(entryMaxBars ? { maxBarsOverride: entryMaxBars } : {}),
-    onProgress: (loaded, total) => {
-      const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
-      job.progress({ phase: "fetch", timeframe: entryTf, message: `Loading ${entryTf} candles: ${loaded.toLocaleString()} / ${total.toLocaleString()}`, pct });
-    },
-  });
+  // A single-TF strategy (TS_TF entry 5m, MD_MR entry 15m) has ONLY this one data
+  // source — unlike AF's triple-TF path, which catches per-type and degrades the
+  // failing component to 0 trades while the others still run. A short TF like 5m
+  // often has no deep history on some exchanges (e.g. Bitget serves only recent
+  // 5m candles) → fetchOHLCV returns empty → KLINES_NOT_FOUND. Without this guard
+  // that raw error propagates and kills the whole job (and, in a tier package, the
+  // whole tier). Wrap it and fail with an ACTIONABLE, strategy-aware message.
+  const stratLabel = strategyCfg?.label || strategyKey;
+  let entryRes;
+  try {
+    entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+      symbol: sym, timeframe: entryTf, ...fetchOpts, periodId: entryEffectivePeriod, allowClamp: true, abortSignal,
+      ...(entryMaxBars ? { maxBarsOverride: entryMaxBars } : {}),
+      onProgress: (loaded, total) => {
+        const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
+        job.progress({ phase: "fetch", timeframe: entryTf, message: `Loading ${entryTf} candles: ${loaded.toLocaleString()} / ${total.toLocaleString()}`, pct });
+      },
+    });
+  } catch (e) {
+    if (e.code === "CANCELLED") throw e;
+    const err = new Error(
+      `${stratLabel}: gagal memuat candle ${entryTf} — ${e.message} ` +
+      `Exchange mungkin tak menyediakan data ${entryTf} sejauh periode itu. ` +
+      `Coba periode lebih pendek/terbaru, timeframe lebih tinggi, atau exchange lain (mis. Binance).`
+    );
+    err.code = e.code || "ENTRY_FETCH_FAILED";
+    err.strategyKey = strategyKey;
+    throw err;
+  }
   const entryCandles = entryRes.candles || [];
   if (entryCandles.length < 60) {
-    throw new Error(`Insufficient ${entryTf} data (${entryCandles.length} bars)`);
+    const err = new Error(
+      `${stratLabel}: data ${entryTf} tidak cukup (${entryCandles.length} bar) untuk backtest. ` +
+      `Coba periode lebih panjang, timeframe lebih tinggi, atau exchange lain.`
+    );
+    err.code = "INSUFFICIENT_DATA";
+    err.strategyKey = strategyKey;
+    throw err;
   }
 
   let htfCandles = null;
