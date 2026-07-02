@@ -256,88 +256,133 @@ class MeanReversionStrategy extends StrategyBase {
    * Main signal detection (mean reversion)
    */
   detectSignal(indicators, lastIdx, config = {}) {
-    // Need ≥50 bars for a stable 20-period BB + RSI warmup.
-    // 50 bars = ~12.5h on 15m TF — a safe minimum before trading (FIX #2).
+    // Need ≥50 bars for stable indicators (20-period BB + 14-period RSI)
     if (lastIdx < 50) return null;
 
-    // Slice to current bar to avoid lookahead. Guard against datasets that
-    // don't actually reach lastIdx (e.g. live feed lag) (FIX #3).
     const closes = (indicators.closes || []).slice(0, lastIdx + 1);
-    if (closes.length <= lastIdx) return null;  // not enough data up to lastIdx
+    if (closes.length <= lastIdx) return null;
 
     const rsiValues = indicators.rsi || [];
     const volumes = (indicators.volumes || []).slice(0, lastIdx + 1);
     const atr = indicators.atr?.[lastIdx];
     const volSMA = indicators.volSMA?.[lastIdx];
 
-    // Indicator availability guards — fail closed rather than silently (FIX #6)
-    if (!atr) return null;
-    if (!rsiValues.length || rsiValues[lastIdx] == null) return null;  // RSI required
-    if (!volSMA || volSMA <= 0) return null;  // can't validate volume without SMA
+    // Fail closed if indicators incomplete
+    if (!atr || !rsiValues[lastIdx] || !volSMA || volSMA <= 0) return null;
 
-    // Calculate current BB levels
-    const bbLevels = this.calculateBollingerBands(
-      closes,
-      this.config.bbPeriod,
-      this.config.bbStdDev
-    );
+    const rsiNow = rsiValues[lastIdx];
+    const close = closes[lastIdx];
+    const volRatio = volumes[lastIdx] / volSMA;
 
-    if (!bbLevels) return null;
+    // Volume gate — reject dead markets
+    if (volRatio < this.config.minVolRatio) return null;
 
-    this._lastBBLevels = bbLevels;
+    // Calculate BB for both components
+    const bbA = this.calculateBollingerBands(closes, this.config.bbPeriod, this.config.bbStdDevA);
+    const bbB = this.calculateBollingerBands(closes, this.config.bbPeriod, this.config.bbStdDevB);
 
-    // Check LONG entry
-    const longCheck = this.checkLongEntry(
-      closes, rsiValues, volumes, bbLevels, volSMA, lastIdx, atr
-    );
+    if (!bbA || !bbB) return null;
 
-    if (longCheck.valid) return "LONG";
+    // VWAP for confirmation
+    const vwapValues = calcVWAP(indicators.candles?.slice?.(0, lastIdx + 1) || []);
+    const vwap = vwapValues[lastIdx] || close;
 
-    // Check SHORT entry
-    const shortCheck = this.checkShortEntry(
-      closes, rsiValues, volumes, bbLevels, volSMA, lastIdx, atr
-    );
+    this._lastBBLevels = { bbA, bbB, vwap };
 
-    if (shortCheck.valid) return "SHORT";
+    // ═══ COMPONENT A: SCALPING (5m) ═══════════════════════════════════════
+    const isCompALong =
+      rsiNow < this.config.rsiOversoldA &&
+      close < bbA.lower &&
+      close < vwap;
+
+    const isCompAShort =
+      rsiNow > this.config.rsiOverboughtA &&
+      close > bbA.upper &&
+      close > vwap;
+
+    // ═══ COMPONENT B: INTRADAY (15m) ═══════════════════════════════════════
+    const isCompBLong =
+      rsiNow < this.config.rsiOversoldB &&
+      close < bbB.lower &&
+      close < vwap;
+
+    const isCompBShort =
+      rsiNow > this.config.rsiOverboughtB &&
+      close > bbB.upper &&
+      close > vwap;
+
+    // ═══ RETURN SIGNAL WITH COMPONENT METADATA ═════════════════════════════
+    if (isCompALong) {
+      return {
+        signal: "LONG",
+        component: "A",
+        confidence: 65,
+        reason: `Scalping: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldA}, BB(1.5σ) touch, below VWAP`,
+      };
+    }
+    if (isCompAShort) {
+      return {
+        signal: "SHORT",
+        component: "A",
+        confidence: 65,
+        reason: `Scalping: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtA}, BB(1.5σ) touch, above VWAP`,
+      };
+    }
+
+    if (isCompBLong) {
+      return {
+        signal: "LONG",
+        component: "B",
+        confidence: 60,
+        reason: `Intraday: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldB}, BB(2.0σ) touch, below VWAP`,
+      };
+    }
+    if (isCompBShort) {
+      return {
+        signal: "SHORT",
+        component: "B",
+        confidence: 60,
+        reason: `Intraday: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtB}, BB(2.0σ) touch, above VWAP`,
+      };
+    }
 
     return null;
   }
 
   /**
-   * Calculate SL/TP based on ATR and BB levels
-   * SL = 1.0×ATR (very tight), TP = 3.0×ATR
-   * Target is mean reversion to BB middle
+   * Calculate SL/TP based on component and ATR
+   * Component A (Scalping): SL 1.4×ATR, TP 3.5×ATR (1:2.5 RR)
+   * Component B (Intraday): SL 1.4×ATR, TP 2.8×ATR (1:2.0 RR)
    */
   calculateRiskConfig(entryPrice, atr, signal, bbLevels = null) {
-    const slDist = atr * this.config.slMultiplier;
-    const tpDist = atr * this.config.tpMultiplier;
+    const component = typeof signal === 'object' ? signal.component : 'B';
+    const isComponentA = component === 'A';
+
+    const slDist = atr * this.config.atrMult;  // 1.4× for both
+    const tpMultiplier = isComponentA ? this.config.tpMultiplierA : this.config.tpMultiplierB;
+    const tpDist = atr * tpMultiplier;
 
     let stopLoss, takeProfit;
 
-    // TP = max(ATR target, BB middle) so we always keep at least the 3×ATR
-    // reward; if the mean (BB middle) is further, aim for the full reversion.
-    // Never let BB middle SHRINK the TP below the ATR floor (FIX #4).
-    if (signal === "LONG") {
+    if (signal.signal === "LONG" || signal === "LONG") {
       stopLoss = entryPrice - slDist;
-      const atrTP = entryPrice + tpDist;
-      // For LONG, further = higher → take the max
-      takeProfit = bbLevels?.middle ? Math.max(atrTP, bbLevels.middle) : atrTP;
+      takeProfit = entryPrice + tpDist;
     } else {  // SHORT
       stopLoss = entryPrice + slDist;
-      const atrTP = entryPrice - tpDist;
-      // For SHORT, further = lower → take the min
-      takeProfit = bbLevels?.middle ? Math.min(atrTP, bbLevels.middle) : atrTP;
+      takeProfit = entryPrice - tpDist;
     }
 
+    const bbMiddle = isComponentA ? bbLevels?.bbA?.middle : bbLevels?.bbB?.middle;
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
       takeProfit: parseFloat(takeProfit.toFixed(8)),
-      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // v2.3: ~2.29 (tp 3.2x / sl 1.4x)
+      riskReward: parseFloat((tpDist / slDist).toFixed(2)),
       slDistance: slDist,
       tpDistance: tpDist,
-      slMultiplier: this.config.slMultiplier,
-      tpMultiplier: this.config.tpMultiplier,
-      bbTarget: bbLevels?.middle || null,
+      component: component,
+      holdMinutes: isComponentA ? this.config.holdMinutesA : this.config.holdMinutesB,
+      trailingStopMult: isComponentA ? this.config.trailingStopAtrMultA : this.config.trailingStopAtrMultB,
+      bbTarget: bbMiddle || null,
     };
   }
 
@@ -404,13 +449,18 @@ class MeanReversionStrategy extends StrategyBase {
   }
 
   /**
-   * Timeframe configuration
+   * Timeframe configuration — Single TF, no HTF regime
+   * Component A runs on 5m, Component B runs on 15m
    */
   getTimeframeConfig() {
     return {
-      interval: "15m",
-      higherTf: null,  // No HTF needed
-      checkInterval: 900000,  // 15 minutes
+      interval: "5m",  // Run on 5m for faster A component response
+      higherTf: null,  // NO HTF regime — both components operate on single TF
+      checkInterval: 300000,  // Check every 5 minutes for both components
+      components: [
+        { id: "A", interval: "5m", holdMinutes: 15 },
+        { id: "B", interval: "15m", holdMinutes: 90 },
+      ],
     };
   }
 
