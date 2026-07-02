@@ -95,165 +95,7 @@ class MeanReversionStrategy extends StrategyBase {
   }
 
   /**
-   * Check if 2+ bars confirm LONG recovery (oversold bounce)
-   * Confirmation bar[1]: small body (indecision near bottom)
-   * Confirmation bar[0]: close > bar[1].close (recovery confirmed)
-   */
-  hasConfirmationBars(closes, rsiValues, direction, fromIdx) {
-    if (!closes || closes.length <= fromIdx) return false;
-
-    const bar1 = { close: closes[fromIdx - 1] };
-    const bar0 = { close: closes[fromIdx] };
-
-    if (direction === "LONG") {
-      // LONG confirmation: current close > previous close (recovery)
-      return bar0.close > bar1.close;
-    } else {
-      // SHORT confirmation: current close < previous close (rejection)
-      return bar0.close < bar1.close;
-    }
-  }
-
-  /**
-   * Validate volume is normal (not panic spike, not dead)
-   */
-  validateVolume(volumes, volSMA, rsiCurrent, direction) {
-    if (!volumes || volumes.length === 0) return false;
-
-    const currentVol = volumes[volumes.length - 1];
-
-    if (volSMA <= 0) return false;
-
-    const volRatio = currentVol / volSMA;
-
-    // Need at least minimum ratio
-    if (volRatio < this.config.minVolRatio) return false;
-
-    // For LONG: RSI is low (oversold) but volume should be normal, not extreme panic
-    // For SHORT: RSI is high (overbought) but volume should be normal, not extreme euphoria
-    // Extreme = > 2.0x SMA for extreme moves
-    if (volRatio > 2.0) {
-      // During recovery/rejection, too much volume is suspicious
-      if (direction === "LONG" && rsiCurrent < 30) return false;  // Panic selling still
-      if (direction === "SHORT" && rsiCurrent > 70) return false; // Euphoria buying still
-    }
-
-    return true;
-  }
-
-  /**
-   * Check LONG entry (oversold bounce)
-   * All conditions must be true
-   */
-  checkLongEntry(
-    closes,
-    rsiValues,
-    volumes,
-    bbLevels,
-    volSMA,
-    lastIdx,
-    atr
-  ) {
-    if (!closes || !bbLevels || closes.length < lastIdx + 1) {
-      return { valid: false, reason: "Insufficient data" };
-    }
-
-    const closeCurr = closes[lastIdx];
-    const closePrev = lastIdx > 0 ? closes[lastIdx - 1] : null;
-    const rsiCurr = rsiValues?.[lastIdx];
-
-    // 1. PRICE EXTREME: harus DEKAT band bawah (sinyal reversion kuat).
-    // Zona masuk = [lower, lower + 0.5×bandwidth] saja — separuh bawah.
-    // Entry yang jauh dari band (mendekati middle) reversion-edge-nya lemah →
-    // tolak agar win-rate tidak terdilusi (TUNING #2).
-    if (closeCurr < bbLevels.lower) {
-      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} still below BB lower ${bbLevels.lower.toFixed(2)}` };
-    }
-    const bounceZoneTop = bbLevels.lower + bbLevels.bandwidth * 0.5;
-    if (closeCurr > bounceZoneTop) {
-      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} terlalu jauh dari band bawah (zona masuk ≤ ${bounceZoneTop.toFixed(2)})` };
-    }
-
-    // 2. RSI CONFIRMATION: oversold but recovering
-    if (!rsiCurr || rsiCurr >= this.config.rsiOversold) {
-      return { valid: false, reason: `RSI ${rsiCurr?.toFixed(1) || "null"} not oversold (<${this.config.rsiOversold})` };
-    }
-
-    // RSI very extreme (< 20) might be panic still
-    if (rsiCurr < 15) {
-      return { valid: false, reason: `RSI ${rsiCurr.toFixed(1)} too extreme (< 15), panic selling` };
-    }
-
-    // 3. VOLUME CONFIRMATION
-    if (!this.validateVolume(volumes, volSMA, rsiCurr, "LONG")) {
-      return { valid: false, reason: "Volume not in normal range" };
-    }
-
-    // 4. CONFIRMATION BARS
-    if (!this.hasConfirmationBars(closes, rsiValues, "LONG", lastIdx)) {
-      return { valid: false, reason: "Missing confirmation bar (close > previous)" };
-    }
-
-    return { valid: true, reason: "All LONG conditions met - oversold bounce" };
-  }
-
-  /**
-   * Check SHORT entry (overbought rejection)
-   * Mirror of checkLongEntry for downside
-   */
-  checkShortEntry(
-    closes,
-    rsiValues,
-    volumes,
-    bbLevels,
-    volSMA,
-    lastIdx,
-    atr
-  ) {
-    if (!closes || !bbLevels || closes.length < lastIdx + 1) {
-      return { valid: false, reason: "Insufficient data" };
-    }
-
-    const closeCurr = closes[lastIdx];
-    const closePrev = lastIdx > 0 ? closes[lastIdx - 1] : null;
-    const rsiCurr = rsiValues?.[lastIdx];
-
-    // 1. PRICE EXTREME: harus DEKAT band atas (sinyal rejection kuat).
-    // Zona masuk = [upper - 0.5×bandwidth, upper] saja — separuh atas.
-    // Simetris dgn LONG: tolak entry yang jauh dari band (edge lemah) (TUNING #2).
-    if (closeCurr > bbLevels.upper) {
-      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} still above BB upper ${bbLevels.upper.toFixed(2)}` };
-    }
-    const rejectionZoneBot = bbLevels.upper - bbLevels.bandwidth * 0.5;
-    if (closeCurr < rejectionZoneBot) {
-      return { valid: false, reason: `Price ${closeCurr.toFixed(2)} terlalu jauh dari band atas (zona masuk ≥ ${rejectionZoneBot.toFixed(2)})` };
-    }
-
-    // 2. RSI CONFIRMATION: overbought but rejecting
-    if (!rsiCurr || rsiCurr <= this.config.rsiOverbought) {
-      return { valid: false, reason: `RSI ${rsiCurr?.toFixed(1) || "null"} not overbought (>${this.config.rsiOverbought})` };
-    }
-
-    // RSI very extreme (> 85) might be euphoria still
-    if (rsiCurr > 85) {
-      return { valid: false, reason: `RSI ${rsiCurr.toFixed(1)} too extreme (> 85), euphoria buying` };
-    }
-
-    // 3. VOLUME CONFIRMATION
-    if (!this.validateVolume(volumes, volSMA, rsiCurr, "SHORT")) {
-      return { valid: false, reason: "Volume not in normal range" };
-    }
-
-    // 4. CONFIRMATION BARS
-    if (!this.hasConfirmationBars(closes, rsiValues, "SHORT", lastIdx)) {
-      return { valid: false, reason: "Missing confirmation bar (close < previous)" };
-    }
-
-    return { valid: true, reason: "All SHORT conditions met - overbought rejection" };
-  }
-
-  /**
-   * Main signal detection (mean reversion)
+   * Main signal detection — dual-component mean reversion (Scalping A / Intraday B).
    */
   detectSignal(indicators, lastIdx, config = {}) {
     // Need ≥50 bars for stable indicators (20-period BB + 14-period RSI)
@@ -311,42 +153,25 @@ class MeanReversionStrategy extends StrategyBase {
       close > bbB.upper &&
       close > vwap;
 
-    // ═══ RETURN SIGNAL WITH COMPONENT METADATA ═════════════════════════════
-    if (isCompALong) {
-      return {
-        signal: "LONG",
-        component: "A",
-        confidence: 65,
-        reason: `Scalping: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldA}, BB(1.5σ) touch, below VWAP`,
-      };
-    }
-    if (isCompAShort) {
-      return {
-        signal: "SHORT",
-        component: "A",
-        confidence: 65,
-        reason: `Scalping: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtA}, BB(1.5σ) touch, above VWAP`,
-      };
-    }
+    // ═══ RESOLVE SIGNAL + STORE META ══════════════════════════════════════
+    // Contract parity with BotEngine + RealStrategyBacktestService: detectSignal
+    // returns a STRING ("LONG"/"SHORT"/null); component/context is exposed via
+    // getLastSignalMeta() and consumed by calculateRiskConfig(...,component,...).
+    let signal = null, component = null, confidence = 0, reason = null;
+    if (isCompALong)       { signal = "LONG";  component = "Scalping"; confidence = 65; reason = `Scalping: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldA}, BB(1.5σ) touch, below VWAP`; }
+    else if (isCompAShort) { signal = "SHORT"; component = "Scalping"; confidence = 65; reason = `Scalping: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtA}, BB(1.5σ) touch, above VWAP`; }
+    else if (isCompBLong)  { signal = "LONG";  component = "Intraday"; confidence = 60; reason = `Intraday: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldB}, BB(2.0σ) touch, below VWAP`; }
+    else if (isCompBShort) { signal = "SHORT"; component = "Intraday"; confidence = 60; reason = `Intraday: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtB}, BB(2.0σ) touch, above VWAP`; }
 
-    if (isCompBLong) {
-      return {
-        signal: "LONG",
-        component: "B",
-        confidence: 60,
-        reason: `Intraday: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldB}, BB(2.0σ) touch, below VWAP`,
-      };
-    }
-    if (isCompBShort) {
-      return {
-        signal: "SHORT",
-        component: "B",
-        confidence: 60,
-        reason: `Intraday: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtB}, BB(2.0σ) touch, above VWAP`,
-      };
-    }
+    if (!signal) { this._lastSignalMeta = null; return null; }
 
-    return null;
+    this._lastSignalMeta = { component, componentConfidence: confidence, marketCond: "MEAN_REVERT", reason };
+    return signal;
+  }
+
+  /** Component/context of the most recent detectSignal (real-engine + live parity). */
+  getLastSignalMeta() {
+    return this._lastSignalMeta || null;
   }
 
   /**
@@ -354,17 +179,21 @@ class MeanReversionStrategy extends StrategyBase {
    * Component A (Scalping): SL 1.4×ATR, TP 3.5×ATR (1:2.5 RR)
    * Component B (Intraday): SL 1.4×ATR, TP 2.8×ATR (1:2.0 RR)
    */
-  calculateRiskConfig(entryPrice, atr, signal, bbLevels = null) {
-    const component = typeof signal === 'object' ? signal.component : 'B';
-    const isComponentA = component === 'A';
+  calculateRiskConfig(entryPrice, atr, signal, component = null, _opts = {}) {
+    // `component` is the string tag from getLastSignalMeta() ("Scalping"/"Intraday").
+    // Accepts legacy object-signal for backward compat.
+    const comp = component || (typeof signal === "object" ? signal.component : null) || "Intraday";
+    const isComponentA = comp === "Scalping" || comp === "A";
+    const side = typeof signal === "object" ? signal.signal : signal;
 
-    const slDist = atr * this.config.atrMult;  // 1.4× for both
+    const slDist = atr * this.config.atrMult;  // 1.4×ATR for both components
+    // tpMultiplier IS the reward:risk ratio → TP distance = SL distance × RR.
+    // (A=2.5 → 1:2.5, B=2.0 → 1:2.0). Computing off slDist keeps RR exact.
     const tpMultiplier = isComponentA ? this.config.tpMultiplierA : this.config.tpMultiplierB;
-    const tpDist = atr * tpMultiplier;
+    const tpDist = slDist * tpMultiplier;
 
     let stopLoss, takeProfit;
-
-    if (signal.signal === "LONG" || signal === "LONG") {
+    if (side === "LONG") {
       stopLoss = entryPrice - slDist;
       takeProfit = entryPrice + tpDist;
     } else {  // SHORT
@@ -372,17 +201,15 @@ class MeanReversionStrategy extends StrategyBase {
       takeProfit = entryPrice - tpDist;
     }
 
-    const bbMiddle = isComponentA ? bbLevels?.bbA?.middle : bbLevels?.bbB?.middle;
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
       takeProfit: parseFloat(takeProfit.toFixed(8)),
       riskReward: parseFloat((tpDist / slDist).toFixed(2)),
       slDistance: slDist,
       tpDistance: tpDist,
-      component: component,
+      component: isComponentA ? "Scalping" : "Intraday",
       holdMinutes: isComponentA ? this.config.holdMinutesA : this.config.holdMinutesB,
       trailingStopMult: isComponentA ? this.config.trailingStopAtrMultA : this.config.trailingStopAtrMultB,
-      bbTarget: bbMiddle || null,
     };
   }
 

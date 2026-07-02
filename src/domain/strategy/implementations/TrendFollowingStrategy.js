@@ -563,6 +563,8 @@ class TrendFollowingStrategy extends StrategyBase {
 
   getLastSignalMeta() {
     return {
+      component: "Swing",  // Trend Following = trend-continuation swing trades (Type Trade label)
+      marketCond: this._trendState.htfTrendConfirmed ? "STRONG_TREND" : "NORMAL",
       direction: this._trendState.htfTrendDirection,
       htfTrendConfirmed: this._trendState.htfTrendConfirmed,
       adxStrength: this._trendState.htfAdxStrength,

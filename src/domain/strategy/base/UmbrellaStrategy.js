@@ -122,6 +122,15 @@ class UmbrellaStrategy extends StrategyBase {
     return null;
   }
 
+  // ─── Passthrough for getLastSignalMeta (real-engine component labeling) ───
+
+  getLastSignalMeta() {
+    const active = this.getActiveComponent();
+    return typeof active.getLastSignalMeta === "function"
+      ? active.getLastSignalMeta()
+      : null;
+  }
+
   // ─── Metadata ────────────────────────────────────────────────────────────
 
   getMetadata() {
