@@ -175,4 +175,60 @@ describe("TrendFollowingStrategy", () => {
       expect(meta.donchianBroken).toBe(false);
     });
   });
+
+  describe("Donchian breakout — self-inclusion regression (2026-07-02)", () => {
+    // Root cause: the fallback Donchian channel (used whenever no separate MTF
+    // indicators are supplied — i.e. every real call site, since nothing in the
+    // codebase ever populates indicators.donchian15m) was read at the SAME index
+    // as the current bar. Since that channel's rolling window includes the
+    // current bar's own high/low, `close > upper` / `close < lower` was
+    // mathematically impossible (close <= high <= upper; close >= low >= lower)
+    // — TS_TF could never produce a signal, in live OR backtest, regardless of
+    // data. Fixed by comparing against the PRIOR bar's channel.
+    const { calcIndicators } = require("../src/domain/indicators");
+
+    // Regime-cycling generator (oscillates trend/pullback so RSI/volume gates can
+    // stay inside their healthy bands, unlike a straight monotonic line which
+    // pins RSI at an extreme and never re-enters [30,70]) — same shape used by
+    // test/real-backtest-service.test.js's proven fixture.
+    function genRegimeCandles(bars, seed = 7) {
+      const R = ["U", "N", "C", "D", "N"];
+      const RL = 48; // bars per regime leg
+      const out = [];
+      let p = 100, t = Date.UTC(2024, 0, 1), s = seed;
+      const rnd = () => { s = (1103515245 * s + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+      for (let i = 0; i < bars; i++) {
+        const r = R[Math.floor(i / RL) % R.length];
+        let d, n;
+        if (r === "U") { d = p * 0.0015; n = 0.004; }
+        else if (r === "D") { d = -p * 0.0015; n = 0.004; }
+        else if (r === "C") { d = (rnd() - 0.5) * p * 0.003; n = 0.014; }
+        else { d = (rnd() - 0.45) * p * 0.0008; n = 0.005; }
+        const no = (rnd() - 0.5) * p * n * 2;
+        const o = p, c = Math.max(p + d + no, 1);
+        const hi = Math.max(o, c) * (1 + rnd() * n);
+        const lo = Math.min(o, c) * (1 - rnd() * n);
+        out.push({ timestamp: t, open: o, high: hi, low: lo, close: c, volume: 1000 + rnd() * 4000 });
+        p = c; t += 5 * 60000;
+      }
+      return out;
+    }
+
+    test("a realistic multi-regime candle series CAN break the fallback Donchian channel (both directions reachable)", () => {
+      const candles = genRegimeCandles(1200);
+      const indicators = calcIndicators(candles, {
+        emaFast: 9, emaSlow: 21, emaTrend: 50, rsiPeriod: 14, atrPeriod: 14,
+      });
+      let sawLong = false, sawShort = false;
+      for (let i = 50; i < candles.length; i++) {
+        const signal = strategy.detectSignal(indicators, i, {});
+        if (signal === "LONG") sawLong = true;
+        if (signal === "SHORT") sawShort = true;
+      }
+      // Before the fix, close[i] could never exceed upper[i] / undercut lower[i]
+      // (both include bar i's own high/low) — donchianBroken was permanently
+      // false and NEITHER direction could ever fire, regardless of trend.
+      expect(sawLong || sawShort).toBe(true);
+    });
+  });
 });

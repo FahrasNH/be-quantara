@@ -89,6 +89,11 @@ class TrendFollowingStrategy extends StrategyBase {
 
     this._openTrades = [];
     this._trendState = this._freshTrendState();
+    // WeakMap keyed by the `indicators.highs` array reference — avoids recomputing
+    // the fallback Donchian channel on every single bar (see detectSignal below).
+    // WeakMap (not a plain field) so different bots/symbols sharing this singleton
+    // instance never leak a cached channel from one symbol's candles into another's.
+    this._donchianCache = new WeakMap();
   }
 
   _freshTrendState() {
@@ -331,10 +336,28 @@ class TrendFollowingStrategy extends StrategyBase {
         donchianBroken = this.isDonchianBroken(mtfCloses, donchianUpperMTF, donchianLowerMTF, htfTrend);
       }
     } else {
-      // Compute Donchian on entry TF as fallback
-      const dc = calcDonchian(indicators.highs || [], indicators.lows || [], this.config.donchianPeriod || 20);
-      donchianUpperMTF = dc.upper?.[lastIdx];
-      donchianLowerMTF = dc.lower?.[lastIdx];
+      // Compute Donchian on entry TF as fallback (memoized — see constructor comment;
+      // calcDonchian scans the full array, so recomputing it fresh on every bar was
+      // O(n²) over the backtest range).
+      const highs = indicators.highs || [];
+      const lows = indicators.lows || [];
+      let dc = this._donchianCache.get(highs);
+      if (!dc) {
+        dc = calcDonchian(highs, lows, this.config.donchianPeriod || 20);
+        this._donchianCache.set(highs, dc);
+      }
+      // BUG FIX: dc.upper[lastIdx]/dc.lower[lastIdx] include the CURRENT bar's own
+      // high/low in their rolling window, so close[lastIdx] can never exceed
+      // upper[lastIdx] (close <= high <= upper by construction) or undercut
+      // lower[lastIdx] (close >= low >= lower) — the breakout condition was
+      // mathematically unreachable, meaning TS_TF could never enter a trade via
+      // this fallback path (the only path ever exercised — nothing in the codebase
+      // populates indicators.donchian15m, so the `if (hasMTF...)` branch above never
+      // runs). Compare against the PRIOR bar's channel instead (excludes the current
+      // bar), which is how a breakout is actually defined: today's close vs.
+      // yesterday's N-period high/low.
+      donchianUpperMTF = dc.upper?.[lastIdx - 1];
+      donchianLowerMTF = dc.lower?.[lastIdx - 1];
       donchianBroken = this.isDonchianBroken(closesEntry, donchianUpperMTF, donchianLowerMTF, htfTrend);
     }
 

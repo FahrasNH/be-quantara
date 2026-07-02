@@ -111,8 +111,15 @@ test("runMultiTypeBacktest (TS_TF: Intraday+Swing) never touches Scalping/5m", a
   assert.ok(r.perTypeStats.Intraday);
   assert.ok(r.perTypeStats.Swing);
   assert.ok(!("Scalping" in r.perTypeStats), "TS_TF must never fetch/run Scalping (5m)");
+  // Regression lock for the self-inclusive Donchian channel bug (2026-07-02): the
+  // fallback breakout check compared close[i] against a channel that included bar
+  // i's own high/low, making close>upper / close<lower mathematically impossible —
+  // TS_TF produced ZERO trades in live AND backtest regardless of data/timeframe.
+  // Fixed by comparing against the PRIOR bar's channel instead.
+  assert.ok(r.trades.length > 0, "TS_TF must be able to produce trades — 0 trades indicates the Donchian self-inclusion regression has returned");
   for (const t of r.trades) {
     assert.ok(["Intraday", "Swing"].includes(t.component), `unexpected component ${t.component}`);
+    assert.strictEqual(t.plannedRR, 2, "TS_TF's fixed RR is 1:2.0 (ATR×1.5 SL / ATR×3.0 TP)");
   }
 });
 
