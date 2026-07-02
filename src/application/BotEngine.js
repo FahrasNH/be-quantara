@@ -791,7 +791,26 @@ class BotEngine extends EventEmitter {
       this._startTimer = null;
       // Bot sudah di-stop selama warm-up → jangan pasang interval (cegah zombie ticker)
       if (!this.state.running || this._stopRequested) return;
-      this._interval = setInterval(() => this._tick(), this.config.checkInterval);
+      // OVERLAP GUARD (anti death-spiral): setInterval TIDAK menunggu _tick() async
+      // selesai. Saat exchange timeout, satu tick bisa makan 30–60s+ (getCandles 10s +
+      // getTicker 10s + DB log-write yang ikut lambat). Tanpa guard ini, tick-tick baru
+      // menumpuk di atas yang belum selesai → getCandles + insertLog berlipat → pool
+      // Postgres & Prisma terkuras → login ikut timeout → proses crash → PM2 restart-loop.
+      // Selain itu, promise _tick() yang tak di-handle bisa jadi unhandledRejection →
+      // crash proses. Bungkus: skip bila masih ticking, dan telan rejection.
+      this._interval = setInterval(() => {
+        if (this._ticking) {
+          this._log("warn", "Tick sebelumnya belum selesai (exchange/DB lambat) — lewati tick ini");
+          return;
+        }
+        this._ticking = true;
+        Promise.resolve()
+          .then(() => this._tick())
+          .catch((err) => {
+            try { this._log("warn", `Tick error: ${err?.message || err}`); } catch { /* jangan crash */ }
+          })
+          .finally(() => { this._ticking = false; });
+      }, this.config.checkInterval);
     }, jitterMs);
 
     // emitStatusReport:false → engine ini bagian dari grup multi-strategi; JANGAN
@@ -1556,10 +1575,23 @@ class BotEngine extends EventEmitter {
         minBars,
       });
     } catch (err) {
-      this._log(
-        isRateLimitError(err) ? "info" : "warn",
-        `Gagal ambil candles dari exchange: ${err.message}`
-      );
+      // THROTTLE (anti DB-storm): saat exchange DOWN, tiap tick gagal → tiap _log warn
+      // memicu DUA tulisan DB (persistBotLog Prisma + insertLog pg pool). Dikali N bot ×
+      // tiap tick = badai koneksi yang menguras pool Postgres (akar insiden "insertLog
+      // gagal: timeout" + login timeout). Coalesce: hanya log sekali per 60s selama
+      // kegagalan beruntun, sertakan hitungan agar tetap terlihat.
+      const nowTs = Date.now();
+      this._candleFailStreak = (this._candleFailStreak || 0) + 1;
+      const throttleMs = 60_000;
+      if (!this._lastCandleFailLogTs || nowTs - this._lastCandleFailLogTs >= throttleMs) {
+        const streak = this._candleFailStreak;
+        this._lastCandleFailLogTs = nowTs;
+        this._candleFailStreak = 0;
+        this._log(
+          isRateLimitError(err) ? "info" : "warn",
+          `Gagal ambil candles dari exchange${streak > 1 ? ` (${streak}× dalam 60s)` : ""}: ${err.message}`
+        );
+      }
     }
 
     // Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
