@@ -10,7 +10,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { runRealBacktest } = require("../src/server/services/RealStrategyBacktestService");
+const { runRealBacktest, runMultiTypeBacktest } = require("../src/server/services/RealStrategyBacktestService");
 
 // Deterministic regime-cycling candles (no Math.random → reproducible).
 function gen(days, iv, seed = 42) {
@@ -41,6 +41,9 @@ function gen(days, iv, seed = 42) {
 
 const entry = gen(180, 15);
 const htf = gen(180, 60);
+const entry4h = gen(365, 240);
+const htf4h = gen(365, 240);
+const htf1w = gen(700, 10080);
 
 test("runs end-to-end and returns stats/trades/equity", async () => {
   const r = await runRealBacktest({ entryCandles: entry, htfCandles: htf, strategyKey: "ADAPTIVE_FUSION", capital: 1000, config: { afMinVotes: 2, volSmaMultiplier: 1.0 } });
@@ -93,6 +96,39 @@ test("no HTF candles → fail-open (HTF filter skipped, still trades)", async ()
   const r = await runRealBacktest({ entryCandles: entry, htfCandles: null, strategyKey: "ADAPTIVE_FUSION", capital: 1000, config: { afMinVotes: 2, volSmaMultiplier: 1.0 } });
   assert.ok(r.stats.totalTrades >= 0);
   assert.ok(typeof r.meta.higherTf === "string"); // canonical config still reports intended HTF
+});
+
+// ── runMultiTypeBacktest (TS_TF/MD_MR sharing AF_SMC's own TF definitions) ──
+test("runMultiTypeBacktest (TS_TF: Intraday+Swing) never touches Scalping/5m", async () => {
+  const r = await runMultiTypeBacktest({
+    entryCandles: { Intraday: entry, Swing: entry4h },
+    htfCandles: { Intraday: htf4h, Swing: htf1w },
+    strategyKey: "TS_TF",
+    capital: 1000,
+  }, ["Intraday", "Swing"]);
+  assert.ok(Array.isArray(r.trades));
+  assert.ok(Array.isArray(r.equity));
+  assert.ok(r.perTypeStats.Intraday);
+  assert.ok(r.perTypeStats.Swing);
+  assert.ok(!("Scalping" in r.perTypeStats), "TS_TF must never fetch/run Scalping (5m)");
+  for (const t of r.trades) {
+    assert.ok(["Intraday", "Swing"].includes(t.component), `unexpected component ${t.component}`);
+  }
+});
+
+test("runMultiTypeBacktest degrades gracefully when one type has no candles", async () => {
+  // Simulates Bitget returning empty 5m candles for MD_MR's Scalping type —
+  // Intraday (15m) must still produce a result instead of the whole job failing.
+  const r = await runMultiTypeBacktest({
+    entryCandles: { Scalping: [], Intraday: entry },
+    htfCandles: { Scalping: [], Intraday: htf },
+    strategyKey: "MD_MR",
+    capital: 1000,
+  }, ["Scalping", "Intraday"]);
+  assert.strictEqual(r.perTypeStats.Scalping.skipped, true);
+  assert.ok(r.perTypeStats.Intraday && !r.perTypeStats.Intraday.skipped, "Intraday must still run despite Scalping being empty");
+  assert.ok(Array.isArray(r.trades));
+  assert.ok(r.stats.totalTrades === r.trades.length);
 });
 
 console.log("✅ real-backtest-service.test.js — all assertions registered");

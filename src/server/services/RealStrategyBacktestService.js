@@ -758,6 +758,21 @@ async function runRealBacktest(opts = {}) {
     return await _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles);
   }
 
+  return await _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles);
+}
+
+/**
+ * Single-position engine (strategy.detectSignal contract — SL/TP only, no fusion
+ * voting). Used by runRealBacktest's non-AF single-TF path, and by
+ * runMultiTypeBacktest below (TS_TF/MD_MR running as a subset of AF's own
+ * Scalping/Intraday/Swing "types" — one call per type — so a failing type
+ * degrades to 0 trades instead of killing the whole backtest, mirroring AF's
+ * triple-TF resilience without AF's detectSignalMulti fusion logic).
+ */
+async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
+  const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
+  const startCapital = opts.capital || 1000;
+
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
     emaSlow: cfg.emaSlow ?? 21,
@@ -1021,6 +1036,107 @@ async function runRealBacktest(opts = {}) {
   };
 }
 
+/**
+ * Run a single-signal strategy (TS_TF, MD_MR) across a SUBSET of AF_SMC's own
+ * Scalping/Intraday/Swing timeframe definitions — same TF pairs (5m/1h, 15m/4h,
+ * 4h/1w), same candle-fetch resilience, but using the single-position engine
+ * (strategy.detectSignal contract) instead of AF's detectSignalMulti fusion.
+ *
+ * WHY: TS_TF's canonical single-TF entry is 5m, and on exchanges with shallow
+ * 5m history (e.g. Bitget) that ONE fetch failing killed the whole backtest —
+ * unlike AF, whose triple-TF split lets a failing Scalping(5m) leg degrade to
+ * 0 trades while Intraday/Swing still run. Routing TS_TF through Intraday(15m)+
+ * Swing(4h) — never touching 5m — and MD_MR through Scalping(5m)+Intraday(15m)
+ * gives them the same per-type resilience, and TS_TF sidesteps the fragile TF
+ * entirely. Each type is independent: a failing/empty fetch for one type just
+ * skips it (0 trades), the other type's result still renders.
+ *
+ * @param {Object}   opts        - same shape as runTripleTypeBacktest
+ * @param {string[]} typeOrder   - subset of ["Scalping","Intraday","Swing"]
+ */
+async function runMultiTypeBacktest(opts = {}, typeOrder) {
+  const { strategyKey, capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
+
+  const validation = strategyRegistry.validate(strategyKey);
+  if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
+  const strategy = validation.strategy;
+
+  const base = STRATEGIES[strategyKey] || {};
+  const cfg = { ...base, ...(opts.config || {}) };
+  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
+
+  const allTrades = [];
+  const perTypeStats = {};
+
+  for (const tradeType of typeOrder) {
+    const entryCandles = opts.entryCandles?.[tradeType];
+    const htfCandles   = opts.htfCandles?.[tradeType];
+
+    if (!entryCandles?.length || entryCandles.length < 60) {
+      perTypeStats[tradeType] = { skipped: true, reason: "Insufficient candles" };
+      continue;
+    }
+
+    const typeResult = await _runSinglePositionBacktest(
+      {
+        ...opts,
+        strategyKey,
+        capital: startCapital,
+        config: cfg,
+        abortSignal: opts.abortSignal,
+        onProgress: opts.onProgress
+          ? (pct, bar, total) => opts.onProgress(pct, bar, total, tradeType)
+          : undefined,
+      },
+      strategy,
+      cfg,
+      feeRate,
+      slip,
+      entryCandles,
+      htfCandles || null,
+    );
+
+    for (const t of typeResult.trades) {
+      allTrades.push({ ...t, component: tradeType, tradeType });
+    }
+    perTypeStats[tradeType] = {
+      trades: typeResult.trades.length,
+      wins: typeResult.trades.filter(t => t.result === "win").length,
+      entryBars: entryCandles.length,
+      htfBars: htfCandles?.length ?? 0,
+    };
+  }
+
+  allTrades.sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
+
+  let grokResult = null;
+  if (opts.grokGate) {
+    grokResult = await _applyGrokGate(allTrades, {
+      strategyKey,
+      symbol: opts.symbol,
+      userId: opts.userId,
+      grokConfirmFn: opts.grokConfirmFn,
+      onGrokProgress: opts.onGrokProgress,
+    });
+  }
+  const finalTrades = grokResult ? grokResult.trades : allTrades;
+
+  const { equity, stats } = _computeTripleStats(finalTrades, startCapital);
+
+  return {
+    ok: true,
+    trades: finalTrades,
+    equity,
+    perTypeStats,
+    stats,
+    grokGate: !!opts.grokGate,
+    grokStats: grokResult?.stats ?? null,
+    grokLogs: grokResult?.logs ?? null,
+    meta: { strategyKey, mode: `multi-tf (${typeOrder.join("+")})`, perTypeStats, grokGate: !!opts.grokGate },
+  };
+}
+
 function round2(v) { return Math.round(v * 100) / 100; }
 
 function buildStats(trades, startCapital, endCapital) {
@@ -1064,4 +1180,4 @@ function buildStats(trades, startCapital, endCapital) {
   };
 }
 
-module.exports = { runRealBacktest, runTripleTypeBacktest, _computeTripleStats, _applyGrokGate };
+module.exports = { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, _computeTripleStats, _applyGrokGate };

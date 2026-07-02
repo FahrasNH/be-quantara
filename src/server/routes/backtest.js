@@ -16,7 +16,7 @@ const OptimizationAnalysisService = require("../services/OptimizationAnalysisSer
 const db = require("../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
-const { runRealBacktest, runTripleTypeBacktest } = require("../services/RealStrategyBacktestService");
+const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest } = require("../services/RealStrategyBacktestService");
 const GrokConfirmService = require("../services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../services/GrokBacktestJobService");
@@ -1295,6 +1295,19 @@ const TYPE_TF = {
   Swing:    { entry: "4h",  trend: "1w" },
 };
 
+// TS_TF/MD_MR reuse AF_SMC's own Scalping/Intraday/Swing TF definitions (same
+// TYPE_TF above) instead of a single fragile entry TF. TS_TF's canonical
+// single-TF entry was 5m — on exchanges with shallow 5m history (e.g. Bitget)
+// that ONE fetch failing killed the whole backtest. Running Intraday(15m)+
+// Swing(4h) avoids 5m entirely; MD_MR keeps Scalping(5m)+Intraday(15m) but now
+// degrades per-type like AF instead of failing outright if 5m comes back empty.
+const MULTI_TYPE_STRATEGY_MAP = {
+  TS_TF: ["Intraday", "Swing"],
+  TREND_FOLLOWING: ["Intraday", "Swing"],
+  MD_MR: ["Scalping", "Intraday"],
+  MEAN_REVERSION: ["Scalping", "Intraday"],
+};
+
 // Per-TF period caps: limit how far back short TFs fetch (avoids timeout).
 // 5m: 150 days covers multiple regimes without huge fetch
 // 15m: 365 days fits comfortably (~35k bars)
@@ -1346,14 +1359,21 @@ async function _runBacktestJobAsync(job, userId, opts) {
   const fetchOpts = { periodId, customStart, customEnd };
   const abortSignal = job.abortController.signal;
 
-  if (AF_SMC_KEYS.has(strategyKey) && !entryTfOverride) {
-    // Triple-TF mode: each type fetches its own candles, runs only its own component
+  const isAF = AF_SMC_KEYS.has(strategyKey);
+  const multiTypeOrder = MULTI_TYPE_STRATEGY_MAP[strategyKey] || null;
+
+  if ((isAF || multiTypeOrder) && !entryTfOverride) {
+    // Multi-type mode: each type fetches its own candles, runs only its own component.
+    // AF_SMC always uses all 3 (Scalping/Intraday/Swing); TS_TF/MD_MR use a subset
+    // (see MULTI_TYPE_STRATEGY_MAP) but share the exact same TF definitions/fetch
+    // resilience/period caps below.
     const entryCandles = {};
     const htfCandles   = {};
     const dataInfo     = {};
-    const typeOrder    = Object.keys(TYPE_TF); // ["Scalping","Intraday","Swing"]
+    const typeOrder    = isAF ? Object.keys(TYPE_TF) : multiTypeOrder;
 
-    for (const [type, tfs] of Object.entries(TYPE_TF)) {
+    for (const type of typeOrder) {
+      const tfs = TYPE_TF[type];
       if (abortSignal.aborted) throw new Error("Cancelled");
 
       job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `Fetching ${type} candles (${tfs.entry})…`, pct: 0 });
@@ -1400,12 +1420,12 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
     if (abortSignal.aborted) throw new Error("Cancelled");
 
-    job.progress({ phase: "compute", message: "Running triple-TF simulation…", pct: 0 });
+    job.progress({ phase: "compute", message: isAF ? "Running triple-TF simulation…" : "Running multi-TF simulation…", pct: 0 });
 
     const typeTotal = typeOrder.length;
     let typesDone = 0;
 
-    const result = await runTripleTypeBacktest({
+    const computeOpts = {
       entryCandles,
       htfCandles,
       strategyKey,
@@ -1429,14 +1449,20 @@ async function _runBacktestJobAsync(job, userId, opts) {
         job.progress({ phase: "compute", type, message: `Computing ${type} signals… ${pct}%`, pct: basePct + typePct });
         if (pct >= 100) typesDone++;
       },
-    });
+    };
+
+    const result = isAF
+      ? await runTripleTypeBacktest(computeOpts)
+      : await runMultiTypeBacktest(computeOpts, typeOrder);
+
+    const modeLabel = typeOrder.map(t => `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})`).join(" + ");
 
     job.done({
       ok: true,
-      engine: "real-1to1-triple-tf",
+      engine: isAF ? "real-1to1-triple-tf" : "real-1to1-multi-tf",
       strategyKey,
       symbol: sym,
-      mode: "SMC Sequence — Scalping (5m/1h) + Intraday (15m/4h) + Swing (4h/1w)",
+      mode: isAF ? `SMC Sequence — ${modeLabel}` : `Multi-TF — ${modeLabel}`,
       dataInfo,
       computeTimeMs: Date.now() - startMs,
       ...result,
