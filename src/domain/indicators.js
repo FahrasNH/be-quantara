@@ -753,8 +753,8 @@ let _meanReversionInstance = null;
 let _breakoutRetestInstance = null;
 function getAdaptiveFusionInstance() {
   if (!_adaptiveFusionInstance) {
-    const AdaptiveFusionStrategy = require("./strategy/implementations/AdaptiveFusionStrategy");
-    _adaptiveFusionInstance = new AdaptiveFusionStrategy();
+    const SmartMoneyConceptsStrategy = require("./strategy/implementations/SmartMoneyConceptsStrategy");
+    _adaptiveFusionInstance = new SmartMoneyConceptsStrategy();
   }
   return _adaptiveFusionInstance;
 }

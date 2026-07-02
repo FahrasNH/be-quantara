@@ -633,8 +633,12 @@ module.exports = function createBotsRouter(helpers) {
       const pairClass = pairClassifier.classify(symbol, pairMetrics);
       const tierOverrides = pairClass.paramOverrides;
 
-      // Block non-MR strategies on VOLATILE pairs (AC-PAIR-04)
-      if (pairClass.tier === "VOLATILE") {
+      // Block strategies the classifier itself marks blocked for this tier (AC-PAIR-04).
+      // AF-FIX-REGIME (Sprint 7, re-scoped 2026-07-02): previously only checked
+      // tier === "VOLATILE", but STRATEGIES_BY_PAIR_TIER.SEMI_VOLATILE.blocked also
+      // lists ADAPTIVE_FUSION — that block was defined but never enforced here, so
+      // AF could still be started live on SEMI_VOLATILE altcoins (thin-book risk).
+      if (pairClass.blockedStrategies.length) {
         const blockedStrategies = strategies.filter(s => pairClass.blockedStrategies.includes(s));
         if (blockedStrategies.length) {
           // Allow if user explicitly chose a strategy (legacy path) and it's MR
@@ -642,7 +646,7 @@ module.exports = function createBotsRouter(helpers) {
             return res.status(400).json({
               ok: false,
               statusCode: 400,
-              message: `${symbol} adalah pair VOLATILE. Strategi ${blockedStrategies.join(", ")} diblokir (ADAPTIVE_FUSION & BREAKOUT_RETEST) — hanya MEAN_REVERSION & TREND_MOMENTUM (dengan filter regime ketat) yang diizinkan untuk pasangan berisiko tinggi ini.`,
+              message: `${symbol} adalah pair ${pairClass.tier}. Strategi ${blockedStrategies.join(", ")} diblokir — hanya ${pairClass.recommendedStrategies.join(", ")} yang diizinkan untuk pasangan berisiko ini.`,
               pairTier: pairClass.tier,
               blockedStrategies,
               allowedStrategies: pairClass.recommendedStrategies,

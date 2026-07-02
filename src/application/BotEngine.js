@@ -310,8 +310,8 @@ class BotEngine extends EventEmitter {
    */
   getStrategyRankings() {
     try {
-      const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
-      const afs = new AdaptiveFusionStrategy();
+      const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+      const afs = new SmartMoneyConceptsStrategy();
       
       const volatility = this.state?.volatility || 1.0;
       const trendStrength = this.state?.trendStrength || 0.1;
@@ -1321,8 +1321,8 @@ class BotEngine extends EventEmitter {
 
             // ── MULTI-POSITION MODE (v3.0): ADAPTIVE_FUSION independent components ──
             if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
-              const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
-              const afStrategy = new AdaptiveFusionStrategy();
+              const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+              const afStrategy = new SmartMoneyConceptsStrategy();
               const multiSignal = afStrategy.detectSignalMulti(indicators, lastIdx, {
                 volatility:           atrPctNow,
                 trend_strength:       trendStr,
@@ -1389,8 +1389,8 @@ class BotEngine extends EventEmitter {
               if (this.config.signalType === "ADAPTIVE_FUSION") {
                 const meta = getAdaptiveFusionMeta();
                 if (meta) {
-                  const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
-                  const afsInstance = new AdaptiveFusionStrategy();
+                  const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+                  const afsInstance = new SmartMoneyConceptsStrategy();
                   const riskCfg = afsInstance.calculateRiskConfig(price, atr, filteredSignal, meta.component, {
                     marketCond: meta.marketCond,
                     strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
@@ -2555,8 +2555,8 @@ class BotEngine extends EventEmitter {
   async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot, marketCond = "NORMAL", confidence = null) {
     if (!signal || !atr) return;
 
-    const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
-    const afStrategy = new AdaptiveFusionStrategy();
+    const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+    const afStrategy = new SmartMoneyConceptsStrategy();
 
     // Calculate risk config for this component. Pass the real regime so
     // strongTrendTPMult (let winners run in STRONG_TREND) can fire.

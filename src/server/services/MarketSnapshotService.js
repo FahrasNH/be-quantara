@@ -179,7 +179,9 @@ async function getPairTierMetrics(client, symbol, opts = {}) {
     atrPeriod = 14,
     dailyLimit = 35,
     minBars = 20,
-    minVolume24h = 2_000_000,
+    // AF-FIX-LIQUIDITY (Sprint 7, 2026-07-02): 2M was too low for perpetual futures
+    // (thin book / wide spread risk); raised to $20M per sprint success criteria.
+    minVolume24h = 20_000_000,
     exchange = 'bitget',
   } = opts;
 

@@ -809,16 +809,41 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
     }
 
-    // ── HTF filter: soft scoring penalty (−15 pts) instead of hard block ────
-    // Allows neutral HTF entries, but penalizes entries against HTF trend
-    if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
-    if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
-    if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
+    // ── HTF filter ───────────────────────────────────────────────────────────
+    // Default: soft scoring penalty (−15 pts) — allows neutral HTF entries but
+    // penalizes trading against HTF trend. AF-FIX-REGIME (Sprint 7, re-scoped
+    // 2026-07-02): when the pair's tier mandates a regime filter (STABLE and
+    // stricter — see PairClassifier PARAM_OVERRIDES.regimeFilterRequired), a
+    // direction-conflicting signal is HARD-blocked instead, since letting a
+    // penalized-but-still-passing signal through defeats "lebih selektif" on
+    // exactly the pairs where regime risk matters most.
+    const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true;
+    if (hardRegimeBlock) {
+      if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) { rawA = null; confA = 0; }
+      if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) { rawB = null; confB = 0; }
+      if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) { rawC = null; confC = 0; }
+    } else {
+      if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
+      if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
+      if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
+    }
 
     // ── Gate: check confidence vs min threshold ─────────────────────────────
-    const sigScalping = (rawA && confA >= minConf.A) ? rawA : null;
-    const sigIntraday = (rawB && confB >= minConf.B) ? rawB : null;
-    const sigSwing    = (rawC && confC >= minConf.C) ? rawC : null;
+    // AF-FIX-VOTING (Sprint 7, re-scoped 2026-07-02): tierOverrides.votingThresholdOverride
+    // (0-1 scale, e.g. STABLE=0.60, VOLATILE=0.78) raises the effective per-component
+    // confidence floor for stricter-tier pairs — stronger consensus required on
+    // lower-liquidity coins, matching the FE's applyPairTierOverrides contract.
+    const votingFloor = config.tierOverrides?.votingThresholdOverride;
+    const votingMinConf = (typeof votingFloor === "number" && votingFloor > 0)
+      ? Math.max(minConf.A, minConf.B, minConf.C, Math.round(votingFloor * 100))
+      : null;
+    const effMinConf = votingMinConf != null
+      ? { A: Math.max(minConf.A, votingMinConf), B: Math.max(minConf.B, votingMinConf), C: Math.max(minConf.C, votingMinConf) }
+      : minConf;
+
+    const sigScalping = (rawA && confA >= effMinConf.A) ? rawA : null;
+    const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;
+    const sigSwing    = (rawC && confC >= effMinConf.C) ? rawC : null;
 
     // Set both type names and legacy letter aliases
     result.Scalping = sigScalping; result.A = sigScalping;
