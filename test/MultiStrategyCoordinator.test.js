@@ -43,7 +43,7 @@ console.log("\n🎛️  MultiStrategyCoordinator Unit Tests\n");
 
   const c = new MultiStrategyCoordinator({
     userId: "u1", symbol: "ETHUSDT",
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
   });
 

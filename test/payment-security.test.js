@@ -72,8 +72,8 @@ t("FOUNDRY autoSelector → denied", () => {
 });
 t("MINT autoSelector → allowed", () => assert.strictEqual(checkTierFeature("MINT", "autoSelector").allowed, true));
 t("FOUNDRY ADAPTIVE_FUSION strategy → allowed", () => assert.strictEqual(checkTierFeature("FOUNDRY", "ADAPTIVE_FUSION").allowed, true));
-t("FOUNDRY TREND_MOMENTUM → denied with requiredTier", () => {
-  const r = checkTierFeature("FOUNDRY", "TREND_MOMENTUM");
+t("FOUNDRY TREND_FOLLOWING → denied with requiredTier", () => {
+  const r = checkTierFeature("FOUNDRY", "TREND_FOLLOWING");
   assert.strictEqual(r.allowed, false);
   assert.strictEqual(r.reason, "STRATEGY_NOT_IN_TIER");
   assert.strictEqual(r.requiredTier, "FORGE");

@@ -52,7 +52,7 @@ console.log("\n=== Grok Backtest Job Tests ===\n");
 
   await test("getJob — user mismatch returns null", async () => {
     const jobId = GrokBacktestJobService.createJob("user-a", {
-      strategy_key: "TREND_MOMENTUM",
+      strategy_key: "TREND_FOLLOWING",
       symbol: "ETHUSDT",
       signals: [{ id: "x" }],
     });

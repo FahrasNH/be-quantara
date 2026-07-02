@@ -748,7 +748,7 @@ function detectSidewaysBreakout(htfCandles, config = {}) {
  */
 // Singleton agar BotEngine bisa mengambil metadata setelah signal
 let _adaptiveFusionInstance = null;
-let _trendMomentumInstance = null;
+let _trendFollowingInstance = null;
 let _meanReversionInstance = null;
 let _breakoutRetestInstance = null;
 function getAdaptiveFusionInstance() {
@@ -768,14 +768,14 @@ function getAdaptiveFusionMeta() {
 }
 
 /**
- * Singleton getter untuk TREND_MOMENTUM strategy
+ * Singleton getter untuk TREND_FOLLOWING strategy
  */
-function getTrendMomentumInstance() {
-  if (!_trendMomentumInstance) {
-    const TrendMomentumStrategy = require("./strategy/implementations/TrendMomentumStrategy");
-    _trendMomentumInstance = new TrendMomentumStrategy();
+function getTrendFollowingInstance() {
+  if (!_trendFollowingInstance) {
+    const TrendFollowingStrategy = require("./strategy/implementations/TrendFollowingStrategy");
+    _trendFollowingInstance = new TrendFollowingStrategy();
   }
-  return _trendMomentumInstance;
+  return _trendFollowingInstance;
 }
 
 /**
@@ -811,10 +811,11 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
       return afs.detectSignal(indicators, i, config);
     }
 
-    // TREND_MOMENTUM — Multi-TF MACD + RSI momentum (MINT tier)
-    case "TREND_MOMENTUM": {
-      const tm = getTrendMomentumInstance();
-      return tm.detectSignal(indicators, i, config);
+    // TREND_FOLLOWING — Multi-TF trend following with Donchian + ADX (FORGE tier)
+    case "TREND_FOLLOWING":
+    case "TS_TF": {
+      const tf = getTrendFollowingInstance();
+      return tf.detectSignal(indicators, i, config);
     }
 
     // MEAN_REVERSION — Bollinger Bands extremes (VAULT tier)
@@ -876,11 +877,99 @@ function calcPositionSize(capital, riskPct, entryPrice, stopLossPrice) {
   return Math.floor(size * 1000) / 1000;
 }
 
+/**
+ * Donchian Channel — highest high / lowest low over the last `period` bars.
+ * Dipakai strategi Trend Following: breakout channel = konfirmasi lanjutan tren.
+ * upper[i]/lower[i] mencakup bar i; untuk deteksi breakout tanpa lookahead,
+ * bandingkan close bar-i dengan channel dari bar (i-1).
+ * @returns {{ upper: (number|null)[], lower: (number|null)[], mid: (number|null)[] }}
+ */
+function calcDonchian(highs, lows, period = 20) {
+  const n = highs.length;
+  const upper = new Array(n).fill(null);
+  const lower = new Array(n).fill(null);
+  const mid   = new Array(n).fill(null);
+  for (let i = period - 1; i < n; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (highs[j] > hi) hi = highs[j];
+      if (lows[j]  < lo) lo = lows[j];
+    }
+    upper[i] = hi;
+    lower[i] = lo;
+    mid[i]   = (hi + lo) / 2;
+  }
+  return { upper, lower, mid };
+}
+
+/**
+ * ADX (Average Directional Index) — Wilder. Ukur KEKUATAN tren (bukan arah).
+ * ADX tinggi (>25) = tren kuat; rendah (<20) = sideways. Trend Following hanya
+ * entry saat ADX di atas threshold. Mengembalikan { adx, plusDI, minusDI }.
+ * @returns {{ adx: (number|null)[], plusDI: (number|null)[], minusDI: (number|null)[] }}
+ */
+function calcADX(highs, lows, closes, period = 14) {
+  const n = closes.length;
+  const adx    = new Array(n).fill(null);
+  const plusDI = new Array(n).fill(null);
+  const minusDI = new Array(n).fill(null);
+  if (n < period * 2) return { adx, plusDI, minusDI };
+
+  const tr = new Array(n).fill(0);
+  const plusDM  = new Array(n).fill(0);
+  const minusDM = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const up   = highs[i] - highs[i - 1];
+    const down = lows[i - 1] - lows[i];
+    plusDM[i]  = (up > down && up > 0)   ? up   : 0;
+    minusDM[i] = (down > up && down > 0) ? down : 0;
+    tr[i] = Math.max(
+      highs[i] - lows[i],
+      Math.abs(highs[i] - closes[i - 1]),
+      Math.abs(lows[i]  - closes[i - 1])
+    );
+  }
+
+  // Wilder smoothing seeded at index `period`
+  let trS = 0, plusS = 0, minusS = 0;
+  for (let i = 1; i <= period; i++) { trS += tr[i]; plusS += plusDM[i]; minusS += minusDM[i]; }
+
+  const dx = new Array(n).fill(null);
+  for (let i = period; i < n; i++) {
+    if (i > period) {
+      trS    = trS    - trS / period    + tr[i];
+      plusS  = plusS  - plusS / period  + plusDM[i];
+      minusS = minusS - minusS / period + minusDM[i];
+    }
+    const pDI = trS === 0 ? 0 : (100 * plusS / trS);
+    const mDI = trS === 0 ? 0 : (100 * minusS / trS);
+    plusDI[i]  = pDI;
+    minusDI[i] = mDI;
+    const diSum = pDI + mDI;
+    dx[i] = diSum === 0 ? 0 : (100 * Math.abs(pDI - mDI) / diSum);
+  }
+
+  // ADX = Wilder-smoothed DX, seeded as average of first `period` DX values
+  const firstDxIdx = period;
+  const adxSeedEnd = firstDxIdx + period - 1;
+  if (adxSeedEnd < n) {
+    let sum = 0;
+    for (let i = firstDxIdx; i <= adxSeedEnd; i++) sum += dx[i] ?? 0;
+    adx[adxSeedEnd] = sum / period;
+    for (let i = adxSeedEnd + 1; i < n; i++) {
+      adx[i] = ((adx[i - 1] * (period - 1)) + (dx[i] ?? 0)) / period;
+    }
+  }
+  return { adx, plusDI, minusDI };
+}
+
 module.exports = {
   calcEMA,
   calcRSI,
   calcATR,
   calcSMA,
+  calcDonchian,
+  calcADX,
   calcBollingerBands,
   calcMACD,
   calcVolumeSMA,
@@ -893,7 +982,7 @@ module.exports = {
   detectSignalPdfSwing,
   detectSignalLegacy,
   getAdaptiveFusionMeta,
-  getTrendMomentumInstance,
+  getTrendFollowingInstance,
   getMeanReversionInstance,
   calcPositionSize,
   calcSidewaysRange,

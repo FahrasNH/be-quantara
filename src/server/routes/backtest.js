@@ -77,7 +77,7 @@ setInterval(() => {
   }
 }, 5 * 60_000).unref?.();
 
-const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 // GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SMC runs real engine w/ server-side gate)
 const GROK_CONFIRM_STRATEGIES = new Set([
   ...USER_STRATEGY_KEYS,
@@ -101,7 +101,7 @@ function validateGrokConfirmPayload(body) {
     return {
       error: {
         status: 400,
-        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, SMART_MONEY_CONCEPTS, TREND_MOMENTUM, MEAN_REVERSION, BREAKOUT_RETEST",
+        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, SMART_MONEY_CONCEPTS, TREND_FOLLOWING, MEAN_REVERSION, BREAKOUT_RETEST",
       },
     };
   }
@@ -142,7 +142,7 @@ function validateGrokConfirmPayload(body) {
 }
 const STRATEGY_ABBREV = {
   ADAPTIVE_FUSION: "AF",
-  TREND_MOMENTUM: "TM",
+  TREND_FOLLOWING: "TM",
   MEAN_REVERSION: "MR",
   BREAKOUT_RETEST: "BR",
 };

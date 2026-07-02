@@ -38,7 +38,7 @@ Format JSON wajib:
     { "area": "string", "name": "string", "suggestion": "string", "potential_gain": number, "parameters": { "key": value } }
   ],
   "parameter_suggestions": [
-    { "strategy": "ADAPTIVE_FUSION|TREND_MOMENTUM|MEAN_REVERSION|BREAKOUT_RETEST", "param": "string", "current_hint": "string", "suggested": "string", "reason": "string" }
+    { "strategy": "ADAPTIVE_FUSION|TREND_FOLLOWING|MEAN_REVERSION|BREAKOUT_RETEST", "param": "string", "current_hint": "string", "suggested": "string", "reason": "string" }
   ],
   "risk_assessment": {
     "level": "Low|Moderate|High",

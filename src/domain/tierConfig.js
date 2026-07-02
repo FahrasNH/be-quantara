@@ -33,7 +33,7 @@ const TIER_CONFIG = {
   FORGE: {
     label: "Forge",
     price: 24,
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
     maxPositions: 2,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 2,
@@ -50,7 +50,7 @@ const TIER_CONFIG = {
   MINT: {
     label: "Mint",
     price: 54,
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
     maxPositions: 3,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 3,
@@ -66,7 +66,7 @@ const TIER_CONFIG = {
   VAULT: {
     label: "Vault",
     price: 99,
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     maxPositions: 4,
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
     capitalAllocation: { equal: true /* dynamic: false */ },

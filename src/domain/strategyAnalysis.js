@@ -36,7 +36,7 @@ function analyzeStrategyFit(marketData, currentStrategy) {
   const signals = [];
   const scores  = {
     ADAPTIVE_FUSION:  0,
-    TREND_MOMENTUM:   0,
+    TREND_FOLLOWING:   0,
     MEAN_REVERSION:   0,
     BREAKOUT_RETEST:  0,
   };
@@ -59,17 +59,17 @@ function analyzeStrategyFit(marketData, currentStrategy) {
   scores.ADAPTIVE_FUSION += highVolume  ? 5  : 0;
   scores.ADAPTIVE_FUSION += emaStrong   ? 7  : 0;
 
-  // === TREND_MOMENTUM score ===
+  // === TREND_FOLLOWING score ===
   // Perlu trend kuat + volume support
   if (emaBullish && emaStrong && highVolume && !rsiOverbought) {
-    scores.TREND_MOMENTUM += 25;
+    scores.TREND_FOLLOWING += 25;
     signals.push({ type: 'bullish_momentum', confidence: 'high' });
   }
   if (!emaBullish && emaStrong && highVolume && !rsiOversold) {
-    scores.TREND_MOMENTUM += 20;
+    scores.TREND_FOLLOWING += 20;
     signals.push({ type: 'bearish_momentum', confidence: 'high' });
   }
-  scores.TREND_MOMENTUM += lowVolume ? -15 : 0; // volume lemah = penalty besar
+  scores.TREND_FOLLOWING += lowVolume ? -15 : 0; // volume lemah = penalty besar
 
   // === MEAN_REVERSION score ===
   // Perlu ranging market + BB extreme touch

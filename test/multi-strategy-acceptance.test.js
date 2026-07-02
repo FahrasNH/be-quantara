@@ -66,8 +66,8 @@ console.log("\n📋 Multi-Strategy Acceptance Tests (TC-001..TC-008)\n");
 
 // ── TC-004: firedByStrategy terisi setiap trade ─────────────────────────────
 {
-  const a = buildTradeAttribution({ strategyKey: "TREND_MOMENTUM", sl: 97, tp: 106, slDist: 3, tpDist: 6, atr: 2 });
-  t("TC-004: firedByStrategy terisi", a.firedByStrategy === "TREND_MOMENTUM");
+  const a = buildTradeAttribution({ strategyKey: "TREND_FOLLOWING", sl: 97, tp: 106, slDist: 3, tpDist: 6, atr: 2 });
+  t("TC-004: firedByStrategy terisi", a.firedByStrategy === "TREND_FOLLOWING");
 }
 
 // ── TC-005: SL/TP match config strategi yang fire (bukan default) ───────────
@@ -100,14 +100,14 @@ console.log("\n📋 Multi-Strategy Acceptance Tests (TC-001..TC-008)\n");
     const factory = (k, cfg) => { const e = makeFakeEngine(k, cfg, ac); engines[k] = e; return e; };
     const coord = new MultiStrategyCoordinator({
       userId: "tc7", symbol: "BTCUSDT",
-      strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"],
+      strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
       totalCapital: 90, engineFactory: factory, accountCoordinator: ac, dryRun: true,
     });
     await coord.start();
     t("TC-007: awal 3 engine (MINT)", coord.engines.size === 3);
 
     // Simulasi downgrade ke FORGE (AF+TM) → MR harus dihentikan.
-    const stopped = await coord.reconcileStrategies(["ADAPTIVE_FUSION", "TREND_MOMENTUM"]);
+    const stopped = await coord.reconcileStrategies(["ADAPTIVE_FUSION", "TREND_FOLLOWING"]);
     t("TC-007: reconcile menghentikan MEAN_REVERSION", stopped.includes("MEAN_REVERSION"));
     t("TC-007: tersisa 2 engine setelah downgrade", coord.engines.size === 2);
     t("TC-007: engine MR benar-benar stop", engines.MEAN_REVERSION.state.running === false);

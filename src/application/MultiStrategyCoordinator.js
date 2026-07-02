@@ -125,7 +125,7 @@ class MultiStrategyCoordinator extends EventEmitter {
 
   /** ADAPTIVE_FUSION → "AF" (initials) — keeps the startup banner on one line. */
   _abbrev(key) {
-    const map = { ADAPTIVE_FUSION: "AF", TREND_MOMENTUM: "TM", MEAN_REVERSION: "MR", BREAKOUT_RETEST: "BR" };
+    const map = { ADAPTIVE_FUSION: "AF", TREND_FOLLOWING: "TM", MEAN_REVERSION: "MR", BREAKOUT_RETEST: "BR" };
     return map[key] || this._titleCase(key).split(" ").map(w => w[0]).join("").toUpperCase();
   }
 

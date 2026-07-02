@@ -54,23 +54,23 @@ const VOLATILE_PAIRS = new Set([]);
 
 // ─── Strategy Recommendations per Pair Tier ───────────────────────────────────
 // v2.3 spec (PAIR_VOLATILITY.md §6): VOLATILE & SEMI_VOLATILE merekomendasikan
-// MEAN_REVERSION + TREND_MOMENTUM (dengan regime filter ketat). ADAPTIVE_FUSION
+// MEAN_REVERSION + TREND_FOLLOWING (dengan regime filter ketat). ADAPTIVE_FUSION
 // hanya diizinkan di LIQUID/STABLE (diblokir di SEMI_VOLATILE & VOLATILE).
 const STRATEGIES_BY_PAIR_TIER = Object.freeze({
   LIQUID: {
-    recommended: ['ADAPTIVE_FUSION', 'TREND_MOMENTUM', 'MEAN_REVERSION'],
+    recommended: ['ADAPTIVE_FUSION', 'TREND_FOLLOWING', 'MEAN_REVERSION'],
     cautious:    ['BREAKOUT_RETEST'],
     blocked:     [],
   },
   STABLE: {
     recommended: ['ADAPTIVE_FUSION', 'MEAN_REVERSION'],
-    cautious:    ['TREND_MOMENTUM', 'BREAKOUT_RETEST'],
+    cautious:    ['TREND_FOLLOWING', 'BREAKOUT_RETEST'],
     blocked:     [],
   },
   SEMI_VOLATILE: {
     // Transisi: TM diizinkan (dengan regime filter wajib), AF diblokir karena
     // voting-nya rentan over-trading di pair transisi. BR masih hati-hati.
-    recommended: ['MEAN_REVERSION', 'TREND_MOMENTUM'],
+    recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
     cautious:    ['BREAKOUT_RETEST'],
     blocked:     ['ADAPTIVE_FUSION'],
   },
@@ -78,7 +78,7 @@ const STRATEGIES_BY_PAIR_TIER = Object.freeze({
     // MR + TM (dengan HTF regime filter ketat). AF & BR diblokir di altcoin
     // thin-book berisiko tinggi. v2.3: TM tidak lagi diblokir total — diizinkan
     // hanya jika lolos triple-EMA regime filter (regimeFilterRequired=true).
-    recommended: ['MEAN_REVERSION', 'TREND_MOMENTUM'],
+    recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
     cautious:    [],
     blocked:     ['ADAPTIVE_FUSION', 'BREAKOUT_RETEST'],
   },

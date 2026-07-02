@@ -54,7 +54,7 @@ module.exports = function createAdminRouter(helpers = {}) {
   // ── Display helpers ─────────────────────────────────────────────────────────
   const STRATEGY_ABBREV = {
     ADAPTIVE_FUSION: "AF",
-    TREND_MOMENTUM:  "TM",
+    TREND_FOLLOWING:  "TM",
     MEAN_REVERSION:  "MR",
     BREAKOUT_RETEST: "BR",
   };

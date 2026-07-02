@@ -22,7 +22,7 @@ console.log("\n📋 tpMode multi-strategy override\n");
 test("BotEngine: tpMode full dari DB override strategi TM default partial", () => {
   const eng = new BotEngine({
     symbol: "WLDUSDT",
-    strategyKey: "TREND_MOMENTUM",
+    strategyKey: "TREND_FOLLOWING",
     tpMode: "full",
     dryRun: true,
     capital: 1000,
@@ -33,7 +33,7 @@ test("BotEngine: tpMode full dari DB override strategi TM default partial", () =
 test("BotEngine: tpMode partial eksplisit aktif", () => {
   const eng = new BotEngine({
     symbol: "WLDUSDT",
-    strategyKey: "TREND_MOMENTUM",
+    strategyKey: "TREND_FOLLOWING",
     tpMode: "partial",
     dryRun: true,
     capital: 1000,

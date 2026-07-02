@@ -317,7 +317,7 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // TREND_MOMENTUM — Multi-TF Momentum (MINT Tier)
+  // TREND_FOLLOWING — Multi-TF Momentum (MINT Tier)
   //
   //   HTF: 1H (EMA trend)
   //   MTF: 15m (MACD + RSI momentum)
@@ -325,8 +325,8 @@ const STRATEGIES = {
   //   v2.3: SL 1.3x ATR | TP 2.5x ATR (RR ~1:1.92) | Risk 1.2% | Max 4 trade/hari
   //   Target: 54-58% WR, 100-180% annual
   // ─────────────────────────────────────────────
-  TREND_MOMENTUM: {
-    name:          "TREND_MOMENTUM",
+  TREND_FOLLOWING: {
+    name:          "TREND_FOLLOWING",
     label:         "Trend Momentum",
     description:   "Multi-TF MACD + RSI momentum. 3-layer confirmation (HTF/MTF/Entry).",
 
@@ -376,7 +376,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 7,
     grokConfirmMinTp:    7,
 
-    signalType:    "TREND_MOMENTUM",
+    signalType:    "TREND_FOLLOWING",
 
     trades:        "8-15 trade/hari",
     winrate:       "~54-58%",
@@ -655,14 +655,14 @@ const STRATEGIES = {
   // ─────────────────────────────────────────────
 
   AF_SMC: null, // populated below — avoids copy-paste drift
-  TS_TM:  null,
+  TS_TF:  null,
   MD_MR:  null,
   BS_BR:  null,
 };
 
 // Populate component-key aliases from their parent presets
 STRATEGIES.AF_SMC = { ...STRATEGIES.SMART_MONEY_CONCEPTS, name: "AF_SMC", label: "Adaptive Fusion (AF_SMC)", signalType: "AF_SMC" };
-STRATEGIES.TS_TM  = { ...STRATEGIES.TREND_MOMENTUM,       name: "TS_TM",  label: "Trend Surge (TS_TM)",     signalType: "TS_TM"  };
+STRATEGIES.TS_TF  = { ...STRATEGIES.TREND_FOLLOWING,       name: "TS_TF",  label: "Trend Surge (TS_TF)",     signalType: "TS_TF"  };
 STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,       name: "MD_MR",  label: "Mean Drift (MD_MR)",      signalType: "MD_MR"  };
 STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST,      name: "BS_BR",  label: "Breakout Storm (BS_BR)",  signalType: "BS_BR"  };
 

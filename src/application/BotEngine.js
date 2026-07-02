@@ -23,7 +23,7 @@ const GrokConfirmService = require("../server/services/GrokConfirmService");
 
 const GROK_CONFIRM_STRATEGIES = new Set([
   "ADAPTIVE_FUSION",
-  "TREND_MOMENTUM",
+  "TREND_FOLLOWING",
   "MEAN_REVERSION",
   "BREAKOUT_RETEST",
 ]);
@@ -235,7 +235,7 @@ class BotEngine extends EventEmitter {
       // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R, sisa dibiarkan
       //             lari ke TP penuh (~2.5–2.85R). Membiarkan winner lari sambil
       //             mengunci sebagian profit → ekspektasi net-of-fee membaik di
-      //             strategi tren (TREND_MOMENTUM). Knob per-strategi via strat.tpMode.
+      //             strategi tren (TREND_FOLLOWING). Knob per-strategi via strat.tpMode.
       tpMode: strat.tpMode || "full",
 
       // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──

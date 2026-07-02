@@ -67,7 +67,7 @@ console.log("\n🛑 Stop-during-warm-up regression\n");
 
     const c = new MultiStrategyCoordinator({
       userId: "u1", symbol: "ETHUSDT",
-      strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
+      strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
       totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
     });
 
@@ -111,7 +111,7 @@ console.log("\n🛑 Stop-during-warm-up regression\n");
     ac.setAccountEquity(1000);
     const c = new MultiStrategyCoordinator({
       userId: "u2", symbol: "BTCUSDT",
-      strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"],
+      strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
       totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
     });
     await c.start();

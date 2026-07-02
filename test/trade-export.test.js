@@ -16,7 +16,7 @@ const baseRow = (over = {}) => ({
   entry_price: 2000, exit_price: 2100, sl: 1960, tp: 2080,
   size: 1, pnl: 100, pnl_pct: 5, fee: 2, funding: 0,
   reason: "TP", dry_run: 1, mode: "dry_run", session_exchange: "bitget",
-  strategy_name: "TREND_MOMENTUM", status: "closed", is_partial: 0,
+  strategy_name: "TREND_FOLLOWING", status: "closed", is_partial: 0,
   open_time: "2026-06-10T10:00:00.000Z",
   close_time: "2026-06-10T11:42:00.000Z",
   indicators: null,
@@ -33,7 +33,7 @@ describe("formatDuration", () => {
 
 describe("mapExportRow — BUG-001 strategi", () => {
   test("pakai kolom strategy_name", () => {
-    expect(db.mapExportRow(baseRow()).strategy).toBe("TREND_MOMENTUM");
+    expect(db.mapExportRow(baseRow()).strategy).toBe("TREND_FOLLOWING");
   });
   test("fallback ke indicators.strategy", () => {
     const r = db.mapExportRow(baseRow({ strategy_name: null, indicators: JSON.stringify({ strategy: "MEAN_REVERSION" }) }));

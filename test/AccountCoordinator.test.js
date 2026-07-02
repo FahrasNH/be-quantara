@@ -106,7 +106,7 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
   // 4 strategi × 25% capital pada SATU koin → total = capital, ≤ budget.
   const c = new AC({ userId: "g1", maxAccountUtilization: 0.8 });
   c.setAccountEquity(100); // budget = 80
-  const strategies = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+  const strategies = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 
   const g = c.reserveGroup("g1", "ETHUSDT", strategies, 80); // total 80 (= budget)
   t("reserveGroup → 4 reservasi (1/strategi)", g.count === 4);
@@ -120,7 +120,7 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
 
   // Strategi segrup boleh berbagi simbol yang sama (bukan 1-posisi/simbol).
   const sameGroup = c.canOpen({
-    botKey: "g1:ETHUSDT#TREND_MOMENTUM",
+    botKey: "g1:ETHUSDT#TREND_FOLLOWING",
     symbol: "ETHUSDT",
     requiredMargin: 1,
     groupKey: "g1:ETHUSDT",

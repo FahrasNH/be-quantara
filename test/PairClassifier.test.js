@@ -68,7 +68,7 @@ describe('PairClassifier', () => {
       assert.equal(r.tier, 'LIQUID');
       assert.equal(r.riskLevel, 'LOW');
       assert.ok(r.recommendedStrategies.includes('ADAPTIVE_FUSION'));
-      assert.ok(r.recommendedStrategies.includes('TREND_MOMENTUM'));
+      assert.ok(r.recommendedStrategies.includes('TREND_FOLLOWING'));
       assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
       assert.deepEqual(r.blockedStrategies, []);
       assert.equal(r.paramOverrides.slMultiplier, 1.0);
@@ -87,7 +87,7 @@ describe('PairClassifier', () => {
       assert.equal(r.tier, 'SEMI_VOLATILE');
       assert.equal(r.riskLevel, 'HIGH-MED');
       assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
-      assert.ok(r.recommendedStrategies.includes('TREND_MOMENTUM'));
+      assert.ok(r.recommendedStrategies.includes('TREND_FOLLOWING'));
       assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
       assert.equal(r.paramOverrides.slMultiplier, 1.3);
       assert.equal(r.paramOverrides.positionSizeAdjustment, 0.75);
@@ -131,7 +131,7 @@ describe('PairClassifier', () => {
       assert.equal(r.tier, 'VOLATILE');
       assert.equal(r.riskLevel, 'HIGH');
       assert.ok(r.recommendedStrategies.includes('MEAN_REVERSION'));
-      assert.ok(r.recommendedStrategies.includes('TREND_MOMENTUM'));
+      assert.ok(r.recommendedStrategies.includes('TREND_FOLLOWING'));
       assert.ok(r.blockedStrategies.includes('ADAPTIVE_FUSION'));
       assert.ok(r.blockedStrategies.includes('BREAKOUT_RETEST'));
       assert.equal(r.paramOverrides.slMultiplier, 1.5);
@@ -159,9 +159,9 @@ describe('PairClassifier', () => {
       const metrics = { hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 120 };
       assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'ADAPTIVE_FUSION', metrics), true);
     });
-    it('TREND_MOMENTUM NOT blocked on HYPEUSDT with semi-volatile metrics', () => {
+    it('TREND_FOLLOWING NOT blocked on HYPEUSDT with semi-volatile metrics', () => {
       const metrics = { hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 80 };
-      assert.equal(pairClassifier.isStrategyBlocked('HYPEUSDT', 'TREND_MOMENTUM', metrics), false);
+      assert.equal(pairClassifier.isStrategyBlocked('HYPEUSDT', 'TREND_FOLLOWING', metrics), false);
     });
     it('BREAKOUT_RETEST IS blocked on thin microcap', () => {
       const metrics = { hv30: 110, atrPercent14: 5.5, liquidityRatio: 0.002, marketCapRank: 200 };
@@ -171,8 +171,8 @@ describe('PairClassifier', () => {
       const metrics = { hv30: 90, atrPercent14: 4.5, liquidityRatio: 0.015, marketCapRank: 120 };
       assert.equal(pairClassifier.isStrategyBlocked('WLDUSDT', 'MEAN_REVERSION', metrics), false);
     });
-    it('TREND_MOMENTUM NOT blocked on ETHUSDT (LIQUID)', () => {
-      assert.equal(pairClassifier.isStrategyBlocked('ETHUSDT', 'TREND_MOMENTUM'), false);
+    it('TREND_FOLLOWING NOT blocked on ETHUSDT (LIQUID)', () => {
+      assert.equal(pairClassifier.isStrategyBlocked('ETHUSDT', 'TREND_FOLLOWING'), false);
     });
     it('ADAPTIVE_FUSION NOT blocked on AVAXUSDT with stable metrics', () => {
       const metrics = { hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 40 };

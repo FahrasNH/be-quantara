@@ -57,7 +57,7 @@ const TIERS = {
     umbrella: "TREND_SURGE",
     color:    "#FF6B35",
 
-    strategies: { active: ["TS_TM"], future: ["TS_EE", "TS_MTF"] },
+    strategies: { active: ["TS_TF"], future: ["TS_EW", "TS_PA"] },
 
     capabilities: {
       maxConcurrentBots:     2,

@@ -119,8 +119,8 @@ describe('[FIX-1] strategyGuard — BREAKOUT_RETEST blocker', () => {
     assert.strictEqual(res._status, null);
   });
 
-  it('harus allow TREND_MOMENTUM', () => {
-    const req  = mockReq({ strategyKey: 'TREND_MOMENTUM' });
+  it('harus allow TREND_FOLLOWING', () => {
+    const req  = mockReq({ strategyKey: 'TREND_FOLLOWING' });
     const res  = mockRes();
     let nextCalled = false;
     strategyGuard(req, res, () => { nextCalled = true; });
@@ -155,7 +155,7 @@ describe('[FIX-3] signalIdempotency — duplicate order prevention', () => {
 
   const BASE_SIGNAL = {
     symbol: 'BTCUSDT',
-    strategy: 'TREND_MOMENTUM',
+    strategy: 'TREND_FOLLOWING',
     candleOpenTime: 1700000000000,
     direction: 'LONG',
   };
@@ -289,10 +289,10 @@ describe('[FIX-2] analyzeStrategyFit — strategy analysis logic', () => {
     lastClose: 2985, bbUpper: 3100, bbLower: 2990,
   };
 
-  it('trending market harus rekomendasikan TREND_MOMENTUM atau ADAPTIVE_FUSION', () => {
+  it('trending market harus rekomendasikan TREND_FOLLOWING atau ADAPTIVE_FUSION', () => {
     const result = analyzeStrategyFit(TRENDING_MARKET, 'ADAPTIVE_FUSION');
     assert.strictEqual(result.ok, true);
-    assert.ok(['TREND_MOMENTUM', 'ADAPTIVE_FUSION'].includes(result.recommended));
+    assert.ok(['TREND_FOLLOWING', 'ADAPTIVE_FUSION'].includes(result.recommended));
   });
 
   it('ranging + BB oversold harus rekomendasikan MEAN_REVERSION', () => {
@@ -338,7 +338,7 @@ describe('[T5-SPRINT] strategyName null guard — warning, tidak crash', () => {
   });
 
   it('resolvedStrategy fallback ke indicators.strategy jika strategyName null', () => {
-    assert.strictEqual(resolveStrategy(null, { strategy: 'TREND_MOMENTUM' }), 'TREND_MOMENTUM');
+    assert.strictEqual(resolveStrategy(null, { strategy: 'TREND_FOLLOWING' }), 'TREND_FOLLOWING');
   });
 
   it('resolvedStrategy fallback ke indicators.firedByStrategy jika strategy juga null', () => {

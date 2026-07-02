@@ -36,17 +36,17 @@ function fakeEngine(strategyKey, state) {
 test("coordinator emits ONE aggregated status report via the leader (not N)", () => {
   const c = new MultiStrategyCoordinator({
     userId: "u1", symbol: "ZECUSDT",
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
     totalCapital: 210, engineFactory: () => ({}),
   });
   const leader = fakeEngine("ADAPTIVE_FUSION", {
     capital: 105, trades: [{ pnl: 5 }, { pnl: -2 }], openPositions: [{ side: "LONG" }],
   });
-  const second = fakeEngine("TREND_MOMENTUM", {
+  const second = fakeEngine("TREND_FOLLOWING", {
     capital: 105, trades: [{ pnl: 3 }], openPositions: [],
   });
   c.engines.set("ADAPTIVE_FUSION", leader);
-  c.engines.set("TREND_MOMENTUM", second);
+  c.engines.set("TREND_FOLLOWING", second);
 
   c._emitUnifiedStatus();
 

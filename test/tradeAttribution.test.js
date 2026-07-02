@@ -16,9 +16,9 @@ console.log("\n🏷️  tradeAttribution Unit Tests\n");
 {
   // entry 100, atr 2, slMult 1.5 → slDist 3 → sl 97; RR 2 → tpDist 6 → tp 106
   const a = buildTradeAttribution({
-    strategyKey: "TREND_MOMENTUM", sl: 97, tp: 106, slDist: 3, tpDist: 6, atr: 2,
+    strategyKey: "TREND_FOLLOWING", sl: 97, tp: 106, slDist: 3, tpDist: 6, atr: 2,
   });
-  t("AC-04: firedByStrategy terisi", a.firedByStrategy === "TREND_MOMENTUM");
+  t("AC-04: firedByStrategy terisi", a.firedByStrategy === "TREND_FOLLOWING");
   t("slPrice = 97", a.slPrice === 97);
   t("tpPrice = 106", a.tpPrice === 106);
   t("slMultiplier = slDist/atr = 1.5", a.slMultiplier === 1.5);

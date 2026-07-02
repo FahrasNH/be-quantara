@@ -57,7 +57,7 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
 
     const coord = new MultiStrategyCoordinator({
       userId: "u1", symbol: "BTCUSDT",
-      strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"],
+      strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
       totalCapital: 90, engineFactory: factory, accountCoordinator: ac, dryRun: true,
     });
 
@@ -68,7 +68,7 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     // AF LONG → boleh
     t("AF LONG → diizinkan", engines.ADAPTIVE_FUSION.tryEnter("LONG").ok === true);
     // TM LONG (searah) → boleh (diversified)
-    t("TM LONG (searah) → diizinkan", engines.TREND_MOMENTUM.tryEnter("LONG").ok === true);
+    t("TM LONG (searah) → diizinkan", engines.TREND_FOLLOWING.tryEnter("LONG").ok === true);
     // MR SHORT (berlawanan) → DITOLAK (AC-05)
     const mr = engines.MEAN_REVERSION.tryEnter("SHORT");
     t("AC-05: MR SHORT ditolak (grup sudah LONG)", mr.ok === false);
@@ -106,12 +106,12 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     const { factory, engines } = makeReservingEngineFactory(ac);
     const coord = new MultiStrategyCoordinator({
       userId: "u3", symbol: "ETHUSDT",
-      strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"], totalCapital: 40,
+      strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"], totalCapital: 40,
       engineFactory: factory, accountCoordinator: ac, dryRun: true,
     });
     await coord.start();
     t("AF SHORT → boleh", engines.ADAPTIVE_FUSION.tryEnter("SHORT").ok === true);
-    t("TM SHORT → boleh (searah)", engines.TREND_MOMENTUM.tryEnter("SHORT").ok === true);
+    t("TM SHORT → boleh (searah)", engines.TREND_FOLLOWING.tryEnter("SHORT").ok === true);
     await coord.stop();
   }
 
