@@ -1177,6 +1177,12 @@ module.exports = function createBacktestRouter(context) {
     const strategyKey = String(strategyKeyRaw || "ADAPTIVE_FUSION").toUpperCase();
     if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair is required" });
 
+    // Validate tpMode if provided
+    const tpMode = parameters?.tpMode;
+    if (tpMode && !["fixed", "partial", "auto"].includes(tpMode)) {
+      return res.status(400).json({ ok: false, error: `Invalid tpMode: ${tpMode}. Allowed: fixed, partial, auto` });
+    }
+
     const strategyCfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
     if (!strategyCfg && !["AF_SMC"].includes(strategyKey)) {
       return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
