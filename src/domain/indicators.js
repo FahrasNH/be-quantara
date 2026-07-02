@@ -963,6 +963,46 @@ function calcADX(highs, lows, closes, period = 14) {
   return { adx, plusDI, minusDI };
 }
 
+/**
+ * Hitung VWAP (Volume Weighted Average Price).
+ * VWAP = Cumulative(TP × Volume) / Cumulative(Volume)
+ * dimana TP = (High + Low + Close) / 3
+ */
+function calcVWAP(candles) {
+  const vwap = new Array(candles.length).fill(null);
+  let cumPV = 0, cumVol = 0;
+
+  for (let i = 0; i < candles.length; i++) {
+    const { high, low, close, volume } = candles[i];
+    const typicalPrice = (high + low + close) / 3;
+    cumPV += typicalPrice * volume;
+    cumVol += volume;
+    vwap[i] = cumVol > 0 ? cumPV / cumVol : null;
+  }
+  return vwap;
+}
+
+/**
+ * Hitung z-score (standard deviation dari mean).
+ * z = (value - mean) / std_dev
+ * Berguna untuk mean reversion: z > 2 oversold, z < -2 overbought.
+ */
+function calcZScore(values, period = 20) {
+  const zscores = new Array(values.length).fill(null);
+
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) continue;
+
+    const slice = values.slice(i - period + 1, i + 1);
+    const mean = slice.reduce((s, v) => s + v, 0) / period;
+    const variance = slice.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / period;
+    const std = Math.sqrt(variance);
+
+    zscores[i] = std > 0 ? (values[i] - mean) / std : 0;
+  }
+  return zscores;
+}
+
 module.exports = {
   calcEMA,
   calcRSI,
@@ -970,6 +1010,8 @@ module.exports = {
   calcSMA,
   calcDonchian,
   calcADX,
+  calcVWAP,
+  calcZScore,
   calcBollingerBands,
   calcMACD,
   calcVolumeSMA,

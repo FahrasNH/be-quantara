@@ -1,67 +1,70 @@
 /**
- * MeanReversionStrategy.js — Statistical Mean Reversion Trading
+ * MeanReversionStrategy.js — Mean Drift (MD_MR): Dual-Component Mean Reversion
  *
- * Philosophy: "Trade extremes with statistical confidence"
- * - Identify price extremes via Bollinger Bands
- * - Confirm with RSI overbought/oversold (>75 or <25)
- * - Enter on mean reversion signal (high probability)
- * - v2.3: tight stops (1.4×ATR), long targets (3.2×ATR) → RR ~1:2.3
- * - Very selective: 40 trades/month, 55-60% WR
- * - Best for: VAULT tier (ultra-conservative, smooth equity)
+ * Philosophy: "Trade price extremes — fast for scalping, sustained for intraday"
  *
- * Mean Reversion Principle:
- * When price touches/crosses Bollinger Band (extreme),
- * price has high probability to revert back to middle (mean)
+ * Komponenten (tiered by market microstructure):
+ *   A (Scalping):  5m entry, RSI<28/RSI>72, BB(20, 1.5σ), hold 5-15min, TP 1.2-1.8% (1:2.5 RR)
+ *   B (Intraday): 15m entry, RSI<32/RSI>68, BB(20, 2.0σ), hold 30-90min, TP 2.5-4.0% (1:2 RR)
+ *
+ * Both components use:
+ *   - Dual-gate logic: BB touch + RSI agreement + VWAP confirmation
+ *   - No HTF regime (single TF entry for faster reaction)
+ *   - Vol SMA gate (reject dead markets)
+ *   - RR-optimized stops: tight for scalps, wider for intraday swings
  */
 
 const StrategyBase = require("../base/StrategyBase");
-const { calcBollingerBands, calcRSI, calcATR, calcSMA } = require("../../indicators");
+const { calcBollingerBands, calcRSI, calcATR, calcSMA, calcVWAP, calcZScore } = require("../../indicators");
 
 class MeanReversionStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "MEAN_REVERSION",
-      label: "Mean Reversion Strategy",
+      label: "Mean Reversion (Mean Drift - MD_MR)",
       description:
-        "Trades statistical extremes via Bollinger Bands. " +
-        "Identifies oversold/overbought with RSI confirmation. " +
-        "Entry near bands, target is middle (mean reversion). " +
-        "Ultra-selective, ultra-conservative. Best for VAULT tier (Rp30M+).",
-      version: "1.0.0",
+        "Dual-component mean reversion strategy. " +
+        "Component A (Scalping): 5m entry, RSI<28, BB(1.5σ), hold 5-15min. " +
+        "Component B (Intraday): 15m entry, RSI<32, BB(2.0σ), hold 30-90min. " +
+        "Optimal for MINT tier (Rp10-15M+). RR 1:2.5 (A), 1:2 (B).",
+      version: "2.0.0",
       enabled: true,
       ...config,
     });
 
     this.config = {
-      ...this.config,           // preserve name/label/version from StrategyBase
-      // Bollinger Bands (mean reversion zones)
-      bbPeriod: 20,
-      bbStdDev: 2.0,
-
-      // RSI (extreme confirmation) — level textbook mean-reversion 30/70.
-      // Lebih banyak peluang sah dibanding 25/75 yang terlalu langka (TUNING #1).
+      ...this.config,
+      // ═══ SHARED SETTINGS ═════════════════════════════════════════════════
       rsiPeriod: 14,
-      rsiOverbought: 70,      // > 70 = overbought (SHORT setup)
-      rsiOversold: 30,        // < 30 = oversold (LONG setup)
-
-      // Volume confirmation
+      bbPeriod: 20,
       volSMAPeriod: 20,
-      minVolRatio: 0.8,       // >= 0.8x avg volume (not dead)
+      minVolRatio: 0.7,
+      atrMult: 1.4,
+      leverage: 1.0,
+      riskPerTrade: 0.008,    // 0.8% per trade (split 0.4% A + 0.4% B)
 
-      // Risk management (VAULT tier - ultra-conservative) — v2.3 spec (STRATEGIES.md §3)
-      riskPerTrade: 0.008,    // v2.3: 0.8% per trade (dari 1%)
-      slMultiplier: 1.4,      // v2.3: SL = 1.4x ATR (dari 1.5)
-      tpMultiplier: 3.2,      // v2.3: TP = 3.2x ATR → RR = 3.2/1.4 ≈ 1:2.3
-      leverage: 1.0,          // NO leverage
+      // ═══ COMPONENT A: SCALPING (5m) ════════════════════════════════════
+      bbStdDevA: 1.5,         // Tight bands for fast mean reversion touch
+      rsiOversoldA: 28,       // LONG entry threshold
+      rsiOverboughtA: 72,     // SHORT entry threshold
+      tpMultiplierA: 2.5,     // TP = 2.5× SL → 1:2.5 RR
+      holdMinutesA: 15,       // Exit after 15 min if not profitable
+      trailingStopAtrMultA: 0.3,
+
+      // ═══ COMPONENT B: INTRADAY (15m) ════════════════════════════════════
+      bbStdDevB: 2.0,         // Looser bands for 30-90min swing
+      rsiOversoldB: 32,       // LONG entry threshold
+      rsiOverboughtB: 68,     // SHORT entry threshold
+      tpMultiplierB: 2.0,     // TP = 2.0× SL → 1:2 RR
+      holdMinutesB: 90,       // Hold up to 90 min for full swing
+      trailingStopAtrMultB: 0,// No trailing for intraday (let profit run)
 
       // Position management
-      maxTradesPerDay: 3,
-      minCapital: 30000000,   // Rp30M minimum
-      maxConcurrentTrades: 1, // One at a time
-      confirmationBars: 2,    // Need 2 bars confirming bounce/rejection
+      maxTradesPerDay: 5,     // More for dual component
+      minVotes: 1,            // Single component can enter
+      maxConcurrentTrades: 3, // Up to 3 positions (1 per entry + 1 carry)
     };
 
-    // Track BB levels for reference
     this._lastBBLevels = null;
   }
 
