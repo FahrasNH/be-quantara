@@ -180,6 +180,7 @@ function calcIndicators(candles, config = {}) {
     rsi:      calcRSI(closes, rsiPeriod),
     atr:      calcATR(highs, lows, closes, atrPeriod),
     volSMA:   calcVolumeSMA(volumes, 20),  // Selalu hitung volume SMA
+    vwap:     calcVWAP(candles),  // O(n) cumulative — precomputed once (Mean Reversion confirmation)
     closes,
     volumes,
     highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)

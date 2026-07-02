@@ -1448,10 +1448,18 @@ async function _runBacktestJobAsync(job, userId, opts) {
   const entryTf = entryTfOverride || strategyCfg?.interval || "15m";
   const htfTf   = htfTfOverride !== undefined ? htfTfOverride : (strategyCfg?.higherTf || null);
 
+  // Per-TF period cap (same as the AF triple-TF path): a short entry TF like 5m
+  // (Trend Following) over "12m" would fetch ~105k bars → huge fetch + a heavy
+  // compute loop. Cap short TFs (5m→180d, 15m→365d) so single-strategy real-engine
+  // runs stay responsive. 4h+ has no cap.
+  const entryEffectivePeriod = getEffectivePeriod(fetchOpts.periodId, entryTf);
+  const entryMaxBars = TYPE_MAX_BARS[entryTf];
+
   job.progress({ phase: "fetch", timeframe: entryTf, message: `Fetching ${entryTf} candles…`, pct: 0 });
 
   const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-    symbol: sym, timeframe: entryTf, ...fetchOpts, abortSignal,
+    symbol: sym, timeframe: entryTf, ...fetchOpts, periodId: entryEffectivePeriod, allowClamp: true, abortSignal,
+    ...(entryMaxBars ? { maxBarsOverride: entryMaxBars } : {}),
     onProgress: (loaded, total) => {
       const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
       job.progress({ phase: "fetch", timeframe: entryTf, message: `Loading ${entryTf} candles: ${loaded.toLocaleString()} / ${total.toLocaleString()}`, pct });
@@ -1467,7 +1475,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     job.progress({ phase: "fetch", timeframe: htfTf, message: `Fetching HTF candles (${htfTf})…`, pct: 0 });
     try {
       const htfRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-        symbol: sym, timeframe: htfTf, ...fetchOpts, abortSignal,
+        symbol: sym, timeframe: htfTf, ...fetchOpts, periodId: getEffectivePeriod(fetchOpts.periodId, htfTf), allowClamp: true, abortSignal,
       });
       htfCandles = htfRes.candles || null;
     } catch { htfCandles = null; }

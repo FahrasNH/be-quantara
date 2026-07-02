@@ -809,6 +809,8 @@ async function runRealBacktest(opts = {}) {
   const higherTf = cfg.higherTf ?? null;
 
   const warmup = Math.max(cfg.emaSlow ?? 21, cfg.atrPeriod ?? 14, 30) + 2;
+  const totalBars = entryCandles.length;
+  const progressEvery = Math.max(500, Math.floor(totalBars / 100));
 
   // Gate funnel — counts WHY candles don't become trades (diagnose 0-trade runs).
   const diag = {
@@ -862,6 +864,18 @@ async function runRealBacktest(opts = {}) {
   }
 
   for (let i = warmup; i < entryCandles.length; i++) {
+    // Abort + progress + event-loop yield (BT-FIX parity with the multi-position
+    // path). Without these, a large 5m/15m dataset (TF/MR) runs the whole loop
+    // SYNCHRONOUSLY → blocks Node's single thread → job-status polls hang → the
+    // FE aborts at ~10s → "Request timed out".
+    if (opts.abortSignal?.aborted) break;
+    if (i % progressEvery === 0 && opts.onProgress) {
+      opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
+    }
+    if (i % 2000 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
     const c = entryCandles[i];
     const price = c.close;
     const atr = indicators.atr[i];

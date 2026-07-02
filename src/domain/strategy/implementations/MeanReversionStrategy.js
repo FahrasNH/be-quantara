@@ -15,7 +15,9 @@
  */
 
 const StrategyBase = require("../base/StrategyBase");
-const { calcBollingerBands, calcRSI, calcATR, calcSMA, calcVWAP, calcZScore } = require("../../indicators");
+// Indicators (RSI/ATR/BB/VWAP) are precomputed once by calcIndicators and read
+// per-bar from the `indicators` arg; this strategy uses its own BB helper for
+// the dual-σ bands, so no direct indicators import is needed here.
 
 class MeanReversionStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -125,9 +127,10 @@ class MeanReversionStrategy extends StrategyBase {
 
     if (!bbA || !bbB) return null;
 
-    // VWAP for confirmation
-    const vwapValues = calcVWAP(indicators.candles?.slice?.(0, lastIdx + 1) || []);
-    const vwap = vwapValues[lastIdx] || close;
+    // VWAP for confirmation — read the precomputed O(n) array from calcIndicators.
+    // (Recomputing calcVWAP(slice) per bar was O(n²) AND, when indicators.candles
+    //  was absent, fell back to `close` → gate `close < close` blocked ALL signals.)
+    const vwap = indicators.vwap?.[lastIdx] ?? close;
 
     this._lastBBLevels = { bbA, bbB, vwap };
 

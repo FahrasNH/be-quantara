@@ -51,8 +51,11 @@ describe("MeanReversionStrategy (Mean Drift — dual-component)", () => {
     const volumes = Array(60).fill(1500);
     const atr = Array(60).fill(120);
     const volSMA = Array(60).fill(1500);
+    // VWAP is precomputed by calcIndicators; here we stub it above the dip so the
+    // LONG confirmation `close < vwap` holds (dip 40500 < vwap 42000).
+    const vwap = Array(60).fill(42000);
     const candles = closes.map((c, i) => ({ high: c + 50, low: c - 50, close: c, volume: volumes[i] }));
-    return { closes, rsi, volumes, atr, volSMA, candles };
+    return { closes, rsi, volumes, atr, volSMA, vwap, candles };
   }
 
   describe("detectSignal contract", () => {
