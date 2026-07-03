@@ -2617,7 +2617,20 @@ class BotEngine extends EventEmitter {
     // Calculate position size based on risk — loss when SL hits must equal
     // riskAmt, so qty = riskAmt / slDist. Dividing by the full SL→TP span (as
     // before) silently under-sized every position ~2.8×.
-    const riskPerTrade = this.config.riskPerTrade || 0.01;
+    //
+    // riskPerTrade is the COMBINED cap across all concurrent AF components, not
+    // per-component (documented in runTripleTypeBacktest: each type is sized at
+    // riskPerTrade/typeOrder.length so "combined max loss = configured
+    // riskPerTrade"). Live must divide by the same concurrent-component count,
+    // else 3 same-direction components each at full riskPerTrade risk 3× the
+    // configured amount live while the backtest shows only 1× — a silent
+    // live-vs-backtest divergence on real money. Divisor mirrors the fixed
+    // A/B/C component set (default 3), scaling correctly if fewer are enabled.
+    const concurrentComponents =
+      this.config.afEnabledComponents?.length ||
+      this.config.sacEnabledComponents?.length ||
+      3;
+    const riskPerTrade = (this.config.riskPerTrade || 0.01) / concurrentComponents;
     const riskAmt = this.state.capital * riskPerTrade;
     const qty = slDist > 0 ? riskAmt / slDist : 0;
 

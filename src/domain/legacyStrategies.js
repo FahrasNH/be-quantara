@@ -594,7 +594,15 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:        0.005,
+    // riskPerTrade = COMBINED max loss across all concurrent components (A/B/C),
+    // NOT per-component. Both engines enforce this: backtest sizes each type at
+    // riskPerTrade/3 (runTripleTypeBacktest), and live now divides per component
+    // too (BotEngine._handleMultiPositionSignal). Raised 0.5%→1.5% (2026-07-03):
+    // at 0.5% the PF was healthy but net return was ~1%/yr — position size was the
+    // bottleneck, not entry quality (per trader review). 1.5% aggregate keeps
+    // worst-case correlated drawdown (all 3 same-direction) sane while making
+    // return meaningful.
+    riskPerTrade:        0.015,
     maxDailyLossPct:     0.03,
     maxTradesPerDay:     8,
     cooldownAfterLoss:   60,
@@ -605,7 +613,11 @@ const STRATEGIES = {
     sacMinVotes:           1,            // 1 = any qualifying component can fire
     sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
     sacMinConfidenceA:     65,  // Scalping — raised 50→65 (AF-FIX-06: too many false entries)
-    sacMinConfidenceB:     65,  // Intraday
+    sacMinConfidenceB:     55,  // Intraday — lowered 65→55 (2026-07-03): 65 produced only
+                                // ~3 Intraday entries per 12mo on BTC. Intraday (15m/4h) is
+                                // meant to be the workhorse (3–5/day target); the sequence
+                                // engine is already selective, so a slightly lower confidence
+                                // floor unlocks frequency without loosening Scalping/Swing.
     sacMinConfidenceC:     65,  // Swing
 
     // ── Event-driven SMC sequence engine (v3.0) ──────────────────────────────
