@@ -2,12 +2,12 @@
  * BreakoutStormUmbrella.js — VAULT Tier umbrella strategy
  *
  * Umbrella key : BS_BR
- * Active now   : BS_BR (BreakoutRetestStrategy)
+ * Active now   : BS_BR (BreakoutTradingStrategy)
  * Future       : BS_VS, BS_LB
  */
 
-const UmbrellaStrategy       = require("../base/UmbrellaStrategy");
-const BreakoutRetestStrategy = require("../implementations/BreakoutRetestStrategy");
+const UmbrellaStrategy        = require("../base/UmbrellaStrategy");
+const BreakoutTradingStrategy = require("../implementations/BreakoutTradingStrategy");
 
 class BreakoutStormUmbrella extends UmbrellaStrategy {
   constructor() {
@@ -20,7 +20,7 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
       votingThreshold: 0.70,
     });
 
-    this.addComponent("BS_BR", new BreakoutRetestStrategy());
+    this.addComponent("BS_BR", new BreakoutTradingStrategy());
   }
 }
 

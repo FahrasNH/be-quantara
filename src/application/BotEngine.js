@@ -1434,8 +1434,8 @@ class BotEngine extends EventEmitter {
                   );
                 }
               } else if (this.config.signalType === "BREAKOUT_RETEST") {
-                const BreakoutRetestStrategy = require("../domain/strategy/implementations/BreakoutRetestStrategy");
-                const brInstance = new BreakoutRetestStrategy();
+                const BreakoutTradingStrategy = require("../domain/strategy/implementations/BreakoutTradingStrategy");
+                const brInstance = new BreakoutTradingStrategy();
                 const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal);
                 signalOptions.slDist = riskCfg.slDistance;
                 signalOptions.tpDist = riskCfg.tpDistance;

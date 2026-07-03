@@ -12,7 +12,7 @@ const UmbrellaStrategy = require("./base/UmbrellaStrategy");
 const SmartMoneyConceptsStrategy = require("./implementations/SmartMoneyConceptsStrategy");
 const TrendFollowingStrategy     = require("./implementations/TrendFollowingStrategy");
 const MeanReversionStrategy      = require("./implementations/MeanReversionStrategy");
-const BreakoutRetestStrategy     = require("./implementations/BreakoutRetestStrategy");
+const BreakoutTradingStrategy    = require("./implementations/BreakoutTradingStrategy");
 const GrokAiTradingStrategy      = require("./implementations/GrokAiTradingStrategy");
 
 // Umbrella wrappers
@@ -33,7 +33,7 @@ module.exports = {
   SmartMoneyConceptsStrategy,
   TrendFollowingStrategy,
   MeanReversionStrategy,
-  BreakoutRetestStrategy,
+  BreakoutTradingStrategy,
   GrokAiTradingStrategy,
 
   // Umbrella wrappers

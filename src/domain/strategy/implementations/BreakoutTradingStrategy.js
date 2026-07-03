@@ -1,30 +1,37 @@
 /**
- * BreakoutRetestStrategy.js — Professional Breakout + Retest Trading
+ * BreakoutTradingStrategy.js — Professional Breakout Trading (consolidation → breakout → retest)
  *
- * Philosophy: "Trade high-probability breakouts with RETEST confirmation"
- * - Identify support/resistance levels (20-candle high/low)
- * - Wait for BREAKOUT with volume confirmation
- * - Enter on RETEST (lower risk than breakout spike)
- * - Excellent risk-to-reward ratio (1:4.0+)
+ * Philosophy: "Trade high-probability breakouts that emerge FROM consolidation,
+ *              confirmed by a RETEST"
+ *   1. CONSOLIDATION — Bollinger Band Width squeeze (volatility contracts)
+ *   2. BREAKOUT      — close leaves the 20-bar high/low range with volume
+ *   3. RETEST        — price returns to the broken level and is rejected → enter
  *
- * Best for: VAULT tier (Rp30M+ capital, exclusive 4th strategy)
- * Win Rate: 51-56%
- * Annual Return: contribution to VAULT portfolio
+ * Indicators: Bollinger Band Width (squeeze), Volume (spike), ATR (stops),
+ *             range high/low (support/resistance levels).
+ * Trade type: Scalping → Swing (multi-TF, driven by getTimeframeConfig).
+ *
+ * Persisted strategy key stays "BREAKOUT_RETEST" / umbrella "BS_BR" (DB + tier +
+ * entitlement compatibility) — only the file/class was renamed from
+ * BreakoutRetestStrategy to reflect the broader "Breakout Trading" method.
+ *
+ * Best for: VAULT tier (exclusive 4th strategy)
+ * v2.4: + Bollinger Band Width consolidation gate (breakout must exit a squeeze).
  * v2.3: SL 1.4×ATR, TP 5.5×ATR → RR ~1:4.0, risk 2%, max 5 trade/hari
  */
 
 const StrategyBase = require("../base/StrategyBase");
 
-class BreakoutRetestStrategy extends StrategyBase {
+class BreakoutTradingStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "BREAKOUT_RETEST",
-      label: "Breakout + Retest Strategy",
+      label: "Breakout Trading Strategy",
       description:
-        "Identifies support/resistance breakouts with volume confirmation. " +
-        "Enters only on RETEST (confirmed entry) for lower risk. " +
+        "Trades breakouts that emerge from a Bollinger Band Width squeeze " +
+        "(consolidation), confirmed by volume and a RETEST of the broken level. " +
         "Excellent risk-to-reward ratio 1:4.0+. Works in any market condition.",
-      version: "1.0.0",
+      version: "2.4.0",
       enabled: true,
       ...config,
     });
@@ -35,6 +42,17 @@ class BreakoutRetestStrategy extends StrategyBase {
       lookbackBars: 20,        // High/low of last 20 candles = S&R level
       volumeMultiplier: 1.3,   // Breakout butuh 1.3x volume (Fix #2: 1.1 terlalu longgar)
       retestWindow: 5,         // Retest must occur within N bars of breakout, else level is stale
+
+      // ── Consolidation gate (Bollinger Band Width squeeze) — v2.4 ─────────
+      // A quality breakout expands OUT of a low-volatility squeeze. We measure
+      // BB width% = (upper − lower) / middle on the bar before the breakout and
+      // require it to be contracted vs its own recent average. This filters
+      // breakouts that fire mid-trend (no coiled energy) which tend to fail.
+      bbPeriod: 20,            // Bollinger Band SMA period
+      bbStdDev: 2.0,           // Band multiplier (±2σ)
+      squeezeLookback: 10,     // Bars of BB-width history to compare against
+      squeezeThreshold: 0.9,   // Squeeze if current width ≤ 0.9× avg prior width
+      requireConsolidation: true, // Set false to disable the gate (legacy behaviour)
 
       // Risk management (VAULT tier)
       // SL calibration: raised from 0.5 → 1.5×ATR after diagnostic proved 0.5×ATR
@@ -68,6 +86,7 @@ class BreakoutRetestStrategy extends StrategyBase {
         breakoutLevel: null,
         breakoutBar: null,
         confirmed: false,
+        squeezeWidthPct: null,
       });
     }
     return this._breakoutStates.get(key);
@@ -92,6 +111,51 @@ class BreakoutRetestStrategy extends StrategyBase {
     const midpoint = (resistance + support) / 2;
 
     return { resistance, support, midpoint, range: resistance - support };
+  }
+
+  /**
+   * Bollinger Band Width% = (upper − lower) / middle, computed from the `period`
+   * closes ENDING at endIdx. Returns null on insufficient data / zero mean.
+   */
+  _bbWidthPctAt(closes, endIdx, period) {
+    if (endIdx + 1 < period) return null;
+    const seg = closes.slice(endIdx - period + 1, endIdx + 1);
+    const mean = seg.reduce((a, b) => a + b, 0) / period;
+    if (mean === 0) return null;
+    const variance = seg.reduce((s, v) => s + (v - mean) ** 2, 0) / period;
+    const std = Math.sqrt(variance);
+    return (2 * this.config.bbStdDev * std) / mean; // (mean+kσ) − (mean−kσ) = 2kσ, over mean
+  }
+
+  /**
+   * Consolidation check via Bollinger Band Width squeeze.
+   * Squeeze = current BB width% is contracted below `squeezeThreshold`× its own
+   * average over the previous `squeezeLookback` bars → volatility is coiling,
+   * a real pre-breakout condition. Pass the closes UP TO the pre-breakout bar
+   * (i.e. exclude the breakout candle, which itself expands the bands).
+   * Returns { squeeze, widthPct, avgPriorWidthPct }.
+   */
+  checkConsolidation(closes) {
+    const period = this.config.bbPeriod;
+    const lb = this.config.squeezeLookback;
+    if (!closes || closes.length < period + lb) {
+      return { squeeze: false, widthPct: null, avgPriorWidthPct: null };
+    }
+
+    const n = closes.length;
+    const curr = this._bbWidthPctAt(closes, n - 1, period);
+    if (curr == null) return { squeeze: false, widthPct: null, avgPriorWidthPct: null };
+
+    let sum = 0, cnt = 0;
+    for (let k = 2; k <= lb + 1; k++) {
+      const w = this._bbWidthPctAt(closes, n - k, period);
+      if (w != null) { sum += w; cnt++; }
+    }
+    const avgPrior = cnt ? sum / cnt : null;
+    if (avgPrior == null) return { squeeze: false, widthPct: curr, avgPriorWidthPct: null };
+
+    const squeeze = curr <= avgPrior * this.config.squeezeThreshold;
+    return { squeeze, widthPct: curr, avgPriorWidthPct: avgPrior };
   }
 
   /**
@@ -160,7 +224,7 @@ class BreakoutRetestStrategy extends StrategyBase {
     const closeCurr = closes[n - 1];
     const lowCurr   = (lows  && lows[n - 1]  != null) ? lows[n - 1]  : closeCurr;
     const highCurr  = (highs && highs[n - 1] != null) ? highs[n - 1] : closeCurr;
-    const tol       = BreakoutRetestStrategy.RETEST_TOUCH_TOL;
+    const tol       = BreakoutTradingStrategy.RETEST_TOUCH_TOL;
 
     if (direction === "LONG") {
       // Wick turun menyentuh level (≤ level×(1+tol)) lalu close di atas level
@@ -192,8 +256,9 @@ class BreakoutRetestStrategy extends StrategyBase {
   /**
    * Main signal detection (VAULT tier)
    * 1. Detect levels (20-bar high/low)
-   * 2. Detect breakout (with volume)
-   * 3. Enter on retest (not on breakout spike)
+   * 2. Verify CONSOLIDATION (Bollinger Band Width squeeze) before the breakout
+   * 3. Detect breakout (with volume)
+   * 4. Enter on retest (not on breakout spike)
    */
   detectSignal(indicators, lastIdx, config = {}) {
     if (lastIdx < 30) return null;
@@ -221,25 +286,34 @@ class BreakoutRetestStrategy extends StrategyBase {
 
     const state = this._getBreakoutState(config);
 
-    // Step 2: Check for LONG breakout
+    // Step 2: Consolidation gate — measure the BB-width squeeze on the closes UP
+    // TO the pre-breakout bar (exclude the current candle, which expands the bands).
+    // Only arm a fresh breakout if the market was coiling; a retest already in
+    // progress (state.direction set on a prior bar) is NOT re-gated here.
+    const consol = this.checkConsolidation(closes.slice(0, -1));
+    const consolidationOK = !this.config.requireConsolidation || consol.squeeze;
+
+    // Step 3: Check for LONG breakout (only arm when it exits a squeeze)
     const longBreakout = this.checkLongBreakout(closes, volumes, volSMA, resistance);
-    if (longBreakout.valid) {
+    if (longBreakout.valid && consolidationOK) {
       state.direction = "LONG";
       state.breakoutLevel = resistance;
       state.breakoutBar = lastIdx;
       state.confirmed = false;
+      state.squeezeWidthPct = consol.widthPct;
     }
 
-    // Step 3: Check for SHORT breakout
+    // Step 4: Check for SHORT breakout (only arm when it exits a squeeze)
     const shortBreakout = this.checkShortBreakout(closes, volumes, volSMA, support);
-    if (shortBreakout.valid) {
+    if (shortBreakout.valid && consolidationOK) {
       state.direction = "SHORT";
       state.breakoutLevel = support;
       state.breakoutBar = lastIdx;
       state.confirmed = false;
+      state.squeezeWidthPct = consol.widthPct;
     }
 
-    // Step 4: Wait for RETEST entry (not immediate breakout)
+    // Step 5: Wait for RETEST entry (not immediate breakout)
     // Only check for retest if breakout was detected on a PREVIOUS bar
     if (state.direction && state.breakoutBar < lastIdx) {
       const barsSinceBreakout = lastIdx - state.breakoutBar;
@@ -271,7 +345,7 @@ class BreakoutRetestStrategy extends StrategyBase {
 
   /**
    * Calculate SL/TP based on ATR
-   * For VAULT: 1.5x ATR SL, 6x ATR TP = 1:4 RR
+   * For VAULT: 1.4x ATR SL, 5.5x ATR TP = ~1:4 RR
    */
   calculateRiskConfig(entryPrice, atr, signal) {
     const slDist = atr * this.config.slMultiplier;  // v2.3: 1.4x ATR
@@ -410,4 +484,4 @@ class BreakoutRetestStrategy extends StrategyBase {
   }
 }
 
-module.exports = BreakoutRetestStrategy;
+module.exports = BreakoutTradingStrategy;

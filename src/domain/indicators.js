@@ -792,8 +792,8 @@ function getMeanReversionInstance() {
 
 function getBreakoutRetestInstance() {
   if (!_breakoutRetestInstance) {
-    const BreakoutRetestStrategy = require("./strategy/implementations/BreakoutRetestStrategy");
-    _breakoutRetestInstance = new BreakoutRetestStrategy();
+    const BreakoutTradingStrategy = require("./strategy/implementations/BreakoutTradingStrategy");
+    _breakoutRetestInstance = new BreakoutTradingStrategy();
   }
   return _breakoutRetestInstance;
 }

@@ -1,8 +1,9 @@
 /**
- * BreakoutRetestStrategy.test.js — Unit Tests
+ * BreakoutTradingStrategy.test.js — Unit Tests
  *
  * Tests for:
  * - Level detection (support/resistance)
+ * - Consolidation detection (Bollinger Band Width squeeze)
  * - Breakout detection (LONG/SHORT)
  * - Retest entry validation
  * - Risk configuration
@@ -10,13 +11,13 @@
  */
 
 const assert = require("assert");
-const BreakoutRetestStrategy = require("../src/domain/strategy/implementations/BreakoutRetestStrategy");
+const BreakoutTradingStrategy = require("../src/domain/strategy/implementations/BreakoutTradingStrategy");
 
-describe("BreakoutRetestStrategy", () => {
+describe("BreakoutTradingStrategy", () => {
   let strategy;
 
   beforeEach(() => {
-    strategy = new BreakoutRetestStrategy();
+    strategy = new BreakoutTradingStrategy();
   });
 
   // ── Level Detection Tests ──────────────────────────────────────────────
@@ -49,6 +50,43 @@ describe("BreakoutRetestStrategy", () => {
     });
   });
 
+  // ── Consolidation (Bollinger Band Width squeeze) Tests ─────────────────
+
+  describe("checkConsolidation()", () => {
+    it("should return squeeze=false with insufficient data", () => {
+      const closes = [100, 101, 102]; // < bbPeriod + squeezeLookback
+      const res = strategy.checkConsolidation(closes);
+
+      assert.strictEqual(res.squeeze, false, "Not enough bars → no squeeze");
+      assert.strictEqual(res.widthPct, null, "widthPct should be null");
+    });
+
+    it("should detect a squeeze when volatility contracts", () => {
+      // Wide swings early (high BB width), then a flat tail (contracted width).
+      const wide = [];
+      for (let i = 0; i < 20; i++) wide.push(100 + (i % 2 === 0 ? 8 : -8)); // ±8 zig-zag
+      const flat = new Array(12).fill(100.2); // near-flat → width collapses
+      const closes = [...wide, ...flat];
+
+      const res = strategy.checkConsolidation(closes);
+
+      assert.strictEqual(res.squeeze, true, "Contracted tail should register as squeeze");
+      assert(res.widthPct < res.avgPriorWidthPct, "Current width below prior average");
+    });
+
+    it("should NOT detect a squeeze when volatility is expanding", () => {
+      // Flat early (tight width), then widening swings (expanding width).
+      const flat = new Array(20).fill(100);
+      const widening = [];
+      for (let i = 0; i < 12; i++) widening.push(100 + (i % 2 === 0 ? i : -i)); // growing ±
+      const closes = [...flat, ...widening];
+
+      const res = strategy.checkConsolidation(closes);
+
+      assert.strictEqual(res.squeeze, false, "Expanding width should NOT be a squeeze");
+    });
+  });
+
   // ── Breakout Detection Tests ───────────────────────────────────────────
 
   describe("checkLongBreakout()", () => {
@@ -66,7 +104,7 @@ describe("BreakoutRetestStrategy", () => {
 
     it("should reject LONG breakout without volume", () => {
       const closes = [100, 100, 100, 100, 100, 105, 110];
-      const volumes = [1000, 1000, 1000, 1000, 1000, 1000, 1050];  // No spike (< 1.1x)
+      const volumes = [1000, 1000, 1000, 1000, 1000, 1000, 1050];  // No spike (< 1.3x)
       const volSMA = 1000;
       const resistance = 105;
 
@@ -248,6 +286,12 @@ describe("BreakoutRetestStrategy", () => {
       assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
+    it("should expose Bollinger Band Width squeeze settings (v2.4)", () => {
+      assert.strictEqual(strategy.config.bbPeriod, 20, "BB period 20");
+      assert.strictEqual(strategy.config.bbStdDev, 2.0, "BB std dev 2.0");
+      assert.strictEqual(strategy.config.requireConsolidation, true, "Consolidation gate on by default");
+    });
+
     it("should allow config updates", () => {
       strategy.setConfig({ riskPerTrade: 0.02, leverage: 3 });
 
@@ -287,12 +331,13 @@ describe("BreakoutRetestStrategy", () => {
 });
 
 // ── Test Summary ───────────────────────────────────────────────────────
-console.log("\n✅ BreakoutRetestStrategy Unit Tests");
+console.log("\n✅ BreakoutTradingStrategy Unit Tests");
 console.log("   - Level detection: 3 tests");
+console.log("   - Consolidation (BB Width squeeze): 3 tests");
 console.log("   - Breakout detection: 5 tests");
 console.log("   - Retest entry: 3 tests");
 console.log("   - Risk configuration: 3 tests");
 console.log("   - LONG & SHORT handling: 3 tests");
-console.log("   - Configuration: 2 tests");
+console.log("   - Configuration: 3 tests");
 console.log("   - Entry validation: 4 tests");
-console.log("   Total: 23 tests\n");
+console.log("   Total: 27 tests\n");
