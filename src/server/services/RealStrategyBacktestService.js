@@ -1069,6 +1069,20 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const allTrades = [];
   const perTypeStats = {};
 
+  // Capital is shared across types (concurrent risk), mirroring runTripleTypeBacktest's
+  // documented model: riskPerTrade is the COMBINED cap across all concurrent types, so
+  // each type must size at riskPerTrade/typeOrder.length. Without this division, TS_TF
+  // (Intraday+Swing, 2 concurrent types) and MD_MR (Scalping+Intraday) each risked the
+  // FULL configured riskPerTrade independently — the same class of bug fixed for live
+  // SMC in BotEngine (2026-07-03), just never applied here. Verified: within a tier
+  // package where AF_SMC risks aggregate/3 per component, TS_TF was risking ~2x that
+  // per position (aggregate/1 instead of aggregate/2), inconsistent with the tier's
+  // shared risk budget.
+  const typeConfig = {
+    ...cfg,
+    riskPerTrade: (cfg.riskPerTrade ?? 0.01) / typeOrder.length,
+  };
+
   for (const tradeType of typeOrder) {
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
@@ -1083,14 +1097,14 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
         ...opts,
         strategyKey,
         capital: startCapital,
-        config: cfg,
+        config: typeConfig,
         abortSignal: opts.abortSignal,
         onProgress: opts.onProgress
           ? (pct, bar, total) => opts.onProgress(pct, bar, total, tradeType)
           : undefined,
       },
       strategy,
-      cfg,
+      typeConfig,
       feeRate,
       slip,
       entryCandles,

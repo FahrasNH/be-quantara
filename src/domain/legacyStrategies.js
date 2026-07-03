@@ -356,7 +356,15 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.012,   // v2.3: 1.2% per trade (dari 2%)
+    // 2026-07-03: normalized so per-position $ risk matches AF_SMC's per-component
+    // risk when both run in the same tier package (FORGE+). runMultiTypeBacktest
+    // divides this by typeOrder.length (2: Intraday+Swing), so effective per-position
+    // risk = 0.01333/2 ≈ 0.667% — same as SMC's 0.02/3 ≈ 0.667% per component. Before
+    // this fix, runMultiTypeBacktest had NO division at all, so TF risked the full
+    // 1.2% per position (~1.8x SMC's per-component risk) within the same $1000 tier
+    // bankroll — user-confirmed via trade PnL comparison (TF swings ~$7-10 vs SMC
+    // ~$0.8-2 on equal capital).
+    riskPerTrade:     0.0133,
     maxDailyLossPct:  0.06,
     maxTradesPerDay:  4,       // v2.3: 4 trade/hari (dari 10)
     cooldownAfterLoss: 5,
@@ -422,7 +430,10 @@ const STRATEGIES = {
 
     volSmaMultiplier: 0.8,
 
-    riskPerTrade:     0.008,   // v2.3: 0.8% ultra-conservative (dari 1%)
+    // 2026-07-03: same normalization as TREND_FOLLOWING above — runMultiTypeBacktest
+    // divides by typeOrder.length (2: Scalping+Intraday), so effective per-position
+    // risk = 0.01333/2 ≈ 0.667%, matching AF_SMC's per-component risk in shared tiers.
+    riskPerTrade:     0.0133,
     maxDailyLossPct:  0.03,
     maxTradesPerDay:  3,
     cooldownAfterLoss: 15,
