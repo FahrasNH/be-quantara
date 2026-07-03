@@ -79,10 +79,17 @@ setInterval(() => {
 
 const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 // GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SMC runs real engine w/ server-side gate)
+// + the v2.0 component keys (TS_TF/MD_MR/BS_BR). The FE sends v2.0 component keys for tier legs
+// (FORGE/MINT/VAULT), so omitting them here rejected every Grok-gated Trend Following / Mean Reversion /
+// Breakout leg with a 400 even though the tier was valid. legacyStrategies.STRATEGIES already resolves
+// these keys downstream, so accepting them is safe.
 const GROK_CONFIRM_STRATEGIES = new Set([
   ...USER_STRATEGY_KEYS,
   "AF_SMC",
   "SMART_MONEY_CONCEPTS",
+  "TS_TF",
+  "MD_MR",
+  "BS_BR",
 ]);
 const GROK_CONFIRM_MAX_SIGNALS = 500;
 
@@ -101,7 +108,7 @@ function validateGrokConfirmPayload(body) {
     return {
       error: {
         status: 400,
-        message: "Grok Confirm Gate hanya untuk ADAPTIVE_FUSION, SMART_MONEY_CONCEPTS, TREND_FOLLOWING, MEAN_REVERSION, BREAKOUT_RETEST",
+        message: "Grok Confirm Gate hanya untuk strategi Adaptive Fusion, Trend Surge (TS_TF), Mean Drift (MD_MR), dan Breakout (BS_BR)",
       },
     };
   }
