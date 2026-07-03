@@ -597,12 +597,14 @@ const STRATEGIES = {
     // riskPerTrade = COMBINED max loss across all concurrent components (A/B/C),
     // NOT per-component. Both engines enforce this: backtest sizes each type at
     // riskPerTrade/3 (runTripleTypeBacktest), and live now divides per component
-    // too (BotEngine._handleMultiPositionSignal). Raised 0.5%→1.5% (2026-07-03):
-    // at 0.5% the PF was healthy but net return was ~1%/yr — position size was the
-    // bottleneck, not entry quality (per trader review). 1.5% aggregate keeps
-    // worst-case correlated drawdown (all 3 same-direction) sane while making
-    // return meaningful.
-    riskPerTrade:        0.015,
+    // too (BotEngine._handleMultiPositionSignal). Progression 0.5%→1.5%→2.0%
+    // (2026-07-03): at 0.5% return was ~1%/yr (size-bound, not edge-bound). The
+    // 12mo BTC run then showed Sharpe 5.16 with max DD only 1.18% at 1.5% —
+    // strongly under-risked. Trader+quant sign-off raised to 2.0% (est. DD ~1.6%,
+    // return ~5%). 2.0% is moderate-aggressive; 3.0% is the prudent ceiling for
+    // 3 correlated components — do NOT exceed. NOTE: backtest DD is in-sample
+    // (40 trades, favorable period); expect live DD 2-4× higher.
+    riskPerTrade:        0.02,
     maxDailyLossPct:     0.03,
     maxTradesPerDay:     8,
     cooldownAfterLoss:   60,
