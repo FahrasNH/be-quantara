@@ -834,13 +834,100 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrGateBlock: 0, validateBlock: 0, opened: 0,
   };
 
+  // ── SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones) ──
+  // Backtest previously had NO partial-TP implementation at all — every trade closed
+  // 100% at SL/TP regardless of tpMode, so "Partial + Trailing" mode was silently a
+  // no-op in backtest (not 1:1 with live, where this is the actual live behavior when
+  // tpMode="partial"). Uses candle high/low (favorable-side extreme) to detect
+  // milestone touches within the bar, same intrabar-check pattern as the SL/TP hit
+  // logic below.
+  const tpModeCfg = cfg.tpMode ?? "full";
+  const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
+  const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
+  const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
+
+  function checkPartialMilestones(c, exitIdx) {
+    if (!slPlusEnabled || !position || position.remainingSize <= 0) return;
+    const R = position.R;
+    if (!Number.isFinite(R) || R <= 0) return;
+
+    const favorableExtreme = position.side === "LONG" ? c.high : c.low;
+    const gain = position.side === "LONG" ? favorableExtreme - position.entry : position.entry - favorableExtreme;
+    const rMult = gain / R;
+
+    const partialAt = (price, size, reason, newSL) => {
+      let px = price;
+      if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+      const grossPnl = position.side === "LONG" ? (px - position.entry) * size : (position.entry - px) * size;
+      const fee = feeRate * (position.entry + px) * size;
+      const pnl = grossPnl - fee;
+      capital += pnl;
+      position.remainingSize -= size;
+      position.slCurrent = newSL;
+      trades.push({
+        date: isoOf(c),
+        openTime: isoOf(entryCandles[position.openIdx]),
+        closeTime: isoOf(c),
+        side: position.side,
+        strategy: strategyKey,
+        component: position.component,
+        marketCond: position.marketCond,
+        entry: position.entry,
+        exit: px,
+        sl: position.sl,
+        tp: position.tp,
+        size,
+        grossPnl,
+        fee,
+        pnl,
+        pnlPct: (pnl / (position.entry * size)) * 100,
+        plannedRR: position.plannedRR,
+        confidence: position.confidence ?? null,
+        reason,
+        result: pnl > 0 ? "win" : "loss",
+        isPartial: true,
+      });
+    };
+
+    // Milestone 1: +1R → partial 40%, SL → BEP
+    if (!position.m1 && rMult >= 1.0) {
+      position.m1 = true;
+      const partial = position.originalSize * slPlusPartial1Pct;
+      const newSL = position.entry; // BEP
+      if (partial > 0 && partial < position.remainingSize) {
+        partialAt(position.entry + (position.side === "LONG" ? R : -R), partial, "Partial_1R", newSL);
+      } else {
+        position.slCurrent = newSL;
+      }
+    }
+
+    // Milestone 2: +2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
+    if (position.m1 && !position.m2 && rMult >= 2.0) {
+      position.m2 = true;
+      const fromOriginal = position.originalSize * slPlusPartial2Pct;
+      const partial = Math.min(fromOriginal, position.remainingSize * 0.90);
+      const newSL = position.side === "LONG" ? position.entry + R : position.entry - R; // +1R
+      if (partial > 0 && partial < position.remainingSize) {
+        partialAt(position.entry + (position.side === "LONG" ? 2 * R : -2 * R), partial, "Partial_2R", newSL);
+      } else {
+        position.slCurrent = newSL;
+      }
+    }
+
+    // Milestone 3: +3R → log-only marker, no partial (mirrors live)
+    if (position.m1 && position.m2 && !position.m3 && rMult >= 3.0) {
+      position.m3 = true;
+    }
+  }
+
   function closePosition(exitPrice, reason, exitIdx) {
     let px = exitPrice;
     if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+    const closeSize = position.remainingSize;
     const grossPnl = position.side === "LONG"
-      ? (px - position.entry) * position.size
-      : (position.entry - px) * position.size;
-    const fee = feeRate * (position.entry + px) * position.size;
+      ? (px - position.entry) * closeSize
+      : (position.entry - px) * closeSize;
+    const fee = feeRate * (position.entry + px) * closeSize;
     const pnl = grossPnl - fee;
     capital += pnl;
 
@@ -865,15 +952,16 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       exit: px,
       sl: position.sl,
       tp: position.tp,
-      size: position.size,
+      size: closeSize,
       grossPnl,
       fee,
       pnl,
-      pnlPct: (pnl / (position.entry * position.size)) * 100,
+      pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
       confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
       reason,
       result: pnl > 0 ? "win" : "loss",
+      isPartial: false,
     });
     position = null;
   }
@@ -910,9 +998,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 1. Manage open position FIRST (intrabar SL/TP, SL checked first) ─────
     if (position) {
-      const hitSL = position.side === "LONG" ? c.low <= position.sl : c.high >= position.sl;
+      checkPartialMilestones(c, i);
+    }
+    if (position) {
+      const stopLevel = position.slCurrent;
+      const hitSL = position.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
       const hitTP = position.side === "LONG" ? c.high >= position.tp : c.low <= position.tp;
-      if (hitSL) closePosition(position.sl, "SL", i);
+      if (hitSL) closePosition(stopLevel, position.m1 ? "SL_TRAIL" : "SL", i);
       else if (hitTP) closePosition(position.tp, "TP", i);
     }
 
@@ -1001,10 +1093,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     // ── 9. Open position (risk-based sizing; leverage irrelevant to PnL) ─────
     const entry = price;
     const size = (capital * riskPerTrade) / slDist;
+    const openSl = signal === "LONG" ? entry - slDist : entry + slDist;
     position = {
       side: signal,
       entry,
-      sl: signal === "LONG" ? entry - slDist : entry + slDist,
+      sl: openSl,
       tp: signal === "LONG" ? entry + tpDist : entry - tpDist,
       slDist,
       size,
@@ -1013,6 +1106,17 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       marketCond,
       plannedRR,
       confidence,
+      // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
+      // slCurrent is the live stop (moves to BEP/+1R after milestones fire),
+      // remainingSize shrinks as partials execute; originalSize stays fixed for
+      // milestone % calc (mirrors BotEngine pos.size vs pos.remainingSize).
+      R: slDist,
+      slCurrent: openSl,
+      remainingSize: size,
+      originalSize: size,
+      m1: false,
+      m2: false,
+      m3: false,
     };
     dailyTradeCount += 1;
     diag.opened += 1;
