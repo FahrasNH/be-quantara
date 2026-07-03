@@ -232,7 +232,7 @@ class BotEngine extends EventEmitter {
 
       // ── Take-Profit mode (FEE-04) ────────────────────────────────────────
       // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
-      // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R, sisa dibiarkan
+      // "partial" → partial close +1R/+2R + SL geser ke +0.3R/+1R, sisa dibiarkan
       //             lari ke TP penuh (~2.5–2.85R). Membiarkan winner lari sambil
       //             mengunci sebagian profit → ekspektasi net-of-fee membaik di
       //             strategi tren (TREND_FOLLOWING). Knob per-strategi via strat.tpMode.
@@ -240,7 +240,7 @@ class BotEngine extends EventEmitter {
 
       // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
       slPlusEnabled:     true,   // legacy; dikontrol oleh tpMode
-      slPlusPartial1Pct: strat.slPlusPartial1Pct ?? 0.40,   // +1R → 40% partial, SL ke BEP
+      slPlusPartial1Pct: strat.slPlusPartial1Pct ?? 0.40,   // +1R → 40% partial, SL ke +0.3R
       slPlusPartial2Pct: strat.slPlusPartial2Pct ?? 0.275,  // +2R → 27.5% partial, SL ke +1R
 
       // ── DB overrides (SELALU override semua default di atas) ─────────────
@@ -2403,7 +2403,7 @@ class BotEngine extends EventEmitter {
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
           slCurrent:     sl,       // SL aktif saat ini (bergerak setelah milestone)
-          m1: false,               // +1R milestone: partial 40%, SL → BEP
+          m1: false,               // +1R milestone: partial 40%, SL → +0.3R
           m2: false,               // +2R milestone: partial 27.5%, SL → +1R
           m3: false,               // +3R: biarkan menuju TP
         };
@@ -2927,20 +2927,24 @@ class BotEngine extends EventEmitter {
     const sym     = (this.config.symbol || "").replace("/", "").replace(":USDT", "");
     const minLot  = MIN_LOT[sym] ?? 0.001;
 
-    // ── Milestone 1: +1R → partial 40%, SL ke BEP ───────────────────────────
+    // ── Milestone 1: +1R → partial 40%, SL ke +0.3R (bukan BEP murni) ───────
+    // 4yr VAULT backtest: runner yang diparkir tepat di BEP mati kena pullback
+    // dangkal pertama (TF 4/5 & MR 3/3 keluar via SL_TRAIL ~breakeven, tak pernah
+    // sampai +2R). +0.3R tetap mengunci profit kecil tapi memberi ruang napas.
+    // HARUS identik dengan RealStrategyBacktestService.checkPartialMilestones.
     if (!pos.m1 && rMult >= 1.0) {
       const pct     = this.config.slPlusPartial1Pct;
       const partial = parseFloat((pos.size * pct).toFixed(8));
-      const newSL   = pos.entry; // Break-Even Point
+      const newSL   = pos.side === "LONG" ? pos.entry + 0.3 * R : pos.entry - 0.3 * R; // +0.3R
       pos.m1 = true;
 
       if (partial >= minLot) {
-        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "BEP");
+        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "+0.3R");
       } else {
-        // Size terlalu kecil untuk partial — geser SL ke BEP saja agar tetap terlindungi
+        // Size terlalu kecil untuk partial — geser SL ke +0.3R saja agar tetap terlindungi
         this._log("info",
           `SL+ M1: partial ${partial.toFixed(4)} < min lot ${minLot} ${sym} ` +
-          `— skip partial, SL digeser ke BEP $${newSL.toFixed(2)} ✓`
+          `— skip partial, SL digeser ke +0.3R $${newSL.toFixed(2)} ✓`
         );
         pos.slCurrent = newSL;
         if (!this.config.dryRun) await this._updateSLOnExchange(pos, newSL);

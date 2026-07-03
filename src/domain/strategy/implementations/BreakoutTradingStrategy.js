@@ -17,6 +17,8 @@
  *
  * Best for: VAULT tier (exclusive 4th strategy)
  * v2.4: + Bollinger Band Width consolidation gate (breakout must exit a squeeze).
+ *        SL/TP recalibrated from 4yr BTC backtest: SL 1.7×ATR, TP 3.2×ATR → RR ~1:1.9
+ *        (was 1.4/5.5 → 1:4 — a target 0/40 trades ever reached in 4 years).
  * v2.3: SL 1.4×ATR, TP 5.5×ATR → RR ~1:4.0, risk 2%, max 5 trade/hari
  */
 
@@ -30,7 +32,7 @@ class BreakoutTradingStrategy extends StrategyBase {
       description:
         "Trades breakouts that emerge from a Bollinger Band Width squeeze " +
         "(consolidation), confirmed by volume and a RETEST of the broken level. " +
-        "Excellent risk-to-reward ratio 1:4.0+. Works in any market condition.",
+        "Risk-to-reward ~1:2 with wide invalidation. Works in any market condition.",
       version: "2.4.0",
       enabled: true,
       ...config,
@@ -58,11 +60,17 @@ class BreakoutTradingStrategy extends StrategyBase {
       // SL calibration: raised from 0.5 → 1.5×ATR after diagnostic proved 0.5×ATR
       // sits inside normal bar noise (avg SL 268 < avg H-L range 535 on 15m BTC).
       // At 0.5×ATR, ~50% of bars breach SL on the next wick → 0% win rate.
-      // At 1.5×ATR the stop clears typical bar noise and gives a real invalidation
-      // level for the retest. tpMultiplier scaled from 4→6 to keep RR 1:4 (6/1.5=4).
+      // v2.4 recalibration (4yr BTC VAULT backtest, 40 unique trades):
+      //   - 0/40 trades EVER reached the 5.5×ATR full TP in 4 years → 4:1 target
+      //     is empirically unreachable; runners always died at trail/SL first.
+      //   - 27/40 (67.5%) never touched +1R before full SL (-127 net) while the
+      //     13 that did were ALL profitable (+83 net) → stop too tight for
+      //     post-breakout retest noise, not a trailing problem.
+      //   Fix: widen SL 1.4→1.7×ATR (room for retest noise) + lower TP 5.5→3.2×ATR
+      //   → RR ≈ 1:1.9 (reachable). Walk-forward validation still required.
       riskPerTrade: 0.02,      // v2.3: 2% per trade (dari 3%)
-      slMultiplier: 1.4,       // v2.3: SL = 1.4x ATR (dari 1.5)
-      tpMultiplier: 5.5,       // v2.3: TP = 5.5x ATR → RR = 5.5/1.4 ≈ 1:4.0
+      slMultiplier: 1.7,       // v2.4: SL = 1.7x ATR (dari 1.4 — clears retest noise)
+      tpMultiplier: 3.2,       // v2.4: TP = 3.2x ATR → RR = 3.2/1.7 ≈ 1:1.9 (dari 5.5 / 1:4)
 
       // Position management
       maxTradesPerDay: 5,      // v2.3: 5 trade/hari (dari 7)
@@ -345,11 +353,11 @@ class BreakoutTradingStrategy extends StrategyBase {
 
   /**
    * Calculate SL/TP based on ATR
-   * For VAULT: 1.4x ATR SL, 5.5x ATR TP = ~1:4 RR
+   * For VAULT: 1.7x ATR SL, 3.2x ATR TP = ~1:1.9 RR (v2.4 recalibration)
    */
   calculateRiskConfig(entryPrice, atr, signal) {
-    const slDist = atr * this.config.slMultiplier;  // v2.3: 1.4x ATR
-    const tpDist = atr * this.config.tpMultiplier;  // v2.3: 5.5x ATR
+    const slDist = atr * this.config.slMultiplier;  // v2.4: 1.7x ATR
+    const tpDist = atr * this.config.tpMultiplier;  // v2.4: 3.2x ATR
 
     let stopLoss, takeProfit;
 
@@ -364,7 +372,7 @@ class BreakoutTradingStrategy extends StrategyBase {
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
       takeProfit: parseFloat(takeProfit.toFixed(8)),
-      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // v2.3: ~3.93 (5.5/1.4 ≈ 1:4)
+      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // v2.4: ~1.88 (3.2/1.7 ≈ 1:1.9)
       slDistance: slDist,
       tpDistance: tpDist,
       slMultiplier: this.config.slMultiplier,

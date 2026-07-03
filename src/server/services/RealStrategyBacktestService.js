@@ -889,11 +889,17 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       });
     };
 
-    // Milestone 1: +1R → partial 40%, SL → BEP
+    // Milestone 1: +1R → partial 40%, SL → +0.3R (NOT pure BEP).
+    // 4yr VAULT backtest showed runners parked at exact BEP died on the first
+    // shallow pullback: TF 4/5 and MR 3/3 partial-triggered trades exited via
+    // SL_TRAIL at ~breakeven and never reached +2R/full TP. +0.3R keeps a small
+    // locked profit while giving the runner breathing room below +1R.
     if (!position.m1 && rMult >= 1.0) {
       position.m1 = true;
       const partial = position.originalSize * slPlusPartial1Pct;
-      const newSL = position.entry; // BEP
+      const newSL = position.side === "LONG"
+        ? position.entry + 0.3 * R
+        : position.entry - 0.3 * R; // +0.3R buffer
       if (partial > 0 && partial < position.remainingSize) {
         partialAt(position.entry + (position.side === "LONG" ? R : -R), partial, "Partial_1R", newSL);
       } else {

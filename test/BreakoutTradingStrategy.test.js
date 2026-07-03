@@ -200,10 +200,10 @@ describe("BreakoutTradingStrategy", () => {
 
       const riskCfg = strategy.calculateRiskConfig(entryPrice, atr, signal);
 
-      // v2.3: SL = 100 - (2 × 1.4) = 97.2 | TP = 100 + (2 × 5.5) = 111 | RR = 5.5/1.4 ≈ 3.93
-      assert.strictEqual(riskCfg.stopLoss, 97.2, "SL should be 100 - (2 × 1.4) = 97.2");
-      assert.strictEqual(riskCfg.takeProfit, 111, "TP should be 100 + (2 × 5.5) = 111");
-      assert.strictEqual(riskCfg.riskReward, 3.93, "RR should be (5.5 / 1.4) ≈ 3.93");
+      // v2.4: SL = 100 - (2 × 1.7) = 96.6 | TP = 100 + (2 × 3.2) = 106.4 | RR = 3.2/1.7 ≈ 1.88
+      assert.strictEqual(riskCfg.stopLoss, 96.6, "SL should be 100 - (2 × 1.7) = 96.6");
+      assert.strictEqual(riskCfg.takeProfit, 106.4, "TP should be 100 + (2 × 3.2) = 106.4");
+      assert.strictEqual(riskCfg.riskReward, 1.88, "RR should be (3.2 / 1.7) ≈ 1.88");
     });
 
     it("should calculate SHORT SL & TP correctly", () => {
@@ -213,10 +213,10 @@ describe("BreakoutTradingStrategy", () => {
 
       const riskCfg = strategy.calculateRiskConfig(entryPrice, atr, signal);
 
-      // v2.3: SL = 100 + (2 × 1.4) = 102.8 | TP = 100 - (2 × 5.5) = 89 | RR = 5.5/1.4 ≈ 3.93
-      assert.strictEqual(riskCfg.stopLoss, 102.8, "SL should be 100 + (2 × 1.4) = 102.8");
-      assert.strictEqual(riskCfg.takeProfit, 89, "TP should be 100 - (2 × 5.5) = 89");
-      assert.strictEqual(riskCfg.riskReward, 3.93, "RR should be (5.5 / 1.4) ≈ 3.93");
+      // v2.4: SL = 100 + (2 × 1.7) = 103.4 | TP = 100 - (2 × 3.2) = 93.6 | RR = 3.2/1.7 ≈ 1.88
+      assert.strictEqual(riskCfg.stopLoss, 103.4, "SL should be 100 + (2 × 1.7) = 103.4");
+      assert.strictEqual(riskCfg.takeProfit, 93.6, "TP should be 100 - (2 × 3.2) = 93.6");
+      assert.strictEqual(riskCfg.riskReward, 1.88, "RR should be (3.2 / 1.7) ≈ 1.88");
     });
 
     it("should handle decimal prices correctly", () => {
@@ -226,10 +226,10 @@ describe("BreakoutTradingStrategy", () => {
 
       const riskCfg = strategy.calculateRiskConfig(entryPrice, atr, signal);
 
-      // v2.3: SL = 42350.50 - (150.25 × 1.4) = 42350.50 - 210.35  = 42140.15
-      //       TP = 42350.50 + (150.25 × 5.5) = 42350.50 + 826.375 = 43176.875
-      assert(Math.abs(riskCfg.stopLoss - 42140.15) < 0.01, "SL calculation should be precise");
-      assert(Math.abs(riskCfg.takeProfit - 43176.875) < 0.01, "TP calculation should be precise");
+      // v2.4: SL = 42350.50 - (150.25 × 1.7) = 42350.50 - 255.425 = 42095.075
+      //       TP = 42350.50 + (150.25 × 3.2) = 42350.50 + 480.8   = 42831.30
+      assert(Math.abs(riskCfg.stopLoss - 42095.075) < 0.01, "SL calculation should be precise");
+      assert(Math.abs(riskCfg.takeProfit - 42831.30) < 0.01, "TP calculation should be precise");
     });
   });
 
@@ -281,8 +281,8 @@ describe("BreakoutTradingStrategy", () => {
   describe("Configuration (VAULT tier)", () => {
     it("should have correct VAULT tier settings", () => {
       assert.strictEqual(strategy.config.riskPerTrade, 0.02, "v2.3: Risk should be 2%");
-      assert.strictEqual(strategy.config.slMultiplier, 1.4, "v2.3: SL should be 1.4x ATR");
-      assert.strictEqual(strategy.config.tpMultiplier, 5.5, "v2.3: TP should be 5.5x ATR → RR ~1:4");
+      assert.strictEqual(strategy.config.slMultiplier, 1.7, "v2.4: SL should be 1.7x ATR");
+      assert.strictEqual(strategy.config.tpMultiplier, 3.2, "v2.4: TP should be 3.2x ATR → RR ~1:1.9");
       assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
@@ -297,7 +297,7 @@ describe("BreakoutTradingStrategy", () => {
 
       assert.strictEqual(strategy.config.riskPerTrade, 0.02, "Risk should be updated");
       assert.strictEqual(strategy.config.leverage, 3, "Leverage should be updated");
-      assert.strictEqual(strategy.config.tpMultiplier, 5.5, "Other settings should remain (v2.3)");
+      assert.strictEqual(strategy.config.tpMultiplier, 3.2, "Other settings should remain (v2.4)");
     });
   });
 
