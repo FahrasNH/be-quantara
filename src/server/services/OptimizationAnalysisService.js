@@ -32,7 +32,7 @@ class OptimizationAnalysisService {
         const access = await XaiTrainingService.canUseAiOptimizer(userId);
         if (access.allowed && XaiTrainingService.isEnabled()) {
           try {
-            const ragQuery = `optimasi ${strategyKey ?? ""} ${symbol ?? ""} trading strategy parameters`;
+            const ragQuery = `optimize ${strategyKey ?? ""} ${symbol ?? ""} trading strategy parameters`;
             const aiResult = await XaiTrainingService.analyzeBacktest(metrics, {
               symbol,
               strategyKey,

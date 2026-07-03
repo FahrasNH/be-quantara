@@ -1316,6 +1316,16 @@ const TYPE_MAX_PERIOD = {
   "1m":  "30d",     // (legacy fallback if sequence engine off)
   "5m": "180d",     // Scalping entry now 5m: 180 days ≈ 51.8k bars
   "15m": "365d",    // Intraday entry now 15m: 365 days ≈ 35k bars
+  // Higher TFs used as trend/HTF (Scalping trend 1h, Intraday trend + Swing entry 4h,
+  // Swing trend 1w). Previously UNCAPPED → picking "Maximum available" resolved to
+  // 2020→now: 1h ≈ 57k bars, 4h ≈ 14k bars, each an unbounded paginated exchange
+  // fetch (10s gate per page) → timeout / KLINES_NOT_FOUND on exchanges whose futures
+  // history is shallower than 2020 (e.g. Bitget). Bounding "max" here keeps the
+  // fetch finite while still giving multi-year coverage. Only bites when userDays
+  // (max=3650) exceeds the cap; 3m/6m/12m pass through unchanged.
+  "1h":  "730d",    // ≈ 17.5k bars
+  "4h": "1460d",    // ≈ 8.7k bars (4 years)
+  "1w": "3650d",    // ≈ 520 bars — effectively uncapped, explicit for clarity
 };
 
 // Safety: extra bar cap per TF (period cap is primary, this is backup)

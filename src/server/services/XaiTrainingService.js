@@ -16,21 +16,27 @@ const { getUserTier } = require("../../services/entitlement");
 const { getTierConfig } = require("../../domain/tierConfig");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 
-const SYSTEM_PROMPT = `Kamu adalah analis quant trading untuk platform Quantara (bot crypto futures).
-Tugasmu menganalisis metrik backtest/live trade dan memberikan rekomendasi parameter strategi yang spesifik.
+const SYSTEM_PROMPT = `You are a quant trading analyst for Quantara (a crypto futures bot platform).
+Your job is to analyze backtest/live-trade metrics and give SPECIFIC, strategy-aware parameter recommendations.
 
-Aturan:
-- Jawab HANYA dalam JSON valid (tanpa markdown fence).
-- Gunakan bahasa Indonesia untuk title, description, ai_summary.
-- Rekomendasi harus actionable: sebut parameter konkret (rsiLongMin, atrMultiplier, riskReward, dll).
-- Skor overall_score 0-100 berdasarkan win rate, profit factor, drawdown, sharpe, ROI.
-- Jangan sarankan leverage ekstrem atau all-in.
-- Prioritas: critical > high > medium > low.
+Rules:
+- Reply with VALID JSON ONLY (no markdown fences).
+- Write ALL text (title, description, ai_summary, reason) in ENGLISH.
+- CRITICAL — strategy awareness: the user message lists the analyzed strategy's ACTUAL indicators and its
+  TUNABLE PARAMETERS. You MUST ONLY suggest parameters from that TUNABLE list. NEVER invent parameters the
+  strategy does not use. Example: a structure-based Smart Money Concepts strategy has NO RSI and NO configurable
+  risk-reward — do not suggest "RSI Period" or "riskReward" for it; suggest its real knobs (confidence gates,
+  risk per trade, HTF regime, TP multiplier) instead.
+- Every parameter_suggestions.param MUST be one of the exact keys listed under TUNABLE PARAMETERS.
+- Set parameter_suggestions.strategy to the EXACT strategyKey given in the user message.
+- overall_score 0-100 based on win rate, profit factor, drawdown, sharpe, ROI.
+- Never suggest extreme leverage or all-in sizing.
+- Priority order: critical > high > medium > low.
 
-Format JSON wajib:
+Required JSON format:
 {
   "overall_score": number,
-  "ai_summary": "string — ringkasan 2-3 kalimat",
+  "ai_summary": "string — 2-3 sentence summary (English)",
   "recommendations": [
     { "title": "string", "priority": "critical|high|medium|low", "description": "string", "expected_impact": number }
   ],
@@ -38,7 +44,7 @@ Format JSON wajib:
     { "area": "string", "name": "string", "suggestion": "string", "potential_gain": number, "parameters": { "key": value } }
   ],
   "parameter_suggestions": [
-    { "strategy": "ADAPTIVE_FUSION|TREND_FOLLOWING|MEAN_REVERSION|BREAKOUT_RETEST", "param": "string", "current_hint": "string", "suggested": "string", "reason": "string" }
+    { "strategy": "<exact strategyKey>", "param": "<exact key from TUNABLE PARAMETERS>", "current_hint": "string", "suggested": "string", "reason": "string" }
   ],
   "risk_assessment": {
     "level": "Low|Moderate|High",
@@ -46,6 +52,46 @@ Format JSON wajib:
     "key_risks": ["string"]
   }
 }`;
+
+/**
+ * Per-strategy tuning profile — tells Grok what each strategy ACTUALLY uses so it
+ * recommends real knobs instead of assuming every strategy is EMA/RSI/RR-based.
+ * Keyed by normalized strategy key (aliases resolved in _strategyProfile).
+ */
+const STRATEGY_TUNING_PROFILES = {
+  AF_SMC: {
+    family: "Smart Money Concepts (price-structure, NOT indicator-based)",
+    indicators: "Liquidity sweep, CHoCH/BOS, Fair Value Gap (FVG), Order Block, Displacement, CVD, Volume surge. EMA is used ONLY for higher-timeframe regime bias — there is NO RSI and NO EMA-cross entry.",
+    tunable: [
+      "sacMinConfidenceA (Scalping entry confidence gate, 0-100 — lower = more trades)",
+      "sacMinConfidenceB (Intraday entry confidence gate, 0-100)",
+      "sacMinConfidenceC (Swing entry confidence gate, 0-100)",
+      "riskPerTrade (combined risk fraction across the 3 concurrent components, e.g. 0.015 = 1.5%)",
+      "strongTrendTPMult (TP multiplier that lets winners run in STRONG_TREND regime)",
+      "maxTradesPerDay (daily trade cap)",
+      "hardRegimeBlock (true = hard-block counter-HTF entries, false = soft -15 penalty)",
+    ],
+    forbidden: "rsiPeriod, rsiLongMin/Max, riskReward, emaFast/emaSlow (SL/TP come from hardcoded per-component ATR multipliers, NOT config)",
+  },
+  TS_TF: {
+    family: "Trend Following (Donchian breakout + EMA trend + ATR)",
+    indicators: "Donchian channel breakout, EMA trend filter, ADX strength, ATR-based SL/TP.",
+    tunable: ["donchianPeriod", "emaFast", "emaSlow", "atrMultiplier", "riskReward", "adxMin"],
+    forbidden: "Smart-money structure params (CHoCH, FVG, order block, CVD)",
+  },
+  MD_MR: {
+    family: "Mean Reversion (VWAP + RSI bands + Bollinger)",
+    indicators: "VWAP deviation, RSI oversold/overbought bands, Bollinger Bands, ATR.",
+    tunable: ["rsiPeriod", "rsiOversold", "rsiOverbought", "bbPeriod", "bbStdDev", "atrMultiplier", "riskReward"],
+    forbidden: "Trend-breakout params (Donchian), smart-money structure params",
+  },
+  BS_BR: {
+    family: "Breakout Retest (range detection + breakout + retest confirmation)",
+    indicators: "Range/consolidation detection, breakout level, retest tolerance, volume confirmation, ATR.",
+    tunable: ["breakoutLookback", "retestTolerancePct", "volSmaMultiplier", "atrMultiplier", "riskReward"],
+    forbidden: "RSI/mean-reversion params",
+  },
+};
 
 class XaiTrainingService {
   static get client() {
@@ -91,6 +137,27 @@ class XaiTrainingService {
   }
 
   /**
+   * Resolve a strategyKey (incl. legacy aliases) to its tuning profile so Grok
+   * only recommends parameters the strategy actually exposes.
+   */
+  static _strategyProfile(strategyKey) {
+    if (!strategyKey) return null;
+    const k = String(strategyKey).toUpperCase();
+    const ALIAS = {
+      AF_SMC: "AF_SMC",
+      SMART_MONEY_CONCEPTS: "AF_SMC",
+      ADAPTIVE_FUSION: "AF_SMC",
+      TS_TF: "TS_TF",
+      TREND_FOLLOWING: "TS_TF",
+      MD_MR: "MD_MR",
+      MEAN_REVERSION: "MD_MR",
+      BS_BR: "BS_BR",
+      BREAKOUT_RETEST: "BS_BR",
+    };
+    return STRATEGY_TUNING_PROFILES[ALIAS[k]] ?? null;
+  }
+
+  /**
    * Analisis backtest dengan Grok + optional RAG context.
    */
   static async analyzeBacktest(metrics, context = {}) {
@@ -107,24 +174,30 @@ class XaiTrainingService {
       }
     }
 
-    const strategySummary = Object.entries(STRATEGIES)
-      .slice(0, 4)
-      .map(([k, s]) => `${k}: EMA ${s.emaFast}/${s.emaSlow}, RSI ${s.rsiPeriod}, RR ${s.riskReward}`)
-      .join("\n");
+    const profile = XaiTrainingService._strategyProfile(strategyKey);
+    const strategyContext = profile
+      ? [
+          `Analyzed strategy: ${strategyKey} — ${profile.family}`,
+          `Indicators actually used: ${profile.indicators}`,
+          `TUNABLE PARAMETERS (only suggest from this list, use the exact key):`,
+          ...profile.tunable.map(t => `  - ${t}`),
+          `DO NOT suggest (not used by this strategy): ${profile.forbidden}`,
+        ].join("\n")
+      : `Analyzed strategy: ${strategyKey ?? "N/A"} (no tuning profile — suggest only widely-safe, generic risk knobs; do not invent indicator params).`;
 
     const userContent = [
-      `Simbol: ${symbol ?? "N/A"}`,
-      `Strategi: ${strategyKey ?? "N/A"}`,
+      `Symbol: ${symbol ?? "N/A"}`,
+      `strategyKey: ${strategyKey ?? "N/A"}`,
       "",
-      "Metrik backtest:",
+      "Backtest metrics:",
       JSON.stringify(metrics, null, 2),
       "",
-      trades?.length ? `Sample trades (${Math.min(trades.length, 20)} dari ${trades.length}):` : "",
+      trades?.length ? `Sample trades (${Math.min(trades.length, 20)} of ${trades.length}):` : "",
       trades?.length ? JSON.stringify(trades.slice(0, 20), null, 2) : "",
       "",
-      "Preset strategi platform:",
-      strategySummary,
-      ragContext ? `\nKonteks knowledge base:\n${ragContext.slice(0, 8000)}` : "",
+      "STRATEGY PROFILE (authoritative — overrides any assumption):",
+      strategyContext,
+      ragContext ? `\nKnowledge-base context:\n${ragContext.slice(0, 8000)}` : "",
     ].filter(Boolean).join("\n");
 
     const raw = await client.chat(
