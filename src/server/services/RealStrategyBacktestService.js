@@ -29,6 +29,15 @@ const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 
+// Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
+// the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
+// silently failed for "MD_MR", making the MR gate exemption + regime filter dead
+// code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
+const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
+const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
+const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
+const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
+
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
 
@@ -790,7 +799,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   // MR regime filter (FIX-MR-01): precompute HTF indicators once for regime checks
   // per-bar (O(1) lookup). Live BotEngine computes these fresh per tick, but
   // backtest can cache since HTF data is static.
-  const isMeanReversion = strategyKey && String(strategyKey).toUpperCase().includes("MEAN_REVERSION");
+  const isMeanReversion = isMRKey(strategyKey);
   let htfIndicators = null;
   if (isMeanReversion && htfCandles?.length >= 30) {
     const htfCloses = htfCandles.map(c => c.close);
@@ -1083,8 +1092,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
     // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
     // reversal valid). Other trend-following strategies require HTF alignment.
-    const isMR = strategyKey && String(strategyKey).toUpperCase().includes("MEAN_REVERSION");
-    const isBR = strategyKey && String(strategyKey).toUpperCase().includes("BREAKOUT");
+    const isMR = isMRKey(strategyKey);
+    const isBR = isBRKey(strategyKey);
     if (!isMR && !isBR) {
       if (signal === "LONG" && htfTrend === "BEARISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
       if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }

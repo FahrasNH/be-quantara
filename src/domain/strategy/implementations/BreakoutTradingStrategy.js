@@ -271,13 +271,23 @@ class BreakoutTradingStrategy extends StrategyBase {
   detectSignal(indicators, lastIdx, config = {}) {
     if (lastIdx < 30) return null;
 
-    // Slice all series to the current bar so every helper (which indexes off
-    // array.length-1) reads `lastIdx` as "current", not the end of the dataset.
-    // Without this, backtest evaluates the final bar's state on every iteration.
-    const closes = (indicators.closes || []).slice(0, lastIdx + 1);
-    const volumes = (indicators.volumes || []).slice(0, lastIdx + 1);
-    const highs = (indicators.highs || []).slice(0, lastIdx + 1);
-    const lows  = (indicators.lows  || []).slice(0, lastIdx + 1);
+    // Slice a SMALL window ending at the current bar so every helper (which
+    // indexes off array.length-1) reads `lastIdx` as "current". Helpers only
+    // need the last ~31 bars: detectLevels (lookbackBars=20), checkConsolidation
+    // (bbPeriod=20 + squeezeLookback=10), breakout/retest (last 1-2 bars).
+    // Copying the FULL prefix per bar was O(n²) — on 15m/365d (~35k bars) that's
+    // ~2B element copies → event-loop block → poll timeout (same class as the
+    // MD_MR O(n²) bug fixed in 01a0d63).
+    const WINDOW = Math.max(
+      this.config.lookbackBars + 1,
+      this.config.bbPeriod + this.config.squeezeLookback + 2,
+      40,
+    );
+    const start = Math.max(0, lastIdx + 1 - WINDOW);
+    const closes = (indicators.closes || []).slice(start, lastIdx + 1);
+    const volumes = (indicators.volumes || []).slice(start, lastIdx + 1);
+    const highs = (indicators.highs || []).slice(start, lastIdx + 1);
+    const lows  = (indicators.lows  || []).slice(start, lastIdx + 1);
     const volSMA = indicators.volSMA?.[lastIdx] || 0;
     const atr = indicators.atr?.[lastIdx];
 

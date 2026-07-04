@@ -257,9 +257,11 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.3,
 
-    // v2.6: risk 0.5% default; 1% saat STRONG_TREND (riskPerTradeStrong).
-    riskPerTrade:        0.005,
-    riskPerTradeStrong:  0.01,
+    // v2.7 (2026-07-03): risk 0.5%→1.5% — user DD budget up to 30%, 12m backtest
+    // DD was 0.39% (massively under-risked). Combined cap across 3 components →
+    // 0.5% per component (top of user's Scalping range). Strong signal 3%.
+    riskPerTrade:        0.015,
+    riskPerTradeStrong:  0.03,
     maxDailyLossPct:     0.035,
     maxTradesPerDay:     6,
     cooldownAfterLoss:   90,
@@ -356,15 +358,11 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    // 2026-07-03: normalized so per-position $ risk matches AF_SMC's per-component
-    // risk when both run in the same tier package (FORGE+). runMultiTypeBacktest
-    // divides this by typeOrder.length (2: Intraday+Swing), so effective per-position
-    // risk = 0.01333/2 ≈ 0.667% — same as SMC's 0.02/3 ≈ 0.667% per component. Before
-    // this fix, runMultiTypeBacktest had NO division at all, so TF risked the full
-    // 1.2% per position (~1.8x SMC's per-component risk) within the same $1000 tier
-    // bankroll — user-confirmed via trade PnL comparison (TF swings ~$7-10 vs SMC
-    // ~$0.8-2 on equal capital).
-    riskPerTrade:     0.0133,
+    // v2.7 (2026-07-03): raised 0.0133→0.02. TF is the best 12m performer (+8.4 on
+    // $250 leg, WR 48%, PF ~1.4). runMultiTypeBacktest divides by typeOrder.length
+    // (2: Intraday+Swing) → 1% per position. User DD budget up to 30%; portfolio
+    // DD was 0.39% (under-risked).
+    riskPerTrade:     0.02,
     maxDailyLossPct:  0.06,
     maxTradesPerDay:  4,       // v2.3: 4 trade/hari (dari 10)
     cooldownAfterLoss: 5,
