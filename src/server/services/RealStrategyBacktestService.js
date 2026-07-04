@@ -28,6 +28,7 @@ const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA } = r
 const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
+const { riskShareForType } = require("../../domain/typeRiskLadder");
 
 // Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
 // the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
@@ -656,19 +657,24 @@ async function runTripleTypeBacktest(opts = {}) {
   const perTypeStats = {};
 
   // Capital is shared across types (concurrent risk).
-  // Each type runs independently on full capital but sized at 1/3 risk so
-  // combined max loss = configured riskPerTrade.
+  // riskPerTrade = COMBINED cap across all concurrent components; v2.8 splits it
+  // by TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1 : Swing 2) instead of equally,
+  // so Swing runners get full size and Scalping chop gets the least. Live parity:
+  // BotEngine._handleMultiPositionSignal uses the SAME riskShareForType helper.
   // cooldownAfterLoss=0: in backtest candle time, cooldown in real minutes is meaningless.
   // maxConsecLoss raised: daily reset already handles this in _runMultiPositionBacktest;
   // the higher cap prevents intra-day blocking during heavy drawdown periods.
-  const typeConfig = {
+  const baseTypeConfig = {
     ...cfg,
-    riskPerTrade:     (cfg.riskPerTrade ?? 0.01) / typeOrder.length,
     cooldownAfterLoss: 0,
     maxConsecLoss:    Math.max(cfg.maxConsecLoss ?? 2, 5),
   };
 
   for (const tradeType of typeOrder) {
+    const typeConfig = {
+      ...baseTypeConfig,
+      riskPerTrade: riskShareForType(tradeType, typeOrder, cfg.riskPerTrade ?? 0.01),
+    };
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
 
@@ -1249,20 +1255,14 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const perTypeStats = {};
 
   // Capital is shared across types (concurrent risk), mirroring runTripleTypeBacktest's
-  // documented model: riskPerTrade is the COMBINED cap across all concurrent types, so
-  // each type must size at riskPerTrade/typeOrder.length. Without this division, TS_TF
-  // (Intraday+Swing, 2 concurrent types) and MD_MR (Scalping+Intraday) each risked the
-  // FULL configured riskPerTrade independently — the same class of bug fixed for live
-  // SMC in BotEngine (2026-07-03), just never applied here. Verified: within a tier
-  // package where AF_SMC risks aggregate/3 per component, TS_TF was risking ~2x that
-  // per position (aggregate/1 instead of aggregate/2), inconsistent with the tier's
-  // shared risk budget.
-  const typeConfig = {
-    ...cfg,
-    riskPerTrade: (cfg.riskPerTrade ?? 0.01) / typeOrder.length,
-  };
-
+  // documented model: riskPerTrade is the COMBINED cap across all concurrent types.
+  // v2.8: split by TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1 : Swing 2) instead of
+  // equally — TS_TF combined 0.03 → 1%/2%, MD_MR combined 0.015 → 0.5%/1%.
   for (const tradeType of typeOrder) {
+    const typeConfig = {
+      ...cfg,
+      riskPerTrade: riskShareForType(tradeType, typeOrder, cfg.riskPerTrade ?? 0.01),
+    };
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
 

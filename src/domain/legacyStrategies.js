@@ -257,11 +257,11 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.3,
 
-    // v2.7 (2026-07-03): risk 0.5%→1.5% — user DD budget up to 30%, 12m backtest
-    // DD was 0.39% (massively under-risked). Combined cap across 3 components →
-    // 0.5% per component (top of user's Scalping range). Strong signal 3%.
-    riskPerTrade:        0.015,
-    riskPerTradeStrong:  0.03,
+    // v2.8 (2026-07-04): per-type risk ladder. riskPerTrade = COMBINED cap,
+    // distributed by TYPE_RISK_WEIGHTS (typeRiskLadder.js): 0.035 →
+    // A/Scalping 0.5% · B/Intraday 1% · C/Swing 2% (user-specified ladder).
+    riskPerTrade:        0.035,
+    riskPerTradeStrong:  0.05,
     maxDailyLossPct:     0.035,
     maxTradesPerDay:     6,
     cooldownAfterLoss:   90,
@@ -358,11 +358,12 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    // v2.7 (2026-07-03): raised 0.0133→0.02. TF is the best 12m performer (+8.4 on
-    // $250 leg, WR 48%, PF ~1.4). runMultiTypeBacktest divides by typeOrder.length
-    // (2: Intraday+Swing) → 1% per position. User DD budget up to 30%; portfolio
-    // DD was 0.39% (under-risked).
-    riskPerTrade:     0.02,
+    // v2.8 (2026-07-04): per-type ladder. Combined cap 0.03 distributed by
+    // TYPE_RISK_WEIGHTS (Intraday 1 : Swing 2) → 1%/position Intraday, 2% Swing.
+    // TF is the best 12m performer (+13.9 on $250 leg, WR 48%). Live single-TF
+    // engine carries the full combined cap per position (one position at a time
+    // → same worst-case max loss as 2 concurrent backtest legs).
+    riskPerTrade:     0.03,
     maxDailyLossPct:  0.06,
     maxTradesPerDay:  4,       // v2.3: 4 trade/hari (dari 10)
     cooldownAfterLoss: 5,
@@ -428,10 +429,11 @@ const STRATEGIES = {
 
     volSmaMultiplier: 0.8,
 
-    // 2026-07-03: same normalization as TREND_FOLLOWING above — runMultiTypeBacktest
-    // divides by typeOrder.length (2: Scalping+Intraday), so effective per-position
-    // risk = 0.01333/2 ≈ 0.667%, matching AF_SMC's per-component risk in shared tiers.
-    riskPerTrade:     0.0133,
+    // v2.8 (2026-07-04): per-type ladder. Combined cap 0.015 distributed by
+    // TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1) → 0.5%/1% per position
+    // (user-specified). NOTE: MR expectancy still negative on n=7 — ladder set
+    // per user request, but entry-gate quality is the real fix, not size.
+    riskPerTrade:     0.015,
     maxDailyLossPct:  0.03,
     maxTradesPerDay:  3,
     cooldownAfterLoss: 15,

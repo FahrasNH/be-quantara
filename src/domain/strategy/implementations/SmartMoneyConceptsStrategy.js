@@ -142,8 +142,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
   getRiskConfig() {
     return {
-      riskPerTrade:       0.015, // v2.7: 0.5%→1.5% (0.5%/component) — see legacyStrategies
-      riskPerTradeStrong: 0.03,
+      riskPerTrade:       0.035, // v2.8: combined cap → 0.5%/1%/2% per A/B/C via typeRiskLadder
+      riskPerTradeStrong: 0.05,
       maxTradesPerDay:    8,
       cooldownAfterLoss:  60,
       maxConsecLoss:      3,

@@ -2619,18 +2619,21 @@ class BotEngine extends EventEmitter {
     // before) silently under-sized every position ~2.8×.
     //
     // riskPerTrade is the COMBINED cap across all concurrent AF components, not
-    // per-component (documented in runTripleTypeBacktest: each type is sized at
-    // riskPerTrade/typeOrder.length so "combined max loss = configured
-    // riskPerTrade"). Live must divide by the same concurrent-component count,
-    // else 3 same-direction components each at full riskPerTrade risk 3× the
-    // configured amount live while the backtest shows only 1× — a silent
-    // live-vs-backtest divergence on real money. Divisor mirrors the fixed
-    // A/B/C component set (default 3), scaling correctly if fewer are enabled.
-    const concurrentComponents =
-      this.config.afEnabledComponents?.length ||
-      this.config.sacEnabledComponents?.length ||
-      3;
-    const riskPerTrade = (this.config.riskPerTrade || 0.01) / concurrentComponents;
+    // per-component. v2.8: the cap is distributed by TYPE_RISK_WEIGHTS
+    // (A/Scalping 0.5 : B/Intraday 1 : C/Swing 2) via the SAME riskShareForType
+    // helper the backtest engines use — single source of truth, so live sizing
+    // can never silently drift from the backtest (the 3× SMC live-risk bug
+    // class, 311e18d). With combined 0.035 → A 0.5%, B 1%, C 2%.
+    const { riskShareForType } = require("../domain/typeRiskLadder");
+    const enabledComponents =
+      this.config.afEnabledComponents ||
+      this.config.sacEnabledComponents ||
+      ["A", "B", "C"];
+    const riskPerTrade = riskShareForType(
+      componentId,
+      enabledComponents,
+      this.config.riskPerTrade || 0.01,
+    );
     const riskAmt = this.state.capital * riskPerTrade;
     const qty = slDist > 0 ? riskAmt / slDist : 0;
 
