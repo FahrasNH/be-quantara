@@ -1092,6 +1092,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       dailyTradeCount = 0;
       dailyLoss = 0;
       dailyStartCapital = capital;
+      // Daily reset: live BotEngine's maxConsecLoss means "stop trading HARI INI"
+      // (state resets each day). Without this reset the single-position engine
+      // blocked a strategy FOREVER after one bad streak — e.g. BS_BR stopped
+      // trading after 3 straight SLs in week 1 of a 12-month run.
+      consecLoss = 0;
     }
 
     // ── 1. Manage open position FIRST (intrabar SL/TP, SL checked first) ─────
