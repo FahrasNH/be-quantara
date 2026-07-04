@@ -29,6 +29,7 @@ const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 const { riskShareForType } = require("../../domain/typeRiskLadder");
+const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../domain/dailyRegimeGate");
 
 // Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
 // the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
@@ -99,6 +100,28 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     htfEmaFastArr = calcEMA(htfCloses, cfg.htfEmaFast ?? 9);
     htfEmaSlowArr = calcEMA(htfCloses, cfg.htfEmaSlow ?? 21);
     htfAtrArr     = calcATR(htfHighs, htfLows, htfCloses, cfg.atrPeriod ?? 14);
+  }
+
+  // Pre-compute daily trend strength for regime gate
+  let dailyTrendCache = null;
+  if (opts.dailyCandles?.length) {
+    const dailyCloses = opts.dailyCandles.map(c => c.close);
+    const dailyHighs = opts.dailyCandles.map(c => c.high);
+    const dailyLows = opts.dailyCandles.map(c => c.low);
+    const dailyTrend = computeDailyTrendStrength({
+      close: dailyCloses,
+      high: dailyHighs,
+      low: dailyLows,
+    });
+
+    // Build dateMap for quick lookup
+    const dailyDateMap = new Map();
+    for (let i = 0; i < opts.dailyCandles.length; i++) {
+      const dateStr = new Date(opts.dailyCandles[i].timestamp).toISOString().split("T")[0];
+      dailyDateMap.set(dateStr, i);
+    }
+
+    dailyTrendCache = { dailyTrend, dateMap: dailyDateMap };
   }
 
   function htfStrengthAt(i) {
@@ -338,6 +361,18 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const signal = multiSignal[componentId];
       if (!signal) continue;
 
+      // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
+      const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
+      const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
+      const regimeResult = applyRegimeGate({
+        signal,
+        strategyKey,
+        regime: dailyRegime,
+        riskPerTrade,
+      });
+      if (!regimeResult.allow) continue;
+      const adjustedRiskPerTrade = regimeResult.riskPerTrade;
+
       // Skip if component already has open position
       if (positions.has(componentId)) continue;
 
@@ -384,7 +419,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // riskAmt. size = riskAmt / slDist. Dividing by the FULL SL→TP span (as
       // before) shrank every position ~2.8× → effective risk ~0.18% instead of
       // the configured 0.5%, which is why return + drawdown were both tiny.
-      const riskAmt = capital * riskPerTrade;
+      const riskAmt = capital * adjustedRiskPerTrade;
       const size = slDist > 0 ? riskAmt / slDist : 0;
 
       if (size <= 0) continue;
@@ -843,6 +878,21 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     return trend;
   }
 
+  // Pre-compute daily trend strength for regime gate (single-position engine)
+  let dailyTrendCache = null;
+  if (opts.dailyCandles?.length) {
+    const dTrend = computeDailyTrendStrength({
+      close: opts.dailyCandles.map(c => c.close),
+      high: opts.dailyCandles.map(c => c.high),
+      low: opts.dailyCandles.map(c => c.low),
+    });
+    const dMap = new Map();
+    for (let di = 0; di < opts.dailyCandles.length; di++) {
+      dMap.set(new Date(opts.dailyCandles[di].timestamp).toISOString().split("T")[0], di);
+    }
+    dailyTrendCache = { dailyTrend: dTrend, dateMap: dMap };
+  }
+
   // ── Replay state (mirror BotEngine state used by _checkRiskGates) ──────────
   let capital = startCapital;
   const trades = [];
@@ -1094,6 +1144,18 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
+    // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
+    const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
+    const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
+    const regimeResult = applyRegimeGate({
+      signal,
+      strategyKey,
+      regime: dailyRegime,
+      riskPerTrade: cfg.riskPerTrade ?? 0.01,
+    });
+    if (!regimeResult.allow) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    const adjustedRiskPerTrade = regimeResult.riskPerTrade;
+
     // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
     // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
     // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
@@ -1173,7 +1235,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 9. Open position (risk-based sizing; leverage irrelevant to PnL) ─────
     const entry = price;
-    const size = (capital * riskPerTrade) / slDist;
+    const size = (capital * adjustedRiskPerTrade) / slDist;
     const openSl = signal === "LONG" ? entry - slDist : entry + slDist;
     position = {
       side: signal,

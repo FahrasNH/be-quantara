@@ -1442,9 +1442,24 @@ async function _runBacktestJobAsync(job, userId, opts) {
     const typeTotal = typeOrder.length;
     let typesDone = 0;
 
+    // Fetch daily candles for regime gate (shared across all types/strategies)
+    let dailyCandles = [];
+    try {
+      job.progress({ phase: "fetch", message: "Fetching daily candles for regime gate…", pct: 0 });
+      const dailyRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+        symbol: sym, timeframe: "1d", ...fetchOpts, allowClamp: true, abortSignal,
+      });
+      dailyCandles = dailyRes.candles || [];
+    } catch (e) {
+      if (e.code === "CANCELLED") throw e;
+      console.warn("Failed to fetch daily candles for regime gate:", e.message);
+      dailyCandles = [];
+    }
+
     const computeOpts = {
       entryCandles,
       htfCandles,
+      dailyCandles,
       strategyKey,
       capital: Number(capital) || 1000,
       enableFees: enableFees !== false,
@@ -1553,9 +1568,26 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
   job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
 
+  // Fetch daily candles for regime gate
+  let dailyCandles = [];
+  try {
+    job.progress({ phase: "fetch", message: "Fetching daily candles for regime gate…", pct: 0 });
+    const dailyRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+      symbol: sym, timeframe: "1d", ...fetchOpts, allowClamp: true, abortSignal,
+    });
+    dailyCandles = dailyRes.candles || [];
+  } catch (e) {
+    if (e.code === "CANCELLED") throw e;
+    console.warn("Failed to fetch daily candles for regime gate:", e.message);
+    dailyCandles = [];
+  }
+
+  job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
+
   const result = await runRealBacktest({
     entryCandles,
     htfCandles,
+    dailyCandles,
     strategyKey,
     capital: Number(capital) || 1000,
     enableFees: enableFees !== false,
