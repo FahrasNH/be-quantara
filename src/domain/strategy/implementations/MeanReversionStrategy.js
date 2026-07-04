@@ -103,20 +103,23 @@ class MeanReversionStrategy extends StrategyBase {
     // Need ≥50 bars for stable indicators (20-period BB + 14-period RSI)
     if (lastIdx < 50) return null;
 
-    const closes = (indicators.closes || []).slice(0, lastIdx + 1);
-    if (closes.length <= lastIdx) return null;
-
+    // FIX 2026-07-03: O(1) access instead of O(n²) copy.
+    // Backtest 12m MD_MR (51.8k bars) called per-bar was copying entire array
+    // per call → 51.8k² / 2 copy ops → 1.3B+ ops per TF type → event loop block
+    // → "Request timed out". Now: read array references, not copies.
+    // calculateBollingerBands will slice(-period) internally as needed.
+    const closes = indicators.closes || [];
     const rsiValues = indicators.rsi || [];
-    const volumes = (indicators.volumes || []).slice(0, lastIdx + 1);
-    const atr = indicators.atr?.[lastIdx];
-    const volSMA = indicators.volSMA?.[lastIdx];
+    const volumes = indicators.volumes || [];
 
     // Fail closed if indicators incomplete
+    const atr = indicators.atr?.[lastIdx];
+    const volSMA = indicators.volSMA?.[lastIdx];
     if (!atr || !rsiValues[lastIdx] || !volSMA || volSMA <= 0) return null;
 
     const rsiNow = rsiValues[lastIdx];
     const close = closes[lastIdx];
-    const volRatio = volumes[lastIdx] / volSMA;
+    const volRatio = (volumes[lastIdx] || 0) / volSMA;
 
     // Volume gate — reject dead markets
     if (volRatio < this.config.minVolRatio) return null;

@@ -357,8 +357,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
       });
 
-      const slDist = riskCfg.slDistance;
-      const tpDist = riskCfg.tpDistance;
+      // Apply pair-tier SL/TP adjustments for STABLE/VOLATILE classification
+      // (live parity: BotEngine.js:2601-2602). cfg.pairSlMultiplier set by
+      // PairClassifier.paramOverrides.slMultiplier (e.g. 1.1× STABLE, 1.3× VOLATILE).
+      // Backtest must match live so tier backtest results align with live trade behavior.
+      const pairSlMult = cfg.pairSlMultiplier || 1;
+      const slDist = riskCfg.slDistance * pairSlMult;
+      const tpDist = riskCfg.tpDistance * pairSlMult;
       const sl = signal === "LONG" ? price - slDist : price + slDist;
       const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
@@ -1077,20 +1082,21 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     // ── 8. Component-aware SL/TP (mirror step 11d) ──────────────────────────
     const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
+    const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     if (meta && typeof strategy.calculateRiskConfig === "function") {
       const rc = strategy.calculateRiskConfig(price, atr, signal, meta.component, {
         marketCond: meta.marketCond,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
       });
-      slDist = rc.slDistance;
-      tpDist = rc.tpDistance;
+      slDist = rc.slDistance * pairSlMult;
+      tpDist = rc.tpDistance * pairSlMult;
       component = meta.component;
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
       // AF-FIX-01/03: conviction behind this entry (component or aggregate score).
       confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
     } else {
-      slDist = atr * (cfg.atrMultiplier ?? 1.4);
+      slDist = atr * (cfg.atrMultiplier ?? 1.4) * pairSlMult;
       tpDist = slDist * (cfg.riskReward ?? 2);
       plannedRR = (cfg.riskReward ?? 2);
     }
