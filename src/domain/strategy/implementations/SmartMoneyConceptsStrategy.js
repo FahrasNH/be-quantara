@@ -544,7 +544,35 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // Displacement strength: range of the FVG-origin bar
     const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
-    score += Math.min(15, dRange * 600); // ~2.5% range → +15
+
+    // AF-SCALP-01: absolute-percentage bonuses (2.5% range, 0.67% gap) are
+    // unreachable on low TFs — a 5m displacement is 0.2-0.5%, so Scalping's
+    // score ceiling sat at ~the min-confidence gate (3 trades / 180d) while 4h
+    // Swing routinely cleared it. sacScoreAtrNorm normalizes both bonuses by
+    // the entry TF's own ATR%, making "strong displacement" mean the same
+    // thing on every timeframe: 2×ATR displacement / 1×ATR gap = full bonus.
+    // Flag-gated for A/B: live configs don't set it, so live scoring is
+    // unchanged until this is validated in backtest.
+    let atrPct = 0;
+    if (ctx.config?.sacScoreAtrNorm) {
+      let trSum = 0, n = 0;
+      for (let b = Math.max(1, lastIdx - 13); b <= lastIdx; b++) {
+        const prevClose = closes[b - 1] ?? closes[b] ?? 0;
+        const tr = Math.max(
+          (highs[b] ?? 0) - (lows[b] ?? 0),
+          Math.abs((highs[b] ?? 0) - prevClose),
+          Math.abs((lows[b] ?? 0) - prevClose),
+        );
+        trSum += tr; n++;
+      }
+      atrPct = n > 0 ? (trSum / n) / (closes[lastIdx] || 1) : 0;
+    }
+
+    if (atrPct > 0) {
+      score += Math.min(15, (dRange / atrPct) * 7.5);  // 2×ATR displacement → +15
+    } else {
+      score += Math.min(15, dRange * 600); // ~2.5% range → +15
+    }
 
     // Displacement volume confirmation — weak displacement = premature entry (AF-FIX-06)
     // If the FVG-origin bar had below-average volume, the "displacement" may be noise.
@@ -553,7 +581,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (dispVolRatio < 1.2) score -= 12; // penalise weak-volume displacement
 
     // FVG size (bigger imbalance = stronger)
-    score += Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
+    if (atrPct > 0) {
+      score += Math.min(10, ((fvg.size || 0) / atrPct) * 10); // 1×ATR gap → +10
+    } else {
+      score += Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
+    }
 
     // Mitigation depth: deeper into the zone = better entry
     const cl = closes[lastIdx];
@@ -837,8 +869,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const votingMinConf = (typeof votingFloor === "number" && votingFloor > 0)
       ? Math.max(minConf.A, minConf.B, minConf.C, Math.round(votingFloor * 100))
       : null;
+    // AF-SCALP-01: Scalping (A) keeps its own floor (default 60). The STABLE
+    // votingFloor resolved to max(60,65,65,60)=65 and starved the 5m leg,
+    // whose score distribution peaks exactly in the 60-65 band. Intraday/Swing
+    // keep the stricter raised floor.
     const effMinConf = votingMinConf != null
-      ? { A: Math.max(minConf.A, votingMinConf), B: Math.max(minConf.B, votingMinConf), C: Math.max(minConf.C, votingMinConf) }
+      ? { A: minConf.A, B: Math.max(minConf.B, votingMinConf), C: Math.max(minConf.C, votingMinConf) }
       : minConf;
 
     const sigScalping = (rawA && confA >= effMinConf.A) ? rawA : null;
