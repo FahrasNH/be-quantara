@@ -971,13 +971,17 @@ function calcADX(highs, lows, closes, period = 14) {
  */
 function calcVWAP(candles) {
   const vwap = new Array(candles.length).fill(null);
-  let cumPV = 0, cumVol = 0;
+  const WINDOW = 200; // FIX-MR-01: rolling window = live fetch limit for parity
 
   for (let i = 0; i < candles.length; i++) {
-    const { high, low, close, volume } = candles[i];
-    const typicalPrice = (high + low + close) / 3;
-    cumPV += typicalPrice * volume;
-    cumVol += volume;
+    const start = Math.max(0, i - WINDOW + 1);
+    let cumPV = 0, cumVol = 0;
+    for (let j = start; j <= i; j++) {
+      const { high, low, close, volume } = candles[j];
+      const typicalPrice = (high + low + close) / 3;
+      cumPV += typicalPrice * volume;
+      cumVol += volume;
+    }
     vwap[i] = cumVol > 0 ? cumPV / cumVol : null;
   }
   return vwap;

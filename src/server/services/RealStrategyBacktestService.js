@@ -24,9 +24,10 @@
  * first = conservative). No opposite-signal exit.
  */
 
-const { calcIndicators, detectHTFTrend, calcEMA, calcATR } = require("../../domain/indicators");
+const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA } = require("../../domain/indicators");
 const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
+const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
@@ -786,6 +787,27 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  // MR regime filter (FIX-MR-01): precompute HTF indicators once for regime checks
+  // per-bar (O(1) lookup). Live BotEngine computes these fresh per tick, but
+  // backtest can cache since HTF data is static.
+  const isMeanReversion = strategyKey && String(strategyKey).toUpperCase().includes("MEAN_REVERSION");
+  let htfIndicators = null;
+  if (isMeanReversion && htfCandles?.length >= 30) {
+    const htfCloses = htfCandles.map(c => c.close);
+    const htfHighs  = htfCandles.map(c => c.high);
+    const htfLows   = htfCandles.map(c => c.low);
+    const htfAtrArr = calcATR(htfHighs, htfLows, htfCloses, 14);
+    const htfAtrSma = calcSMA(htfAtrArr.filter(v => v != null), 20);
+    htfIndicators = {
+      emaFast: calcEMA(htfCloses, 9),
+      emaSlow: calcEMA(htfCloses, 21),
+      rsi: calcRSI(htfCloses, 14),
+      atr: htfAtrArr,
+      atrSma: htfAtrSma, // rolling SMA of ATR for ratio check
+      close: htfCloses,
+    };
+  }
+
   const htfPtr = htfCandles?.length
     ? buildHtfIndexPointer(entryCandles, htfCandles)
     : null;
@@ -1058,8 +1080,40 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
-    if (signal === "LONG" && htfTrend === "BEARISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
-    if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
+    // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
+    // reversal valid). Other trend-following strategies require HTF alignment.
+    const isMR = strategyKey && String(strategyKey).toUpperCase().includes("MEAN_REVERSION");
+    const isBR = strategyKey && String(strategyKey).toUpperCase().includes("BREAKOUT");
+    if (!isMR && !isBR) {
+      if (signal === "LONG" && htfTrend === "BEARISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+      if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    }
+
+    // ── 5b. MEAN_REVERSION regime gate (mirror step 2c in live BotEngine) ──
+    // MR counter-trend entries need regime check: block SHORT in strong bull,
+    // LONG in strong bear, and all entries during ATR spike (wide spreads).
+    if (isMR && htfIndicators && htfPtr) {
+      const j = htfPtr[i];
+      if (j >= 0 && j < htfIndicators.emaFast.length) {
+        // Assemble HTF data at bar j (aligned to entry bar i via htfPtr)
+        const lastNonNull = (arr) => { for (let k = arr.length - 1; k >= 0; k--) if (arr[k] != null) return arr[k]; return null; };
+        const htfDataAtJ = {
+          emaFast: htfIndicators.emaFast[j],
+          emaSlow: htfIndicators.emaSlow[j],
+          rsi: htfIndicators.rsi[j],
+          close: htfIndicators.close[j],
+          atr: htfIndicators.atr[j],
+          atrBaseline: htfIndicators.atrSma ?? lastNonNull(htfIndicators.atr.slice(0, j)),
+        };
+        const mrCheck = meanReversionRegimeFilter({ direction: signal, htfData: htfDataAtJ });
+        if (!mrCheck.allowed) {
+          diag.htfDirBlock += 1;
+          equity.push({ date: isoOf(c), value: round2(capital) });
+          continue;
+        }
+      }
+    }
 
     // ── 6. Risk gates (mirror BotEngine._checkRiskGates) ────────────────────
     const nowMs = c.timestamp ?? 0;
