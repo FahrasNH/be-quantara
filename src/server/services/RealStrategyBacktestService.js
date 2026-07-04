@@ -687,7 +687,11 @@ async function runTripleTypeBacktest(opts = {}) {
   const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
-  const typeOrder = ["Scalping", "Intraday", "Swing"];
+  // opts.typeOrder: Advance-config subset (e.g. ["Swing"]); risk weights normalize
+  // over the ACTIVE types only, so a single active type gets the full combined cap.
+  const typeOrder = Array.isArray(opts.typeOrder) && opts.typeOrder.length
+    ? opts.typeOrder
+    : ["Scalping", "Intraday", "Swing"];
   const allTrades = [];
   const perTypeStats = {};
 

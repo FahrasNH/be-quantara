@@ -1379,6 +1379,21 @@ async function _runBacktestJobAsync(job, userId, opts) {
   const isAF = AF_SMC_KEYS.has(strategyKey);
   const multiTypeOrder = MULTI_TYPE_STRATEGY_MAP[strategyKey] || null;
 
+  // Advance config: restrict run to selected trade types (Scalping/Intraday/Swing).
+  // Sent by the FE as parameters.activeTypes; stripped from parameters so it never
+  // leaks into the strategy config. Fallback to the full set when the filter would
+  // empty the strategy (defensive — the FE already drops non-matching strategies).
+  const VALID_TYPES = new Set(["Scalping", "Intraday", "Swing"]);
+  const activeTypes = Array.isArray(parameters?.activeTypes)
+    ? parameters.activeTypes.filter(t => VALID_TYPES.has(t))
+    : null;
+  if (parameters && "activeTypes" in parameters) delete parameters.activeTypes;
+  const applyTypeFilter = (order) => {
+    if (!activeTypes?.length) return order;
+    const filtered = order.filter(t => activeTypes.includes(t));
+    return filtered.length ? filtered : order;
+  };
+
   if ((isAF || multiTypeOrder) && !entryTfOverride) {
     // Multi-type mode: each type fetches its own candles, runs only its own component.
     // AF_SMC always uses all 3 (Scalping/Intraday/Swing); TS_TF/MD_MR use a subset
@@ -1387,7 +1402,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     const entryCandles = {};
     const htfCandles   = {};
     const dataInfo     = {};
-    const typeOrder    = isAF ? Object.keys(TYPE_TF) : multiTypeOrder;
+    const typeOrder    = applyTypeFilter(isAF ? Object.keys(TYPE_TF) : multiTypeOrder);
 
     for (const type of typeOrder) {
       const tfs = TYPE_TF[type];
@@ -1484,7 +1499,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     };
 
     const result = isAF
-      ? await runTripleTypeBacktest(computeOpts)
+      ? await runTripleTypeBacktest({ ...computeOpts, typeOrder })
       : await runMultiTypeBacktest(computeOpts, typeOrder);
 
     const modeLabel = typeOrder.map(t => `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})`).join(" + ");
