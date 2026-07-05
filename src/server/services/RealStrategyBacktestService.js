@@ -435,6 +435,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
         marketCond: regime,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
+        // AF-SCALP-06: per-leg SL/TP ATR-multiple overrides (typeOverrides →
+        // typeConfig → cfg). Undefined = strategy's SUB_STRATEGIES defaults,
+        // so live and non-overridden legs are unchanged.
+        slMultiplier: cfg.slAtrMult,
+        tpMultiplier: cfg.tpAtrMult,
       });
 
       // Apply pair-tier SL/TP adjustments for STABLE/VOLATILE classification

@@ -167,8 +167,16 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const mul      = opts.strongTrendTPMult ?? 1.0;
     const isStrong = opts.marketCond === "STRONG_TREND" && mul > 1;
 
-    const slDist = atr * sub.slMultiplier;
-    let   tpDist = atr * sub.tpMultiplier;
+    // AF-SCALP-06: per-leg SL/TP ATR-multiple overrides (cfg.slAtrMult /
+    // cfg.tpAtrMult via typeOverrides). Fee-drag lever: Scalping's 1.0×ATR SL
+    // on 5m ≈ 0.28% of price, so the ~0.13% round-trip fee costs 0.42R per
+    // trade and pushes breakeven WR from 18% to 30%. Widening the SL (with TP
+    // scaled to keep RR) shrinks fee-R without touching entry logic.
+    const slMultiplier = opts.slMultiplier ?? sub.slMultiplier;
+    const tpMultiplier = opts.tpMultiplier ?? sub.tpMultiplier;
+
+    const slDist = atr * slMultiplier;
+    let   tpDist = atr * tpMultiplier;
     if (isStrong) tpDist *= mul;
 
     const stopLoss   = signal === "LONG" ? entryPrice - slDist : entryPrice + slDist;
@@ -178,8 +186,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       stopLoss:    parseFloat(stopLoss.toFixed(8)),
       takeProfit:  parseFloat(takeProfit.toFixed(8)),
       riskReward:  parseFloat((tpDist / slDist).toFixed(2)),
-      slMultiplier: sub.slMultiplier,
-      tpMultiplier: isStrong ? parseFloat((sub.tpMultiplier * mul).toFixed(4)) : sub.tpMultiplier,
+      slMultiplier,
+      tpMultiplier: isStrong ? parseFloat((tpMultiplier * mul).toFixed(4)) : tpMultiplier,
       slDistance:  slDist,
       tpDistance:  tpDist,
       component,
@@ -1161,8 +1169,20 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return "NORMAL";
   }
 
-  _htfDirectionBlocked(dir, htfTrend) {
+  _htfDirectionBlocked(dir, htfTrend, strict = false) {
     if (!htfTrend) return false;
+    if (strict) {
+      // AF-SCALP-06: with-trend alignment only — LONG needs a confirmed BULLISH
+      // HTF, SHORT needs BEARISH; SIDEWAYS/UNKNOWN = no entry either direction.
+      // The legacy branch below is LONG-biased: LONG passes in SIDEWAYS while
+      // SHORT is blocked unless BEARISH. Under sacHtfHardBlock that asymmetry
+      // produced a 104-LONG book at 11.5% WR (SHORT with-trend book: 20.4%) —
+      // LONGs sailed through every falling tape the 0.2% EMA-spread threshold
+      // labeled SIDEWAYS.
+      if (dir === "LONG")  return htfTrend !== "BULLISH";
+      if (dir === "SHORT") return htfTrend !== "BEARISH";
+      return false;
+    }
     if (dir === "LONG"  && htfTrend === "BEARISH") return true;
     if (dir === "SHORT" && htfTrend !== "BEARISH")  return true;
     return false;
@@ -1241,12 +1261,19 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // config (backtest A/B). CSV evidence: 8/11 Scalping losses were LONGs
     // opened during HTF downtrends that survived the −15 penalty — "buy the
     // discount" only works WITH the higher-timeframe trend, never against it.
+    // AF-SCALP-06: sacHtfHardBlock now means STRICT with-trend alignment (LONG
+    // needs BULLISH, SHORT needs BEARISH, SIDEWAYS = flat). The asymmetric hard
+    // block it shipped with made results WORSE than the soft penalty: it kept
+    // every knife-catching LONG in SIDEWAYS-labeled downtrends while banning
+    // the with-trend SHORTs. tierOverrides.regimeFilterRequired keeps the
+    // legacy asymmetric behaviour (live parity — that path is live on STABLE+).
+    const strictAlign = config.sacHtfHardBlock === true;
     const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true
-      || config.sacHtfHardBlock === true;
+      || strictAlign;
     if (hardRegimeBlock) {
-      if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) { rawA = null; confA = 0; }
-      if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) { rawB = null; confB = 0; }
-      if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) { rawC = null; confC = 0; }
+      if (rawA && this._htfDirectionBlocked(rawA, htfTrend, strictAlign)) { rawA = null; confA = 0; }
+      if (rawB && this._htfDirectionBlocked(rawB, htfTrend, strictAlign)) { rawB = null; confB = 0; }
+      if (rawC && this._htfDirectionBlocked(rawC, htfTrend, strictAlign)) { rawC = null; confC = 0; }
     } else {
       if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
