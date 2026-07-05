@@ -316,7 +316,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const htfTrend = htfTrendAt(i);
     if (htfTrend === "UNKNOWN") continue; // fail-closed
 
-    // Detect multi-component signals (AF v3.0)
+    // Detect multi-component signals (AF v3.0 / SMC v3.1)
     const multiSignal = strategy.detectSignalMulti(indicators, i, {
       // BT-FIX: spread full strategy config so SAC knobs (sacMinConfidenceA/B/C,
       // sacEnabledComponents, sacSweepVolMult, sacOBDispMult, …) actually reach
@@ -337,6 +337,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       afEnabledComponents: cfg.afEnabledComponents, // v3.2: C-only by default
       afMinComponentConfidence: cfg.afMinComponentConfidence, // AF-FIX-02 conviction gate
       afMinAggregateConfidence: cfg.afMinAggregateConfidence, // AF-FIX-03
+      // AF-SCALP-09 v3.1: regime detection config + per-leg typeOverrides
+      regimeDetection: cfg.regimeDetection, // EMA gap thresholds, ADX strength
+      typeOverrides: cfg.typeOverrides, // per-leg overrides (Scalping/Intraday/Swing)
     });
 
 
@@ -360,6 +363,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
           htfTrend, htfTrendStrength: htfStrengthAt(i),
           maxEntryExtensionATR: cfg.maxEntryExtensionATR,
           afEnabledComponents: cfg.afEnabledComponents,
+          regimeDetection: cfg.regimeDetection,
+          typeOverrides: cfg.typeOverrides,
           // gates OFF for diagnosis:
           sacMinConfidenceA: 0, sacMinConfidenceB: 0, sacMinConfidenceC: 0,
           afMinComponentConfidence: 0, afMinAggregateConfidence: 0,
@@ -432,14 +437,21 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // hardcoded "NORMAL", so the ×1.8 TP extension never applied and every
       // winner was capped at the base RR.
       const regime = multiSignal.meta?.marketCond || "NORMAL";
+
+      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides (slAtrMult, tpAtrMult) by componentId
+      const componentType = componentId === "A" ? "Scalping" : componentId === "B" ? "Intraday" : "Swing";
+      const typeOverride = cfg.typeOverrides?.[componentType] || {};
+      const slMult = typeOverride.slAtrMult ?? cfg.slAtrMult;
+      const tpMult = typeOverride.tpAtrMult ?? cfg.tpAtrMult;
+
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
         marketCond: regime,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
-        // AF-SCALP-06: per-leg SL/TP ATR-multiple overrides (typeOverrides →
-        // typeConfig → cfg). Undefined = strategy's SUB_STRATEGIES defaults,
-        // so live and non-overridden legs are unchanged.
-        slMultiplier: cfg.slAtrMult,
-        tpMultiplier: cfg.tpAtrMult,
+        // AF-SCALP-06/09: per-leg SL/TP ATR-multiple overrides (typeOverrides →
+        // typeConfig → cfg). Merged from typeOverrides per componentId.
+        // Undefined = strategy's SUB_STRATEGIES defaults, so live and non-overridden legs are unchanged.
+        slMultiplier: slMult,
+        tpMultiplier: tpMult,
       });
 
       // Apply pair-tier SL/TP adjustments for STABLE/VOLATILE classification
@@ -1205,6 +1217,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       afMinAggregateConfidence: cfg.afMinAggregateConfidence, // AF-FIX-03
       pairTier: cfg.pairTier,
       tierOverrides: cfg.tierOverrides,
+      // AF-SCALP-09 v3.1: regime detection + per-leg typeOverrides
+      regimeDetection: cfg.regimeDetection,
+      typeOverrides: cfg.typeOverrides,
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
@@ -1283,9 +1298,17 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     if (meta && typeof strategy.calculateRiskConfig === "function") {
+      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides by component
+      const componentType = meta.component === "A" ? "Scalping" : meta.component === "B" ? "Intraday" : "Swing";
+      const typeOverride = cfg.typeOverrides?.[componentType] || {};
+      const slMult = typeOverride.slAtrMult ?? cfg.slAtrMult;
+      const tpMult = typeOverride.tpAtrMult ?? cfg.tpAtrMult;
+
       const rc = strategy.calculateRiskConfig(price, atr, signal, meta.component, {
         marketCond: meta.marketCond,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
+        slMultiplier: slMult,
+        tpMultiplier: tpMult,
       });
       slDist = rc.slDistance * pairSlMult;
       tpDist = rc.tpDistance * pairSlMult;

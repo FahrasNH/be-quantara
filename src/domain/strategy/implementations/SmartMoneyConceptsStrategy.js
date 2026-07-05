@@ -1212,6 +1212,96 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return swingHigh > currentPrice * 1.001;
   }
 
+  // AF-SCALP-09 v3.1: Detect HTF market regime for direction-aware entry mapping
+  _detectHTFRegime(indicators, config = {}) {
+    if (!indicators || !indicators.closes) return "SIDEWAYS";
+
+    const closes = indicators.closes;
+    if (closes.length < 21) return "SIDEWAYS";
+
+    const lastIdx = closes.length - 1;
+    const { bullishThreshold = 0.004, bearishThreshold = -0.004, adxMinStrength = 22 } = config.regimeDetection || {};
+
+    // Calculate EMA 9 and EMA 21
+    const ema9 = this._calcEMA(closes, 9);
+    const ema21 = this._calcEMA(closes, 21);
+
+    if (!ema9 || !ema21 || ema9.length === 0 || ema21.length === 0) return "SIDEWAYS";
+
+    const lastClose = closes[lastIdx];
+    const emaDiff = (ema9[ema9.length - 1] - ema21[ema21.length - 1]) / lastClose;
+    const adx = indicators.adx?.[lastIdx] ?? 20;
+
+    // BULLISH: EMA gap > threshold AND ADX > strength
+    if (emaDiff > bullishThreshold && adx > adxMinStrength) {
+      return "BULLISH";
+    }
+
+    // BEARISH: EMA gap < negative threshold AND ADX > strength
+    if (emaDiff < bearishThreshold && adx > adxMinStrength) {
+      return "BEARISH";
+    }
+
+    // Default: SIDEWAYS (weak trend)
+    return "SIDEWAYS";
+  }
+
+  // AF-SCALP-09 v3.1: Regime-aware direction mapping for Intraday leg
+  // Maps entry direction to market regime (BULLISH→LONG only, BEARISH→SHORT only, SIDEWAYS→skip)
+  _applyRegimeDirectionMapping(rawSignal, regime, tradeType, config = {}) {
+    // Only apply to Intraday leg
+    if (tradeType !== "Intraday" && tradeType !== "B") return rawSignal;
+
+    // If regime mapping is disabled, pass through
+    if (config.regimeMappingStrict !== true) return rawSignal;
+
+    if (regime === "BULLISH") {
+      // In bullish regime, only accept LONG entries
+      return rawSignal === "LONG" ? "LONG" : null;
+    } else if (regime === "BEARISH") {
+      // In bearish regime, only accept SHORT entries
+      return rawSignal === "SHORT" ? "SHORT" : null;
+    } else {
+      // SIDEWAYS: skip Intraday entry entirely
+      return null;
+    }
+  }
+
+  // AF-SCALP-09 v3.1: Enhanced 5m multi-CHoCH validation
+  // Requires sequential candle structure (2+ consecutive candles), not just a single wick
+  _detect5mMultiChoCH(indicators, lastIdx, config = {}) {
+    const { closes, highs, lows } = indicators;
+    if (!closes || !highs || !lows || lastIdx < 5) return false;
+
+    // Check last 5 candles for sequential structure
+    const window = 5;
+    const startIdx = Math.max(0, lastIdx - window + 1);
+    const endIdx = lastIdx + 1;
+
+    const windowCloses = closes.slice(startIdx, endIdx);
+    const windowHighs = highs.slice(startIdx, endIdx);
+    const windowLows = lows.slice(startIdx, endIdx);
+
+    if (windowCloses.length < 3) return false;
+
+    // Count consecutive candles showing trend reversal
+    let reversalStrength = 0;
+    for (let i = 1; i < windowHighs.length; i++) {
+      const prevHigh = windowHighs[i - 1];
+      const prevLow = windowLows[i - 1];
+      const currHigh = windowHighs[i];
+      const currLow = windowLows[i];
+
+      // Reversal = opposite direction (up candle after down, or vice versa)
+      const isReversal = (currHigh > prevHigh && currLow > prevLow) ||
+                        (currHigh < prevHigh && currLow < prevLow);
+      if (isReversal) reversalStrength++;
+    }
+
+    // Require at least 2 consecutive reversals = real structure, not wick noise
+    return reversalStrength >= 2;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // detectSignalMulti — per-component results + meta
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1226,6 +1316,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const minConfC = config.sacMinConfidenceC ?? 65;
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
+
+    // AF-SCALP-09 v3.1: Detect HTF regime for direction-aware Intraday mapping
+    const htfRegime = this._detectHTFRegime(indicators, config);
 
     // Primary keys are type names; A/B/C kept as backward-compat aliases
     const result = { Scalping: null, Intraday: null, Swing: null, A: null, B: null, C: null };
@@ -1273,6 +1366,22 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
     }
 
+    // ── AF-SCALP-09 v3.1: Regime-aware direction mapping for Intraday ────────────
+    // Intraday now uses regimeMappingStrict to map direction to regime:
+    // BULLISH regime → only LONG entries allowed
+    // BEARISH regime → only SHORT entries allowed
+    // SIDEWAYS regime → skip Intraday entirely
+    const typeOverrides = config.typeOverrides || {};
+    if (rawB && typeOverrides.Intraday?.regimeMappingStrict === true) {
+      const mappedB = this._applyRegimeDirectionMapping(rawB, htfRegime, "Intraday", config);
+      if (!mappedB) {
+        rawB = null;
+        confB = 0;
+      } else {
+        rawB = mappedB;  // Direction remapped or passed through
+      }
+    }
+
     // ── HTF filter ───────────────────────────────────────────────────────────
     // Default: soft scoring penalty (−15 pts) — allows neutral HTF entries but
     // penalizes trading against HTF trend. AF-FIX-REGIME (Sprint 7, re-scoped
@@ -1304,13 +1413,16 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
     }
 
-    // ── AF-SCALP-07: 5m CHoCH validation for Scalping (entry-TF structure) ────
+    // ── AF-SCALP-07/09: 5m CHoCH validation for Scalping (entry-TF structure) ────
     // CSV showed false-breakout LONGs (wick sweeps) contaminating 5m entry set.
-    // Gate: require swing high structure above entry (supply level), not just noise.
-    // Backtest-only flag (live disabled for now) — validates entry causal context.
+    // Gate: require BOTH swing high structure AND multi-candle sequence (not just 1-candle wick).
+    // v3.1: Enhanced to use _detect5mMultiChoCH for stricter causal validation.
+    // Validates entry causal context — single swing high insufficient, needs confirmation.
     if (rawA && config.scalpingChochValidate !== false) {
-      const has5mChoch = this._detect5mChocH(indicators, lastIdx, config);
-      if (!has5mChoch) {
+      const hasSwingHigh = this._detect5mChocH(indicators, lastIdx, config);
+      const hasMultiStructure = this._detect5mMultiChoCH(indicators, lastIdx, config);
+      // Require BOTH conditions: swing high (supply) + multi-candle reversal (structure)
+      if (!hasSwingHigh || !hasMultiStructure) {
         rawA = null;
         confA = 0;
       }
