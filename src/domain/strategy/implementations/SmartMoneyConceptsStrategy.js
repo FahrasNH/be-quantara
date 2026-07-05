@@ -388,7 +388,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * Bearish FVG: highs[i] < lows[i-2]  (gap below i-2's low)
    * Returns most recent qualifying FVG that is still "open" (price hasn't filled it).
    */
-  _detectFVG(closes, highs, lows, lastIdx, config = {}) {
+  _detectFVG(closes, highs, lows, lastIdx, config = {}, opens = null) {
+    // AF-SCALP-04: LuxAlgo FVG mode — adaptive body threshold replaces the
+    // absolute sacFvgMinGap floor (same absolute-% TF bug class as AF-SCALP-01:
+    // 0.3% gaps are meaningful on 1h, noise-level rare on 5m). Flag-gated.
+    if (config.sacFvgAutoThreshold === true) {
+      return this._detectFVGAuto(closes, highs, lows, lastIdx, config, opens);
+    }
     const minGapPct = config.sacFvgMinGap  ?? 0.003;
     const scanBars  = config.sacFvgScanBars ?? 30;
 
@@ -425,6 +431,86 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   /**
+   * AF-SCALP-04: LuxAlgo-compatible FVG (ported from feature/smc-strategy-fix).
+   * A gap only counts when the middle candle's BODY displacement exceeds an
+   * adaptive threshold (2× the running mean absolute body) — TF-relative, so
+   * "significant imbalance" means the same thing on 5m and 4h. Gaps are also
+   * invalidated causally (any later bar trading through the zone kills it),
+   * instead of only checking the current close.
+   *
+   * The running body mean needs bars 1..lastIdx — recomputing per call would be
+   * O(n²) across a backtest, so prefix sums are cached per candle-array (LRU).
+   */
+  _detectFVGAuto(closes, highs, lows, lastIdx, config = {}, opens = null) {
+    const scanBars = config.sacFvgScanBars ?? 30;
+    if (lastIdx < 2) return { bullish: null, bearish: null };
+
+    // Incremental |body|% prefix: prefix[i] = Σ |bodyΔ(mid candle of bar i)|, i ≥ 1.
+    if (!this._fvgBodyCaches) this._fvgBodyCaches = new Map();
+    let bc = this._fvgBodyCaches.get(closes);
+    if (!bc) {
+      bc = { prefix: [0, 0], len: 1 }; // prefix[0] unused, prefix[1] = 0-start
+      this._fvgBodyCaches.delete(closes);
+      if (this._fvgBodyCaches.size >= 4) {
+        this._fvgBodyCaches.delete(this._fvgBodyCaches.keys().next().value);
+      }
+      this._fvgBodyCaches.set(closes, bc);
+    }
+    for (let i = bc.len; i <= lastIdx; i++) {
+      const midOpen = opens?.[i - 1] ?? closes[i - 2] ?? closes[i - 1];
+      const midClose = closes[i - 1];
+      const bodyDelta = Math.abs((midClose - midOpen) / Math.max(Math.abs(midOpen), EPSILON));
+      bc.prefix[i] = (bc.prefix[i - 1] ?? 0) + bodyDelta;
+    }
+    if (lastIdx >= bc.len) bc.len = lastIdx + 1;
+
+    const startIdx = Math.max(2, lastIdx - scanBars);
+    let lastBull = null, lastBear = null;
+
+    for (let i = lastIdx; i >= startIdx && (!lastBull || !lastBear); i--) {
+      const midOpen = opens?.[i - 1] ?? closes[i - 2] ?? closes[i - 1];
+      const midClose = closes[i - 1];
+      const bodyDelta = (midClose - midOpen) / Math.max(Math.abs(midOpen), EPSILON);
+      const threshold = ((bc.prefix[i] ?? 0) / Math.max(i, 1)) * 2;
+      const ref = Math.max(Math.abs(midClose), EPSILON);
+
+      if (!lastBull && lows[i] > highs[i - 2] && midClose > highs[i - 2] && bodyDelta > threshold) {
+        const top = lows[i], bottom = highs[i - 2];
+        let invalidated = false;
+        for (let j = i + 1; j <= lastIdx; j++) {
+          if (lows[j] < bottom) { invalidated = true; break; }
+        }
+        if (!invalidated) {
+          lastBull = {
+            type: "bullish", top, bottom, midpoint: (top + bottom) / 2,
+            size: (top - bottom) / ref, idx: i, displacementIdx: i - 1, filled: false,
+          };
+        }
+      }
+
+      if (!lastBear && highs[i] < lows[i - 2] && midClose < lows[i - 2] && -bodyDelta > threshold) {
+        const top = lows[i - 2], bottom = highs[i];
+        let invalidated = false;
+        // Full-fill invalidation (symmetric with bullish). The branch used the
+        // reference indicator's DISPLAY rule (lower-edge touch kills the box),
+        // but the mitigation entry requires price to be inside the zone — that
+        // rule would make SHORT sequence entries structurally impossible.
+        for (let j = i + 1; j <= lastIdx; j++) {
+          if (highs[j] > top) { invalidated = true; break; }
+        }
+        if (!invalidated) {
+          lastBear = {
+            type: "bearish", top, bottom, midpoint: (top + bottom) / 2,
+            size: (top - bottom) / ref, idx: i, displacementIdx: i - 1, filled: false,
+          };
+        }
+      }
+    }
+
+    return { bullish: lastBull, bearish: lastBear };
+  }
+
+  /**
    * Displacement candle: high volume + wide range = conviction move.
    * Returns most recent displacement within scanBars.
    */
@@ -455,6 +541,259 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   // ═════════════════════════════════════════════════════════════════════════════
+  // AF-SCALP-04: LuxAlgo-style PIVOT STRUCTURE ENGINE
+  // (ported from feature/smc-strategy-fix d144166, rewritten incremental)
+  //
+  // Real structure = confirmed pivots (internal size-5, swing size-50) whose
+  // levels get CROSSED by a close — that produces BOS/CHoCH events, order
+  // blocks, and a trailing swing range (premium/discount). The naive 10-bar
+  // high/low comparison in _detectCHoCH fires constantly in chop; this engine
+  // is the entry-quality upgrade for the sequence detector.
+  //
+  // PERFORMANCE CONTRACT: backtest engines call detectSignal once per bar with
+  // a shared indicators object — a full O(n) rebuild per bar is the BS_BR
+  // O(n²) hang class. The state machine only consumes bars FORWARD, so we
+  // cache per candle-array (strategies are singletons → small LRU keyed by
+  // the closes reference) and advance only the new bars on each call.
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  _structConfigKey(config = {}) {
+    return [
+      config.sacInternalStructureSize ?? 5,
+      config.sacSwingStructureSize ?? 50,
+      String(config.sacOrderBlockFilter ?? "ATR").toUpperCase(),
+      config.sacOrderBlockAtrLength ?? 200,
+      String(config.sacOrderBlockMitigation ?? "HIGHLOW").toUpperCase(),
+      config.sacInternalFilterConfluence === true ? 1 : 0,
+    ].join("|");
+  }
+
+  _getStructureState(indicators, lastIdx, config = {}) {
+    const { closes, highs, lows, opens } = indicators;
+    if (!this._structCaches) this._structCaches = new Map();
+    const cfgKey = this._structConfigKey(config);
+
+    let cache = this._structCaches.get(closes);
+    if (!cache || cache.cfgKey !== cfgKey || cache.lastIdx > lastIdx) {
+      cache = this._initStructureCache(cfgKey, config);
+      this._structCaches.delete(closes);
+      // LRU: singletons serve concurrent jobs; keep the map tiny.
+      if (this._structCaches.size >= 4) {
+        this._structCaches.delete(this._structCaches.keys().next().value);
+      }
+      this._structCaches.set(closes, cache);
+    }
+
+    for (let bar = cache.lastIdx + 1; bar <= lastIdx; bar++) {
+      this._structAdvanceBar(cache, bar, closes, highs, lows, opens, config);
+    }
+    cache.lastIdx = lastIdx;
+
+    const t = cache.trailing;
+    const range = t.top != null && t.bottom != null && t.top > t.bottom ? t.top - t.bottom : null;
+    const premiumDiscount = range == null ? null : {
+      top: t.top,
+      bottom: t.bottom,
+      eqMid: t.bottom + range * 0.5,
+      premium: { low: t.bottom + range * 0.95, high: t.top },
+      equilibrium: { low: t.bottom + range * 0.475, high: t.bottom + range * 0.525 },
+      discount: { low: t.bottom, high: t.bottom + range * 0.05 },
+    };
+    return {
+      events: cache.events,
+      orderBlocks: cache.orderBlocks,
+      pivots: cache.pivots,
+      trailing: t,
+      premiumDiscount,
+    };
+  }
+
+  _initStructureCache(cfgKey, config = {}) {
+    const makeState = (size, internal) => ({
+      size, internal, leg: 0, trend: 0,
+      high: { currentLevel: null, lastLevel: null, crossed: false, idx: -1, previousSeriesLevel: null },
+      low: { currentLevel: null, lastLevel: null, crossed: false, idx: -1, previousSeriesLevel: null },
+    });
+    return {
+      cfgKey,
+      lastIdx: -1,
+      swing: makeState(Math.max(2, config.sacSwingStructureSize ?? 50), false),
+      internal: makeState(Math.max(1, config.sacInternalStructureSize ?? 5), true),
+      events: [],
+      orderBlocks: [],
+      pivots: { internalHighs: [], internalLows: [], swingHighs: [], swingLows: [] },
+      trailing: { top: null, bottom: null, barIndex: -1 },
+      // parsed-price accumulators (volatility filter for OB zones)
+      cumulativeTR: 0,
+      atr: null,
+      parsedHighs: [],
+      parsedLows: [],
+    };
+  }
+
+  _structAdvanceBar(cache, bar, closes, highs, lows, opens, config = {}) {
+    const filter = String(config.sacOrderBlockFilter ?? "ATR").toUpperCase();
+    const atrLength = Math.max(1, config.sacOrderBlockAtrLength ?? 200);
+    const mitigationMode = String(config.sacOrderBlockMitigation ?? "HIGHLOW").toUpperCase();
+
+    // Parsed prices: high-volatility bars contribute their opposite extreme so
+    // OB zones don't anchor to spike wicks (reference-indicator behaviour).
+    const hi = highs[bar] ?? 0;
+    const lo = lows[bar] ?? hi;
+    const prevClose = bar > 0 ? (closes[bar - 1] ?? lo) : lo;
+    const tr = bar > 0
+      ? Math.max(hi - lo, Math.abs(hi - prevClose), Math.abs(lo - prevClose))
+      : Math.max(hi - lo, 0);
+    cache.cumulativeTR += tr;
+    if (bar === atrLength - 1) cache.atr = cache.cumulativeTR / atrLength;
+    else if (bar >= atrLength && cache.atr != null) cache.atr = ((cache.atr * (atrLength - 1)) + tr) / atrLength;
+    const cumulativeMean = cache.cumulativeTR / Math.max(bar, 1);
+    const measure = filter === "RANGE" ? cumulativeMean : (cache.atr ?? Infinity);
+    const highVolatilityBar = (hi - lo) >= 2 * Math.max(measure, EPSILON);
+    cache.parsedHighs[bar] = highVolatilityBar ? lows[bar] : highs[bar];
+    cache.parsedLows[bar] = highVolatilityBar ? highs[bar] : lows[bar];
+
+    const trailing = cache.trailing;
+    if (trailing.top != null) trailing.top = Math.max(trailing.top, highs[bar] ?? trailing.top);
+    if (trailing.bottom != null) trailing.bottom = Math.min(trailing.bottom, lows[bar] ?? trailing.bottom);
+
+    const updateLegAndPivot = (state) => {
+      const size = state.size;
+      if (bar < size) return;
+      const candidate = bar - size;
+      let rightHighest = -Infinity;
+      let rightLowest = Infinity;
+      for (let j = candidate + 1; j <= bar; j++) {
+        rightHighest = Math.max(rightHighest, highs[j] ?? -Infinity);
+        rightLowest = Math.min(rightLowest, lows[j] ?? Infinity);
+      }
+      const newLegHigh = (highs[candidate] ?? -Infinity) > rightHighest;
+      const newLegLow = (lows[candidate] ?? Infinity) < rightLowest;
+      let nextLeg = state.leg;
+      if (newLegHigh) nextLeg = 0;
+      else if (newLegLow) nextLeg = 1;
+      if (nextLeg === state.leg) return;
+
+      if (nextLeg === 1) {
+        const p = state.low;
+        p.lastLevel = p.currentLevel;
+        p.currentLevel = lows[candidate];
+        p.crossed = false;
+        p.idx = candidate;
+        (state.internal ? cache.pivots.internalLows : cache.pivots.swingLows).push({
+          idx: candidate, confirmedIdx: bar, price: p.currentLevel, type: "low",
+        });
+        if (!state.internal) {
+          trailing.bottom = p.currentLevel;
+          trailing.barIndex = candidate;
+        }
+      } else {
+        const p = state.high;
+        p.lastLevel = p.currentLevel;
+        p.currentLevel = highs[candidate];
+        p.crossed = false;
+        p.idx = candidate;
+        (state.internal ? cache.pivots.internalHighs : cache.pivots.swingHighs).push({
+          idx: candidate, confirmedIdx: bar, price: p.currentLevel, type: "high",
+        });
+        if (!state.internal) {
+          trailing.top = p.currentLevel;
+          trailing.barIndex = candidate;
+        }
+      }
+      state.leg = nextLeg;
+    };
+
+    const structureConfluenceOk = (direction) => {
+      if (config.sacInternalFilterConfluence !== true) return true;
+      const open = opens?.[bar] ?? closes[bar - 1] ?? closes[bar];
+      const close = closes[bar];
+      const upperWick = (highs[bar] ?? close) - Math.max(close, open);
+      const lowerWick = Math.min(close, open) - (lows[bar] ?? close);
+      return direction === "bullish" ? upperWick > lowerWick : upperWick < lowerWick;
+    };
+
+    const storeOrderBlock = (state, direction, pivot, event) => {
+      if (pivot.idx < 0 || pivot.idx >= bar) return;
+      let obIdx = pivot.idx;
+      if (direction === "bullish") {
+        let minValue = Infinity;
+        for (let i = pivot.idx; i < bar; i++) {
+          if ((cache.parsedLows[i] ?? Infinity) < minValue) { minValue = cache.parsedLows[i]; obIdx = i; }
+        }
+      } else {
+        let maxValue = -Infinity;
+        for (let i = pivot.idx; i < bar; i++) {
+          if ((cache.parsedHighs[i] ?? -Infinity) > maxValue) { maxValue = cache.parsedHighs[i]; obIdx = i; }
+        }
+      }
+      const ob = {
+        type: direction === "bullish" ? "bullish_OB" : "bearish_OB",
+        bias: direction,
+        high: cache.parsedHighs[obIdx],
+        low: cache.parsedLows[obIdx],
+        idx: obIdx,
+        createdIdx: bar,
+        internal: state.internal,
+      };
+      cache.orderBlocks.unshift(ob);
+      if (cache.orderBlocks.length > 200) cache.orderBlocks.pop();
+      event.orderBlock = ob;
+    };
+
+    const processBreak = (state, direction, pivot) => {
+      if (pivot.currentLevel == null || pivot.crossed || bar <= 0) return;
+      const previousLevel = pivot.previousSeriesLevel ?? pivot.currentLevel;
+      const crossed = direction === "bullish"
+        ? closes[bar] > pivot.currentLevel && closes[bar - 1] <= previousLevel
+        : closes[bar] < pivot.currentLevel && closes[bar - 1] >= previousLevel;
+      if (!crossed) return;
+
+      if (state.internal) {
+        const swingPivot = direction === "bullish" ? cache.swing.high : cache.swing.low;
+        if (swingPivot.currentLevel === pivot.currentLevel) return;
+        if (!structureConfluenceOk(direction)) return;
+      }
+
+      const isChoch = direction === "bullish" ? state.trend === -1 : state.trend === 1;
+      const event = {
+        idx: bar,
+        type: direction,
+        tag: isChoch ? "CHOCH" : "BOS",
+        level: pivot.currentLevel,
+        pivotIdx: pivot.idx,
+        internal: state.internal,
+        previousTrend: state.trend,
+      };
+      cache.events.push(event);
+      pivot.crossed = true;
+      state.trend = direction === "bullish" ? 1 : -1;
+      storeOrderBlock(state, direction, pivot, event);
+    };
+
+    updateLegAndPivot(cache.swing);
+    updateLegAndPivot(cache.internal);
+
+    processBreak(cache.internal, "bullish", cache.internal.high);
+    processBreak(cache.internal, "bearish", cache.internal.low);
+    processBreak(cache.swing, "bullish", cache.swing.high);
+    processBreak(cache.swing, "bearish", cache.swing.low);
+
+    // Mitigate (remove) order blocks the price has traded through.
+    const bearSource = mitigationMode === "CLOSE" ? closes[bar] : highs[bar];
+    const bullSource = mitigationMode === "CLOSE" ? closes[bar] : lows[bar];
+    cache.orderBlocks = cache.orderBlocks.filter(ob => {
+      if (ob.bias === "bearish") return !(bearSource > Math.max(ob.high, ob.low));
+      return !(bullSource < Math.min(ob.high, ob.low));
+    });
+
+    for (const state of [cache.internal, cache.swing]) {
+      state.high.previousSeriesLevel = state.high.currentLevel;
+      state.low.previousSeriesLevel = state.low.currentLevel;
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════════
   // EVENT-DRIVEN SMC SEQUENCE DETECTOR (v3.0)
   //
   // Real institutional SMC is a CAUSAL SEQUENCE across bars, not 3 independent
@@ -476,12 +815,26 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     const cl = closes[lastIdx];
 
+    // AF-SCALP-04 flags (all default OFF → live behaviour unchanged):
+    //   sacPivotStructure      — CHoCH from the pivot structure engine's events
+    //                            instead of the naive 10-bar high/low compare
+    //   sacPremiumDiscountGate — LONG only below equilibrium (discount half),
+    //                            SHORT only above (premium half) of the trailing
+    //                            swing range: don't buy expensive / sell cheap
+    const usePivot = config.sacPivotStructure === true;
+    const pdGate = config.sacPremiumDiscountGate === true;
+    const structState = (usePivot || pdGate)
+      ? this._getStructureState(indicators, lastIdx, config)
+      : null;
+    const structureType = String(config.sacStructureType ?? "internal").toLowerCase();
+
     // ── STEP 1: current bar must be mitigating an unfilled FVG ────────────────
-    const fvgs = this._detectFVG(closes, highs, lows, lastIdx, config);
+    const fvgs = this._detectFVG(closes, highs, lows, lastIdx, config, indicators.opens);
 
     // Try LONG then SHORT; return the first valid completed sequence.
     for (const dir of ["LONG", "SHORT"]) {
       const isLong = dir === "LONG";
+      const expectedType = isLong ? "bullish" : "bearish";
       const fvg = isLong ? fvgs.bullish : fvgs.bearish;
       if (!fvg) continue;
 
@@ -493,14 +846,37 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         : (cl <= fvg.top * 1.001    && cl >= fvg.midpoint * 0.998);
       if (!inMitigation) continue;
 
+      // Premium/discount gate on the trailing swing range. Uses HALVES, not the
+      // reference indicator's 5% drawing bands — a 5%-of-range band as an entry
+      // gate would starve the leg again (the atrMinMult lesson).
+      if (pdGate && structState?.premiumDiscount) {
+        const eqMid = structState.premiumDiscount.eqMid;
+        if (isLong ? cl > eqMid : cl < eqMid) continue;
+      }
+
       // The FVG is the footprint of the displacement leg. Its origin bar:
       const dispIdx = fvg.idx;
 
       // ── STEP 2: a CHoCH in our direction must precede the displacement ──────
       let chochIdx = -1;
-      for (let b = dispIdx; b >= Math.max(25, dispIdx - win); b--) {
-        const choch = this._detectCHoCH(closes, highs, lows, b, config);
-        if (choch && choch.type === (isLong ? "bullish" : "bearish")) { chochIdx = b; break; }
+      if (usePivot) {
+        // Pivot-engine events are already accumulated — O(events) reverse scan.
+        const events = structState.events;
+        for (let e = events.length - 1; e >= 0; e--) {
+          const ev = events[e];
+          if (ev.idx > dispIdx) continue;
+          if (ev.idx < dispIdx - win) break;
+          if (ev.tag !== "CHOCH" || ev.type !== expectedType) continue;
+          if (structureType === "both" || (structureType === "swing" ? !ev.internal : ev.internal)) {
+            chochIdx = ev.idx;
+            break;
+          }
+        }
+      } else {
+        for (let b = dispIdx; b >= Math.max(25, dispIdx - win); b--) {
+          const choch = this._detectCHoCH(closes, highs, lows, b, config);
+          if (choch && choch.type === expectedType) { chochIdx = b; break; }
+        }
       }
       if (chochIdx < 0) continue;
 
@@ -508,7 +884,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       let sweepIdx = -1, sweepExtreme = null;
       for (let b = chochIdx; b >= Math.max(15, chochIdx - win); b--) {
         const sweep = this._detectSweep(closes, highs, lows, volumes, volSMA, b, config);
-        if (sweep && sweep.type === (isLong ? "bullish" : "bearish")) {
+        if (sweep && sweep.type === expectedType) {
           sweepIdx = b;
           sweepExtreme = isLong ? lows[b] : highs[b];
           break;
@@ -516,15 +892,23 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       }
       if (sweepIdx < 0) continue;
 
+      // Order-block confluence: entering inside a live OB of our bias.
+      const obConfluence = usePivot && structState.orderBlocks.some(ob =>
+        ob.bias === expectedType &&
+        cl >= Math.min(ob.low, ob.high) && cl <= Math.max(ob.low, ob.high));
+
       // Causal order guaranteed by construction: sweepIdx ≤ chochIdx ≤ dispIdx ≤ now.
       // ── Confidence score from the quality of each leg ──────────────────────
       const score = this._scoreSequence(indicators, lastIdx, {
-        isLong, fvg, dispIdx, chochIdx, sweepIdx, config,
+        isLong, fvg, dispIdx, chochIdx, sweepIdx, config, obConfluence,
       });
 
       return {
         signal: dir,
-        meta: { sweepIdx, chochIdx, dispIdx, fvg, sweepExtreme, score },
+        meta: {
+          sweepIdx, chochIdx, dispIdx, fvg, sweepExtreme, score, obConfluence,
+          premiumDiscount: structState?.premiumDiscount ?? null,
+        },
       };
     }
 
@@ -600,6 +984,10 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if      (sweepAge <= 20) score += 8;   // fresh: full bonus
     else if (sweepAge <= 40) score += 3;   // acceptable
     else                     score -= 8;   // stale: risk of whipsaw
+
+    // AF-SCALP-04: mitigation happening INSIDE a live order block of the same
+    // bias = institutional footprint confluence (pivot structure engine only).
+    if (ctx.obConfluence) score += 8;
 
     return Math.round(this.clamp(score, 0, 100));
   }

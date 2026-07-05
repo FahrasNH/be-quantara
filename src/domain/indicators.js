@@ -173,6 +173,7 @@ function calcIndicators(candles, config = {}) {
   const highs   = candles.map(c => c.high);
   const lows    = candles.map(c => c.low);
   const volumes = candles.map(c => c.volume || 0);
+  const opens   = candles.map((c, i) => c.open ?? (i > 0 ? closes[i - 1] : c.close));
 
   const result = {
     emaFast:  calcEMA(closes, emaFast),
@@ -185,6 +186,7 @@ function calcIndicators(candles, config = {}) {
     volumes,
     highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
     lows,
+    opens,   // SMC pivot structure + FVG body threshold (AF-SCALP-04)
   };
 
   // EMA trend filter (EMA50 untuk Day Trading, EMA200 untuk Swing)
