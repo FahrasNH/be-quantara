@@ -1249,8 +1249,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // AF-SCALP-09 v3.1: Regime-aware direction mapping for Intraday leg
   // Maps entry direction to market regime (BULLISH→LONG only, BEARISH→SHORT only, SIDEWAYS→skip)
   _applyRegimeDirectionMapping(rawSignal, regime, tradeType, config = {}) {
-    // Only apply to Intraday leg
-    if (tradeType !== "Intraday" && tradeType !== "B") return rawSignal;
+    // Only apply to Intraday leg (v3.1 uses full type names)
+    if (tradeType !== "Intraday") return rawSignal;
 
     // If regime mapping is disabled, pass through
     if (config.regimeMappingStrict !== true) return rawSignal;

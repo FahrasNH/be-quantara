@@ -438,9 +438,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // winner was capped at the base RR.
       const regime = multiSignal.meta?.marketCond || "NORMAL";
 
-      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides (slAtrMult, tpAtrMult) by componentId
-      const componentType = componentId === "A" ? "Scalping" : componentId === "B" ? "Intraday" : "Swing";
-      const typeOverride = cfg.typeOverrides?.[componentType] || {};
+      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides (slAtrMult, tpAtrMult)
+      // Backtest uses full type names (Scalping/Intraday/Swing), not legacy A/B/C
+      const typeOverride = cfg.typeOverrides?.[componentId] || {};
       const slMult = typeOverride.slAtrMult ?? cfg.slAtrMult;
       const tpMult = typeOverride.tpAtrMult ?? cfg.tpAtrMult;
 
@@ -1298,9 +1298,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     if (meta && typeof strategy.calculateRiskConfig === "function") {
-      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides by component
-      const componentType = meta.component === "A" ? "Scalping" : meta.component === "B" ? "Intraday" : "Swing";
-      const typeOverride = cfg.typeOverrides?.[componentType] || {};
+      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides
+      // Backtest passes full type names (Scalping/Intraday/Swing), not legacy A/B/C
+      const typeOverride = cfg.typeOverrides?.[meta.component] || {};
       const slMult = typeOverride.slAtrMult ?? cfg.slAtrMult;
       const tpMult = typeOverride.tpAtrMult ?? cfg.tpAtrMult;
 
