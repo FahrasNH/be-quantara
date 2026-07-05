@@ -752,6 +752,11 @@ async function runTripleTypeBacktest(opts = {}) {
   for (const tradeType of typeOrder) {
     const typeConfig = {
       ...baseTypeConfig,
+      // AF-SCALP-05: per-leg config overrides (cfg.typeOverrides.Swing = {...}).
+      // Lets the FE A/B new entry-engine flags on Scalping/Intraday while the
+      // proven Swing leg keeps EXACT baseline behaviour. Ladder risk stays
+      // authoritative (applied after the spread).
+      ...(cfg.typeOverrides?.[tradeType] ?? {}),
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
     };
     const entryCandles = opts.entryCandles?.[tradeType];
@@ -1385,6 +1390,8 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   for (const tradeType of typeOrder) {
     const typeConfig = {
       ...cfg,
+      // AF-SCALP-05: per-leg overrides — see runTripleTypeBacktest.
+      ...(cfg.typeOverrides?.[tradeType] ?? {}),
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
     };
     const entryCandles = opts.entryCandles?.[tradeType];

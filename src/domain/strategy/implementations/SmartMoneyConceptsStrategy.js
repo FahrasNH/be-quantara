@@ -1237,7 +1237,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // direction-conflicting signal is HARD-blocked instead, since letting a
     // penalized-but-still-passing signal through defeats "lebih selektif" on
     // exactly the pairs where regime risk matters most.
-    const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true;
+    // AF-SCALP-05: sacHtfHardBlock upgrades the soft −15 to a hard block via
+    // config (backtest A/B). CSV evidence: 8/11 Scalping losses were LONGs
+    // opened during HTF downtrends that survived the −15 penalty — "buy the
+    // discount" only works WITH the higher-timeframe trend, never against it.
+    const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true
+      || config.sacHtfHardBlock === true;
     if (hardRegimeBlock) {
       if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) { rawA = null; confA = 0; }
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) { rawB = null; confB = 0; }
