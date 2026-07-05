@@ -46,11 +46,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // ── Sub-strategy RR/SL/TP multipliers (keyed by type name AND legacy letter) ─
     this.SUB_STRATEGIES = {
-      Scalping: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 0.8,  tpMultiplier: 1.5  },
+      Scalping: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 2.0,  tpMultiplier: 4.0  },
       Intraday: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
       Swing:    { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
       // Backward-compat aliases (old code that passes "A"/"B"/"C")
-      A: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 0.8,  tpMultiplier: 1.5  },
+      A: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 2.0,  tpMultiplier: 4.0  },
       B: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
       C: { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
     };
