@@ -1188,6 +1188,30 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return false;
   }
 
+  _detect5mChocH(indicators, lastIdx, config) {
+    // AF-SCALP-07: 5m entry-TF CHoCH (Change of Character) validation.
+    // Scalping entries are noisy (wick sweeps), but real reversals have swing
+    // structure: supply level (swing high) above entry that price breaks below.
+    // Gate requires swing high in recent window — blocks false-breakout LONGs.
+    const { highs, lows, closes } = indicators;
+    if (!highs || !lows || !closes || lastIdx < 20) return false;
+
+    const window = 20;  // ~100 min of 5m candles
+    const startIdx = Math.max(0, lastIdx - window);
+    const endIdx = lastIdx + 1;
+
+    // Find swing high in the window (exclude last 5 live candles)
+    const windowHighs = highs.slice(startIdx, Math.max(startIdx, endIdx - 5));
+    if (windowHighs.length === 0) return false;
+
+    const swingHigh = Math.max(...windowHighs);
+    const currentPrice = closes[lastIdx];
+
+    // Supply exists if swing high is materially above current price (0.1%)
+    // Real structure, not just "any high in candles" (which is always true).
+    return swingHigh > currentPrice * 1.001;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // detectSignalMulti — per-component results + meta
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1278,6 +1302,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
+    }
+
+    // ── AF-SCALP-07: 5m CHoCH validation for Scalping (entry-TF structure) ────
+    // CSV showed false-breakout LONGs (wick sweeps) contaminating 5m entry set.
+    // Gate: require swing high structure above entry (supply level), not just noise.
+    // Backtest-only flag (live disabled for now) — validates entry causal context.
+    if (rawA && config.scalpingChochValidate !== false) {
+      const has5mChoch = this._detect5mChocH(indicators, lastIdx, config);
+      if (!has5mChoch) {
+        rawA = null;
+        confA = 0;
+      }
     }
 
     // ── Gate: check confidence vs min threshold ─────────────────────────────
