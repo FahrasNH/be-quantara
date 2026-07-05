@@ -76,6 +76,31 @@ function isoOf(c) {
  */
 // Multi-position backtest (v3.0): each AF component opens independent positions
 // Pass opts.debug=true to get a per-bar rejection log (capped at 500 entries).
+
+// AF-SCALP-02: rolling mean of ATR — per-leg baseline for the relative ATR gate.
+// cfg.atrMinMult/atrMaxMult are ABSOLUTE price-% bounds calibrated for a ~1h
+// chart (SMC: 0.8-5%). Applied TF-agnostically they starve low-TF legs: 5m BTC
+// ATR is 0.05-0.15%, so the 0.8% floor only passes during flash crashes
+// (Scalping = 3 trades / 12 months, all in extreme candles, worst-possible
+// fee+slippage conditions). The relative gate compares each bar's ATR to the
+// leg's OWN recent baseline instead — "market not dead / not panicking" means
+// the same thing on every timeframe.
+function buildAtrBaseline(atrArr, window = 100) {
+  if (!Array.isArray(atrArr) || !atrArr.length) return null;
+  const out = new Array(atrArr.length).fill(null);
+  const q = [];
+  let sum = 0;
+  for (let k = 0; k < atrArr.length; k++) {
+    const v = atrArr[k];
+    if (v != null && Number.isFinite(v)) {
+      q.push(v); sum += v;
+      if (q.length > window) sum -= q.shift();
+    }
+    out[k] = q.length ? sum / q.length : null;
+  }
+  return out;
+}
+
 async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
@@ -170,6 +195,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
+  // AF-SCALP-02: relative ATR gate (see buildAtrBaseline). Flag-gated for A/B —
+  // live configs don't set atrGateRelative, so live gating is unchanged.
+  const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
+  const atrRelMin = cfg.atrRelMin ?? 0.6;
+  const atrRelMax = cfg.atrRelMax ?? 3.0;
   const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
   const riskPerTrade = cfg.riskPerTrade ?? 0.01;
 
@@ -389,9 +419,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const dailyBase = dailyStartCapital || capital;
       if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) continue;
 
-      // Check ATR gate
+      // Check ATR gate — relative to the leg's own baseline when enabled
       const atrPct = (atr / price) * 100;
-      if (atrPct < atrMinPct || atrPct > atrMaxPct) continue;
+      if (atrBaseline) {
+        const base = atrBaseline[i];
+        const rel = base > 0 ? atr / base : 1;
+        if (rel < atrRelMin || rel > atrRelMax) continue;
+      } else if (atrPct < atrMinPct || atrPct > atrMaxPct) continue;
 
       // Calculate risk config for this component. Pass the REAL regime so
       // strongTrendTPMult (let winners run in STRONG_TREND) can fire — it was
@@ -915,6 +949,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
+  // AF-SCALP-02: relative ATR gate (see buildAtrBaseline). Flag-gated for A/B —
+  // live configs don't set atrGateRelative, so live gating is unchanged.
+  const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
+  const atrRelMin = cfg.atrRelMin ?? 0.6;
+  const atrRelMax = cfg.atrRelMax ?? 3.0;
   const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
   const riskPerTrade = cfg.riskPerTrade ?? 0.01;
   const higherTf = cfg.higherTf ?? null;
@@ -1209,7 +1248,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const dailyBase = dailyStartCapital || capital;
     if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) { diag.dailyLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const atrPct = (atr / price) * 100;
-    if (atrPct < atrMinPct || atrPct > atrMaxPct) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    if (atrBaseline) {
+      const base = atrBaseline[i];
+      const rel = base > 0 ? atr / base : 1;
+      if (rel < atrRelMin || rel > atrRelMax) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    } else if (atrPct < atrMinPct || atrPct > atrMaxPct) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 7. validateEntry (mirror step 9) ────────────────────────────────────
     if (typeof strategy.validateEntry === "function") {
