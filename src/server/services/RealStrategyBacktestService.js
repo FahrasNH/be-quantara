@@ -743,10 +743,16 @@ async function runTripleTypeBacktest(opts = {}) {
     maxConsecLoss:    Math.max(cfg.maxConsecLoss ?? 2, 5),
   };
 
+  // AF-SCALP-03: ladder shares are ABSOLUTE caps per type (0.5%/1%/2% of the
+  // combined cap), normalized over the strategy's natural type set — running a
+  // SUBSET (Advance type filter) must not inflate the remaining legs' risk.
+  const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
+    ? opts.naturalTypeOrder
+    : ["Scalping", "Intraday", "Swing"];
   for (const tradeType of typeOrder) {
     const typeConfig = {
       ...baseTypeConfig,
-      riskPerTrade: riskShareForType(tradeType, typeOrder, cfg.riskPerTrade ?? 0.01),
+      riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
     };
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
@@ -1372,10 +1378,14 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   // documented model: riskPerTrade is the COMBINED cap across all concurrent types.
   // v2.8: split by TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1 : Swing 2) instead of
   // equally — TS_TF combined 0.03 → 1%/2%, MD_MR combined 0.015 → 0.5%/1%.
+  // AF-SCALP-03: normalize ladder over the natural type set (see runTripleTypeBacktest).
+  const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
+    ? opts.naturalTypeOrder
+    : typeOrder;
   for (const tradeType of typeOrder) {
     const typeConfig = {
       ...cfg,
-      riskPerTrade: riskShareForType(tradeType, typeOrder, cfg.riskPerTrade ?? 0.01),
+      riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
     };
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];

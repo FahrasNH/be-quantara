@@ -1475,6 +1475,10 @@ async function _runBacktestJobAsync(job, userId, opts) {
       entryCandles,
       htfCandles,
       dailyCandles,
+      // Risk ladder must normalize over the strategy's NATURAL type set, not the
+      // user-filtered one — else "Scalping only" hands the 0.5%-weight leg the
+      // FULL combined 3.5% cap (7x the ladder). See riskShareForType callers.
+      naturalTypeOrder: isAF ? Object.keys(TYPE_TF) : multiTypeOrder,
       strategyKey,
       capital: Number(capital) || 1000,
       enableFees: enableFees !== false,
