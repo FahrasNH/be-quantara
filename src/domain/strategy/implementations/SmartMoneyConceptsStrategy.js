@@ -1527,9 +1527,17 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       ? { A: minConf.A, B: Math.max(minConf.B, votingMinConf), C: Math.max(minConf.C, votingMinConf) }
       : minConf;
 
+    // AF-SCALP-15: asymmetric per-side confidence floor for Scalping (15m).
+    // 12mo CSV forensics: conf>=75 flips Scalping from netPF 0.90 to 1.18; LONG
+    // is the weaker side (PF 0.74 vs SHORT 1.01) — SHORT>=75/LONG>=80 measured
+    // netPF 1.35 (n=28, WR 46.4%). rawA here is the side string ("LONG"/"SHORT").
+    const scalpMinConfLong = config.sacMinConfidenceALong ?? effMinConf.A;
+    const scalpMinConfShort = config.sacMinConfidenceAShort ?? effMinConf.A;
+    const effMinConfA = rawA === "LONG" ? scalpMinConfLong : scalpMinConfShort;
+
     // AF-SCALP-13: confidence-floor ablation for the Scalping leg.
-    if (rawA) { if (confA >= effMinConf.A) this._abl("passed"); else this._abl("rejByConf"); }
-    const sigScalping = (rawA && confA >= effMinConf.A) ? rawA : null;
+    if (rawA) { if (confA >= effMinConfA) this._abl("passed"); else this._abl("rejByConf"); }
+    const sigScalping = (rawA && confA >= effMinConfA) ? rawA : null;
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;
     const sigSwing    = (rawC && confC >= effMinConf.C) ? rawC : null;
 

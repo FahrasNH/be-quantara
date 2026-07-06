@@ -207,6 +207,96 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
   const warmup = Math.max(cfg.emaSlow ?? 21, cfg.atrPeriod ?? 14, 30) + 2;
 
+  // AF-SCALP-16: SL+ Trailing Partial TP, ported from the single-position engine
+  // (see checkPartialMilestones in runRealBacktest). Previously this multi-position
+  // engine — the one AF_SMC/triple-type backtests actually use — had NO partial-TP
+  // path at all: "Is Partial" was always false regardless of the FE tpMode toggle.
+  const tpModeCfg = cfg.tpMode ?? "full";
+  const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
+  const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
+  const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
+
+  function checkPartialMilestones(componentId, position, c, exitIdx) {
+    if (!slPlusEnabled || !position || position.remainingSize <= 0) return;
+    const R = position.R;
+    if (!Number.isFinite(R) || R <= 0) return;
+
+    const favorableExtreme = position.side === "LONG" ? c.high : c.low;
+    const gain = position.side === "LONG" ? favorableExtreme - position.entry : position.entry - favorableExtreme;
+    const rMult = gain / R;
+
+    const partialAt = (price, size, reason, newSL) => {
+      let px = price;
+      if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+      const grossPnl = position.side === "LONG" ? (px - position.entry) * size : (position.entry - px) * size;
+      const fee = feeRate * (position.entry + px) * size;
+      const pnl = grossPnl - fee;
+      capital += pnl;
+      position.remainingSize -= size;
+      position.slCurrent = newSL;
+      const tradeTypeLabel = typeof strategy.getTradeTypeLabel === "function"
+        ? strategy.getTradeTypeLabel(componentId)
+        : componentId;
+      trades.push({
+        date: isoOf(c),
+        openTime: isoOf(entryCandles[position.openIdx]),
+        closeTime: isoOf(c),
+        side: position.side,
+        strategy: strategyKey,
+        component: tradeTypeLabel,
+        tradeType: tradeTypeLabel,
+        marketCond: position.marketCond,
+        entry: position.entry,
+        exit: px,
+        sl: position.sl,
+        tp: position.tp,
+        size,
+        grossPnl,
+        fee,
+        pnl,
+        pnlPct: (pnl / (position.entry * size)) * 100,
+        plannedRR: position.plannedRR,
+        confidence: position.confidence ?? null,
+        atr: position.atr ?? null,
+        entryRsi: position.entryRsi ?? null,
+        htfTrend: position.htfTrend ?? null,
+        reason,
+        result: pnl > 0 ? "win" : "loss",
+        isPartial: true,
+      });
+    };
+
+    // Milestone 1: +1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
+    if (!position.m1 && rMult >= 1.0) {
+      position.m1 = true;
+      const partial = position.originalSize * slPlusPartial1Pct;
+      const newSL = position.side === "LONG" ? position.entry + 0.3 * R : position.entry - 0.3 * R;
+      if (partial > 0 && partial < position.remainingSize) {
+        partialAt(position.entry + (position.side === "LONG" ? R : -R), partial, "Partial_1R", newSL);
+      } else {
+        position.slCurrent = newSL;
+      }
+    }
+
+    // Milestone 2: +2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
+    if (position.m1 && !position.m2 && rMult >= 2.0) {
+      position.m2 = true;
+      const fromOriginal = position.originalSize * slPlusPartial2Pct;
+      const partial = Math.min(fromOriginal, position.remainingSize * 0.90);
+      const newSL = position.side === "LONG" ? position.entry + R : position.entry - R;
+      if (partial > 0 && partial < position.remainingSize) {
+        partialAt(position.entry + (position.side === "LONG" ? 2 * R : -2 * R), partial, "Partial_2R", newSL);
+      } else {
+        position.slCurrent = newSL;
+      }
+    }
+
+    // Milestone 3: +3R → log-only marker, no partial (mirrors live)
+    if (position.m1 && position.m2 && !position.m3 && rMult >= 3.0) {
+      position.m3 = true;
+    }
+  }
+
   function closePosition(componentId, position, exitPrice, reason, exitIdx) {
     // AF-SCALP-12: maker/taker + slippage by ORDER TYPE.
     //   entry (limit-at-level)  → maker, no slippage
@@ -219,17 +309,20 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const makerRate = cfg.makerFeeRate ?? 0.0002;
     const isLimitExit = reason === "TP"; // TP = resting limit (maker); SL/time = market (taker)
 
+    // AF-SCALP-16: close the REMAINING size (partials may have already trimmed it).
+    const closeSize = position.remainingSize ?? position.size;
+
     let px = exitPrice;
     // Slippage only on MARKET exits (stop/time). Limit fills execute at the level.
     if (slip && !(useMaker && isLimitExit)) {
       px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
     }
     const grossPnl = position.side === "LONG"
-      ? (px - position.entry) * position.size
-      : (position.entry - px) * position.size;
+      ? (px - position.entry) * closeSize
+      : (position.entry - px) * closeSize;
     const entryFeeRate = useMaker ? makerRate : feeRate;
     const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
-    const fee = entryFeeRate * position.entry * position.size + exitFeeRate * px * position.size;
+    const fee = entryFeeRate * position.entry * closeSize + exitFeeRate * px * closeSize;
     const pnl = grossPnl - fee;
     capital += pnl;
 
@@ -261,11 +354,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       exit: px,
       sl: position.sl,
       tp: position.tp,
-      size: position.size,
+      size: closeSize,
       grossPnl,
       fee,
       pnl,
-      pnlPct: (pnl / (position.entry * position.size)) * 100,
+      pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
       confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
       // GROK-FIX: entry-context snapshot forwarded for post-hoc Grok Confirm Gate.
@@ -274,6 +367,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       htfTrend: position.htfTrend ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
+      isPartial: false,
     });
     positions.delete(componentId);
   }
@@ -315,10 +409,16 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
     // Monitor all open positions for SL/TP
     for (const [componentId, pos] of positions.entries()) {
-      const hitSL = pos.side === "LONG" ? c.low <= pos.sl : c.high >= pos.sl;
+      // AF-SCALP-16: partial-TP milestones may trim size + move slCurrent before
+      // the SL/TP check below (mirrors runRealBacktest's single-position order).
+      checkPartialMilestones(componentId, pos, c, i);
+      if (!positions.has(componentId)) continue; // safety: milestone logic never fully closes, but guard anyway
+
+      const stopLevel = pos.slCurrent;
+      const hitSL = pos.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
       const hitTP = pos.side === "LONG" ? c.high >= pos.tp : c.low <= pos.tp;
       if (hitSL) {
-        closePosition(componentId, pos, pos.sl, "SL", i);
+        closePosition(componentId, pos, stopLevel, pos.m1 ? "SL_TRAIL" : "SL", i);
       } else if (hitTP) {
         closePosition(componentId, pos, pos.tp, "TP", i);
       }
@@ -513,6 +613,16 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
+        // AF-SCALP-16: SL+ partial-TP state — R is the risk distance, slCurrent
+        // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
+        // shrinks as partials execute; originalSize stays fixed for milestone %.
+        R: slDist,
+        slCurrent: sl,
+        originalSize: size,
+        remainingSize: size,
+        m1: false,
+        m2: false,
+        m3: false,
       });
 
       dailyTradeCount += 1;
