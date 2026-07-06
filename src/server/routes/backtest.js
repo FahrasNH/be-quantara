@@ -1506,6 +1506,27 @@ async function _runBacktestJobAsync(job, userId, opts) {
       ? await runTripleTypeBacktest({ ...computeOpts, typeOrder })
       : await runMultiTypeBacktest(computeOpts, typeOrder);
 
+    // AF-SCALP-13: emit ablation funnel to browser via SSE (instead of server log)
+    const scalping = result.perTypeStats?.Scalping;
+    if (scalping?.ablation) {
+      const a = scalping.ablation;
+      const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
+      const funnel = {
+        phase: "info",
+        type: "AF-SCALP-13-ABLATION",
+        message: `[AF-SCALP-13] Scalping filter funnel:\n` +
+          `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}\n` +
+          `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}%)\n` +
+          `     -> signals after rejection   : ${a.seqSignal}\n` +
+          `  3. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}%)\n` +
+          `  4. - 5m CHoCH validation        : -${a.rejByChoch}\n` +
+          `  5. - Confidence floor           : -${a.rejByConf}\n` +
+          `  = PASSED (tradeable signals)    : ${a.passed}`,
+        ablation: a,
+      };
+      job.progress(funnel);
+    }
+
     const modeLabel = typeOrder.map(t => `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})`).join(" + ");
 
     job.done({
