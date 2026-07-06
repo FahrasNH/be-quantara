@@ -40,7 +40,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // ── Trade type TF configuration (each type runs on its own TF stack) ─────
     this.TRADE_TYPE_TF_CONFIG = {
-      Scalping: { entryTf: "5m",  confirmTf: "15m", trendTf: "1h" },  // v3.0: 1m→5m for SMC sequence
+      // AF-SCALP-14: 5m→15m migration. PROVEN (local harness, 6mo real BTC):
+      // 5m SMC WR 28.6% (BELOW 33.3% coin-flip) net PF 0.67 — zero edge at any
+      // filter. 15m SMC WR ~37% (above coin-flip) net PF 1.03 — real edge. The
+      // "Scalping" leg now runs 15m/4h (Intraday cadence, ~0.24 trades/day; the
+      // 4-8/day scalp target is unreachable for fee-viable BTC SMC).
+      Scalping: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },  // AF-SCALP-14: 5m→15m (edge TF)
       Intraday: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },  // v3.0: 5m→15m entry
       Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w" },
     };

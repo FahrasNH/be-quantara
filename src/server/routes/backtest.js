@@ -1297,7 +1297,7 @@ module.exports = function createBacktestRouter(context) {
 // ─── Async job runner ─────────────────────────────────────────────────────────
 const AF_SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
 const TYPE_TF = {
-  Scalping: { entry: "5m",  trend: "1h" },  // v3.0: 1m→5m — SMC sequence needs stable structure
+  Scalping: { entry: "15m", trend: "4h" },  // AF-SCALP-14: 5m→15m — 5m has zero edge, 15m net PF 1.03
   Intraday: { entry: "15m", trend: "4h" },  // v3.0: 5m→15m entry, 4h HTF bias
   Swing:    { entry: "4h",  trend: "1w" },
 };
