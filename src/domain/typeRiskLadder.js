@@ -1,15 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Per-type risk ladder (v3.1, 2026-07-05)
+// Per-type risk ladder (v3.2, 2026-07-05)
 //
 // riskPerTrade stays the COMBINED cap across all concurrent type legs of a
 // strategy, but instead of splitting it EQUALLY (÷ typeOrder.length), it is
 // distributed by trade-type weight:
 //
-//   v3.1 weights:  Scalping 1 : Intraday 3 : Swing 4
-//   Allocation:    0.5% + 1.5% + 2% = 4% combined cap
+//   v3.2 weights:  Scalping 2 : Intraday 3 : Swing 4
+//   Allocation:    1% + 1.5% + 2% = 4.5% combined cap
 //
-//   AF_SMC  combined 0.04 → 0.5% (Scalping 15m/5m hybrid) / 1.5% (Intraday) / 2% (Swing)
-//           (Previously: 0.5% / 1% / 2% — Intraday +0.5%, Swing stable, Scalping active hybrid)
+//   AF_SMC  combined 0.045 → 1% (Scalping RR 2.0) / 1.5% (Intraday) / 2% (Swing)
+//           (Previously v3.1: 0.5% / 1.5% / 2% — Scalping +0.5% RR fix)
 //   TS_TF   combined 0.03  → 1% (Intraday) / 2% (Swing) [unchanged]
 //   MD_MR   combined 0.015 → 0.5% (Scalping) / 1% (Intraday) [unchanged]
 //
@@ -18,13 +18,13 @@
 // source of truth so live sizing can never drift from what the backtest showed
 // (the 3× SMC live-risk bug class, 311e18d).
 //
-// v3.1 Rationale:
-// - Scalping 0.5%: 15m/5m hybrid testing phase (TP ladder + volume + displacement gates)
+// v3.2 Rationale:
+// - Scalping 1%: RR 2.0 root cause fix (SL 2.2×ATR, TP 4.4×ATR, 1W:2L ratio)
 // - Intraday 1.5%: 28.9% WR BULLISH-only + regime filter = breakeven→profit
 // - Swing 2%: 41.7% WR proven; stable anchor capital
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TYPE_RISK_WEIGHTS = { Scalping: 1, Intraday: 3, Swing: 4 };
+const TYPE_RISK_WEIGHTS = { Scalping: 2, Intraday: 3, Swing: 4 };
 
 // Live multi-AF componentIds are "A"/"B"/"C" (SMC sub-strategies); backtest
 // uses the full type names. Map both vocabularies (key-vocab standing rule).

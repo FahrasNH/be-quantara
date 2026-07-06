@@ -1178,8 +1178,23 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const stopLevel = position.slCurrent;
       const hitSL = position.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
       const hitTP = position.side === "LONG" ? c.high >= position.tp : c.low <= position.tp;
-      if (hitSL) closePosition(stopLevel, position.m1 ? "SL_TRAIL" : "SL", i);
-      else if (hitTP) closePosition(position.tp, "TP", i);
+
+      // AF-SCALP-10: Time-stop for Scalping (enforce scalpingMaxHoldHours)
+      // Exit at market price if time exceeded to prevent slot-blocking
+      let hitTimeStop = false;
+      if (position.component === "Scalping" && cfg.typeOverrides?.Scalping?.scalpingMaxHoldHours) {
+        const holdMs = c.timestamp - entryCandles[position.openIdx].timestamp;
+        const maxHoldMs = cfg.typeOverrides.Scalping.scalpingMaxHoldHours * 3600 * 1000;
+        if (holdMs > maxHoldMs) {
+          hitTimeStop = true;
+          closePosition(price, "TIME_STOP", i);  // exit at market price
+        }
+      }
+
+      if (!hitTimeStop) {
+        if (hitSL) closePosition(stopLevel, position.m1 ? "SL_TRAIL" : "SL", i);
+        else if (hitTP) closePosition(position.tp, "TP", i);
+      }
     }
 
     if (position) { // still open → no new entry
