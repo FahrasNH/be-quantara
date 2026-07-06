@@ -1260,14 +1260,29 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const lastIdx = closes.length - 1;
     const { bullishThreshold = 0.004, bearishThreshold = -0.004, adxMinStrength = 22 } = config.regimeDetection || {};
 
-    // Calculate EMA 9 and EMA 21
-    const ema9 = calcEMA(closes, 9);
-    const ema21 = calcEMA(closes, 21);
+    // AF-SCALP-12 PERF: Use pre-computed EMA from indicators (already calculated
+    // during indicatorpass). Avoids O(n) recalc per bar. If not available, cache
+    // the result in config so subsequent calls in same backtest bar don't recalc.
+    let ema9 = indicators.ema9_Regime; // Cache key (per-bar pass)
+    let ema21 = indicators.ema21_Regime;
+    if (!ema9 || !ema21) {
+      ema9  = calcEMA(closes, 9);
+      ema21 = calcEMA(closes, 21);
+      // Store back to indicators for current bar (avoid recalc if called again)
+      if (indicators) {
+        indicators.ema9_Regime = ema9;
+        indicators.ema21_Regime = ema21;
+      }
+    }
 
     if (!ema9 || !ema21 || ema9.length === 0 || ema21.length === 0) return "SIDEWAYS";
 
     const lastClose = closes[lastIdx];
-    const emaDiff = (ema9[ema9.length - 1] - ema21[ema21.length - 1]) / lastClose;
+    const ema9Last = ema9[ema9.length - 1];
+    const ema21Last = ema21[ema21.length - 1];
+    if (ema9Last == null || ema21Last == null) return "SIDEWAYS";
+
+    const emaDiff = (ema9Last - ema21Last) / lastClose;
     const adx = indicators.adx?.[lastIdx] ?? 20;
 
     // BULLISH: EMA gap > threshold AND ADX > strength
