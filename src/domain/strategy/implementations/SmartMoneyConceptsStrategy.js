@@ -18,6 +18,7 @@
 "use strict";
 
 const StrategyBase = require("../base/StrategyBase");
+const { calcEMA } = require("../../indicators");
 
 const EPSILON = 1e-9;
 
@@ -1260,8 +1261,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const { bullishThreshold = 0.004, bearishThreshold = -0.004, adxMinStrength = 22 } = config.regimeDetection || {};
 
     // Calculate EMA 9 and EMA 21
-    const ema9 = this._calcEMA(closes, 9);
-    const ema21 = this._calcEMA(closes, 21);
+    const ema9 = calcEMA(closes, 9);
+    const ema21 = calcEMA(closes, 21);
 
     if (!ema9 || !ema21 || ema9.length === 0 || ema21.length === 0) return "SIDEWAYS";
 
