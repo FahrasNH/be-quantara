@@ -206,17 +206,28 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const warmup = Math.max(cfg.emaSlow ?? 21, cfg.atrPeriod ?? 14, 30) + 2;
 
   function closePosition(componentId, position, exitPrice, reason, exitIdx) {
+    // AF-SCALP-12: maker/taker + slippage by ORDER TYPE.
+    //   entry (limit-at-level)  → maker, no slippage
+    //   TP exit (limit order)   → maker, no slippage
+    //   SL / TIME_STOP (market) → taker, slippage applies
+    // CSV3 forensics: gross PF 1.23 but net 0.95 — the whole gap is execution
+    // cost. 26 wins were paying taker on a TP that fills as a maker limit.
+    const compOv = cfg.typeOverrides?.[componentId] || {};
+    const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
+    const makerRate = cfg.makerFeeRate ?? 0.0002;
+    const isLimitExit = reason === "TP"; // TP = resting limit (maker); SL/time = market (taker)
+
     let px = exitPrice;
-    if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+    // Slippage only on MARKET exits (stop/time). Limit fills execute at the level.
+    if (slip && !(useMaker && isLimitExit)) {
+      px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+    }
     const grossPnl = position.side === "LONG"
       ? (px - position.entry) * position.size
       : (position.entry - px) * position.size;
-    // AF-SCALP-11: maker fee on ENTRY side (limit-at-level fills as maker),
-    // taker on EXIT (SL/TP hit as market/stop). Cuts entry fee 0.06%→0.02%.
-    const compOv = cfg.typeOverrides?.[componentId] || {};
-    const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
-    const entryFeeRate = useMaker ? (cfg.makerFeeRate ?? 0.0002) : feeRate;
-    const fee = entryFeeRate * position.entry * position.size + feeRate * px * position.size;
+    const entryFeeRate = useMaker ? makerRate : feeRate;
+    const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
+    const fee = entryFeeRate * position.entry * position.size + exitFeeRate * px * position.size;
     const pnl = grossPnl - fee;
     capital += pnl;
 
@@ -789,6 +800,12 @@ async function runTripleTypeBacktest(opts = {}) {
       continue;
     }
 
+    // AF-SCALP-12: per-leg slippage override (typeConfig.slippagePct). BTCUSDT is
+    // the most liquid pair — 0.05% default overstates fills; Scalping can set 0.02%.
+    const typeSlip = enableSlippage
+      ? (typeConfig.slippagePct ?? cfg.slippagePct ?? DEFAULT_SLIPPAGE)
+      : 0;
+
     const typeResult = await _runMultiPositionBacktest(
       {
         ...opts,
@@ -804,7 +821,7 @@ async function runTripleTypeBacktest(opts = {}) {
       strategy,
       typeConfig,
       feeRate,
-      slip,
+      typeSlip,
       entryCandles,
       htfCandles || null,
     );
@@ -1095,17 +1112,24 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   }
 
   function closePosition(exitPrice, reason, exitIdx) {
-    let px = exitPrice;
-    if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+    // AF-SCALP-12: maker/taker + slippage by order type (see multi engine).
+    // entry limit → maker; TP limit → maker (no slip); SL/time market → taker (slip).
+    const compOv = cfg.typeOverrides?.[position.component] || {};
+    const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
+    const makerRate = cfg.makerFeeRate ?? 0.0002;
+    const isLimitExit = reason === "TP";
     const closeSize = position.remainingSize;
+
+    let px = exitPrice;
+    if (slip && !(useMaker && isLimitExit)) {
+      px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+    }
     const grossPnl = position.side === "LONG"
       ? (px - position.entry) * closeSize
       : (position.entry - px) * closeSize;
-    // AF-SCALP-11: maker fee on ENTRY (limit-at-level), taker on EXIT.
-    const compOv = cfg.typeOverrides?.[position.component] || {};
-    const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
-    const entryFeeRate = useMaker ? (cfg.makerFeeRate ?? 0.0002) : feeRate;
-    const fee = entryFeeRate * position.entry * closeSize + feeRate * px * closeSize;
+    const entryFeeRate = useMaker ? makerRate : feeRate;
+    const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
+    const fee = entryFeeRate * position.entry * closeSize + exitFeeRate * px * closeSize;
     const pnl = grossPnl - fee;
     capital += pnl;
 
