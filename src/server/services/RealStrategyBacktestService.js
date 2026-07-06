@@ -474,8 +474,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       // Apply pair-tier SL/TP adjustments for STABLE/VOLATILE classification
       // (live parity: BotEngine.js:2601-2602). cfg.pairSlMultiplier set by
-      // PairClassifier.paramOverrides.slMultiplier (e.g. 1.1× STABLE, 1.3× VOLATILE).
-      // Backtest must match live so tier backtest results align with live trade behavior.
+      // PairClassifier.classify(...).paramOverrides.slMultiplier — a CONTINUOUS
+      // function of the hybrid volatility score (v2.4, 1.0×-1.5×), not a fixed
+      // per-tier step. Backtest must match live so tier backtest results align
+      // with live trade behavior.
       const pairSlMult = cfg.pairSlMultiplier || 1;
       const slDist = riskCfg.slDistance * pairSlMult;
       const tpDist = riskCfg.tpDistance * pairSlMult;
