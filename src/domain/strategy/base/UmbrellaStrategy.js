@@ -122,6 +122,19 @@ class UmbrellaStrategy extends StrategyBase {
     return null;
   }
 
+  // ─── Passthrough for AF-SCALP-13 ablation telemetry ──────────────────────
+  // The backtest resets/reads these on the umbrella (what the registry returns),
+  // but the counters live on the active component (SMC). Without these the funnel
+  // stayed null even though the leg ran. BUG: registry returns AdaptiveFusionUmbrella.
+  resetAblation() {
+    const active = this.getActiveComponent();
+    if (typeof active.resetAblation === "function") active.resetAblation();
+  }
+  getAblation() {
+    const active = this.getActiveComponent();
+    return typeof active.getAblation === "function" ? active.getAblation() : null;
+  }
+
   // ─── Passthrough for getLastSignalMeta (real-engine component labeling) ───
 
   getLastSignalMeta() {
