@@ -1278,13 +1278,17 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   // AF-SCALP-09 v3.1: Detect HTF market regime for direction-aware entry mapping
-  _detectHTFRegime(indicators, config = {}) {
+  _detectHTFRegime(indicators, config = {}, atIdx = null) {
     if (!indicators || !indicators.closes) return "SIDEWAYS";
 
     const closes = indicators.closes;
     if (closes.length < 21) return "SIDEWAYS";
 
-    const lastIdx = closes.length - 1;
+    // AF-SCALP-17: evaluate at the CURRENT backtest bar, not the final bar of
+    // the whole dataset. The old `closes.length - 1` read the END of the array
+    // on every call — in backtest that is (a) look-ahead and (b) a constant:
+    // the same regime label was returned for every bar of the run.
+    const lastIdx = Number.isInteger(atIdx) ? Math.min(atIdx, closes.length - 1) : closes.length - 1;
     const { bullishThreshold = 0.004, bearishThreshold = -0.004, adxMinStrength = 22 } = config.regimeDetection || {};
 
     // AF-SCALP-12 PERF: Use pre-computed EMA from indicators (already calculated
@@ -1305,20 +1309,28 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (!ema9 || !ema21 || ema9.length === 0 || ema21.length === 0) return "SIDEWAYS";
 
     const lastClose = closes[lastIdx];
-    const ema9Last = ema9[ema9.length - 1];
-    const ema21Last = ema21[ema21.length - 1];
+    // AF-SCALP-17: EMA arrays are index-aligned with closes — read the CURRENT
+    // bar, not the array tail (same look-ahead bug as above).
+    const ema9Last = ema9[lastIdx];
+    const ema21Last = ema21[lastIdx];
     if (ema9Last == null || ema21Last == null) return "SIDEWAYS";
 
     const emaDiff = (ema9Last - ema21Last) / lastClose;
-    const adx = indicators.adx?.[lastIdx] ?? 20;
+    // AF-SCALP-17: calcIndicators does NOT produce an `adx` array, so the old
+    // `?? 20` default made `adx > 22` unconditionally FALSE → this function
+    // returned SIDEWAYS on every bar → regimeMappingStrict skipped 100% of
+    // Intraday entries on every coin. Only apply the ADX gate when ADX data
+    // actually exists.
+    const adxVal = indicators.adx?.[lastIdx];
+    const adxOk = adxVal == null ? true : adxVal > adxMinStrength;
 
-    // BULLISH: EMA gap > threshold AND ADX > strength
-    if (emaDiff > bullishThreshold && adx > adxMinStrength) {
+    // BULLISH: EMA gap > threshold AND (ADX confirms, when available)
+    if (emaDiff > bullishThreshold && adxOk) {
       return "BULLISH";
     }
 
-    // BEARISH: EMA gap < negative threshold AND ADX > strength
-    if (emaDiff < bearishThreshold && adx > adxMinStrength) {
+    // BEARISH: EMA gap < negative threshold AND (ADX confirms, when available)
+    if (emaDiff < bearishThreshold && adxOk) {
       return "BEARISH";
     }
 
@@ -1397,8 +1409,15 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
 
-    // AF-SCALP-09 v3.1: Detect HTF regime for direction-aware Intraday mapping
-    const htfRegime = this._detectHTFRegime(indicators, config);
+    // AF-SCALP-09 v3.1: Detect HTF regime for direction-aware Intraday mapping.
+    // AF-SCALP-17: prefer the REAL higher-timeframe trend (computed from actual
+    // 4h candles by the engine and passed as config.htfTrend) over the internal
+    // entry-TF EMA/ADX proxy — the proxy reads 15m indicators whose EMA9-21 gap
+    // almost never clears the 0.4% threshold, and its ADX gate was dead (see
+    // _detectHTFRegime). The proxy remains as fallback for callers without HTF data.
+    const htfRegime = (htfTrend === "BULLISH" || htfTrend === "BEARISH" || htfTrend === "SIDEWAYS")
+      ? htfTrend
+      : this._detectHTFRegime(indicators, config, lastIdx);
 
     // Primary keys are type names; A/B/C kept as backward-compat aliases
     const result = { Scalping: null, Intraday: null, Swing: null, A: null, B: null, C: null };
