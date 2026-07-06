@@ -24,6 +24,8 @@
  * first = conservative). No opposite-signal exit.
  */
 
+const fs = require("fs");
+const path = require("path");
 const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA } = require("../../domain/indicators");
 const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
@@ -850,17 +852,38 @@ async function runTripleTypeBacktest(opts = {}) {
       const a = strategy.getAblation();
       if (a) {
         const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
-        console.log(
-          `[AF-SCALP-13] Scalping filter funnel (${entryCandles.length} bars):\n` +
+        const funnelText =
+          `[AF-SCALP-13] Scalping filter funnel (${entryCandles.length} bars, ${allTrades.length} trades so far):\n` +
           `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}\n` +
           `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}% of setups)\n` +
           `     -> signals after rejection   : ${a.seqSignal}\n` +
           `  3. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}% of signals)\n` +
           `  4. - 5m CHoCH validation        : -${a.rejByChoch}\n` +
           `  5. - Confidence floor           : -${a.rejByConf}\n` +
-          `  = PASSED (tradeable signals)    : ${a.passed}`
-        );
+          `  = PASSED (tradeable signals)    : ${a.passed}`;
+        console.log(funnelText);
         perTypeStats[tradeType].ablation = a;
+
+        // AF-SCALP-13: also write to a DEDICATED file so the user can `cat` ONE
+        // clean file instead of grepping the noisy shared PM2 log. Includes the
+        // running commit hash so we can confirm WHICH backend produced it (the
+        // prod-vs-staging confusion). Overwritten each run.
+        try {
+          const outPath = path.join(process.cwd(), "scalping-ablation.txt");
+          let commit = "unknown";
+          try {
+            commit = require("child_process")
+              .execSync("git rev-parse --short HEAD", { cwd: process.cwd() })
+              .toString().trim();
+          } catch { /* git not available — ignore */ }
+          fs.writeFileSync(
+            outPath,
+            `commit: ${commit}\nsymbol: ${opts.symbol ?? "?"}\n\n${funnelText}\n`,
+            "utf8",
+          );
+        } catch (e) {
+          console.log("[AF-SCALP-13] gagal tulis file ablation:", e.message);
+        }
       }
     }
   }
