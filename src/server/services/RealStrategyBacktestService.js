@@ -800,6 +800,12 @@ async function runTripleTypeBacktest(opts = {}) {
       continue;
     }
 
+    // AF-SCALP-13: reset per-filter ablation counters for the Scalping leg so we
+    // can report exactly which gate throttles trade frequency in this run.
+    if (tradeType === "Scalping" && typeof strategy.resetAblation === "function") {
+      strategy.resetAblation();
+    }
+
     // AF-SCALP-12: per-leg slippage override (typeConfig.slippagePct). BTCUSDT is
     // the most liquid pair — 0.05% default overstates fills; Scalping can set 0.02%.
     const typeSlip = enableSlippage
@@ -836,6 +842,27 @@ async function runTripleTypeBacktest(opts = {}) {
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
     };
+
+    // AF-SCALP-13: report the per-filter funnel for the Scalping leg. Shows
+    // exactly how many raw setups each gate removed → identifies the throttle
+    // without running an N-way ablation.
+    if (tradeType === "Scalping" && typeof strategy.getAblation === "function") {
+      const a = strategy.getAblation();
+      if (a) {
+        const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
+        console.log(
+          `[AF-SCALP-13] Scalping filter funnel (${entryCandles.length} bars):\n` +
+          `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}\n` +
+          `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}% of setups)\n` +
+          `     -> signals after rejection   : ${a.seqSignal}\n` +
+          `  3. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}% of signals)\n` +
+          `  4. - 5m CHoCH validation        : -${a.rejByChoch}\n` +
+          `  5. - Confidence floor           : -${a.rejByConf}\n` +
+          `  = PASSED (tradeable signals)    : ${a.passed}`
+        );
+        perTypeStats[tradeType].ablation = a;
+      }
+    }
   }
 
   // Sort all trades by openTime

@@ -60,7 +60,28 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     this.COMPONENT_TO_TYPE = { A: "Scalping", B: "Intraday", C: "Swing" };
 
     this._lastSignalMeta = null;
+
+    // AF-SCALP-13: per-filter ablation counters (Scalping leg). Reset at backtest
+    // start via resetAblation(); each gate increments its rejection count so ONE
+    // run reports exactly which filter throttles trade frequency. getAblation()
+    // returns the histogram for logging. Zero overhead when not being read.
+    this._ablation = null;
   }
+
+  // AF-SCALP-13: ablation telemetry — call at backtest start to begin counting.
+  resetAblation() {
+    this._ablation = {
+      seqCandidate: 0,   // bars with an FVG + mitigation (raw setup exists)
+      rejByRejection: 0, // killed by AF-SCALP-11 rejection-wick gate
+      seqSignal: 0,      // sequence produced a signal (passed rejection)
+      rejByRegime: 0,    // rawA killed by HTF regime hard-block
+      rejByChoch: 0,     // rawA killed by 5m CHoCH validation
+      rejByConf: 0,      // rawA killed by confidence floor
+      passed: 0,         // survived ALL gates → a tradeable Scalping signal
+    };
+  }
+  getAblation() { return this._ablation; }
+  _abl(key) { if (this._ablation) this._ablation[key]++; }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Public interface (matches AdaptiveFusionStrategy for drop-in compatibility)
@@ -855,6 +876,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         ? (cl >= fvg.bottom * 0.999 && cl <= fvg.midpoint * 1.002)
         : (cl <= fvg.top * 1.001    && cl >= fvg.midpoint * 0.998);
       if (!inMitigation) continue;
+      this._abl("seqCandidate"); // AF-SCALP-13: raw setup (FVG + mitigation) exists
 
       // ── AF-SCALP-11: REJECTION confirmation (limit-at-level entry model) ──────
       // Root cause of nol-edge (CSV forensics): the mitigation check above enters
@@ -881,14 +903,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
           const closedBullish  = cl >= op;                     // rejected upward
           const heldZone       = cl >= fvg.bottom;             // not broken below
           const strongReject   = lowerWick >= body * wickRatio;
-          if (!(wickedIntoZone && closedBullish && heldZone && strongReject)) continue;
+          if (!(wickedIntoZone && closedBullish && heldZone && strongReject)) { this._abl("rejByRejection"); continue; }
         } else {
           const upperWick = hi - Math.max(op, cl);
           const wickedIntoZone = hi >= fvg.midpoint;           // touched premium
           const closedBearish  = cl <= op;                     // rejected downward
           const heldZone       = cl <= fvg.top;                // not broken above
           const strongReject   = upperWick >= body * wickRatio;
-          if (!(wickedIntoZone && closedBearish && heldZone && strongReject)) continue;
+          if (!(wickedIntoZone && closedBearish && heldZone && strongReject)) { this._abl("rejByRejection"); continue; }
         }
       }
 
@@ -1404,6 +1426,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       const sig = seq.signal;
       const score = seq.meta?.score ?? 0;
       this._lastSequenceMeta = seq.meta; // structural levels for SL placement
+      if (wantA && sig) this._abl("seqSignal"); // AF-SCALP-13: passed rejection → signal
       rawA = wantA ? sig : null; confA = rawA ? score : 0;
       rawB = wantB ? sig : null; confB = rawB ? score : 0;
       rawC = wantC ? sig : null; confC = rawC ? score : 0;
@@ -1457,7 +1480,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true
       || strictAlign;
     if (hardRegimeBlock) {
-      if (rawA && this._htfDirectionBlocked(rawA, htfTrend, strictAlign)) { rawA = null; confA = 0; }
+      if (rawA && this._htfDirectionBlocked(rawA, htfTrend, strictAlign)) { this._abl("rejByRegime"); rawA = null; confA = 0; }
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend, strictAlign)) { rawB = null; confB = 0; }
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend, strictAlign)) { rawC = null; confC = 0; }
     } else {
@@ -1476,6 +1499,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       const hasMultiStructure = this._detect5mMultiChoCH(indicators, lastIdx, config);
       // Require BOTH conditions: swing high (supply) + multi-candle reversal (structure)
       if (!hasSwingHigh || !hasMultiStructure) {
+        this._abl("rejByChoch");
         rawA = null;
         confA = 0;
       }
@@ -1498,6 +1522,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       ? { A: minConf.A, B: Math.max(minConf.B, votingMinConf), C: Math.max(minConf.C, votingMinConf) }
       : minConf;
 
+    // AF-SCALP-13: confidence-floor ablation for the Scalping leg.
+    if (rawA) { if (confA >= effMinConf.A) this._abl("passed"); else this._abl("rejByConf"); }
     const sigScalping = (rawA && confA >= effMinConf.A) ? rawA : null;
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;
     const sigSwing    = (rawC && confC >= effMinConf.C) ? rawC : null;
