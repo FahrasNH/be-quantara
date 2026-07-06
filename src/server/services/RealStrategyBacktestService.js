@@ -211,7 +211,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const grossPnl = position.side === "LONG"
       ? (px - position.entry) * position.size
       : (position.entry - px) * position.size;
-    const fee = feeRate * (position.entry + px) * position.size;
+    // AF-SCALP-11: maker fee on ENTRY side (limit-at-level fills as maker),
+    // taker on EXIT (SL/TP hit as market/stop). Cuts entry fee 0.06%→0.02%.
+    const compOv = cfg.typeOverrides?.[componentId] || {};
+    const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
+    const entryFeeRate = useMaker ? (cfg.makerFeeRate ?? 0.0002) : feeRate;
+    const fee = entryFeeRate * position.entry * position.size + feeRate * px * position.size;
     const pnl = grossPnl - fee;
     capital += pnl;
 
@@ -1096,7 +1101,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const grossPnl = position.side === "LONG"
       ? (px - position.entry) * closeSize
       : (position.entry - px) * closeSize;
-    const fee = feeRate * (position.entry + px) * closeSize;
+    // AF-SCALP-11: maker fee on ENTRY (limit-at-level), taker on EXIT.
+    const compOv = cfg.typeOverrides?.[position.component] || {};
+    const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
+    const entryFeeRate = useMaker ? (cfg.makerFeeRate ?? 0.0002) : feeRate;
+    const fee = entryFeeRate * position.entry * closeSize + feeRate * px * closeSize;
     const pnl = grossPnl - fee;
     capital += pnl;
 

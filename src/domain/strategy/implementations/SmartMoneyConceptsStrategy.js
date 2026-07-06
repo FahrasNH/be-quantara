@@ -818,6 +818,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
   _detectSMCSequence(indicators, lastIdx, config = {}) {
     const { closes, highs, lows, volumes, volSMA } = indicators;
+    const opens = indicators.opens;
     const win = config.sacSeqWindow ?? 60;
     if (lastIdx < 25) return { signal: null, meta: null };
 
@@ -853,6 +854,42 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         ? (cl >= fvg.bottom * 0.999 && cl <= fvg.midpoint * 1.002)
         : (cl <= fvg.top * 1.001    && cl >= fvg.midpoint * 0.998);
       if (!inMitigation) continue;
+
+      // ── AF-SCALP-11: REJECTION confirmation (limit-at-level entry model) ──────
+      // Root cause of nol-edge (CSV forensics): the mitigation check above enters
+      // the moment CLOSE is anywhere inside the zone — it can't tell "price
+      // BOUNCED off the level" (tradeable reversal) from "price is SLICING THROUGH
+      // the level" (continuation → instant SL). WR sat exactly on the random-walk
+      // line (29.2% @ RR2 vs 33.3% theoretical) = zero predictive edge.
+      //
+      // Fix: require the entry bar to show a rejection from the level —
+      //   LONG  : wicked DOWN into discount, closed back UP (bullish), lower wick
+      //           ≥ body (buyers defended the level), close not below zone bottom.
+      //   SHORT : wicked UP into premium, closed back DOWN (bearish), upper wick
+      //           ≥ body, close not above zone top.
+      // Flag-gated (sacRejectionEntry, Scalping-only in backtest) → live unchanged.
+      if (config.sacRejectionEntry === true && opens) {
+        const op = opens[lastIdx] ?? cl;
+        const hi = highs[lastIdx] ?? cl;
+        const lo = lows[lastIdx] ?? cl;
+        const body = Math.abs(cl - op);
+        const wickRatio = config.sacRejectionWickRatio ?? 0.8; // wick ≥ 0.8× body
+        if (isLong) {
+          const lowerWick = Math.min(op, cl) - lo;
+          const wickedIntoZone = lo <= fvg.midpoint;           // touched discount
+          const closedBullish  = cl >= op;                     // rejected upward
+          const heldZone       = cl >= fvg.bottom;             // not broken below
+          const strongReject   = lowerWick >= body * wickRatio;
+          if (!(wickedIntoZone && closedBullish && heldZone && strongReject)) continue;
+        } else {
+          const upperWick = hi - Math.max(op, cl);
+          const wickedIntoZone = hi >= fvg.midpoint;           // touched premium
+          const closedBearish  = cl <= op;                     // rejected downward
+          const heldZone       = cl <= fvg.top;                // not broken above
+          const strongReject   = upperWick >= body * wickRatio;
+          if (!(wickedIntoZone && closedBearish && heldZone && strongReject)) continue;
+        }
+      }
 
       // Premium/discount gate on the trailing swing range. Uses HALVES, not the
       // reference indicator's 5% drawing bands — a 5%-of-range band as an entry
