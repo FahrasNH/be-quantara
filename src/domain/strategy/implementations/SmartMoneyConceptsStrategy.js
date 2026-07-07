@@ -1359,6 +1359,60 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     }
   }
 
+  // AF-SCALP-18: Intraday's own structural confirmation gate.
+  // Root cause of the leg's missing edge: rawA (Scalping) and rawB (Intraday)
+  // share the SAME raw signal from _detectSMCSequence — the only thing that
+  // ever differentiated Scalping's profitability was its CHoCH structure gate
+  // (_detect5mChocH/_detect5mMultiChoCH), which rawB never received. Giving
+  // Intraday that EXACT same gate (tested 2026-07-07, entry-swap validation)
+  // produced 100% trade-entry overlap with Scalping — not a second leg, just
+  // Scalping's signal with a different exit. This gate reuses the same
+  // swing-high/reversal-count logic but over a window scaled to Intraday's
+  // actual holding duration (avg 3-8h at 15m ≈ 12-32 bars, vs Scalping's ~20/5
+  // bars tuned for its own much shorter holds) so it filters on genuinely
+  // slower structure instead of re-detecting Scalping's fast setups.
+  _detectIntradayStructureConfirm(indicators, lastIdx, config = {}) {
+    const { highs, lows, closes } = indicators;
+    const window = config.intradayStructureWindow ?? 40;      // ~10h of 15m candles
+    const multiWindow = config.intradayMultiWindow ?? 10;      // ~2.5h of 15m candles
+    const reversalMin = config.intradayReversalMin ?? 3;
+    const rangeThreshold = config.intradayRangeThreshold ?? 0.01; // 1%
+    if (!highs || !lows || !closes || lastIdx < window) return false;
+
+    // Range check: price must sit genuinely INSIDE a structural range (swing
+    // high above AND swing low below, both beyond rangeThreshold) — an OR
+    // check here is a near no-op (some 0.1%-away extreme exists in almost any
+    // window of real price data, measured pass rate 93-100% on synthetic
+    // data). Requiring BOTH sides at a real % distance is what actually
+    // discriminates range/reversal structure from trending noise.
+    const startIdx = Math.max(0, lastIdx - window);
+    const endIdx = lastIdx + 1;
+    const bodyEnd = Math.max(startIdx, endIdx - multiWindow);
+    const windowHighs = highs.slice(startIdx, bodyEnd);
+    const windowLows = lows.slice(startIdx, bodyEnd);
+    if (windowHighs.length === 0 || windowLows.length === 0) return false;
+    const swingHigh = Math.max(...windowHighs);
+    const swingLow = Math.min(...windowLows);
+    const currentPrice = closes[lastIdx];
+    const hasSwingLevel = swingHigh > currentPrice * (1 + rangeThreshold)
+      && currentPrice > swingLow * (1 - rangeThreshold);
+    if (!hasSwingLevel) return false;
+
+    // Multi-candle reversal count over the shorter recent window (structure,
+    // not a single wick) — same reversal test as _detect5mMultiChoCH, wider window.
+    const mStart = Math.max(0, lastIdx - multiWindow + 1);
+    const mHighs = highs.slice(mStart, endIdx);
+    const mLows = lows.slice(mStart, endIdx);
+    if (mHighs.length < 3) return false;
+    let reversalStrength = 0;
+    for (let i = 1; i < mHighs.length; i++) {
+      const isReversal = (mHighs[i] > mHighs[i - 1] && mLows[i] > mLows[i - 1]) ||
+                          (mHighs[i] < mHighs[i - 1] && mLows[i] < mLows[i - 1]);
+      if (isReversal) reversalStrength++;
+    }
+    return reversalStrength >= reversalMin;
+  }
+
   // AF-SCALP-09 v3.1: Enhanced 5m multi-CHoCH validation
   // Requires sequential candle structure (2+ consecutive candles), not just a single wick
   _detect5mMultiChoCH(indicators, lastIdx, config = {}) {
@@ -1479,6 +1533,17 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         confB = 0;
       } else {
         rawB = mappedB;  // Direction remapped or passed through
+      }
+    }
+
+    // AF-SCALP-18: Intraday's OWN structural confirmation gate (see method doc
+    // above for root-cause rationale). Off by default — enable via
+    // typeOverrides.Intraday.structureConfirmValidate.
+    if (rawB && typeOverrides.Intraday?.structureConfirmValidate === true) {
+      if (!this._detectIntradayStructureConfirm(indicators, lastIdx, { ...config, ...typeOverrides.Intraday })) {
+        this._abl("rejByIntradayStructure");
+        rawB = null;
+        confB = 0;
       }
     }
 
