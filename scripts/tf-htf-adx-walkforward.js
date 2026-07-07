@@ -1,18 +1,12 @@
 #!/usr/bin/env node
 /**
- * TS_TF HTF+ADX GATE A/B (AF-SCALP-24, 2026-07-07) — v2, aligned
+ * TS_TF LAYER-1 ROBUSTNESS SWEEP (AF-SCALP-24 stage 3, 2026-07-07)
  *
- * v1 finding: "V0 == V1" was a broken control (injection ran in BOTH variants),
- * and the injected Layer 1 used the strategy's hardcoded ratio-12 index mapping
- * (5m→1h assumption) — on the 15m→4h / 4h→1w legs it read future/wrong HTF bars
- * and DEGRADED results (PF 0.83 → 0.49).
- *
- * v2: engine passes config.htfIdx = htfPtr[i]-1 (timestamp-aligned, last CLOSED
- * HTF bar, no lookahead) and cfg.tfHtfLayerEnabled=false gives a true control.
- *
- * Stage 1 (12mo): V0 control vs aligned Layer-1 variants (ADX 20/25/30, tight geometry)
- * Stage 2: walk-forward best variant vs V0 across 3 yearly windows.
- * Run: node scripts/tf-htf-adx-gate-ab.js
+ * Stage-2 result: aligned Layer 1 + engine ADX gate turned 12mo from PF 0.83
+ * (net -90.5) to PF 1.29 (net +64.6) at ADX30. Before shipping a default,
+ * verify the ADX threshold is not an in-sample artifact: run ADX25 vs ADX30,
+ * each with/without the daily strong-trend gate, across ALL windows.
+ * Run: node scripts/tf-htf-adx-walkforward.js
  */
 const { execSync } = require("child_process");
 const { runMultiTypeBacktest } = require("../src/server/services/RealStrategyBacktestService");
@@ -35,7 +29,7 @@ function row(label, t) {
   const closes = t.filter(x => !x.isPartial);
   const w = closes.filter(x => x.result === "win").length;
   const p = pf(t);
-  return `${label.padEnd(52)} pos=${String(closes.length).padStart(3)} WR=${closes.length ? (w / closes.length * 100).toFixed(1) : " 0.0"}% netPF=${isFinite(p.net) ? p.net.toFixed(2) : "inf"} net=${p.pnl.toFixed(1)}`;
+  return `${label.padEnd(44)} pos=${String(closes.length).padStart(3)} WR=${closes.length ? (w / closes.length * 100).toFixed(1) : " 0.0"}% netPF=${isFinite(p.net) ? p.net.toFixed(2) : "inf"} net=${p.pnl.toFixed(1)}`;
 }
 
 const BASE = {
@@ -43,21 +37,20 @@ const BASE = {
   riskPerTrade: 0.03, htfTrendStrengthMin: 0.65, capital: 1000,
   atrMult: 1.3, riskReward: 1.92, tpMode: "full",
 };
-const V = (extra = {}) => ({ ...BASE, ...extra });
 
-async function run(cfg, candles, legs = ["Intraday", "Swing"]) {
+async function run(cfg, candles) {
   const res = await runMultiTypeBacktest({
     strategyKey: "TS_TF", capital: 1000, enableFees: true, enableSlippage: true,
-    config: cfg, naturalTypeOrder: ["Intraday", "Swing"],
+    config: { ...BASE, ...cfg }, naturalTypeOrder: ["Intraday", "Swing"],
     entryCandles: candles.entry, htfCandles: candles.htf, dailyCandles: candles.daily,
     symbol: "BTCUSDT",
-  }, legs);
+  }, ["Intraday", "Swing"]);
   return res.trades || [];
 }
 
 (async () => {
   const now = Date.now();
-  console.log("Fetching 4yr of 15m + 4h + 1w + 1d candles (BTCUSDT)…");
+  console.log("Fetching 4yr candles (BTCUSDT)…");
   const s4y = Date.UTC(2022, 6, 1);
   const all15 = fetchK("BTCUSDT", "15m", s4y, now);
   const all4h = fetchK("BTCUSDT", "4h", s4y, now);
@@ -70,38 +63,36 @@ async function run(cfg, candles, legs = ["Intraday", "Swing"]) {
     htf: { Intraday: inWin(all4h, s, e), Swing: inWin(all1w, s, e) },
     daily: inWin(all1d, s, e),
   });
-  const W12 = win(Date.UTC(2025, 6, 1), now);
 
-  console.log("── STAGE 1: aligned Layer-1 variants (12mo, fees+slip ON, full TP) ──");
-  const CANDS = [
-    ["V0 CONTROL (Layer 1 OFF)", V({ tfHtfLayerEnabled: false }), ["Intraday", "Swing"]],
-    ["V1 Layer1 aligned, ADX25", V(), ["Intraday", "Swing"]],
-    ["V2 Layer1 ADX20", V({ adxMinStrength: 20 }), ["Intraday", "Swing"]],
-    ["V3 Layer1 ADX30", V({ adxMinStrength: 30 }), ["Intraday", "Swing"]],
-    ["V4 Layer1 ADX25 + SL1.0/RR2.5", V({ atrMult: 1.0, riskReward: 2.5 }), ["Intraday", "Swing"]],
-    ["V5 Layer1 ADX25 Intraday-only", V(), ["Intraday"]],
+  const VARIANTS = [
+    ["ADX25", { adxMinStrength: 25 }],
+    ["ADX30", { adxMinStrength: 30 }],
+    ["ADX25+strongDay", { adxMinStrength: 25, tfRequireStrongTrend: true }],
+    ["ADX30+strongDay", { adxMinStrength: 30, tfRequireStrongTrend: true }],
   ];
-  const results = [];
-  for (const [label, cfg, legs] of CANDS) {
-    const t = await run(cfg, W12, legs);
-    results.push({ label, cfg, legs, t, netPF: pf(t).net, n: t.filter(x => !x.isPartial).length });
-    console.log(row(label, t));
-  }
-  const viable = results.slice(1).filter(r => r.n >= 8).sort((a, b) => b.netPF - a.netPF);
-  const best = viable[0] || results[1];
-  console.log(`\n→ Stage 1 best Layer-1 variant: ${best.label}\n`);
-
-  console.log("── STAGE 2: WALK-FORWARD best vs V0 control ──");
   const WINDOWS = [
     ["2022-07→2023-07 (bear)", Date.UTC(2022, 6, 1), Date.UTC(2023, 6, 1)],
     ["2023-07→2024-07 (recovery)", Date.UTC(2023, 6, 1), Date.UTC(2024, 6, 1)],
     ["2024-07→2025-07 (bull)", Date.UTC(2024, 6, 1), Date.UTC(2025, 6, 1)],
+    ["2025-07→now (12mo eval)", Date.UTC(2025, 6, 1), now],
   ];
-  for (const [label, s, e] of WINDOWS) {
+
+  const totals = new Map(VARIANTS.map(([k]) => [k, { pnl: 0, wins: 0 }]));
+  for (const [wl, s, e] of WINDOWS) {
+    console.log(`── ${wl} ──`);
     const wdat = win(s, e);
-    const t0 = await run(V({ tfHtfLayerEnabled: false }), wdat, ["Intraday", "Swing"]);
-    const tb = await run(best.cfg, wdat, best.legs);
-    console.log(row(`${label} V0`, t0));
-    console.log(row(`${label} ${best.label.split(" ")[0]}`, tb));
+    for (const [vl, cfg] of VARIANTS) {
+      const t = await run(cfg, wdat);
+      console.log(row(vl, t));
+      const p = pf(t);
+      const agg = totals.get(vl);
+      agg.pnl += p.pnl;
+      if (p.net >= 1.0) agg.wins += 1;
+    }
+    console.log("");
+  }
+  console.log("── SUMMARY (4 windows) ──");
+  for (const [vl, agg] of totals) {
+    console.log(`${vl.padEnd(20)} windows PF>=1.0: ${agg.wins}/4   total net: ${agg.pnl.toFixed(1)}`);
   }
 })().catch(e => { console.error("ERR:", e.stack || e.message); process.exit(1); });

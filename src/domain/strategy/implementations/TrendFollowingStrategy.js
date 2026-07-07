@@ -298,10 +298,16 @@ class TrendFollowingStrategy extends StrategyBase {
 
     if (!atr || !rsiEntry || !emaFastEntry || !emaMidEntry) return null;
 
-    // Index alignment
+    // Index alignment. config.htfIdx (AF-SCALP-24) is a timestamp-aligned index
+    // into the HTF arrays supplied by the backtest engine — the fixed ratios below
+    // assume the canonical 5m/15m/1h stack and silently point at the WRONG (often
+    // future) HTF bar when the engine runs other pairs (15m→4h ratio 16, 4h→1w
+    // ratio 42). Prefer the engine's pointer whenever provided.
     const hasHTF = Array.isArray(indicators.closesHTF);
     const hasMTF = Array.isArray(indicators.macd15m);
-    const idxHTF = hasHTF ? Math.floor(lastIdx / (this.config.htfRatio || 12)) : lastIdx;
+    const idxHTF = Number.isInteger(config.htfIdx)
+      ? config.htfIdx
+      : (hasHTF ? Math.floor(lastIdx / (this.config.htfRatio || 12)) : lastIdx);
     const idxMTF = hasMTF ? Math.floor(lastIdx / (this.config.mtfRatio || 3)) : lastIdx;
 
     // AF-SCALP-24: Layer 1 — HTF trend (enabled in backtest via indicators injection)

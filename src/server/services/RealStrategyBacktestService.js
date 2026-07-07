@@ -1094,27 +1094,36 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   // backtest can cache since HTF data is static.
   const isMeanReversion = isMRKey(strategyKey);
   let htfIndicators = null;
-  // AF-SCALP-24: build HTF indicators for both MR (regime gate) and TF (adxHTF layer)
-  const needsHTF = isMeanReversion || isTFKey(strategyKey);
+  // AF-SCALP-24: build HTF indicators for both MR (regime gate) and TF (adxHTF layer).
+  // tfHtfLayerEnabled gates the whole TF Layer-1 path (injection + ADX gate) so
+  // A/B harnesses can run a true control; default ON per TREND_FOLLOWING_STRATEGY.md.
+  const tfHtfLayer = isTFKey(strategyKey) && cfg.tfHtfLayerEnabled !== false;
+  const needsHTF = isMeanReversion || tfHtfLayer;
   if (needsHTF && htfCandles?.length >= 30) {
     const htfCloses = htfCandles.map(c => c.close);
     const htfHighs  = htfCandles.map(c => c.high);
     const htfLows   = htfCandles.map(c => c.low);
     const htfAtrArr = calcATR(htfHighs, htfLows, htfCloses, 14);
     const htfAtrSma = calcSMA(htfAtrArr.filter(v => v != null), 20);
-    const htfAdx = calcADX(htfHighs, htfLows, htfCloses, 14);
+    // calcADX returns { adx, plusDI, minusDI } — keep only the adx ARRAY.
+    // (First cut stored the whole object: adx[j] was then always undefined and
+    // the fail-closed gate below skipped EVERY entry → 0 trades on all legs.)
+    const htfAdx = calcADX(htfHighs, htfLows, htfCloses, 14).adx;
     htfIndicators = {
       emaFast: calcEMA(htfCloses, 9),
       emaSlow: calcEMA(htfCloses, 21),
       rsi: calcRSI(htfCloses, 14),
       atr: htfAtrArr,
       atrSma: htfAtrSma, // rolling SMA of ATR for ratio check
-      adx: htfAdx, // AF-SCALP-24: TF gate adxHTF >= 25
+      adx: htfAdx, // AF-SCALP-24: TF gate adxHTF >= 25 (number|null per HTF bar)
       close: htfCloses,
     };
-    // AF-SCALP-24: inject HTF data into indicators for TF detectSignal fallback
-    // (TrendFollowingStrategy.detectSignal reads closesHTF, emaFastHTF, emaMidHTF, adxHTF)
-    if (isTFKey(strategyKey)) {
+    // AF-SCALP-24: inject HTF data into indicators for TF detectSignal Layer 1
+    // (TrendFollowingStrategy.detectSignal reads closesHTF, emaFastHTF, emaMidHTF,
+    // emaSlowHTF, adxHTF). Index alignment comes from config.htfIdx per bar — the
+    // strategy's built-in ratio-12 mapping assumes 5m→1h and reads FUTURE bars on
+    // the 15m→4h / 4h→1w legs (measured: PF 0.83 → 0.49 when misaligned).
+    if (tfHtfLayer) {
       indicators.closesHTF = htfCloses;
       indicators.emaFastHTF = htfIndicators.emaFast;
       indicators.emaMidHTF = htfIndicators.emaSlow;
@@ -1502,24 +1511,26 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // AF-SCALP-09 v3.1: regime detection + per-leg typeOverrides
       regimeDetection: cfg.regimeDetection,
       typeOverrides: cfg.typeOverrides,
+      // AF-SCALP-24: timestamp-aligned CLOSED HTF bar for Layer 1. htfPtr[i] points
+      // at the HTF bar still FORMING at entry bar i — its close/EMA are future info,
+      // so Layer 1 reads the previous (closed) bar. -1 when no closed bar yet →
+      // strategy degrades to entry-TF fallback for the warmup bars.
+      htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
-    // AF-SCALP-24: TF adxHTF gate — require strong trend on HTF (ADX >= 25)
-    // Fail-closed: if adxHTF is null, skip entry (not "assume strong")
-    if (isTFKey(strategyKey) && htfIndicators?.adx) {
-      const j = htfPtr[i];
-      if (j >= 0 && j < htfIndicators.adx.length) {
-        const adxVal = htfIndicators.adx[j];
-        if (adxVal == null || adxVal < 25) {
-          diag.adxHTFGate = (diag.adxHTFGate || 0) + 1;
-          equity.push({ date: isoOf(c), value: round2(capital) });
-          continue; // adxHTF too low or null → skip entry (fail-closed)
-        }
+    // AF-SCALP-24: TF adxHTF gate — require strong trend on HTF (ADX >= 25), on the
+    // last CLOSED HTF bar (htfPtr[i] is the forming bar — lookahead). Fail-closed:
+    // adx null (warmup) or no closed bar yet → skip entry, never "assume strong".
+    if (tfHtfLayer && htfIndicators?.adx && htfPtr) {
+      const j = (htfPtr[i] ?? 0) - 1;
+      const adxVal = j >= 0 && j < htfIndicators.adx.length ? htfIndicators.adx[j] : null;
+      const adxMin = cfg.adxMinStrength ?? 25;
+      if (adxVal == null || adxVal < adxMin) {
+        diag.adxHTFGate = (diag.adxHTFGate || 0) + 1;
+        equity.push({ date: isoOf(c), value: round2(capital) });
+        continue;
       }
-    } else if (isTFKey(strategyKey) && !htfIndicators?.adx && i === 100) {
-      // Log once if HTF not built for TF (debug)
-      console.log(`[WARN] TF backtest: htfIndicators or adx missing (HTF layer dormant)`);
     }
 
     // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
