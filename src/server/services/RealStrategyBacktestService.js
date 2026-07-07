@@ -1149,6 +1149,14 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const equity = [{ date: isoOf(entryCandles[0]), value: capital }];
 
   let position = null; // { side, entry, sl, tp, slDist, size, openIdx, component, marketCond }
+  // AF-SCALP-23: pending retest-limit entry. TF's "pullback retest" layer is in
+  // truth `close > EMA9` on the breakout bar — it fires at the EXTENDED price and
+  // parks the SL inside the retest zone (geometry diagnostic: edge only exists at
+  // tight SL, and fee/R at 15m eats it). retestEntryEnabled converts the signal
+  // into a resting limit `retestPullbackAtr × ATR` behind the signal close: fills
+  // only if price pulls back (better entry, maker by construction), cancels after
+  // retestTtlBars if the move runs away without a retest.
+  let pendingOrder = null; // { side, limit, slDist, tpDist, expiresIdx, ... }
   let cooldownUntil = 0; // ms epoch
   let consecLoss = 0;
   let dayKey = null;
@@ -1403,6 +1411,49 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       continue;
     }
 
+    // ── 1b. AF-SCALP-23: pending retest-limit order management ──────────────
+    if (pendingOrder) {
+      if (i > pendingOrder.expiresIdx) {
+        pendingOrder = null; // move ran away without a retest — no chase
+      } else {
+        const touched = pendingOrder.side === "LONG"
+          ? c.low <= pendingOrder.limit
+          : c.high >= pendingOrder.limit;
+        if (touched) {
+          const entry = pendingOrder.limit; // limit fill — no slippage, maker
+          const size = (capital * pendingOrder.riskPerTrade) / pendingOrder.slDist;
+          const openSl = pendingOrder.side === "LONG" ? entry - pendingOrder.slDist : entry + pendingOrder.slDist;
+          position = {
+            side: pendingOrder.side,
+            entry,
+            sl: openSl,
+            tp: pendingOrder.side === "LONG" ? entry + pendingOrder.tpDist : entry - pendingOrder.tpDist,
+            slDist: pendingOrder.slDist,
+            size,
+            openIdx: i,
+            component: pendingOrder.component,
+            marketCond: pendingOrder.marketCond,
+            plannedRR: pendingOrder.plannedRR,
+            confidence: pendingOrder.confidence,
+            R: pendingOrder.slDist,
+            slCurrent: openSl,
+            remainingSize: size,
+            originalSize: size,
+            m1: false, m2: false, m3: false,
+          };
+          pendingOrder = null;
+          dailyTradeCount += 1;
+          diag.opened += 1;
+          // Same-bar stop-through: if the retest bar keeps going past the SL,
+          // the fill and the stop both happen inside this bar (conservative).
+          const sbSL = position.side === "LONG" ? c.low <= position.sl : c.high >= position.sl;
+          if (sbSL) closePosition(position.sl, "SL", i);
+          equity.push({ date: isoOf(c), value: round2(capital) });
+          continue; // filled (or filled+stopped) this bar — no fresh signal eval
+        }
+      }
+    }
+
     diag.barsEvaluated += 1;
 
     // ── 2. Market conditions (mirror AdaptiveStrategyEngine._tick step 4) ───
@@ -1449,6 +1500,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       riskPerTrade: cfg.riskPerTrade ?? 0.01,
     });
     if (!regimeResult.allow) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    // AF-SCALP-23: optional stricter gate for TF — trade ONLY on STRONG_TREND
+    // days (default gate only blocks CHOP; the 0.5-0.8 transition band still
+    // bled through in every chop month: Feb, then Jun 2026).
+    if (cfg.tfRequireStrongTrend && dailyTrendCache && dailyRegime !== "STRONG_TREND") {
+      equity.push({ date: isoOf(c), value: round2(capital) });
+      continue;
+    }
     const adjustedRiskPerTrade = regimeResult.riskPerTrade;
 
     // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
@@ -1539,6 +1597,26 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       plannedRR = (cfg.riskReward ?? 2);
     }
     if (!(slDist > 0)) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+
+    // ── 8b. AF-SCALP-23: retest-limit entry — park a resting order instead of
+    // chasing the breakout close. Latest signal replaces any unfilled pending.
+    if (cfg.retestEntryEnabled) {
+      const pullback = (cfg.retestPullbackAtr ?? 0.5) * atr;
+      pendingOrder = {
+        side: signal,
+        limit: signal === "LONG" ? price - pullback : price + pullback,
+        slDist,
+        tpDist,
+        riskPerTrade: adjustedRiskPerTrade,
+        expiresIdx: i + (cfg.retestTtlBars ?? 12),
+        component,
+        marketCond,
+        plannedRR,
+        confidence,
+      };
+      equity.push({ date: isoOf(c), value: round2(capital) });
+      continue;
+    }
 
     // ── 9. Open position (risk-based sizing; leverage irrelevant to PnL) ─────
     const entry = price;
