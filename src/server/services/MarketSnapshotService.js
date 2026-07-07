@@ -1,7 +1,6 @@
 /**
  * MarketSnapshotService.js  (src/server/services/MarketSnapshotService.js)
  *
- * Membangun snapshot indikator market untuk konsumsi analyzeStrategyFit (FIX-2).
  * Menggantikan referensi `getMarketSnapshot` dari Implementation Guide (yang
  * mengasumsikan marketService existing — di repo Quantara belum ada).
  *

@@ -2,7 +2,6 @@
  * STRATEGY_SUPPORTED_TYPES — which trade types each strategy supports.
  * Used for FE dropdown filtering and BE validation.
  *
- * AF-SCALP-18 (2026-07-07): Intraday edge at SMC falsified 4× independent
  * (1h redesign, 15m restructure, entry-swap, custom gate). Hidden from UI.
  *
  * TS_TF (Trend Following): runs Intraday+Swing only (avoids 5m fetch fragility).
@@ -11,7 +10,7 @@
  */
 
 const STRATEGY_SUPPORTED_TYPES = {
-  AF_SMC: ["Scalping", "Swing"],           // Intraday HIDDEN (AF-SCALP-18)
+  AF_SMC: ["Scalping", "Swing"],
   TS_TF: ["Intraday", "Swing"],            // Scalping removed to avoid 5m fetch failure
   MD_MR: ["Scalping", "Intraday"],         // Swing not applicable (mean reversion short-term only)
   BS_BR: ["Scalping", "Intraday", "Swing"], // Breakout works on all timeframes

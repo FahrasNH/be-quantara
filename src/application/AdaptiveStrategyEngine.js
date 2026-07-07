@@ -13,7 +13,7 @@ const BotEngine = require("./BotEngine");
 const PositionManager = require("../domain/PositionManager");
 const { strategyRegistry } = require("../domain/strategy");
 const { calcIndicators, detectHTFTrend } = require("../domain/indicators");
-const { isDuplicate } = require("../domain/signalIdempotency"); // FIX-3 (re-entry guard)
+const { isDuplicate } = require("../domain/signalIdempotency");
 
 class AdaptiveStrategyEngine extends BotEngine {
   constructor(config = {}) {
@@ -217,11 +217,11 @@ class AdaptiveStrategyEngine extends BotEngine {
         maxEntryExtensionATR: this.config.maxEntryExtensionATR,
         afRejectOnDissent:    this.config.afRejectOnDissent,
         afMinVotes:           this.config.afMinVotes,
-        // AF-FIX-02/03 (Sprint 7): conviction gate also applies to the multi-strategy
+
         // single-position voting path used by this engine.
         afMinComponentConfidence: this.config.afMinComponentConfidence,
         afMinAggregateConfidence: this.config.afMinAggregateConfidence,
-        // v2.3: tier pair + override agar voting threshold, regime filter, dan
+
         // SL komponen-C (VOLATILE/SEMI_VOLATILE) aktif di multi-strategy engine.
         pairTier:             this.config.pairTier,
         tierOverrides:        this.config.tierOverrides,
@@ -253,7 +253,7 @@ class AdaptiveStrategyEngine extends BotEngine {
         return;
       }
 
-      // 7c. IDEMPOTENCY (FIX-3) — cegah re-entry arah yang sama pada candle yang sama.
+
       //     _fetchCandles cache hingga 15 menit → confirmed candle bisa identik antar
       //     tick → entry/SL/TP identik berulang. Key = symbol+strategy+candleTime+arah.
       const candleOpenTime = candles[lastIdx].timestamp ?? candles[lastIdx].openTime ?? candles[lastIdx].time;
@@ -381,8 +381,8 @@ class AdaptiveStrategyEngine extends BotEngine {
         indicatorSnapshot.afComponent  = meta.component;
         indicatorSnapshot.afVotes      = meta.votes;
         indicatorSnapshot.afMarketCond = meta.marketCond;
-        indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;          // AF-FIX-01
-        indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null; // AF-FIX-03
+        indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;
+        indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null;
         const tpMultNote = riskCfg.strongTrendTPApplied
           ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
           : "";

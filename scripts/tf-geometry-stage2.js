@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * TS_TF GEOMETRY STAGE 2 (AF-SCALP-21 follow-up)
  * Stage 1 verdict: at RR2, SL 1.0×ATR (+5.0pp) and 1.3×ATR (+4.9pp) beat random;
  * the buggy always-on default 1.5×ATR is edge-free at every RR. The intended
  * config (atrMult 1.3) was right all along — the dead knob was discarding it.

@@ -11,8 +11,8 @@ const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGat
 const cfg = require("../config/env");
 const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
-const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
-const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
+const { isDuplicate } = require("../domain/signalIdempotency");
+const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter");
 const { getStrategy } = require("../domain/legacyStrategies");
 const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
@@ -172,7 +172,7 @@ class BotEngine extends EventEmitter {
       afRejectOnDissent:    strat.afRejectOnDissent ?? true,
       // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
       afMinVotes:           strat.afMinVotes ?? 3,
-      // v2.6: TP ×1.8 saat STRONG_TREND (STRATEGIES.md §4.2).
+
       strongTrendTPMult:    strat.strongTrendTPMult ?? 1,
 
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
@@ -222,13 +222,13 @@ class BotEngine extends EventEmitter {
       sidewaysBreakoutBufMult: strat.sidewaysBreakoutBufMult || 0.3,
 
       // ── Risk management harian (v2.3 spec — STRATEGIES.md §9: diperketat) ──
-      maxDailyLossPct:   strat.maxDailyLossPct  || 0.03,   // v2.3: 0.04 → 0.03
+      maxDailyLossPct:   strat.maxDailyLossPct  || 0.03,
       maxTradesPerDay:   strat.maxTradesPerDay   || 10,
-      // v2.3: default cooldown 30 → 45 menit. Data dry-run 12 Jun menunjukkan
+
       // re-entry cepat pada setup identik setelah SL → loss duplikat beruntun.
       // Strategi tetap bisa override via strat.cooldownAfterLoss (MR: 15).
       cooldownAfterLoss: strat.cooldownAfterLoss || 45,
-      maxConsecLoss:     strat.maxConsecLoss     || 3,     // v2.3: tetap 3
+      maxConsecLoss:     strat.maxConsecLoss     || 3,
 
       // ── Take-Profit mode (FEE-04) ────────────────────────────────────────
       // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
@@ -1261,7 +1261,7 @@ class BotEngine extends EventEmitter {
               volatility:       atrPctNow,
               trend_strength:   trendStr,
               balance:          this.state.capital,
-              // v2.3: teruskan knob AF + tier pair agar voting threshold, HTF
+
               // alignment, anti-chase, dan SL komponen-C (VOLATILE) aktif live.
               afMinVotes:           this.config.afMinVotes,
               afRejectOnDissent:    this.config.afRejectOnDissent,
@@ -1273,7 +1273,7 @@ class BotEngine extends EventEmitter {
               tierOverrides:        this.config.tierOverrides,
             });
 
-            // ── STEP 2c: MEAN_REVERSION HTF regime guard (FIX-4) ──────────────
+
             // MR tanpa filter akan counter-trend terus saat strong bull/bear →
             // SL beruntun → daily loss limit. Blokir SHORT di strong bull dan
             // LONG di strong bear, juga saat ATR HTF spike. Fail-open bila HTF
@@ -1354,9 +1354,9 @@ class BotEngine extends EventEmitter {
                 pairTier:             this.config.pairTier,
                 tierOverrides:        this.config.tierOverrides,
                 volSmaMultiplier:     this.config.volSmaMultiplier,
-                afEnabledComponents:  this.config.afEnabledComponents, // v3.2: C-only default
-                afMinComponentConfidence: this.config.afMinComponentConfidence, // AF-FIX-02
-                afMinAggregateConfidence: this.config.afMinAggregateConfidence, // AF-FIX-03
+                afEnabledComponents:  this.config.afEnabledComponents,
+                afMinComponentConfidence: this.config.afMinComponentConfidence,
+                afMinAggregateConfidence: this.config.afMinAggregateConfidence,
               });
 
               // Check each component independently for entry
@@ -1422,8 +1422,8 @@ class BotEngine extends EventEmitter {
                   indicatorSnapshot.afComponent  = meta.component;
                   indicatorSnapshot.afVotes      = meta.votes;
                   indicatorSnapshot.afMarketCond = meta.marketCond;
-                  indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;          // AF-FIX-01
-                  indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null; // AF-FIX-03
+                  indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;
+                  indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null;
                   const tpMultNote = riskCfg.strongTrendTPApplied
                     ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
                     : "";
@@ -1462,7 +1462,7 @@ class BotEngine extends EventEmitter {
                 signalOptions = grokGate.signalOptions;
               }
 
-              // ── Idempotency guard (FIX-3) ───────────────────────────────────
+
               // Cegah dua posisi terbuka untuk sinyal yang sama bila tick/candle
               // diproses dua kali (mis. polling overlap atau WS reconnect).
               // Key = symbol + strategy + candleOpenTime + direction (TTL 5 menit).
@@ -2619,7 +2619,7 @@ class BotEngine extends EventEmitter {
     // before) silently under-sized every position ~2.8×.
     //
     // riskPerTrade is the COMBINED cap across all concurrent AF components, not
-    // per-component. v2.8: the cap is distributed by TYPE_RISK_WEIGHTS
+
     // (A/Scalping 0.5 : B/Intraday 1 : C/Swing 2) via the SAME riskShareForType
     // helper the backtest engines use — single source of truth, so live sizing
     // can never silently drift from the backtest (the 3× SMC live-risk bug
@@ -2657,7 +2657,7 @@ class BotEngine extends EventEmitter {
       openTime: new Date().toISOString(),
       openCandle: lastIdx,
       unrealizedPL: 0,
-      confidence: confidence ?? null, // AF-FIX-01: entry conviction (0–100)
+      confidence: confidence ?? null,
     };
 
     // Store position

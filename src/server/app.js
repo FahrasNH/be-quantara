@@ -265,11 +265,11 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     delete botsMap[key];
   }
   // PAIR-TIER override juga untuk engine tunggal (legacy/non-multi).
-  // v2.3: pairMetrics (ATR%30d + likuiditas 24j) opsional dari caller (bot-start)
+
   // → bump tier dinamis. Tanpa metrics → klasifikasi tier dasar (backward-compatible).
   // Diekstrak agar tidak ikut ter-spread ke config BotEngine.
   const { pairMetrics: _pairMetrics, ...engineOverrides } = configOverrides;
-  // v2.4: confidence gate — bila data klasifikasi lemah (confidence < 60:
+
   // CoinGecko proxy/stale/skor di ambang tier), size & SL diperlakukan satu
   // tingkat lebih konservatif sampai data membaik. Backtest tak terpengaruh
   // (selalu Jalur 1 / confidence tinggi) — gate ini murni safety net live.
@@ -286,7 +286,7 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
     pairTier:                   _singlePair.tier,
     pairSlMultiplier:           _singlePair.paramOverrides.slMultiplier,
     pairPositionSizeAdjustment: _singlePair.paramOverrides.positionSizeAdjustment,
-    // v2.3: teruskan seluruh override tier (votingThresholdOverride,
+
     // regimeFilterRequired, dll) ke engine agar gating tier benar-benar aktif.
     tierOverrides:              { tier: _singlePair.tier, ..._singlePair.paramOverrides },
     ...engineOverrides,
@@ -361,9 +361,9 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   const accountCoordinator = getCoordinator(userId);
 
   // Klasifikasi tier pair → ambil override SL & ukuran posisi (lihat engineConfig).
-  // v2.3: opts.pairMetrics (ATR%30d + likuiditas 24j) opsional dari caller (bot-start)
+
   // → bump tier dinamis. Tanpa metrics → klasifikasi tier dasar (backward-compatible).
-  // v2.4: confidence gate (lihat createBotInstance) — enforce juga di jalur
+
   // multi-strategy agar kedua entry point live konsisten.
   const _pairClass = pairClassifier.applyConfidenceGate(
     pairClassifier.classify(symbol, opts.pairMetrics || null)
@@ -376,7 +376,7 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
     slMultiplier:           _pairClass.paramOverrides.slMultiplier,
     positionSizeAdjustment: _pairClass.paramOverrides.positionSizeAdjustment,
   };
-  // v2.3: override tier lengkap untuk gating runtime (voting threshold, regime
+
   // filter, SL komponen-C VOLATILE) di tiap AdaptiveStrategyEngine.
   const _tierOverrides = { tier: _pairClass.tier, ..._pairClass.paramOverrides };
 
@@ -1027,10 +1027,10 @@ db.init()
     // Purge soft-deleted exchange keys older than 7 days (every 6h)
     const { scheduleKeyPurge } = require("../services/exchangeKeyPurge");
     scheduleKeyPurge();
-    // Dynamic pair classification dari CoinGecko (v2.3: refresh tiap 2 jam, non-blocking)
+
     pairClassifier.refreshDynamic().catch(() => {});
     setInterval(() => pairClassifier.refreshDynamic().catch(() => {}), 2 * 60 * 60 * 1000);
-    // v2.4: drift monitor mingguan — alert bila >10% pair pindah tier sejak
+
     // snapshot terakhir (sinyal ambang 0.48/0.65/0.78 mulai usang → jalankan
     // scripts/recalibrate-pair-tiers.js). Observasi saja, tidak mengubah ambang.
     const { pairTierDriftMonitor } = require("../infrastructure/classification/PairTierDriftMonitor");

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * AF-SCALP-13 LOCAL ablation harness.
  *
  * Runs the REAL runTripleTypeBacktest engine against REAL BTCUSDT candles
  * fetched from data-api.binance.vision (public, no auth) — entirely local, no

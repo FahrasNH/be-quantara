@@ -2,7 +2,6 @@
  * strategyGuard.js  (src/middleware/strategyGuard.js)
  * Middleware: blokir strategi yang belum production-ready dari start live/dry-run.
  *
- * ROOT CAUSE FIX (FIX-1):
  *   BREAKOUT_RETEST sempat WR 0.7% karena belum terintegrasi ke BotEngine (fallback ke
  *   strategi B) + bug entry/SL. Setelah perbaikan: dry-run diizinkan, live diblokir
  *   sampai validasi staging selesai.

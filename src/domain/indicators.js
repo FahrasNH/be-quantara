@@ -186,7 +186,7 @@ function calcIndicators(candles, config = {}) {
     volumes,
     highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
     lows,
-    opens,   // SMC pivot structure + FVG body threshold (AF-SCALP-04)
+    opens,
   };
 
   // EMA trend filter (EMA50 untuk Day Trading, EMA200 untuk Swing)

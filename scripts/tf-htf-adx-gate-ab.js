@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * TS_TF HTF+ADX GATE A/B (AF-SCALP-24, 2026-07-07) — v2, aligned
  *
  * v1 finding: "V0 == V1" was a broken control (injection ran in BOTH variants),
  * and the injected Layer 1 used the strategy's hardcoded ratio-12 index mapping

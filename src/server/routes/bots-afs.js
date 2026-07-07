@@ -382,7 +382,6 @@ module.exports = function createBotsRouter(helpers) {
   );
 
   /**
-   * GET /api/v1/bots/:symbol/strategy-analysis  (FIX-2)
    * Analisis kondisi market + rekomendasi strategi.
    * Ditaruh SEBELUM "/:symbol" agar tidak tertangkap route generik.
    *
@@ -630,7 +629,7 @@ module.exports = function createBotsRouter(helpers) {
       // candle harian + CoinGecko, lalu sertakan ke classify(). Non-fatal: bila
       // gagal/null → classify jatuh ke tier rank/static (backward-compatible).
       const pairMetrics = await getPairTierMetrics(sharedClient, symbol).catch(() => null);
-      // v2.4: confidence gate — data lemah (metrics gagal di-fetch → CoinGecko
+
       // proxy / static fallback) berarti sizing satu tingkat lebih konservatif.
       const pairClass = pairClassifier.applyConfidenceGate(
         pairClassifier.classify(symbol, pairMetrics)
@@ -752,7 +751,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // ── Margin gate START (live only) — BUG-FIX-01/02/03 ────────────────────
+
       // Bagian kritis ini DI-SERIALISASI per user (mutex) supaya reservasi bot
       // ke-1 sudah terlihat oleh bot ke-2 saat "Start All" (anti TOCTOU). Isinya:
       //  (1) refresh equity dari balance (cache TTL + backoff). FAIL-CLOSED bila
@@ -845,7 +844,7 @@ module.exports = function createBotsRouter(helpers) {
             apiKey:     decryptedApiKey,
             apiSecret:  decryptedApiSecret,
             passphrase: decryptedPassphrase,
-            pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
+            pairMetrics,
             maxAccountOpenPositions: accountOpenCap,
             grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
             grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
@@ -863,7 +862,7 @@ module.exports = function createBotsRouter(helpers) {
             apiKey:      decryptedApiKey,
             apiSecret:   decryptedApiSecret,
             passphrase:  decryptedPassphrase,
-            pairMetrics,           // v2.3: metrik hybrid → tier bump aktif di engine config
+            pairMetrics,
             maxAccountOpenPositions: accountOpenCap,
             grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
             grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
@@ -899,7 +898,7 @@ module.exports = function createBotsRouter(helpers) {
           )
           .catch(async (err) => {
             console.error(`[bot-start:${symbol}] startup gagal: ${err.message}`);
-            // Lepas reservasi margin awal (BUG-FIX-03) agar tidak bocor saat start
+
             // gagal sebelum bot sempat entry → kalau tidak, anggaran "tersedot" hantu.
             if (!bot.dryRun) {
               try {

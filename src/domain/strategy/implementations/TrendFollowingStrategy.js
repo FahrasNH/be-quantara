@@ -298,7 +298,7 @@ class TrendFollowingStrategy extends StrategyBase {
 
     if (!atr || !rsiEntry || !emaFastEntry || !emaMidEntry) return null;
 
-    // Index alignment. config.htfIdx (AF-SCALP-24) is a timestamp-aligned index
+
     // into the HTF arrays supplied by the backtest engine — the fixed ratios below
     // assume the canonical 5m/15m/1h stack and silently point at the WRONG (often
     // future) HTF bar when the engine runs other pairs (15m→4h ratio 16, 4h→1w
@@ -310,7 +310,7 @@ class TrendFollowingStrategy extends StrategyBase {
       : (hasHTF ? Math.floor(lastIdx / (this.config.htfRatio || 12)) : lastIdx);
     const idxMTF = hasMTF ? Math.floor(lastIdx / (this.config.mtfRatio || 3)) : lastIdx;
 
-    // AF-SCALP-24: Layer 1 — HTF trend (enabled in backtest via indicators injection)
+
     // Live path: htfTrend passed via config.htfTrend from BotEngine (status quo)
     // Backtest path: read from indicators.closesHTF/emaFastHTF/emaMidHTF/emaSlowHTF/adxHTF
     const htfClose   = indicators.closesHTF?.[idxHTF] ?? closesEntry[closesEntry.length - 1];
@@ -423,7 +423,7 @@ class TrendFollowingStrategy extends StrategyBase {
     return null;
   }
 
-  // AF-SCALP-21: accept the engine's per-run overrides (5th arg), matching the
+
   // SMC contract. Before this, the 3-arg signature silently DISCARDED the
   // slMultiplier/tpMultiplier the backtest engine passes (built from
   // cfg.slAtrMult / typeOverrides) — every SL/TP knob for TS_TF (FE "SL

@@ -1298,8 +1298,8 @@ module.exports = function createBacktestRouter(context) {
 // ─── Async job runner ─────────────────────────────────────────────────────────
 const AF_SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
 const TYPE_TF = {
-  Scalping: { entry: "15m", trend: "4h" },  // AF-SCALP-14: 5m→15m — 5m has zero edge, 15m net PF 1.03
-  Intraday: { entry: "15m", trend: "4h" },  // v3.0: 5m→15m entry, 4h HTF bias
+  Scalping: { entry: "15m", trend: "4h" },
+  Intraday: { entry: "15m", trend: "4h" },
   Swing:    { entry: "4h",  trend: "1w" },
 };
 
@@ -1397,7 +1397,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
   if ((isAF || multiTypeOrder) && !entryTfOverride) {
     // Multi-type mode: each type fetches its own candles, runs only its own component.
-    // AF_SMC uses supported types per STRATEGY_SUPPORTED_TYPES (Scalping/Swing, Intraday hidden per AF-SCALP-18);
+
     // TS_TF/MD_MR use a subset (see MULTI_TYPE_STRATEGY_MAP) but share the exact same
     // TF definitions/fetch resilience/period caps below.
     const entryCandles = {};
@@ -1517,7 +1517,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
       ? await runTripleTypeBacktest({ ...computeOpts, typeOrder })
       : await runMultiTypeBacktest(computeOpts, typeOrder);
 
-    // AF-SCALP-13: emit ablation funnel to browser via SSE (instead of server log)
+
     const scalping = result.perTypeStats?.Scalping;
     if (scalping?.ablation) {
       const a = scalping.ablation;

@@ -82,7 +82,7 @@ function atrPctStats(candles) {
   const cand = clone(baseCfg);
   cand.typeOverrides.Intraday = {
     ...cand.typeOverrides.Scalping,       // maker fees, slippage 2bps, choch on, RR 2.0 SL/TP
-    regimeMappingStrict: true,            // keep (now uses REAL 4h trend post AF-SCALP-17)
+    regimeMappingStrict: true,
   };
   cand.sacMinConfidenceB = 75;            // floor parity with the validated Scalping floor
   console.log(row("Intraday re-spec @ 1h/4h + Scalping exec", await runT(cand, "Intraday", e1h, e4h)));

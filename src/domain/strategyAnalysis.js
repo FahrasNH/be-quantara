@@ -1,7 +1,6 @@
 /**
  * strategyAnalysis.js  (src/domain/strategyAnalysis.js)
  *
- * ROOT CAUSE FIX (FIX-2):
  *   FE memanggil GET /bots/:symbol/strategy-analysis tapi endpoint ini
  *   tidak ada di BE (gap dari §5 ARCHITECTURE.md). Fix: tambahkan handler + route.
  *

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * TS_TF ENTRY/SL/TP GEOMETRY DIAGNOSTIC (AF-SCALP-21, 2026-07-07)
  *
  * User question: "is something wrong with the Entry, TP, or SL?" — answered by
  * measuring TOUCH PROBABILITIES with fees OFF, so the numbers are pure
@@ -14,7 +13,6 @@
  *   - WR > random at low RR, < at high RR  → TP too far (edge decays; bring TP in)
  *   - widening SL lifts WR ABOVE random    → SL too tight (noise-stops; widen SL)
  *
- * Prerequisite: AF-SCALP-21 fix in TrendFollowingStrategy.calculateRiskConfig —
  * before it, slAtrMult/tpAtrMult never reached TF (dead knobs, constructor
  * defaults 1.5/3.0 always used — every row in the 12mo CSV shows RR 2.0).
  *
@@ -50,7 +48,7 @@ const BASE = {
 function cfgGeom(sl, tp, { tpMode = "full" } = {}) {
   // slAtrMult/tpAtrMult flow: runMultiTypeBacktest merges typeOverrides[leg]
   // to the top level; engine passes them as opts.slMultiplier/tpMultiplier
-  // into calculateRiskConfig (honored post AF-SCALP-21).
+
   return { ...BASE, tpMode, slAtrMult: sl, tpAtrMult: tp };
 }
 

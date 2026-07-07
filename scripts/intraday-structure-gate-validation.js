@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * INTRADAY STRUCTURE-GATE VALIDATION (AF-SCALP-18, 2026-07-07)
  *
  * Root-cause hypothesis: Intraday (rawB) shares the identical raw signal with
  * Scalping (rawA) — the entry-swap test proved that giving it Scalping's exact

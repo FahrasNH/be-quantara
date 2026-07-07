@@ -16,10 +16,8 @@
  * BreakoutRetestStrategy to reflect the broader "Breakout Trading" method.
  *
  * Best for: VAULT tier (exclusive 4th strategy)
- * v2.4: + Bollinger Band Width consolidation gate (breakout must exit a squeeze).
  *        SL/TP recalibrated from 4yr BTC backtest: SL 1.7×ATR, TP 3.2×ATR → RR ~1:1.9
  *        (was 1.4/5.5 → 1:4 — a target 0/40 trades ever reached in 4 years).
- * v2.3: SL 1.4×ATR, TP 5.5×ATR → RR ~1:4.0, risk 2%, max 5 trade/hari
  */
 
 const StrategyBase = require("../base/StrategyBase");
@@ -68,12 +66,12 @@ class BreakoutTradingStrategy extends StrategyBase {
       //     post-breakout retest noise, not a trailing problem.
       //   Fix: widen SL 1.4→1.7×ATR (room for retest noise) + lower TP 5.5→3.2×ATR
       //   → RR ≈ 1:1.9 (reachable). Walk-forward validation still required.
-      riskPerTrade: 0.02,      // v2.3: 2% per trade (dari 3%)
-      slMultiplier: 1.7,       // v2.4: SL = 1.7x ATR (dari 1.4 — clears retest noise)
-      tpMultiplier: 3.2,       // v2.4: TP = 3.2x ATR → RR = 3.2/1.7 ≈ 1:1.9 (dari 5.5 / 1:4)
+      riskPerTrade: 0.02,
+      slMultiplier: 1.7,
+      tpMultiplier: 3.2,
 
       // Position management
-      maxTradesPerDay: 5,      // v2.3: 5 trade/hari (dari 7)
+      maxTradesPerDay: 5,
       minCapital: 100,         // Minimum $100 to trade
       leverage: 1,             // Conservative leverage for VAULT
     };
@@ -366,8 +364,8 @@ class BreakoutTradingStrategy extends StrategyBase {
    * For VAULT: 1.7x ATR SL, 3.2x ATR TP = ~1:1.9 RR (v2.4 recalibration)
    */
   calculateRiskConfig(entryPrice, atr, signal) {
-    const slDist = atr * this.config.slMultiplier;  // v2.4: 1.7x ATR
-    const tpDist = atr * this.config.tpMultiplier;  // v2.4: 3.2x ATR
+    const slDist = atr * this.config.slMultiplier;
+    const tpDist = atr * this.config.tpMultiplier;
 
     let stopLoss, takeProfit;
 
@@ -382,7 +380,7 @@ class BreakoutTradingStrategy extends StrategyBase {
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
       takeProfit: parseFloat(takeProfit.toFixed(8)),
-      riskReward: parseFloat((tpDist / slDist).toFixed(2)),  // v2.4: ~1.88 (3.2/1.7 ≈ 1:1.9)
+      riskReward: parseFloat((tpDist / slDist).toFixed(2)),
       slDistance: slDist,
       tpDistance: tpDist,
       slMultiplier: this.config.slMultiplier,

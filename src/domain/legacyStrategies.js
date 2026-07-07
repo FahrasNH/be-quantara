@@ -227,11 +227,11 @@ const STRATEGIES = {
     emaSlow:       21,
     emaTrend:      50,
 
-    // AF-FIX-14: RSI period 14→21 reduces sideways noise (Grok analysis recommendation)
+
     rsiPeriod:     21,
     rsiOverbought: 72,
     rsiOversold:   28,
-    // AF-FIX-17: Widen Component B RSI bands (was 60-68/32-40 — too narrow, rarely satisfied
+
     // simultaneously with pullback event + EMA alignment + MACD on 1h TF → near-zero B trades)
     rsiLongMin:    55,
     rsiLongMax:    75,
@@ -240,15 +240,15 @@ const STRATEGIES = {
 
     atrPeriod:     14,
     atrMultiplier: 1.4,
-    // AF-FIX-14: RR 2.5→1.8 (more realistic targets on 1h TF; avoids TP never hit)
+
     riskReward:    1.8,
     atrMinMult:    1.2,
     atrMaxMult:    3.5,
 
-    higherTf:      "4h",        // v3.3: changed from 1h → 4h (proper swing context)
+    higherTf:      "4h",
     htfEmaFast:    9,
     htfEmaSlow:    21,
-    htfTrendStrengthMin: 0.25, // v3.3: lowered from 0.75; backtest was always null → gate blocked all BULLISH/BEARISH entries
+    htfTrendStrengthMin: 0.25,
     sidewaysThresholdPct: 0.2,
 
     sidewaysRangeLookback:   20,
@@ -267,7 +267,7 @@ const STRATEGIES = {
     cooldownAfterLoss:   90,
     maxConsecLoss:       2,
 
-    // AF-FIX-17: Relaxed from 0.7 (too tight — blocked valid pullback-to-EMA entries on 1h TF)
+
     maxEntryExtensionATR: 1.2,
     minEdgeFeeMultiple:   7,
     strongTrendTPMult:    1.8,
@@ -276,36 +276,36 @@ const STRATEGIES = {
     afRejectOnDissent:    true,
     // ── Sprint 7 (AF-FIX, 2026-06-29): confidence-gated multi-component ──────────
     // v3.2 disabled A/B (C-only) because, UNGATED, their EMA-crossover designs
-    // bled on real 15m chop (A PF 0.31, B PF 0.41). AF-FIX-01/02 adds a 0–100
+
     // conviction score per component + a ≥60 entry gate, so A/B now fire ONLY on
     // high-confidence setups. All three components are re-enabled behind the gate
     // ("semua komponen berjalan dengan normal"); the gate removes the low-quality
     // fires that were the source of the bleed. NOTE: promote to live only after
-    // the Quant apple-to-apple backtest gate (AF-FIX-06/07/08) confirms the edge.
-    // AF-FIX-12/13 (Sprint 8): Component D (SMC) added — enable all 4 components.
+
+
     afEnabledComponents:  ["A", "B", "C", "D"],
-    // AF-FIX-02: a component may vote/fire only if its confidence ≥ this.
+
     afMinComponentConfidence: 60,
-    // AF-FIX-03: resolved entry rejected unless mean confidence of agreeing
+
     // components ≥ this (blocks weak reversal/"Signal" entries that only pay fees).
     afMinAggregateConfidence: 60,
     // SMC Component D lookback (bars to scan for OB/FVG zones)
     smcLookback: 20,
-    // OA-FIX-02: Order Flow Component A knobs
+
     // vwapLookback: rolling window for CVD + VWAP computation (bars)
     vwapLookback: 14,
     // ofDeltaThreshold: min bar delta for LONG entry (≥0.55 = close in top 45% of bar range).
     // 0.55 is calibrated for 1h TF; 0.60 was designed for <5m scalping and produced 0 trades/year on 1h.
     ofDeltaThreshold: 0.55,
 
-    // AF-FIX-11: MACD histogram alignment required for Component B (trend direction confirmation)
+
     bUseMacd:      true,
-    // AF-FIX-04: net-edge filter — skip entry when ATR/price < k × feePct
+
     netEdgeK:      2.0,   // need 2× fee as minimum expected move
     feePct:        0.0012, // 0.12% roundtrip (taker both legs)
 
     leverage:      2,
-    interval:      "1h",        // v3.3: changed from 15m → 1h (pullback-to-EMA needs proper swing TF)
+    interval:      "1h",
     checkInterval: 60000,
 
     grokConfirmMinEntry: 8,
@@ -324,7 +324,7 @@ const STRATEGIES = {
   //   HTF: 1H (EMA trend)
   //   MTF: 15m (MACD + RSI momentum)
   //   Entry: 5m (EMA + RSI + volume confirmation)
-  //   v2.3: SL 1.3x ATR | TP 2.5x ATR (RR ~1:1.92) | Risk 1.2% | Max 4 trade/hari
+
   //   Target: 54-58% WR, 100-180% annual
   // ─────────────────────────────────────────────
   TREND_FOLLOWING: {
@@ -345,7 +345,7 @@ const STRATEGIES = {
     rsiShortMax:   65,
 
     atrPeriod:     14,
-    atrMultiplier: 1.3,        // v2.3: SL = 1.3x ATR (dari 1.2)
+    atrMultiplier: 1.3,
     riskReward:    1.92,       // TP = 1.92×1.3 ≈ 2.5x ATR (v2.3)
     atrMinMult:    0.5,
     atrMaxMult:    8.0,
@@ -365,12 +365,12 @@ const STRATEGIES = {
     // → same worst-case max loss as 2 concurrent backtest legs).
     riskPerTrade:     0.03,
     maxDailyLossPct:  0.06,
-    maxTradesPerDay:  4,       // v2.3: 4 trade/hari (dari 10)
+    maxTradesPerDay:  4,
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
     // FEE-04: mode "partial" mengunci 40% di +1R & 27.5% di +2R lalu menggeser
-    // SL ke +0.3R/+1R sembari sisanya lari ke TP penuh. AF-SCALP-20 note
+
     // (2026-07-07): partial mode juga berfungsi sebagai DIAGNOSTIK — leg
     // Partial_1R/Partial_2R/TP di CSV mengukur seberapa sering tiap level
     // tersentuh (touch-rate +1R = 45.6%, +2R = 14% pada run 12mo). Jangan
@@ -386,7 +386,7 @@ const STRATEGIES = {
 
     signalType:    "TREND_FOLLOWING",
 
-    // AF-SCALP-20: maker execution on entries/TP (same A/B harness) recovers
+
     // further fee drag (in-sample netPF 0.76 -> 0.82; bull window 0.96 was the
     // best single-window result found). SL/time-stop exits remain taker+slippage.
     typeOverrides: {
@@ -394,7 +394,7 @@ const STRATEGIES = {
       Swing:    { makerEntry: true, makerFeeRate: 0.0002 },
     },
 
-    // AF-SCALP-24 (2026-07-07): Layer 1 (HTF EMA9>21>50 + close>EMA21 + ADX gate)
+
     // AKTIF di backtest dengan index timestamp-aligned (htfPtr, closed bar — the
     // strategy's hardcoded ratio-12 mapping was reading future bars on 15m→4h /
     // 4h→1w legs). ADX 30 dipilih dari sweep 4 window (25/30 × ±strongDay):
@@ -416,7 +416,7 @@ const STRATEGIES = {
   //   BB: 20 period, 2σ deviation
   //   RSI: 14 period (oversold <25, overbought >75)
   //   Entry: Price touch band + RSI confirmation + 2-bar validate
-  //   v2.3: SL 1.4x ATR | TP 3.2x ATR (RR ~1:2.3) | Risk 0.8% per trade
+
   //   Target: 55-60% WR, 100-150% annual
   // ─────────────────────────────────────────────
   MEAN_REVERSION: {
@@ -437,7 +437,7 @@ const STRATEGIES = {
     rsiShortMax:   85,
 
     atrPeriod:     14,
-    atrMultiplier: 1.4,        // v2.3: SL = 1.4x ATR (dari 1.0)
+    atrMultiplier: 1.4,
     riskReward:    2.29,       // TP = 1.4×2.29 ≈ 3.2x ATR → RR ~1:2.3 (v2.3)
     atrMinMult:    0.5,
     atrMaxMult:    6.0,
@@ -477,7 +477,7 @@ const STRATEGIES = {
   // BREAKOUT_RETEST — Breakout + Retest (VAULT Tier)
   //
   //   Entry TF  : 15m — deteksi level S&R 20-bar, breakout + retest
-  //   v2.3: SL 1.4× ATR | TP 5.5× ATR (RR ~1:4) | Risk 2% | Max 5 trade/hari
+
   // ─────────────────────────────────────────────
   BREAKOUT_RETEST: {
     name:          "BREAKOUT_RETEST",
@@ -497,7 +497,7 @@ const STRATEGIES = {
     rsiShortMax:   60,
 
     atrPeriod:     14,
-    atrMultiplier: 1.4,        // v2.3: SL = 1.4× ATR (dari 1.5)
+    atrMultiplier: 1.4,
     riskReward:    3.93,       // TP = 1.4×3.93 ≈ 5.5× ATR → RR ~1:4 (v2.3)
     atrMinMult:    0.2,
     atrMaxMult:    5.0,
@@ -509,9 +509,9 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.02,    // v2.3: 2% per trade (dari 3%)
+    riskPerTrade:     0.02,
     maxDailyLossPct:  0.08,
-    maxTradesPerDay:  5,       // v2.3: 5 trade/hari (dari 7)
+    maxTradesPerDay:  5,
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
@@ -645,7 +645,7 @@ const STRATEGIES = {
     sacEnabledComponents: ["A", "B", "C"],
     sacMinVotes:           1,            // 1 = any qualifying component can fire
     sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
-    sacMinConfidenceA:     65,  // Scalping — raised 50→65 (AF-FIX-06: too many false entries)
+    sacMinConfidenceA:     65,
     sacMinConfidenceB:     55,  // Intraday — lowered 65→55 (2026-07-03): 65 produced only
                                 // ~3 Intraday entries per 12mo on BTC. Intraday (15m/4h) is
                                 // meant to be the workhorse (3–5/day target); the sequence
@@ -676,7 +676,7 @@ const STRATEGIES = {
 
     // Displacement
     sacDispScanBars:   25,
-    sacDispVolMult:    1.8,              // 2.0 → 1.6 → 1.8: AF-FIX-06 tighter displacement confirmation
+    sacDispVolMult:    1.8,
     sacDispRangePct:   0.008,            // 1.2% → 0.8%: lower range bar for displacement
 
     // CVD / VWAP lookback

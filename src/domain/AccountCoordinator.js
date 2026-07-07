@@ -220,7 +220,6 @@ class AccountCoordinator {
   }
 
   /**
-   * Boleh START (arm) sebuah bot baru bermodal `capital`?  (BUG-FIX-01)
    *
    * Berbeda dari canOpen() yang menilai margin entry RIIL (notional/leverage),
    * gate START ini menilai FOOTPRINT MODAL PENUH karena reserveGroup() me-reserve

@@ -84,7 +84,7 @@ const STRATEGIES_BY_PAIR_TIER = Object.freeze({
   },
   VOLATILE: {
     // MR + TM (dengan HTF regime filter ketat). AF & BR diblokir di altcoin
-    // thin-book berisiko tinggi. v2.3: TM tidak lagi diblokir total — diizinkan
+
     // hanya jika lolos triple-EMA regime filter (regimeFilterRequired=true).
     recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
     cautious:    [],
@@ -109,11 +109,11 @@ const PARAM_OVERRIDES = Object.freeze({
   },
   STABLE: {
     slMultiplier:            1.1,   // 10% wider SL (less liquid)
-    positionSizeAdjustment:  0.95,  // 5% smaller position (v2.3: 0.9 → 0.95)
+    positionSizeAdjustment:  0.95,
     maxTradesPerDay:         8,
     dailyLossLimit:          null,
-    regimeFilterRequired:    true,  // v2.3: regime filter wajib untuk semua tier kecuali LIQUID
-    votingThresholdOverride: 0.60,  // v2.3: 0.55 → 0.60 (AF needs stronger consensus)
+    regimeFilterRequired:    true,
+    votingThresholdOverride: 0.60,
   },
   SEMI_VOLATILE: {
     slMultiplier:            1.3,   // v2.3 tier transisi baru
@@ -125,8 +125,8 @@ const PARAM_OVERRIDES = Object.freeze({
   },
   VOLATILE: {
     slMultiplier:            1.5,   // 50% wider SL (volatile moves)
-    positionSizeAdjustment:  0.55,  // v2.3: 0.6 → 0.55 (45% smaller, risk management)
-    maxTradesPerDay:         4,     // v2.3: 5 → 4
+    positionSizeAdjustment:  0.55,
+    maxTradesPerDay:         4,
     dailyLossLimit:          0.03,  // hard 3% daily loss cap
     regimeFilterRequired:    true,  // MUST pass HTF regime check
     votingThresholdOverride: 0.78,  // v2.3 (stricter of 0.78 vs 0.75) — single dissent blocks entry
@@ -373,7 +373,7 @@ class PairClassifier {
                 volume24h:      coin.total_volume ?? null,
                 rank,
                 priceChange24h: coin.price_change_percentage_24h ?? null,
-                // v2.4: real 24h range (not just net displacement) for a more
+
                 // honest ATR proxy — see _buildCoinGeckoHybridData().
                 high24h:        coin.high_24h ?? null,
                 low24h:         coin.low_24h ?? null,
@@ -426,7 +426,6 @@ class PairClassifier {
 
   /**
    * Build hybrid-score inputs from CoinGecko data when candle metrics unavailable.
-   * v2.4: prefers the REAL 24h high/low range over net price-change displacement
    * — a coin can whipsaw 5% up and down repeatedly and close +0.2%, which the old
    * "|24h change| × 1.2 + 0.8" proxy misread as calm. Falls back to displacement
    * only when range data is missing, and reports `proxied: true` so callers can

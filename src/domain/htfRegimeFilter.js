@@ -1,7 +1,6 @@
 /**
  * htfRegimeFilter.js  (src/domain/htfRegimeFilter.js)
  *
- * ROOT CAUSE FIX (FIX-4):
  *   MEAN_REVERSION akan terus counter-trend jika tidak ada HTF filter.
  *   Di strong bull market → SHORT terus kena SL.
  *   Di strong bear market → LONG terus kena SL.

@@ -1,7 +1,6 @@
 /**
  * signalIdempotency.js  (src/domain/signalIdempotency.js)
  *
- * ROOT CAUSE FIX (FIX-3):
  *   Jika WebSocket reconnect atau candle-close event diterima 2x,
  *   BotEngine bisa open 2 positions untuk sinyal yang sama.
  *   Fix: setiap sinyal diberi idempotency key = hash(symbol + strategy + candleTimestamp + direction).

@@ -39,7 +39,7 @@ const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require
 // code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
 const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
 const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
-const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING"]); // AF-SCALP-24: HTF layer support
+const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING"]);
 const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
 const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
@@ -199,7 +199,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
-  // AF-SCALP-02: relative ATR gate (see buildAtrBaseline). Flag-gated for A/B —
+
   // live configs don't set atrGateRelative, so live gating is unchanged.
   const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
   const atrRelMin = cfg.atrRelMin ?? 0.6;
@@ -209,7 +209,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
   const warmup = Math.max(cfg.emaSlow ?? 21, cfg.atrPeriod ?? 14, 30) + 2;
 
-  // AF-SCALP-16: SL+ Trailing Partial TP, ported from the single-position engine
+
   // (see checkPartialMilestones in runRealBacktest). Previously this multi-position
   // engine — the one AF_SMC/triple-type backtests actually use — had NO partial-TP
   // path at all: "Is Partial" was always false regardless of the FE tpMode toggle.
@@ -300,7 +300,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   }
 
   function closePosition(componentId, position, exitPrice, reason, exitIdx) {
-    // AF-SCALP-12: maker/taker + slippage by ORDER TYPE.
+
     //   entry (limit-at-level)  → maker, no slippage
     //   TP exit (limit order)   → maker, no slippage
     //   SL / TIME_STOP (market) → taker, slippage applies
@@ -311,7 +311,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const makerRate = cfg.makerFeeRate ?? 0.0002;
     const isLimitExit = reason === "TP"; // TP = resting limit (maker); SL/time = market (taker)
 
-    // AF-SCALP-16: close the REMAINING size (partials may have already trimmed it).
+
     const closeSize = position.remainingSize ?? position.size;
 
     let px = exitPrice;
@@ -362,7 +362,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
-      confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
+      confidence: position.confidence ?? null,
       // GROK-FIX: entry-context snapshot forwarded for post-hoc Grok Confirm Gate.
       atr: position.atr ?? null,
       entryRsi: position.entryRsi ?? null,
@@ -411,7 +411,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
     // Monitor all open positions for SL/TP
     for (const [componentId, pos] of positions.entries()) {
-      // AF-SCALP-16: partial-TP milestones may trim size + move slCurrent before
+
       // the SL/TP check below (mirrors runRealBacktest's single-position order).
       checkPartialMilestones(componentId, pos, c, i);
       if (!positions.has(componentId)) continue; // safety: milestone logic never fully closes, but guard anyway
@@ -453,11 +453,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       pairTier: cfg.pairTier,
       tierOverrides: cfg.tierOverrides,
       volSmaMultiplier: cfg.volSmaMultiplier,
-      marketThresholds: cfg.marketThresholds, // v3.0: TF-aware regime calibration
-      afEnabledComponents: cfg.afEnabledComponents, // v3.2: C-only by default
-      afMinComponentConfidence: cfg.afMinComponentConfidence, // AF-FIX-02 conviction gate
-      afMinAggregateConfidence: cfg.afMinAggregateConfidence, // AF-FIX-03
-      // AF-SCALP-09 v3.1: regime detection config + per-leg typeOverrides
+      marketThresholds: cfg.marketThresholds,
+      afEnabledComponents: cfg.afEnabledComponents,
+      afMinComponentConfidence: cfg.afMinComponentConfidence,
+      afMinAggregateConfidence: cfg.afMinAggregateConfidence,
+
       regimeDetection: cfg.regimeDetection, // EMA gap thresholds, ADX strength
       typeOverrides: cfg.typeOverrides, // per-leg overrides (Scalping/Intraday/Swing)
     });
@@ -558,7 +558,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // winner was capped at the base RR.
       const regime = multiSignal.meta?.marketCond || "NORMAL";
 
-      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides (slAtrMult, tpAtrMult)
+
       // Backtest uses full type names (Scalping/Intraday/Swing), not legacy A/B/C
       const typeOverride = cfg.typeOverrides?.[componentId] || {};
       const slMult = typeOverride.slAtrMult ?? cfg.slAtrMult;
@@ -567,7 +567,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
         marketCond: regime,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
-        // AF-SCALP-06/09: per-leg SL/TP ATR-multiple overrides (typeOverrides →
+
         // typeConfig → cfg). Merged from typeOverrides per componentId.
         // Undefined = strategy's SUB_STRATEGIES defaults, so live and non-overridden legs are unchanged.
         slMultiplier: slMult,
@@ -609,13 +609,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         component: componentId,
         marketCond: regime,
         plannedRR: riskCfg.riskReward,
-        // AF-FIX-01: conviction score that cleared the entry gate (for reporting).
+
         confidence: multiSignal.meta?.confidence?.[componentId] ?? null,
         // GROK-FIX: entry-context snapshot so the trade can be Grok-confirmed post-hoc.
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
-        // AF-SCALP-16: SL+ partial-TP state — R is the risk distance, slCurrent
+
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.
         R: slDist,
@@ -892,7 +892,7 @@ async function runTripleTypeBacktest(opts = {}) {
     maxConsecLoss:    Math.max(cfg.maxConsecLoss ?? 2, 5),
   };
 
-  // AF-SCALP-03: ladder shares are ABSOLUTE caps per type (0.5%/1%/2% of the
+
   // combined cap), normalized over the strategy's natural type set — running a
   // SUBSET (Advance type filter) must not inflate the remaining legs' risk.
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
@@ -901,7 +901,7 @@ async function runTripleTypeBacktest(opts = {}) {
   for (const tradeType of typeOrder) {
     const typeConfig = {
       ...baseTypeConfig,
-      // AF-SCALP-05: per-leg config overrides (cfg.typeOverrides.Swing = {...}).
+
       // Lets the FE A/B new entry-engine flags on Scalping/Intraday while the
       // proven Swing leg keeps EXACT baseline behaviour. Ladder risk stays
       // authoritative (applied after the spread).
@@ -916,13 +916,13 @@ async function runTripleTypeBacktest(opts = {}) {
       continue;
     }
 
-    // AF-SCALP-13: reset per-filter ablation counters for the Scalping leg so we
+
     // can report exactly which gate throttles trade frequency in this run.
     if (tradeType === "Scalping" && typeof strategy.resetAblation === "function") {
       strategy.resetAblation();
     }
 
-    // AF-SCALP-12: per-leg slippage override (typeConfig.slippagePct). BTCUSDT is
+
     // the most liquid pair — 0.05% default overstates fills; Scalping can set 0.02%.
     const typeSlip = enableSlippage
       ? (typeConfig.slippagePct ?? cfg.slippagePct ?? DEFAULT_SLIPPAGE)
@@ -959,7 +959,7 @@ async function runTripleTypeBacktest(opts = {}) {
       htfBars: htfCandles?.length ?? 0,
     };
 
-    // AF-SCALP-13: report the per-filter funnel for the Scalping leg. Shows
+
     // exactly how many raw setups each gate removed → identifies the throttle
     // without running an N-way ablation.
     if (tradeType === "Scalping" && typeof strategy.getAblation === "function") {
@@ -978,7 +978,7 @@ async function runTripleTypeBacktest(opts = {}) {
         console.log(funnelText);
         perTypeStats[tradeType].ablation = a;
 
-        // AF-SCALP-13: also write to a DEDICATED file so the user can `cat` ONE
+
         // clean file instead of grepping the noisy shared PM2 log. Includes the
         // running commit hash so we can confirm WHICH backend produced it (the
         // prod-vs-staging confusion). Overwritten each run.
@@ -1094,7 +1094,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   // backtest can cache since HTF data is static.
   const isMeanReversion = isMRKey(strategyKey);
   let htfIndicators = null;
-  // AF-SCALP-24: build HTF indicators for both MR (regime gate) and TF (adxHTF layer).
+
   // tfHtfLayerEnabled gates the whole TF Layer-1 path (injection + ADX gate) so
   // A/B harnesses can run a true control; default ON per TREND_FOLLOWING_STRATEGY.md.
   const tfHtfLayer = isTFKey(strategyKey) && cfg.tfHtfLayerEnabled !== false;
@@ -1115,10 +1115,10 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       rsi: calcRSI(htfCloses, 14),
       atr: htfAtrArr,
       atrSma: htfAtrSma, // rolling SMA of ATR for ratio check
-      adx: htfAdx, // AF-SCALP-24: TF gate adxHTF >= 25 (number|null per HTF bar)
+      adx: htfAdx,
       close: htfCloses,
     };
-    // AF-SCALP-24: inject HTF data into indicators for TF detectSignal Layer 1
+
     // (TrendFollowingStrategy.detectSignal reads closesHTF, emaFastHTF, emaMidHTF,
     // emaSlowHTF, adxHTF). Index alignment comes from config.htfIdx per bar — the
     // strategy's built-in ratio-12 mapping assumes 5m→1h and reads FUTURE bars on
@@ -1173,7 +1173,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const equity = [{ date: isoOf(entryCandles[0]), value: capital }];
 
   let position = null; // { side, entry, sl, tp, slDist, size, openIdx, component, marketCond }
-  // AF-SCALP-23: pending retest-limit entry. TF's "pullback retest" layer is in
+
   // truth `close > EMA9` on the breakout bar — it fires at the EXTENDED price and
   // parks the SL inside the retest zone (geometry diagnostic: edge only exists at
   // tight SL, and fee/R at 15m eats it). retestEntryEnabled converts the signal
@@ -1193,7 +1193,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
-  // AF-SCALP-02: relative ATR gate (see buildAtrBaseline). Flag-gated for A/B —
+
   // live configs don't set atrGateRelative, so live gating is unchanged.
   const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
   const atrRelMin = cfg.atrRelMin ?? 0.6;
@@ -1306,7 +1306,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   }
 
   function closePosition(exitPrice, reason, exitIdx) {
-    // AF-SCALP-12: maker/taker + slippage by order type (see multi engine).
+
     // entry limit → maker; TP limit → maker (no slip); SL/time market → taker (slip).
     const compOv = cfg.typeOverrides?.[position.component] || {};
     const useMaker = compOv.makerEntry === true || cfg.makerEntry === true;
@@ -1354,7 +1354,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
-      confidence: position.confidence ?? null, // AF-FIX-01: entry conviction (0–100)
+      confidence: position.confidence ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
@@ -1406,7 +1406,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const hitSL = position.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
       const hitTP = position.side === "LONG" ? c.high >= position.tp : c.low <= position.tp;
 
-      // AF-SCALP-10/20: Time-stop, generalized to any component via
+
       // typeOverrides[component].maxHoldHours (was Scalping-only/scalpingMaxHoldHours;
       // TS_TF forensics showed >=24h-underwater positions accounted for -76.8 of the
       // -230.8 net loss on the Intraday/Swing legs — a hung thesis is a dead thesis).
@@ -1435,7 +1435,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       continue;
     }
 
-    // ── 1b. AF-SCALP-23: pending retest-limit order management ──────────────
+
     if (pendingOrder) {
       if (i > pendingOrder.expiresIdx) {
         pendingOrder = null; // move ran away without a retest — no chase
@@ -1504,14 +1504,14 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       maxEntryExtensionATR: cfg.maxEntryExtensionATR,
       afRejectOnDissent: cfg.afRejectOnDissent,
       afMinVotes: cfg.afMinVotes,
-      afMinComponentConfidence: cfg.afMinComponentConfidence, // AF-FIX-02
-      afMinAggregateConfidence: cfg.afMinAggregateConfidence, // AF-FIX-03
+      afMinComponentConfidence: cfg.afMinComponentConfidence,
+      afMinAggregateConfidence: cfg.afMinAggregateConfidence,
       pairTier: cfg.pairTier,
       tierOverrides: cfg.tierOverrides,
-      // AF-SCALP-09 v3.1: regime detection + per-leg typeOverrides
+
       regimeDetection: cfg.regimeDetection,
       typeOverrides: cfg.typeOverrides,
-      // AF-SCALP-24: timestamp-aligned CLOSED HTF bar for Layer 1. htfPtr[i] points
+
       // at the HTF bar still FORMING at entry bar i — its close/EMA are future info,
       // so Layer 1 reads the previous (closed) bar. -1 when no closed bar yet →
       // strategy degrades to entry-TF fallback for the warmup bars.
@@ -1519,7 +1519,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
-    // AF-SCALP-24: TF adxHTF gate — require strong trend on HTF (ADX >= 25), on the
+
     // last CLOSED HTF bar (htfPtr[i] is the forming bar — lookahead). Fail-closed:
     // adx null (warmup) or no closed bar yet → skip entry, never "assume strong".
     if (tfHtfLayer && htfIndicators?.adx && htfPtr) {
@@ -1543,7 +1543,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       riskPerTrade: cfg.riskPerTrade ?? 0.01,
     });
     if (!regimeResult.allow) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
-    // AF-SCALP-23: optional stricter gate for TF — trade ONLY on STRONG_TREND
+
     // days (default gate only blocks CHOP; the 0.5-0.8 transition band still
     // bled through in every chop month: Feb, then Jun 2026).
     if (cfg.tfRequireStrongTrend && dailyTrendCache && dailyRegime !== "STRONG_TREND") {
@@ -1615,7 +1615,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     if (meta && typeof strategy.calculateRiskConfig === "function") {
-      // AF-SCALP-09 v3.1: Merge per-leg typeOverrides
+
       // Backtest passes full type names (Scalping/Intraday/Swing), not legacy A/B/C
       const typeOverride = cfg.typeOverrides?.[meta.component] || {};
       const slMult = typeOverride.slAtrMult ?? cfg.slAtrMult;
@@ -1632,7 +1632,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       component = meta.component;
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
-      // AF-FIX-01/03: conviction behind this entry (component or aggregate score).
+
       confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
     } else {
       slDist = atr * (cfg.atrMultiplier ?? 1.4) * pairSlMult;
@@ -1641,7 +1641,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
     if (!(slDist > 0)) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
-    // ── 8b. AF-SCALP-23: retest-limit entry — park a resting order instead of
+
     // chasing the breakout close. Latest signal replaces any unfilled pending.
     if (cfg.retestEntryEnabled) {
       const pullback = (cfg.retestPullbackAtr ?? 0.5) * atr;
@@ -1766,18 +1766,18 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
 
   // Capital is shared across types (concurrent risk), mirroring runTripleTypeBacktest's
   // documented model: riskPerTrade is the COMBINED cap across all concurrent types.
-  // v2.8: split by TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1 : Swing 2) instead of
+
   // equally — TS_TF combined 0.03 → 1%/2%, MD_MR combined 0.015 → 0.5%/1%.
-  // AF-SCALP-03: normalize ladder over the natural type set (see runTripleTypeBacktest).
+
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
     : typeOrder;
   for (const tradeType of typeOrder) {
-    // AF-SCALP-22: translate AFTER the per-leg merge so legacy keys inside
+
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
     const typeConfig = normalizeTfGeometryKeys(strategyKey, {
       ...cfg,
-      // AF-SCALP-05: per-leg overrides — see runTripleTypeBacktest.
+
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
     });

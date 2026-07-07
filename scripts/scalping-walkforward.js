@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * AF-SCALP-15 WALK-FORWARD validation + Intraday zero-trade diagnosis.
  *
  * Part 1 — walk-forward: the 80/75 asymmetric floor was picked on the
  * Jul-2025→Jul-2026 window. Test it on THREE windows never used for selection

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * TS_TF LAYER-1 ROBUSTNESS SWEEP (AF-SCALP-24 stage 3, 2026-07-07)
  *
  * Stage-2 result: aligned Layer 1 + engine ADX gate turned 12mo from PF 0.83
  * (net -90.5) to PF 1.29 (net +64.6) at ADX30. Before shipping a default,

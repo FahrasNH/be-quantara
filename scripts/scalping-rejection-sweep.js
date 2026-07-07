@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * AF-SCALP-13 rejection-wick SWEEP (local, real BTC data).
  * Fetches candles ONCE, runs the real engine across several
  * sacRejectionWickRatio values (+ rejection OFF) and prints a comparison so we
  * can pick the setting that maximizes net PF while restoring trade volume.

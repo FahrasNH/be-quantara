@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /**
- * TS_TF EXIT-LADDER A/B TEST (AF-SCALP-20, 2026-07-07)
  *
  * CSV forensics (all-type-tf-12.csv, 91 legs -> 57 positions after de-dupe):
  *   WR 45.6%, PF 0.49, net -230.8. Root cause identified as EXIT structure,

@@ -12,7 +12,6 @@
  *
  * References:
  *   FOUNDRY_SAC_COMPLETE_SPECIFICATION.md (2026-06-30)
- *   SAC-FIX-05 / SAC-FIX-06 / SAC-FIX-07 / SAC-FIX-08
  */
 
 "use strict";
@@ -40,13 +39,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // ── Trade type TF configuration (each type runs on its own TF stack) ─────
     this.TRADE_TYPE_TF_CONFIG = {
-      // AF-SCALP-14: 5m→15m migration. PROVEN (local harness, 6mo real BTC):
+
       // 5m SMC WR 28.6% (BELOW 33.3% coin-flip) net PF 0.67 — zero edge at any
       // filter. 15m SMC WR ~37% (above coin-flip) net PF 1.03 — real edge. The
       // "Scalping" leg now runs 15m/4h (Intraday cadence, ~0.24 trades/day; the
       // 4-8/day scalp target is unreachable for fee-viable BTC SMC).
-      Scalping: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },  // AF-SCALP-14: 5m→15m (edge TF)
-      Intraday: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },  // v3.0: 5m→15m entry
+      Scalping: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },
+      Intraday: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },
       Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w" },
     };
 
@@ -66,18 +65,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     this._lastSignalMeta = null;
 
-    // AF-SCALP-13: per-filter ablation counters (Scalping leg). Reset at backtest
+
     // start via resetAblation(); each gate increments its rejection count so ONE
     // run reports exactly which filter throttles trade frequency. getAblation()
     // returns the histogram for logging. Zero overhead when not being read.
     this._ablation = null;
   }
 
-  // AF-SCALP-13: ablation telemetry — call at backtest start to begin counting.
+
   resetAblation() {
     this._ablation = {
       seqCandidate: 0,   // bars with an FVG + mitigation (raw setup exists)
-      rejByRejection: 0, // killed by AF-SCALP-11 rejection-wick gate
+      rejByRejection: 0,
       seqSignal: 0,      // sequence produced a signal (passed rejection)
       rejByRegime: 0,    // rawA killed by HTF regime hard-block
       rejByChoch: 0,     // rawA killed by 5m CHoCH validation
@@ -169,7 +168,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
   getRiskConfig() {
     return {
-      riskPerTrade:       0.035, // v2.8: combined cap → 0.5%/1%/2% per A/B/C via typeRiskLadder
+      riskPerTrade:       0.035,
       riskPerTradeStrong: 0.05,
       maxTradesPerDay:    8,
       cooldownAfterLoss:  60,
@@ -194,7 +193,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const mul      = opts.strongTrendTPMult ?? 1.0;
     const isStrong = opts.marketCond === "STRONG_TREND" && mul > 1;
 
-    // AF-SCALP-06: per-leg SL/TP ATR-multiple overrides (cfg.slAtrMult /
+
     // cfg.tpAtrMult via typeOverrides). Fee-drag lever: Scalping's 1.0×ATR SL
     // on 5m ≈ 0.28% of price, so the ~0.13% round-trip fee costs 0.42R per
     // trade and pushes breakeven WR from 18% to 30%. Widening the SL (with TP
@@ -424,8 +423,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * Returns most recent qualifying FVG that is still "open" (price hasn't filled it).
    */
   _detectFVG(closes, highs, lows, lastIdx, config = {}, opens = null) {
-    // AF-SCALP-04: LuxAlgo FVG mode — adaptive body threshold replaces the
-    // absolute sacFvgMinGap floor (same absolute-% TF bug class as AF-SCALP-01:
+
+
     // 0.3% gaps are meaningful on 1h, noise-level rare on 5m). Flag-gated.
     if (config.sacFvgAutoThreshold === true) {
       return this._detectFVGAuto(closes, highs, lows, lastIdx, config, opens);
@@ -466,7 +465,6 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   /**
-   * AF-SCALP-04: LuxAlgo-compatible FVG (ported from feature/smc-strategy-fix).
    * A gap only counts when the middle candle's BODY displacement exceeds an
    * adaptive threshold (2× the running mean absolute body) — TF-relative, so
    * "significant imbalance" means the same thing on 5m and 4h. Gaps are also
@@ -576,7 +574,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   // ═════════════════════════════════════════════════════════════════════════════
-  // AF-SCALP-04: LuxAlgo-style PIVOT STRUCTURE ENGINE
+
   // (ported from feature/smc-strategy-fix d144166, rewritten incremental)
   //
   // Real structure = confirmed pivots (internal size-5, swing size-50) whose
@@ -851,7 +849,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     const cl = closes[lastIdx];
 
-    // AF-SCALP-04 flags (all default OFF → live behaviour unchanged):
+
     //   sacPivotStructure      — CHoCH from the pivot structure engine's events
     //                            instead of the naive 10-bar high/low compare
     //   sacPremiumDiscountGate — LONG only below equilibrium (discount half),
@@ -881,9 +879,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         ? (cl >= fvg.bottom * 0.999 && cl <= fvg.midpoint * 1.002)
         : (cl <= fvg.top * 1.001    && cl >= fvg.midpoint * 0.998);
       if (!inMitigation) continue;
-      this._abl("seqCandidate"); // AF-SCALP-13: raw setup (FVG + mitigation) exists
+      this._abl("seqCandidate");
 
-      // ── AF-SCALP-11: REJECTION confirmation (limit-at-level entry model) ──────
+
       // Root cause of nol-edge (CSV forensics): the mitigation check above enters
       // the moment CLOSE is anywhere inside the zone — it can't tell "price
       // BOUNCED off the level" (tradeable reversal) from "price is SLICING THROUGH
@@ -1002,7 +1000,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // Displacement strength: range of the FVG-origin bar
     const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
 
-    // AF-SCALP-01: absolute-percentage bonuses (2.5% range, 0.67% gap) are
+
     // unreachable on low TFs — a 5m displacement is 0.2-0.5%, so Scalping's
     // score ceiling sat at ~the min-confidence gate (3 trades / 180d) while 4h
     // Swing routinely cleared it. sacScoreAtrNorm normalizes both bonuses by
@@ -1031,7 +1029,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       score += Math.min(15, dRange * 600); // ~2.5% range → +15
     }
 
-    // Displacement volume confirmation — weak displacement = premature entry (AF-FIX-06)
+
     // If the FVG-origin bar had below-average volume, the "displacement" may be noise.
     const dVol = volumes[dispIdx] ?? 0, dVSMA = volSMA[dispIdx] ?? 1;
     const dispVolRatio = dVSMA > 0 ? dVol / dVSMA : 1;
@@ -1051,14 +1049,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       : (cl - fvg.midpoint) / Math.max(fvg.top - fvg.midpoint, 1e-9);
     score += Math.max(0, Math.min(15, depth * 15));
 
-    // Sequence freshness — stale setups produce whipsaws (AF-FIX-06: 0% WR on <2h trades)
+
     // Reward recent sweeps (≤20 bars = setup is still "alive"), penalise very old ones.
     const sweepAge = lastIdx - sweepIdx;
     if      (sweepAge <= 20) score += 8;   // fresh: full bonus
     else if (sweepAge <= 40) score += 3;   // acceptable
     else                     score -= 8;   // stale: risk of whipsaw
 
-    // AF-SCALP-04: mitigation happening INSIDE a live order block of the same
+
     // bias = institutional footprint confluence (pivot structure engine only).
     if (ctx.obConfluence) score += 8;
 
@@ -1237,7 +1235,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   _htfDirectionBlocked(dir, htfTrend, strict = false) {
     if (!htfTrend) return false;
     if (strict) {
-      // AF-SCALP-06: with-trend alignment only — LONG needs a confirmed BULLISH
+
       // HTF, SHORT needs BEARISH; SIDEWAYS/UNKNOWN = no entry either direction.
       // The legacy branch below is LONG-biased: LONG passes in SIDEWAYS while
       // SHORT is blocked unless BEARISH. Under sacHtfHardBlock that asymmetry
@@ -1254,7 +1252,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   _detect5mChocH(indicators, lastIdx, config) {
-    // AF-SCALP-07: 5m entry-TF CHoCH (Change of Character) validation.
+
     // Scalping entries are noisy (wick sweeps), but real reversals have swing
     // structure: supply level (swing high) above entry that price breaks below.
     // Gate requires swing high in recent window — blocks false-breakout LONGs.
@@ -1277,21 +1275,21 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return swingHigh > currentPrice * 1.001;
   }
 
-  // AF-SCALP-09 v3.1: Detect HTF market regime for direction-aware entry mapping
+
   _detectHTFRegime(indicators, config = {}, atIdx = null) {
     if (!indicators || !indicators.closes) return "SIDEWAYS";
 
     const closes = indicators.closes;
     if (closes.length < 21) return "SIDEWAYS";
 
-    // AF-SCALP-17: evaluate at the CURRENT backtest bar, not the final bar of
+
     // the whole dataset. The old `closes.length - 1` read the END of the array
     // on every call — in backtest that is (a) look-ahead and (b) a constant:
     // the same regime label was returned for every bar of the run.
     const lastIdx = Number.isInteger(atIdx) ? Math.min(atIdx, closes.length - 1) : closes.length - 1;
     const { bullishThreshold = 0.004, bearishThreshold = -0.004, adxMinStrength = 22 } = config.regimeDetection || {};
 
-    // AF-SCALP-12 PERF: Use pre-computed EMA from indicators (already calculated
+
     // during indicatorpass). Avoids O(n) recalc per bar. If not available, cache
     // the result in config so subsequent calls in same backtest bar don't recalc.
     let ema9 = indicators.ema9_Regime; // Cache key (per-bar pass)
@@ -1309,14 +1307,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (!ema9 || !ema21 || ema9.length === 0 || ema21.length === 0) return "SIDEWAYS";
 
     const lastClose = closes[lastIdx];
-    // AF-SCALP-17: EMA arrays are index-aligned with closes — read the CURRENT
+
     // bar, not the array tail (same look-ahead bug as above).
     const ema9Last = ema9[lastIdx];
     const ema21Last = ema21[lastIdx];
     if (ema9Last == null || ema21Last == null) return "SIDEWAYS";
 
     const emaDiff = (ema9Last - ema21Last) / lastClose;
-    // AF-SCALP-17: calcIndicators does NOT produce an `adx` array, so the old
+
     // `?? 20` default made `adx > 22` unconditionally FALSE → this function
     // returned SIDEWAYS on every bar → regimeMappingStrict skipped 100% of
     // Intraday entries on every coin. Only apply the ADX gate when ADX data
@@ -1338,7 +1336,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return "SIDEWAYS";
   }
 
-  // AF-SCALP-09 v3.1: Regime-aware direction mapping for Intraday leg
+
   // Maps entry direction to market regime (BULLISH→LONG only, BEARISH→SHORT only, SIDEWAYS→skip)
   _applyRegimeDirectionMapping(rawSignal, regime, tradeType, config = {}) {
     // Only apply to Intraday leg (v3.1 uses full type names)
@@ -1359,7 +1357,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     }
   }
 
-  // AF-SCALP-18: Intraday's own structural confirmation gate.
+
   // Root cause of the leg's missing edge: rawA (Scalping) and rawB (Intraday)
   // share the SAME raw signal from _detectSMCSequence — the only thing that
   // ever differentiated Scalping's profitability was its CHoCH structure gate
@@ -1413,7 +1411,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return reversalStrength >= reversalMin;
   }
 
-  // AF-SCALP-09 v3.1: Enhanced 5m multi-CHoCH validation
+
   // Requires sequential candle structure (2+ consecutive candles), not just a single wick
   _detect5mMultiChoCH(indicators, lastIdx, config = {}) {
     const { closes, highs, lows } = indicators;
@@ -1463,8 +1461,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
 
-    // AF-SCALP-09 v3.1: Detect HTF regime for direction-aware Intraday mapping.
-    // AF-SCALP-17: prefer the REAL higher-timeframe trend (computed from actual
+
+
     // 4h candles by the engine and passed as config.htfTrend) over the internal
     // entry-TF EMA/ADX proxy — the proxy reads 15m indicators whose EMA9-21 gap
     // almost never clears the 0.4% threshold, and its ADX gate was dead (see
@@ -1504,7 +1502,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       const sig = seq.signal;
       const score = seq.meta?.score ?? 0;
       this._lastSequenceMeta = seq.meta; // structural levels for SL placement
-      if (wantA && sig) this._abl("seqSignal"); // AF-SCALP-13: passed rejection → signal
+      if (wantA && sig) this._abl("seqSignal");
       rawA = wantA ? sig : null; confA = rawA ? score : 0;
       rawB = wantB ? sig : null; confB = rawB ? score : 0;
       rawC = wantC ? sig : null; confC = rawC ? score : 0;
@@ -1520,7 +1518,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
     }
 
-    // ── AF-SCALP-09 v3.1: Regime-aware direction mapping for Intraday ────────────
+
     // Intraday now uses regimeMappingStrict to map direction to regime:
     // BULLISH regime → only LONG entries allowed
     // BEARISH regime → only SHORT entries allowed
@@ -1536,7 +1534,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       }
     }
 
-    // AF-SCALP-18: Intraday's OWN structural confirmation gate (see method doc
+
     // above for root-cause rationale). Off by default — enable via
     // typeOverrides.Intraday.structureConfirmValidate.
     if (rawB && typeOverrides.Intraday?.structureConfirmValidate === true) {
@@ -1555,11 +1553,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // direction-conflicting signal is HARD-blocked instead, since letting a
     // penalized-but-still-passing signal through defeats "lebih selektif" on
     // exactly the pairs where regime risk matters most.
-    // AF-SCALP-05: sacHtfHardBlock upgrades the soft −15 to a hard block via
+
     // config (backtest A/B). CSV evidence: 8/11 Scalping losses were LONGs
     // opened during HTF downtrends that survived the −15 penalty — "buy the
     // discount" only works WITH the higher-timeframe trend, never against it.
-    // AF-SCALP-06: sacHtfHardBlock now means STRICT with-trend alignment (LONG
+
     // needs BULLISH, SHORT needs BEARISH, SIDEWAYS = flat). The asymmetric hard
     // block it shipped with made results WORSE than the soft penalty: it kept
     // every knife-catching LONG in SIDEWAYS-labeled downtrends while banning
@@ -1578,10 +1576,10 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
     }
 
-    // ── AF-SCALP-07/09: 5m CHoCH validation for Scalping (entry-TF structure) ────
+
     // CSV showed false-breakout LONGs (wick sweeps) contaminating 5m entry set.
     // Gate: require BOTH swing high structure AND multi-candle sequence (not just 1-candle wick).
-    // v3.1: Enhanced to use _detect5mMultiChoCH for stricter causal validation.
+
     // Validates entry causal context — single swing high insufficient, needs confirmation.
     if (rawA && config.scalpingChochValidate !== false) {
       const hasSwingHigh = this._detect5mChocH(indicators, lastIdx, config);
@@ -1603,7 +1601,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const votingMinConf = (typeof votingFloor === "number" && votingFloor > 0)
       ? Math.max(minConf.A, minConf.B, minConf.C, Math.round(votingFloor * 100))
       : null;
-    // AF-SCALP-01: Scalping (A) keeps its own floor (default 60). The STABLE
+
     // votingFloor resolved to max(60,65,65,60)=65 and starved the 5m leg,
     // whose score distribution peaks exactly in the 60-65 band. Intraday/Swing
     // keep the stricter raised floor.
@@ -1611,7 +1609,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       ? { A: minConf.A, B: Math.max(minConf.B, votingMinConf), C: Math.max(minConf.C, votingMinConf) }
       : minConf;
 
-    // AF-SCALP-15: asymmetric per-side confidence floor for Scalping (15m).
+
     // 12mo CSV forensics: conf>=75 flips Scalping from netPF 0.90 to 1.18; LONG
     // is the weaker side (PF 0.74 vs SHORT 1.01) — SHORT>=75/LONG>=80 measured
     // netPF 1.35 (n=28, WR 46.4%). rawA here is the side string ("LONG"/"SHORT").
@@ -1619,7 +1617,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const scalpMinConfShort = config.sacMinConfidenceAShort ?? effMinConf.A;
     const effMinConfA = rawA === "LONG" ? scalpMinConfLong : scalpMinConfShort;
 
-    // AF-SCALP-13: confidence-floor ablation for the Scalping leg.
+
     if (rawA) { if (confA >= effMinConfA) this._abl("passed"); else this._abl("rejByConf"); }
     const sigScalping = (rawA && confA >= effMinConfA) ? rawA : null;
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;

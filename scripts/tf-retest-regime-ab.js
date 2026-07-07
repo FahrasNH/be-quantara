@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /**
- * TS_TF RETEST-ENTRY + STRICT-REGIME A/B (AF-SCALP-23, 2026-07-07)
  *
- * Post AF-SCALP-22 CSVs confirm geometry now flows (RR 1.92) but netPF is flat
  * (~0.55-0.6): geometry alone cannot clear PF 1.2. Two structural levers left:
  *   1. RETEST ENTRY — TF fires at the extended breakout close ("pullback
  *      retest" layer is really just close>EMA9). retestEntryEnabled parks a
