@@ -394,6 +394,17 @@ const STRATEGIES = {
       Swing:    { makerEntry: true, makerFeeRate: 0.0002 },
     },
 
+    // AF-SCALP-24 (2026-07-07): Layer 1 (HTF EMA9>21>50 + close>EMA21 + ADX gate)
+    // AKTIF di backtest dengan index timestamp-aligned (htfPtr, closed bar — the
+    // strategy's hardcoded ratio-12 mapping was reading future bars on 15m→4h /
+    // 4h→1w legs). ADX 30 dipilih dari sweep 4 window (25/30 × ±strongDay):
+    // ADX30 menang di SEMUA window — 12mo eval netPF 0.83→1.29 (net -90.5→+64.6),
+    // bull 1.54, bear/recovery masih <1 tapi rugi terpangkas 60-79%. Satu-satunya
+    // varian dengan total 4yr net positif. strongDay gate MERUSAK semua kombinasi
+    // (tfRequireStrongTrend tetap OFF). tfHtfLayerEnabled: false = kontrol A/B.
+    adxMinStrength:    30,
+    tfHtfLayerEnabled: true,
+
     trades:        "8-15 trade/hari",
     winrate:       "~54-58%",
     risk:          "Sedang",

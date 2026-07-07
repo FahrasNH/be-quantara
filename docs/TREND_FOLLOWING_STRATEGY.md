@@ -403,15 +403,26 @@ These parameters can be adjusted in the backtest UI:
 | **Realized R:R** | 1.9R / –1.1R | 1.9R / –1.0R | 2.2R / –1.3R | Losers tight, not wide |
 | **Trades/Day** | ~0.1 | ~0.04 | ~0.25 | Below design 0.5–3 |
 
-### Architecture Note: HTF Layer Status (AF-SCALP-24)
+### Architecture Note: HTF Layer Status (AF-SCALP-24) — ✅ ACTIVE
 
-⚠️ **Critical Finding:** The 3-layer confirmation described in this doc (§3-Layer Confirmation System) was designed with HTF ADX gate, but pre-2026-07-07 backtest engine did NOT build or pass HTF indicators to detectSignal. Result:
+⚠️ **Critical Finding (2026-07-07):** The 3-layer confirmation described in this doc was designed with an HTF ADX gate, but the pre-AF-SCALP-24 backtest engine never built or passed HTF indicators to detectSignal — Layer 1 was **dormant** (entry-TF fallback), and the ADX gate never fired. All results in the table above were measured against that degraded 1-layer version.
 
-- **Layer 1 (HTF trend via EMA9>21>50 + ADX≥25):** Dormant — fallback to entry-TF only
-- **Layer 2 (MTF Donchian):** Computed on entry-TF as fallback (not true MTF)
-- **ADX gate:** Never fired (adxHTF always null → fail-open assumed strong)
+**AF-SCALP-24 enables Layer 1 correctly.** Three bugs had to fall together:
+1. **HTF indicators never built** for TF (only MR) → now built + injected (closesHTF/emaFastHTF/emaMidHTF/emaSlowHTF/adxHTF)
+2. **Index alignment:** the strategy's hardcoded `htfRatio: 12` (5m→1h) read FUTURE/wrong HTF bars on the actual 15m→4h / 4h→1w legs (measured: PF 0.83 → 0.49 when misaligned). Engine now passes a timestamp-aligned index to the last CLOSED HTF bar (no lookahead).
+3. **calcADX return shape:** returns `{adx, plusDI, minusDI}`, not an array — first cut made the fail-closed gate skip every entry (0 trades).
 
-All 12-month results above measured against this **degraded 1-layer version**. AF-SCALP-24 re-enables Layer 1 + ADX gate in backtest. Walk-forward results pending.
+**Measured impact (12mo eval, fees+slip ON, full TP, Intraday+Swing, maker):**
+
+| Variant | Trades | WR | Net PF | Net PnL |
+|---|---|---|---|---|
+| Layer 1 OFF (old behavior) | 50 | 34.0% | 0.83 | –$90.5 |
+| Layer 1 aligned, ADX 25 | 27 | 40.7% | 1.09 | +$22.2 |
+| **Layer 1 aligned, ADX 30 (shipped default)** | **24** | **45.8%** | **1.29** | **+$64.6** |
+
+Walk-forward (ADX 30 vs Layer-1-OFF): bear 0.69 vs 0.57, recovery 0.59 vs 0.57, bull **1.54** vs 0.89. ADX 30 won **every** window in the 25/30 × ±strongDay sweep and is the only variant net-positive over the full 4 years. Trend-following still loses (much less) in trendless years — that is regime allocation's job, not this signal's.
+
+Defaults shipped: `adxMinStrength: 30` (BE `legacyStrategies.js` + FE param, keep in sync), `tfHtfLayerEnabled: true` (set `false` only for A/B controls). `tfRequireStrongTrend` measured HARMFUL in all combos — keep OFF.
 
 ### Realized Performance Issues (Pre-AF-SCALP-24)
 
@@ -895,9 +906,11 @@ This section documents systematic A/B testing on TF from 2026-07-06 to 2026-07-0
 
 **Conclusion:** No variant clears PF 1.0 in any window. In-sample optimism does not survive walk-forward.
 
-### Root Cause: Edge Ceiling
+### Root Cause: Edge Ceiling — SUPERSEDED by AF-SCALP-24
 
-5 independent angles (exit ladder, time-stop, tight SL geometry, retest, strict regime) all converge on the same finding: **TF's Donchian-breakout entry on this timeframe (15m/4h) carries insufficient edge to clear PF 1.2 net of costs.** Gross edge ~1.32 fee-free at best geometry (SL 1.0×ATR, RR 2.0+); fee drag + regime bleed consume it entirely. **Improvement requires different signal** (e.g., 4h-native entry with 1D confirm), not further tuning.
+5 independent angles (exit ladder, time-stop, tight SL geometry, retest, strict regime) converged on: "TF's entry carries insufficient edge to clear PF 1.2 net of costs — needs a different signal."
+
+**That verdict was measured on the DEGRADED strategy** (Layer 1 dormant, see Architecture Note). The "different signal" turned out to be the one already designed in this doc: HTF trend + ADX strength gating, which had simply never executed. With Layer 1 aligned and ADX 30 (AF-SCALP-24): 12mo netPF **1.29** (+$64.6), bull window **1.54**. Lesson recorded for future tuning: before falsifying a strategy, verify every documented layer is actually running in the engine under test.
 
 ---
 
