@@ -44,6 +44,13 @@ async function run(cfg, candles, label = "") {
     entryCandles: candles.entry, htfCandles: candles.htf, dailyCandles: candles.daily,
     symbol: "BTCUSDT",
   }, ["Intraday", "Swing"]);
+  if (label.includes("V1")) {
+    console.log(`[DEBUG] V1 meta:`, {
+      trades: res.trades?.length || 0,
+      htfBars: res.meta?.htfBars,
+      strategyKey: res.meta?.strategyKey
+    });
+  }
   return res.trades || [];
 }
 

@@ -26,7 +26,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA } = require("../../domain/indicators");
+const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX } = require("../../domain/indicators");
 const { strategyRegistry } = require("../../domain/strategy");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
@@ -39,8 +39,10 @@ const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require
 // code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
 const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
 const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
+const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING"]); // AF-SCALP-24: HTF layer support
 const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
+const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
 
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
@@ -1510,10 +1512,14 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       if (j >= 0 && j < htfIndicators.adx.length) {
         const adxVal = htfIndicators.adx[j];
         if (adxVal == null || adxVal < 25) {
+          diag.adxHTFGate = (diag.adxHTFGate || 0) + 1;
           equity.push({ date: isoOf(c), value: round2(capital) });
           continue; // adxHTF too low or null → skip entry (fail-closed)
         }
       }
+    } else if (isTFKey(strategyKey) && !htfIndicators?.adx && i === 100) {
+      // Log once if HTF not built for TF (debug)
+      console.log(`[WARN] TF backtest: htfIndicators or adx missing (HTF layer dormant)`);
     }
 
     // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
