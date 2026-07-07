@@ -1608,6 +1608,26 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
  * @param {Object}   opts        - same shape as runTripleTypeBacktest
  * @param {string[]} typeOrder   - subset of ["Scalping","Intraday","Swing"]
  */
+// AF-SCALP-22: TS_TF geometry key TRANSLATION. The FE sends the legacy knob
+// names (atrMult / riskReward — FE backtestStrategies TREND_FOLLOWING defaults
+// 1.3 / 1.92) and the BE legacy config uses atrMultiplier / riskReward, but the
+// engine's SL/TP override chain only reads slAtrMult / tpAtrMult. AF-SCALP-21
+// made the chain live inside TrendFollowingStrategy, yet post-deploy CSVs
+// (2026-07-07) still show Planned R:R exactly 2.0 on every row — nothing was
+// translating the legacy names, so the constructor defaults 1.5/3.0 kept
+// winning. Scoped to TF ONLY: riskReward also exists as DEAD config on other
+// strategies (e.g. SMC, where it must stay dead) — mapping it globally would
+// silently change their SL/TP too.
+function normalizeTfGeometryKeys(strategyKey, cfg) {
+  if (strategyKey !== "TS_TF" && strategyKey !== "TREND_FOLLOWING") return cfg;
+  const out = { ...cfg };
+  if (out.slAtrMult == null) out.slAtrMult = out.atrMult ?? out.atrMultiplier;
+  if (out.tpAtrMult == null && out.slAtrMult != null) {
+    out.tpAtrMult = out.slAtrMult * (out.riskReward ?? 2);
+  }
+  return out;
+}
+
 async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const { strategyKey, capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
 
@@ -1632,12 +1652,14 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     ? opts.naturalTypeOrder
     : typeOrder;
   for (const tradeType of typeOrder) {
-    const typeConfig = {
+    // AF-SCALP-22: translate AFTER the per-leg merge so legacy keys inside
+    // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
+    const typeConfig = normalizeTfGeometryKeys(strategyKey, {
       ...cfg,
       // AF-SCALP-05: per-leg overrides — see runTripleTypeBacktest.
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
-    };
+    });
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
 
