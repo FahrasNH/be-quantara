@@ -1404,12 +1404,21 @@ async function _runBacktestJobAsync(job, userId, opts) {
     const htfCandles   = {};
     const dataInfo     = {};
 
-    // Normalize typeOrder: expand "All" to supported types, then filter by strategy support
+    // Normalize typeOrder: filter to supported types, expand "All", then apply FE filter
     let typeOrder = isAF ? Object.keys(TYPE_TF) : multiTypeOrder;
-    typeOrder = expandAllTypes(strategyKey, typeOrder); // expand "All" → actual supported types
-    typeOrder = applyTypeFilter(typeOrder); // apply FE advance-config filter
+
+    // (1) Filter to only types supported by this strategy (mandatory)
+    const supportedForStrategy = STRATEGY_SUPPORTED_TYPES[strategyKey] || [];
+    typeOrder = typeOrder.filter(t => supportedForStrategy.includes(t));
+
+    // (2) Expand "All" pseudo-type to actual supported types
+    typeOrder = expandAllTypes(strategyKey, typeOrder);
+
+    // (3) Apply FE advance-config filter (activeTypes parameter, optional)
+    typeOrder = applyTypeFilter(typeOrder);
 
     // Validate typeOrder against strategy's supported types
+    // (Should always pass now, but kept as safety check)
     const validation = validateTypeOrderForStrategy(strategyKey, typeOrder);
     if (!validation.valid) {
       throw new Error(validation.error);
