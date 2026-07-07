@@ -369,17 +369,13 @@ const STRATEGIES = {
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
-    // AF-SCALP-20 (2026-07-07): REVERSED FEE-04's premise. 12mo CSV forensics
-    // + position-level de-dupe (91 legs -> 57 positions) showed the "partial"
-    // ladder (40%@1R SL->0.3R, 27.5%@2R SL->1R) caps realized winners at ~1.1R
-    // even on full-TP hits vs the planned 2R signal -- pushing breakeven WR to
-    // 63.2% against an actual 45.6%, net PF 0.49. A/B harness
-    // (scripts/tf-exit-ladder-ab.js) confirmed tpMode="full" (no ladder) beats
-    // the ladder in ALL 4 windows tested (in-sample + 3yr walk-forward: bear
-    // 0.74 vs 0.63, recovery 0.67 vs 0.44, bull 0.96 vs 0.55) -- the ladder's
-    // "protect the win" premise doesn't survive contact with TF's actual WR.
-    // Set tpMode:"partial" to restore the old (now-falsified) ladder behavior.
-    tpMode:        "full",
+    // FEE-04: mode "partial" mengunci 40% di +1R & 27.5% di +2R lalu menggeser
+    // SL ke +0.3R/+1R sembari sisanya lari ke TP penuh. AF-SCALP-20 note
+    // (2026-07-07): partial mode juga berfungsi sebagai DIAGNOSTIK — leg
+    // Partial_1R/Partial_2R/TP di CSV mengukur seberapa sering tiap level
+    // tersentuh (touch-rate +1R = 45.6%, +2R = 14% pada run 12mo). Jangan
+    // ganti mode ini untuk "memperbaiki" PF — perbaiki geometri Entry/SL/TP.
+    tpMode:        "partial",
 
     leverage:      2,
     interval:      "5m",

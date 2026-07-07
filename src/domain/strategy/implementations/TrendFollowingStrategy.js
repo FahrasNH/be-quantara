@@ -415,9 +415,20 @@ class TrendFollowingStrategy extends StrategyBase {
     return null;
   }
 
-  calculateRiskConfig(entryPrice, atr, signal) {
-    const slDist = atr * this.config.slMultiplier;
-    const tpDist = atr * this.config.tpMultiplier;
+  // AF-SCALP-21: accept the engine's per-run overrides (5th arg), matching the
+  // SMC contract. Before this, the 3-arg signature silently DISCARDED the
+  // slMultiplier/tpMultiplier the backtest engine passes (built from
+  // cfg.slAtrMult / typeOverrides) — every SL/TP knob for TS_TF (FE "SL
+  // Multiplier" atrMult 1.3, "TP Multiplier" riskReward 1.92) was a dead knob,
+  // and TF always traded the constructor defaults SL 1.5×ATR / TP 3.0×ATR
+  // (CSV cross-check: all 91 rows show Planned R:R 2.0 = 3.0/1.5, never 1.92).
+  // Live engines pass no slMultiplier/tpMultiplier in opts → fallback keeps
+  // live behavior byte-identical.
+  calculateRiskConfig(entryPrice, atr, signal, _component, opts = {}) {
+    const slMult = opts.slMultiplier ?? this.config.slMultiplier;
+    const tpMult = opts.tpMultiplier ?? this.config.tpMultiplier;
+    const slDist = atr * slMult;
+    const tpDist = atr * tpMult;
 
     let stopLoss, takeProfit;
 
@@ -435,8 +446,8 @@ class TrendFollowingStrategy extends StrategyBase {
       riskReward: parseFloat((tpDist / slDist).toFixed(2)),
       slDistance: slDist,
       tpDistance: tpDist,
-      slMultiplier: this.config.slMultiplier,
-      tpMultiplier: this.config.tpMultiplier,
+      slMultiplier: slMult,
+      tpMultiplier: tpMult,
     };
   }
 
