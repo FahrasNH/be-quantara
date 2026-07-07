@@ -273,15 +273,26 @@ function computeHybridScore(data = {}) {
   return clamp01(score);
 }
 
+// Tier boundaries (calibrated on 2023–2024 top-250 score distribution — see
+// ATR_AND_PAIR_TIER_GUIDE.md §2.3). NOT to be edited ad-hoc: changes go through
+// the quarterly recalibration report (scripts/recalibrate-pair-tiers.js) +
+// backtest sign-off, because every SL/size/strategy gate downstream keys off
+// these numbers.
+const TIER_THRESHOLDS = Object.freeze({
+  STABLE:        0.48, // score > 0.48 → at least STABLE
+  SEMI_VOLATILE: 0.65, // score > 0.65 → at least SEMI_VOLATILE
+  VOLATILE:      0.78, // score > 0.78 → VOLATILE
+});
+
 /**
  * Map hybrid score ke tier string.
  * @param {number} score
  * @returns {string}
  */
 function tierFromHybridScore(score) {
-  if (score > 0.78) return PAIR_TIER.VOLATILE;
-  if (score > 0.65) return PAIR_TIER.SEMI_VOLATILE;
-  if (score > 0.48) return PAIR_TIER.STABLE;
+  if (score > TIER_THRESHOLDS.VOLATILE)      return PAIR_TIER.VOLATILE;
+  if (score > TIER_THRESHOLDS.SEMI_VOLATILE) return PAIR_TIER.SEMI_VOLATILE;
+  if (score > TIER_THRESHOLDS.STABLE)        return PAIR_TIER.STABLE;
   return PAIR_TIER.LIQUID;
 }
 
@@ -296,6 +307,15 @@ function calculateHybridVolatilityScore(data) {
 
 // ─── Stablecoins to skip during dynamic classification ────────────────────────
 const STABLECOINS = new Set(["USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "GUSD", "FRAX", "USDD", "PYUSD", "FDUSD"]);
+
+// ─── Confidence gate (live enforcement) ──────────────────────────────────────
+// Below this confidence the live/dry-run path treats the coin one notch more
+// conservative (see applyConfidenceGate). Env-overridable for ops tuning
+// without a deploy; clamp to a sane band so a typo can't disable the gate.
+const CONFIDENCE_GATE_MIN = (() => {
+  const raw = Number(process.env.PAIR_CONFIDENCE_GATE_MIN);
+  return Number.isFinite(raw) ? Math.min(90, Math.max(0, raw)) : 60;
+})();
 
 // ─── PairClassifier ───────────────────────────────────────────────────────────
 class PairClassifier {
@@ -683,12 +703,78 @@ class PairClassifier {
     }
 
     if (typeof score === 'number') {
-      const thresholds = [0.48, 0.65, 0.78];
+      const thresholds = Object.values(TIER_THRESHOLDS);
       const nearBoundary = thresholds.some((t) => Math.abs(score - t) <= 0.03);
       if (nearBoundary) confidence -= 10;
     }
 
     return Math.round(clamp01(confidence / 100) * 100);
+  }
+
+  /**
+   * Enforce the confidence gate on a classify() result (live/dry-run path).
+   *
+   * ATR_AND_PAIR_TIER_GUIDE.md §2.4: "confidence < 60% → engine memperlakukan
+   * coin satu tingkat lebih konservatif dari tier-nya sampai data membaik."
+   * Concretely, when confidence < CONFIDENCE_GATE_MIN:
+   *   - Continuous sizing (slMultiplier / positionSizeAdjustment) is recomputed
+   *     from `score + 0.10` — roughly one tier's worth of extra caution on the
+   *     same ramps, so a shaky STABLE is sized like a SEMI_VOLATILE.
+   *   - Discrete policy params are taken from the STRICTER of the current tier
+   *     and the score-bumped tier (min trades/day, min loss cap, regime filter
+   *     forced on, max voting threshold).
+   *   - `gated: true` + `gatedFromTier` are set so callers/logs can see the
+   *     gate fired; `tier` itself keeps the measured label (the gate changes
+   *     how much we risk, not what we believe the coin is).
+   * When confidence ≥ the gate, the result is returned unchanged (gated: false).
+   *
+   * Backtest paths always supply full candle metrics (Jalur 1, confidence ~95)
+   * so this gate is effectively a live/dry-run safety net — live parity is
+   * preserved because the gate only fires when live has WORSE data than the
+   * backtest ever ran with.
+   *
+   * @param {Object} classification - output of classify()
+   * @returns {Object} same shape + { gated, gatedFromTier? }
+   */
+  applyConfidenceGate(classification) {
+    if (!classification) return classification;
+    const { confidence, hybridScore, tier } = classification;
+    if (typeof confidence !== 'number' || confidence >= CONFIDENCE_GATE_MIN) {
+      return { ...classification, gated: false };
+    }
+
+    // No score at all (Jalur 3 static fallback) → already VOLATILE-conservative
+    // for unknown symbols; for known-LIQUID statics just force the regime filter.
+    if (typeof hybridScore !== 'number') {
+      return {
+        ...classification,
+        gated: true,
+        gatedFromTier: tier,
+        paramOverrides: { ...classification.paramOverrides, regimeFilterRequired: true },
+      };
+    }
+
+    const bumpedScore = Math.min(1, hybridScore + 0.10);
+    const bumpedTier  = tierFromHybridScore(bumpedScore);
+    const cur  = PARAM_OVERRIDES[tier]       ?? PARAM_OVERRIDES.STABLE;
+    const bump = PARAM_OVERRIDES[bumpedTier] ?? PARAM_OVERRIDES.VOLATILE;
+    const minDefined = (a, b) => (a == null ? b : b == null ? a : Math.min(a, b));
+    const maxDefined = (a, b) => (a == null ? b : b == null ? a : Math.max(a, b));
+
+    return {
+      ...classification,
+      gated:         true,
+      gatedFromTier: tier,
+      paramOverrides: {
+        ...classification.paramOverrides,
+        slMultiplier:            slMultiplierFromScore(bumpedScore),
+        positionSizeAdjustment:  positionSizeFromScore(bumpedScore),
+        maxTradesPerDay:         minDefined(cur.maxTradesPerDay, bump.maxTradesPerDay),
+        dailyLossLimit:          minDefined(cur.dailyLossLimit, bump.dailyLossLimit),
+        regimeFilterRequired:    true,
+        votingThresholdOverride: maxDefined(cur.votingThresholdOverride, bump.votingThresholdOverride),
+      },
+    };
   }
 
   /**
@@ -794,4 +880,7 @@ module.exports = {
   atrExtremePenalty,
   slMultiplierFromScore,
   positionSizeFromScore,
+  TIER_THRESHOLDS,
+  CONFIDENCE_GATE_MIN,
+  STABLECOINS,
 };

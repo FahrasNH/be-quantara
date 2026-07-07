@@ -269,7 +269,16 @@ function createBotInstance(userId, symbol, configOverrides = {}) {
   // → bump tier dinamis. Tanpa metrics → klasifikasi tier dasar (backward-compatible).
   // Diekstrak agar tidak ikut ter-spread ke config BotEngine.
   const { pairMetrics: _pairMetrics, ...engineOverrides } = configOverrides;
-  const _singlePair = pairClassifier.classify(symbol, _pairMetrics || null);
+  // v2.4: confidence gate — bila data klasifikasi lemah (confidence < 60:
+  // CoinGecko proxy/stale/skor di ambang tier), size & SL diperlakukan satu
+  // tingkat lebih konservatif sampai data membaik. Backtest tak terpengaruh
+  // (selalu Jalur 1 / confidence tinggi) — gate ini murni safety net live.
+  const _singlePair = pairClassifier.applyConfidenceGate(
+    pairClassifier.classify(symbol, _pairMetrics || null)
+  );
+  if (_singlePair.gated) {
+    console.warn(`[PairTier] ${symbol}: confidence ${_singlePair.confidence} < gate — sizing bumped one notch conservative (tier ${_singlePair.tier}, path ${_singlePair.dataPath})`);
+  }
   const bot = new BotEngine({
     symbol,
     botKey:      key,
@@ -354,7 +363,14 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   // Klasifikasi tier pair → ambil override SL & ukuran posisi (lihat engineConfig).
   // v2.3: opts.pairMetrics (ATR%30d + likuiditas 24j) opsional dari caller (bot-start)
   // → bump tier dinamis. Tanpa metrics → klasifikasi tier dasar (backward-compatible).
-  const _pairClass = pairClassifier.classify(symbol, opts.pairMetrics || null);
+  // v2.4: confidence gate (lihat createBotInstance) — enforce juga di jalur
+  // multi-strategy agar kedua entry point live konsisten.
+  const _pairClass = pairClassifier.applyConfidenceGate(
+    pairClassifier.classify(symbol, opts.pairMetrics || null)
+  );
+  if (_pairClass.gated) {
+    console.warn(`[PairTier] ${symbol}: confidence ${_pairClass.confidence} < gate — sizing bumped one notch conservative (tier ${_pairClass.tier}, path ${_pairClass.dataPath})`);
+  }
   const _pairOverrides = {
     tier:                   _pairClass.tier,
     slMultiplier:           _pairClass.paramOverrides.slMultiplier,
@@ -1014,6 +1030,11 @@ db.init()
     // Dynamic pair classification dari CoinGecko (v2.3: refresh tiap 2 jam, non-blocking)
     pairClassifier.refreshDynamic().catch(() => {});
     setInterval(() => pairClassifier.refreshDynamic().catch(() => {}), 2 * 60 * 60 * 1000);
+    // v2.4: drift monitor mingguan — alert bila >10% pair pindah tier sejak
+    // snapshot terakhir (sinyal ambang 0.48/0.65/0.78 mulai usang → jalankan
+    // scripts/recalibrate-pair-tiers.js). Observasi saja, tidak mengubah ambang.
+    const { pairTierDriftMonitor } = require("../infrastructure/classification/PairTierDriftMonitor");
+    pairTierDriftMonitor.start();
     checkPm2RestartHealth();
     startBotWatchdog();
     // Pulihkan bot yang sedang berjalan (async, tidak memblok startup)

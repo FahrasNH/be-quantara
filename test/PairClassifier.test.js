@@ -549,6 +549,71 @@ describe('PairClassifier', () => {
     });
   });
 
+  // ── Confidence gate enforcement (v2.4 live safety net) ────────────────────
+
+  describe('applyConfidenceGate()', () => {
+    const { CONFIDENCE_GATE_MIN } = require('../src/infrastructure/classification/PairClassifier');
+
+    it('high-confidence classification passes through unchanged (gated: false)', () => {
+      const pc = new PairClassifier();
+      const metrics = { hv30: 25, atrPercent14: 1.0, liquidityRatio: 0.12, marketCapRank: 5, betaToBTC: 1.0 };
+      const raw = pc.classify('BTCUSDT', metrics);
+      const gated = pc.applyConfidenceGate(raw);
+      assert.equal(gated.gated, false);
+      assert.equal(gated.tier, raw.tier);
+      assert.equal(gated.paramOverrides.slMultiplier, raw.paramOverrides.slMultiplier);
+      assert.equal(gated.paramOverrides.positionSizeAdjustment, raw.paramOverrides.positionSizeAdjustment);
+    });
+
+    it('low-confidence result gets more conservative sizing (wider SL, smaller size)', () => {
+      const pc = new PairClassifier();
+      const raw = pc.classify('SOMECOINUSDT', { hv30: 70, atrPercent14: 3.0, liquidityRatio: 0.04, marketCapRank: 40 });
+      // Force low confidence without depending on data-path internals.
+      const lowConf = { ...raw, confidence: CONFIDENCE_GATE_MIN - 10 };
+      const gated = pc.applyConfidenceGate(lowConf);
+      assert.equal(gated.gated, true);
+      assert.equal(gated.gatedFromTier, raw.tier);
+      assert.ok(gated.paramOverrides.slMultiplier > raw.paramOverrides.slMultiplier);
+      assert.ok(gated.paramOverrides.positionSizeAdjustment < raw.paramOverrides.positionSizeAdjustment);
+      assert.equal(gated.paramOverrides.regimeFilterRequired, true);
+      // Tier label stays the measured one — the gate changes risk, not belief.
+      assert.equal(gated.tier, raw.tier);
+    });
+
+    it('gated discrete policy takes the STRICTER of current and bumped tier', () => {
+      const pc = new PairClassifier();
+      // STABLE-ish score → bump lands in SEMI_VOLATILE territory.
+      const raw = pc.classify('SOMECOINUSDT', { hv30: 75, atrPercent14: 3.4, liquidityRatio: 0.03, marketCapRank: 50 });
+      assert.equal(raw.tier, PAIR_TIER.STABLE);
+      const gated = pc.applyConfidenceGate({ ...raw, confidence: 30 });
+      // STABLE allows 8 trades/day, SEMI_VOLATILE 6 → gate takes 6.
+      assert.ok(gated.paramOverrides.maxTradesPerDay <= 8);
+      // Voting threshold takes the max (stricter consensus).
+      assert.ok(gated.paramOverrides.votingThresholdOverride >= 0.60);
+    });
+
+    it('emergency-path result without a score still gets regime filter forced on', () => {
+      const pc = new PairClassifier();
+      const raw = pc.classify('BTCUSDT'); // Jalur 3: static LIQUID, no score, confidence 40
+      assert.equal(raw.dataPath, 3);
+      const gated = pc.applyConfidenceGate(raw);
+      assert.equal(gated.gated, true);
+      assert.equal(gated.paramOverrides.regimeFilterRequired, true);
+      assert.equal(gated.tier, PAIR_TIER.LIQUID);
+    });
+
+    it('never loosens anything: gated params are ≥ conservative vs raw on every axis', () => {
+      const pc = new PairClassifier();
+      const raw = pc.classify('XCOINUSDT', { hv30: 95, atrPercent14: 4.8, liquidityRatio: 0.01, marketCapRank: 180, betaToBTC: 2.2 });
+      const gated = pc.applyConfidenceGate({ ...raw, confidence: 10 });
+      assert.ok(gated.paramOverrides.slMultiplier >= raw.paramOverrides.slMultiplier);
+      assert.ok(gated.paramOverrides.positionSizeAdjustment <= raw.paramOverrides.positionSizeAdjustment);
+      // Already at/near VOLATILE ceiling → clamps hold (sl ≤ 1.5, size ≥ 0.55).
+      assert.ok(gated.paramOverrides.slMultiplier <= 1.5);
+      assert.ok(gated.paramOverrides.positionSizeAdjustment >= 0.55);
+    });
+  });
+
   // ── Singleton export ──────────────────────────────────────────────────────
 
   it('pairClassifier singleton is an instance of PairClassifier', () => {

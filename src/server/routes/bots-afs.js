@@ -630,7 +630,14 @@ module.exports = function createBotsRouter(helpers) {
       // candle harian + CoinGecko, lalu sertakan ke classify(). Non-fatal: bila
       // gagal/null → classify jatuh ke tier rank/static (backward-compatible).
       const pairMetrics = await getPairTierMetrics(sharedClient, symbol).catch(() => null);
-      const pairClass = pairClassifier.classify(symbol, pairMetrics);
+      // v2.4: confidence gate — data lemah (metrics gagal di-fetch → CoinGecko
+      // proxy / static fallback) berarti sizing satu tingkat lebih konservatif.
+      const pairClass = pairClassifier.applyConfidenceGate(
+        pairClassifier.classify(symbol, pairMetrics)
+      );
+      if (pairClass.gated) {
+        console.warn(`[PairTier] ${symbol}: confidence ${pairClass.confidence} < gate — sizing bumped one notch conservative (tier ${pairClass.tier}, path ${pairClass.dataPath})`);
+      }
       const tierOverrides = pairClass.paramOverrides;
 
       // Block strategies the classifier itself marks blocked for this tier (AC-PAIR-04).
