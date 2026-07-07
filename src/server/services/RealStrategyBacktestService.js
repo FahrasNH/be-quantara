@@ -1374,12 +1374,18 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const hitSL = position.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
       const hitTP = position.side === "LONG" ? c.high >= position.tp : c.low <= position.tp;
 
-      // AF-SCALP-10: Time-stop for Scalping (enforce scalpingMaxHoldHours)
-      // Exit at market price if time exceeded to prevent slot-blocking
+      // AF-SCALP-10/20: Time-stop, generalized to any component via
+      // typeOverrides[component].maxHoldHours (was Scalping-only/scalpingMaxHoldHours;
+      // TS_TF forensics showed >=24h-underwater positions accounted for -76.8 of the
+      // -230.8 net loss on the Intraday/Swing legs — a hung thesis is a dead thesis).
+      // Exit at market price if time exceeded to prevent slot-blocking.
       let hitTimeStop = false;
-      if (position.component === "Scalping" && cfg.typeOverrides?.Scalping?.scalpingMaxHoldHours) {
+      const compOv = cfg.typeOverrides?.[position.component];
+      const maxHoldHours = compOv?.maxHoldHours
+        ?? (position.component === "Scalping" ? compOv?.scalpingMaxHoldHours : undefined);
+      if (maxHoldHours) {
         const holdMs = c.timestamp - entryCandles[position.openIdx].timestamp;
-        const maxHoldMs = cfg.typeOverrides.Scalping.scalpingMaxHoldHours * 3600 * 1000;
+        const maxHoldMs = maxHoldHours * 3600 * 1000;
         if (holdMs > maxHoldMs) {
           hitTimeStop = true;
           closePosition(price, "TIME_STOP", i);  // exit at market price

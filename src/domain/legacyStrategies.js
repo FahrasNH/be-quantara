@@ -369,12 +369,17 @@ const STRATEGIES = {
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
-    // FEE-04: biarkan winner lari. Profit gross +$38 tertelan fee $45 (net −$7)
-    // karena TP penuh dipukul rata di ~1.9R. Mode "partial" mengunci 40% di +1R
-    // & 27.5% di +2R lalu menggeser SL ke BEP/+1R sembari sisanya lari ke TP
-    // penuh — menaikkan ekspektasi net-of-fee tanpa menaikkan risiko. Knob:
-    // set tpMode:"full" untuk perilaku lama.
-    tpMode:        "partial",
+    // AF-SCALP-20 (2026-07-07): REVERSED FEE-04's premise. 12mo CSV forensics
+    // + position-level de-dupe (91 legs -> 57 positions) showed the "partial"
+    // ladder (40%@1R SL->0.3R, 27.5%@2R SL->1R) caps realized winners at ~1.1R
+    // even on full-TP hits vs the planned 2R signal -- pushing breakeven WR to
+    // 63.2% against an actual 45.6%, net PF 0.49. A/B harness
+    // (scripts/tf-exit-ladder-ab.js) confirmed tpMode="full" (no ladder) beats
+    // the ladder in ALL 4 windows tested (in-sample + 3yr walk-forward: bear
+    // 0.74 vs 0.63, recovery 0.67 vs 0.44, bull 0.96 vs 0.55) -- the ladder's
+    // "protect the win" premise doesn't survive contact with TF's actual WR.
+    // Set tpMode:"partial" to restore the old (now-falsified) ladder behavior.
+    tpMode:        "full",
 
     leverage:      2,
     interval:      "5m",
@@ -384,6 +389,14 @@ const STRATEGIES = {
     grokConfirmMinTp:    7,
 
     signalType:    "TREND_FOLLOWING",
+
+    // AF-SCALP-20: maker execution on entries/TP (same A/B harness) recovers
+    // further fee drag (in-sample netPF 0.76 -> 0.82; bull window 0.96 was the
+    // best single-window result found). SL/time-stop exits remain taker+slippage.
+    typeOverrides: {
+      Intraday: { makerEntry: true, makerFeeRate: 0.0002 },
+      Swing:    { makerEntry: true, makerFeeRate: 0.0002 },
+    },
 
     trades:        "8-15 trade/hari",
     winrate:       "~54-58%",
