@@ -1,11 +1,11 @@
-commit: 1c01a1b
+commit: 20786a5
 symbol: BTCUSDT
 
-[AF-SCALP-13] Scalping filter funnel (35575 bars, 46 trades so far):
-  1. Raw setups (FVG+mitigation) : 2141
+[AF-SCALP-13] Scalping filter funnel (35040 bars, 32 trades so far):
+  1. Raw setups (FVG+mitigation) : 1612
   2. - Rejection-wick gate       : -0 (0.0% of setups)
-     -> signals after rejection   : 1247
-  3. - Regime hard-block          : -785 (63.0% of signals)
-  4. - 5m CHoCH validation        : -108
-  5. - Confidence floor           : -273
-  = PASSED (tradeable signals)    : 81
+     -> signals after rejection   : 904
+  3. - Regime hard-block          : -600 (66.4% of signals)
+  4. - 5m CHoCH validation        : -78
+  5. - Confidence floor           : -165
+  = PASSED (tradeable signals)    : 61

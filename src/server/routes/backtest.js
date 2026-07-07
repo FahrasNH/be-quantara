@@ -21,6 +21,7 @@ const GrokConfirmService = require("../services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../services/GrokBacktestJobService");
 const cfg = require("../../config/env");
+const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../constants/strategySupportedTypes");
 
 // ─── Backtest Job Store ────────────────────────────────────────────────────────
 // Each job runs async on the server; clients subscribe via SSE.
@@ -1396,13 +1397,23 @@ async function _runBacktestJobAsync(job, userId, opts) {
 
   if ((isAF || multiTypeOrder) && !entryTfOverride) {
     // Multi-type mode: each type fetches its own candles, runs only its own component.
-    // AF_SMC always uses all 3 (Scalping/Intraday/Swing); TS_TF/MD_MR use a subset
-    // (see MULTI_TYPE_STRATEGY_MAP) but share the exact same TF definitions/fetch
-    // resilience/period caps below.
+    // AF_SMC uses supported types per STRATEGY_SUPPORTED_TYPES (Scalping/Swing, Intraday hidden per AF-SCALP-18);
+    // TS_TF/MD_MR use a subset (see MULTI_TYPE_STRATEGY_MAP) but share the exact same
+    // TF definitions/fetch resilience/period caps below.
     const entryCandles = {};
     const htfCandles   = {};
     const dataInfo     = {};
-    const typeOrder    = applyTypeFilter(isAF ? Object.keys(TYPE_TF) : multiTypeOrder);
+
+    // Normalize typeOrder: expand "All" to supported types, then filter by strategy support
+    let typeOrder = isAF ? Object.keys(TYPE_TF) : multiTypeOrder;
+    typeOrder = expandAllTypes(strategyKey, typeOrder); // expand "All" → actual supported types
+    typeOrder = applyTypeFilter(typeOrder); // apply FE advance-config filter
+
+    // Validate typeOrder against strategy's supported types
+    const validation = validateTypeOrderForStrategy(strategyKey, typeOrder);
+    if (!validation.valid) {
+      throw new Error(validation.error);
+    }
 
     for (const type of typeOrder) {
       const tfs = TYPE_TF[type];
