@@ -1092,20 +1092,33 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   // backtest can cache since HTF data is static.
   const isMeanReversion = isMRKey(strategyKey);
   let htfIndicators = null;
-  if (isMeanReversion && htfCandles?.length >= 30) {
+  // AF-SCALP-24: build HTF indicators for both MR (regime gate) and TF (adxHTF layer)
+  const needsHTF = isMeanReversion || isTFKey(strategyKey);
+  if (needsHTF && htfCandles?.length >= 30) {
     const htfCloses = htfCandles.map(c => c.close);
     const htfHighs  = htfCandles.map(c => c.high);
     const htfLows   = htfCandles.map(c => c.low);
     const htfAtrArr = calcATR(htfHighs, htfLows, htfCloses, 14);
     const htfAtrSma = calcSMA(htfAtrArr.filter(v => v != null), 20);
+    const htfAdx = calcADX(htfHighs, htfLows, htfCloses, 14);
     htfIndicators = {
       emaFast: calcEMA(htfCloses, 9),
       emaSlow: calcEMA(htfCloses, 21),
       rsi: calcRSI(htfCloses, 14),
       atr: htfAtrArr,
       atrSma: htfAtrSma, // rolling SMA of ATR for ratio check
+      adx: htfAdx, // AF-SCALP-24: TF gate adxHTF >= 25
       close: htfCloses,
     };
+    // AF-SCALP-24: inject HTF data into indicators for TF detectSignal fallback
+    // (TrendFollowingStrategy.detectSignal reads closesHTF, emaFastHTF, emaMidHTF, adxHTF)
+    if (isTFKey(strategyKey)) {
+      indicators.closesHTF = htfCloses;
+      indicators.emaFastHTF = htfIndicators.emaFast;
+      indicators.emaMidHTF = htfIndicators.emaSlow;
+      indicators.emaSlowHTF = calcEMA(htfCloses, 50); // 50-bar EMA for HTF slow
+      indicators.adxHTF = htfAdx;
+    }
   }
 
   const htfPtr = htfCandles?.length
@@ -1489,6 +1502,19 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       typeOverrides: cfg.typeOverrides,
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+
+    // AF-SCALP-24: TF adxHTF gate — require strong trend on HTF (ADX >= 25)
+    // Fail-closed: if adxHTF is null, skip entry (not "assume strong")
+    if (isTFKey(strategyKey) && htfIndicators?.adx) {
+      const j = htfPtr[i];
+      if (j >= 0 && j < htfIndicators.adx.length) {
+        const adxVal = htfIndicators.adx[j];
+        if (adxVal == null || adxVal < 25) {
+          equity.push({ date: isoOf(c), value: round2(capital) });
+          continue; // adxHTF too low or null → skip entry (fail-closed)
+        }
+      }
+    }
 
     // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
     const entryDate = new Date(c.timestamp).toISOString().split("T")[0];

@@ -304,7 +304,9 @@ class TrendFollowingStrategy extends StrategyBase {
     const idxHTF = hasHTF ? Math.floor(lastIdx / (this.config.htfRatio || 12)) : lastIdx;
     const idxMTF = hasMTF ? Math.floor(lastIdx / (this.config.mtfRatio || 3)) : lastIdx;
 
-    // Layer 1: HTF trend
+    // AF-SCALP-24: Layer 1 — HTF trend (enabled in backtest via indicators injection)
+    // Live path: htfTrend passed via config.htfTrend from BotEngine (status quo)
+    // Backtest path: read from indicators.closesHTF/emaFastHTF/emaMidHTF/emaSlowHTF/adxHTF
     const htfClose   = indicators.closesHTF?.[idxHTF] ?? closesEntry[closesEntry.length - 1];
     const htfEmaFast = indicators.emaFastHTF?.[idxHTF] ?? emaFastEntry;
     const htfEmaMid  = indicators.emaMidHTF?.[idxHTF] ?? emaMidEntry;
