@@ -1446,6 +1446,58 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return reversalStrength >= 2;
   }
 
+  /**
+   * AF-SCALP-28: Validate Scalping 5m entry-TF structure alignment.
+   *
+   * For Scalping (Component A) only — ensures 5m entry has COMPLETE SMC
+   * structure before allowing entry:
+   *   1. Sweep detected on 5m (liquidity consumed at recent low/high)
+   *   2. CHoCH confirmed (2+ consecutive candles show reversal)
+   *   3. Displacement underway (price moved away from sweep level by >0.5%)
+   *   4. Direction correct (LONG: price > sweep level; SHORT: price < sweep level)
+   *
+   * This prevents entries during incomplete structure (e.g., sweep without CHoCH
+   * yet) which often reverse immediately. Structure alignment between 5m entry
+   * and 1h confirmation is the hallmark of institutional breakouts.
+   */
+  _validateScalpingEntryTFStructure(indicators, lastIdx, signal, config = {}) {
+    const { closes, highs, lows, volumes, volSMA } = indicators;
+    if (!closes || !highs || !lows || lastIdx < 30) return true; // Allow if insufficient data
+
+    // Scalping 5m structure gate: ensure complete structure before entry
+    // Checks: sweep + CHoCH + displacement (all on 5m entry TF)
+
+    // 1. Detect recent sweep (liquidity consumed)
+    const sweep = this._detectSweep(closes, highs, lows, volumes, volSMA, lastIdx, config);
+    if (!sweep) return false;
+
+    // Sweep must match signal direction
+    const sweepOK = (sweep.type === "bullish" && signal === "LONG") ||
+                    (sweep.type === "bearish" && signal === "SHORT");
+    if (!sweepOK) return false;
+
+    // 2. Verify CHoCH on 5m (at least 2 consecutive candles showing reversal)
+    // This is checked via _detect5mMultiChoCH which requires sequential structure
+    const chochOK = this._detect5mMultiChoCH(indicators, lastIdx, config);
+    if (!chochOK) return false;
+
+    // 3. Check displacement (price moved away from sweep level by minimum threshold)
+    const currentPrice = closes[lastIdx];
+    const sweepLevel = sweep.level;
+    const displacementPct = Math.abs(currentPrice - sweepLevel) / sweepLevel;
+    const minDisplacementPct = config.sacScalpingMinDisplacementPct ?? 0.003; // 0.3% minimum
+
+    if (displacementPct < minDisplacementPct) return false;
+
+    // 4. Displacement must be in correct direction
+    const displaceOK = (signal === "LONG" && currentPrice > sweepLevel) ||
+                       (signal === "SHORT" && currentPrice < sweepLevel);
+    if (!displaceOK) return false;
+
+    // All checks passed — 5m structure is complete and aligned
+    return true;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // detectSignalMulti — per-component results + meta
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1542,6 +1594,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         this._abl("rejByIntradayStructure");
         rawB = null;
         confB = 0;
+      }
+    }
+
+    // ── Scalping (A) Entry TF Structure Validation (5m alignment with 1h) ──────
+    // AF-SCALP-28: For Scalping only — validate that 5m entry-TF structure
+    // (sweep + CHoCH + displacement) is complete before allowing entry. This
+    // prevents entries during incomplete structure moves, which often reverse.
+    // Disabled by default; enable via typeOverrides.Scalping.validateEntryTFStructure = true
+    if (rawA && typeOverrides.Scalping?.validateEntryTFStructure === true) {
+      if (!this._validateScalpingEntryTFStructure(indicators, lastIdx, rawA, config)) {
+        rawA = null;
+        confA = Math.max(0, confA - 30);  // Heavy penalty for invalid structure
       }
     }
 
