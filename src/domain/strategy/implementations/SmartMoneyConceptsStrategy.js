@@ -1618,6 +1618,19 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const effMinConfA = rawA === "LONG" ? scalpMinConfLong : scalpMinConfShort;
 
 
+    // Entry-TF ADX chop gate (per-component, opt-in via typeOverrides[type].minAdx).
+    // indicators.adx is only populated when the backtest engine computes it for
+    // AF_SMC (see RealStrategyBacktestService) — without that wiring this is a
+    // no-op (adxVal undefined → gate skipped), same fail-open default as before.
+    const adxVal = indicators.adx?.[lastIdx];
+    const passesAdx = (minAdx) => {
+      if (!minAdx || adxVal == null) return true;
+      return adxVal >= minAdx;
+    };
+    if (rawA && !passesAdx(typeOverrides.Scalping?.minAdx)) { rawA = null; confA = 0; }
+    if (rawB && !passesAdx(typeOverrides.Intraday?.minAdx)) { rawB = null; confB = 0; }
+    if (rawC && !passesAdx(typeOverrides.Swing?.minAdx)) { rawC = null; confC = 0; }
+
     if (rawA) { if (confA >= effMinConfA) this._abl("passed"); else this._abl("rejByConf"); }
     const sigScalping = (rawA && confA >= effMinConfA) ? rawA : null;
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;

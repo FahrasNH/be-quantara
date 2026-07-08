@@ -40,9 +40,11 @@ const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require
 const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
 const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
 const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING"]);
+const SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
 const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
 const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
+const isSmcKey = (k) => SMC_KEYS.has(String(k || "").toUpperCase());
 
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
@@ -116,6 +118,14 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     rsiPeriod: cfg.rsiPeriod ?? 14,
     atrPeriod: cfg.atrPeriod ?? 14,
   });
+
+  // AF_SMC entry-TF ADX (chop gate): SmartMoneyConceptsStrategy reads
+  // indicators.adx but calcIndicators never populated it — the gate has been
+  // permanently fail-open (dead code) regardless of config. Populate it here
+  // so typeOverrides[component].minAdx can actually filter chop bars.
+  if (isSmcKey(strategyKey)) {
+    indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
+  }
 
   const htfPtr = htfCandles?.length ? buildHtfIndexPointer(entryCandles, htfCandles) : null;
   const htfTrendCache = new Map();
@@ -217,6 +227,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
   const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
   const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
+  // Ladder trigger points in R-multiples. Per-leg via typeOverrides[type] (cfg
+  // here is already the per-type merged config in runTripleTypeBacktest) — the
+  // milestone 1/2 R-thresholds were hardcoded 1.0/2.0 regardless of tradeType,
+  // so a leg-specific ladder (e.g. Swing 1.5R/2.67R) could never be tested.
+  const slPlusM1R = cfg.slPlusM1R ?? 1.0;
+  const slPlusM2R = cfg.slPlusM2R ?? 2.0;
 
   function checkPartialMilestones(componentId, position, c, exitIdx) {
     if (!slPlusEnabled || !position || position.remainingSize <= 0) return;
@@ -268,26 +284,26 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       });
     };
 
-    // Milestone 1: +1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
-    if (!position.m1 && rMult >= 1.0) {
+    // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
+    if (!position.m1 && rMult >= slPlusM1R) {
       position.m1 = true;
       const partial = position.originalSize * slPlusPartial1Pct;
       const newSL = position.side === "LONG" ? position.entry + 0.3 * R : position.entry - 0.3 * R;
       if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? R : -R), partial, "Partial_1R", newSL);
+        partialAt(position.entry + (position.side === "LONG" ? slPlusM1R * R : -slPlusM1R * R), partial, "Partial_1R", newSL);
       } else {
         position.slCurrent = newSL;
       }
     }
 
-    // Milestone 2: +2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
-    if (position.m1 && !position.m2 && rMult >= 2.0) {
+    // Milestone 2: +slPlusM2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
+    if (position.m1 && !position.m2 && rMult >= slPlusM2R) {
       position.m2 = true;
       const fromOriginal = position.originalSize * slPlusPartial2Pct;
       const partial = Math.min(fromOriginal, position.remainingSize * 0.90);
       const newSL = position.side === "LONG" ? position.entry + R : position.entry - R;
       if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? 2 * R : -2 * R), partial, "Partial_2R", newSL);
+        partialAt(position.entry + (position.side === "LONG" ? slPlusM2R * R : -slPlusM2R * R), partial, "Partial_2R", newSL);
       } else {
         position.slCurrent = newSL;
       }

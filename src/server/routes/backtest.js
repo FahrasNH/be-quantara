@@ -1297,6 +1297,12 @@ module.exports = function createBacktestRouter(context) {
 
 // ─── Async job runner ─────────────────────────────────────────────────────────
 const AF_SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+// Shared across AF_SMC, TS_TF (Intraday+Swing), and MD_MR (Scalping+Intraday) —
+// do not scope changes here to one strategy without checking MULTI_TYPE_STRATEGY_MAP
+// below. (Tried moving Intraday to 1h/4h for an AF_SMC-only experiment; that
+// would have silently shifted TS_TF's already-validated Intraday leg off 15m/4h
+// too. AF_SMC's Intraday@1h variant failed validation anyway — see
+// scripts/smc-intraday-1h-validation.js — so left at the shared 15m/4h.)
 const TYPE_TF = {
   Scalping: { entry: "15m", trend: "4h" },
   Intraday: { entry: "15m", trend: "4h" },

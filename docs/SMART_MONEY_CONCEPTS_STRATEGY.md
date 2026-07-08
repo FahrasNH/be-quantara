@@ -1,10 +1,18 @@
 # Smart Money Concepts Strategy (AF_SMC) — Complete Guide
 
 **Version:** 3.0.0 (SAC — Smart Money Concepts)  
-**Last Updated:** 2026-07-07  
+**Last Updated:** 2026-07-08  
 **Strategy Code:** `SmartMoneyConceptsStrategy.js`  
 **Tier:** FOUNDRY (minimum Rp3-5M / $200-350)  
-**Trade Types:** Scalping + Intraday + Swing (3 concurrent types)  
+**Trade Types:** Scalping + Swing (Intraday hidden — see below)  
+
+⚠️ **Intraday is currently HIDDEN from the UI.** It ran on the exact same
+candles as Scalping (both 15m entry / 4h trend — 100% signal overlap, not a
+genuinely separate leg), so it was disabled rather than double-count the same
+trades under two labels. A 2026-07-08 attempt to revive it on 1h entry (a
+real, different signal source) was tested and **failed validation** — see
+[Appendix: Intraday Revival Attempt](#appendix-intraday-revival-attempt-2026-07-08)
+for the full result. It stays hidden until a design clears the bar.
 
 ---
 
@@ -738,6 +746,60 @@ Portfolio:
   + Breakout:          20% risk  (consolidation breaks)
   = Robust coverage of all market conditions
 ```
+
+---
+
+## Appendix: Intraday Revival Attempt (2026-07-08)
+
+A v3.1 proposal suggested moving Intraday to 1h entry / 4h confirm (a genuinely
+different signal source from Scalping's 15m, unlike the current hidden state)
+plus an entry-TF ADX chop gate and a revised TP ladder. Tested with a
+purpose-built harness (`scripts/smc-intraday-1h-validation.js`, BTCUSDT,
+fees+slippage ON) against the same bar TS_TF's Layer-1 fix used: **netPF ≥ 1.0
+in EVERY walk-forward window**, not just the recent 12-month window.
+
+**Engine work landed as reusable infra (kept, zero risk to Scalping/Swing):**
+- Entry-TF ADX now actually computed for AF_SMC (`indicators.adx` was read by
+  the strategy but never populated — a dead gate, same bug class as TS_TF's
+  pre-fix HTF ADX). Opt-in per leg via `typeOverrides.<Type>.minAdx`.
+- Partial-TP ladder R-multiples (`slPlusM1R` / `slPlusM2R`, default 1.0/2.0)
+  are now configurable per leg instead of hardcoded — needed to test the
+  spec's Scalping 2R/4R and Swing 1.5R/2.67R ladder ideas without touching the
+  shipped defaults for other legs.
+
+**Result — FAILS validation, stays hidden:**
+
+| Variant | Bear 22-23 | Recovery 23-24 | Bull 24-25 | 12mo eval |
+|---|---|---|---|---|
+| V0 baseline (1h, no gate) | 1.01 | 1.06 | 0.84 | 0.65 |
+| V2 +ADX25 chop gate | 0.81 | 1.08 | 0.88 | 0.71 |
+| V4 HTF hard-block | 0.81 | 1.19 | 0.70 | 0.58 |
+| V5 HTF hard-block+ADX20 | 0.84 | 1.25 | 0.73 | 0.58 |
+
+No variant clears 1.0 in all four windows — every one fails at least one
+window, and the failures move around (ADX helps 12mo/bull but hurts bear;
+HTF hard-block helps recovery but hurts bull/eval). This is the signature of
+a signal without a stable edge on 1h, not a tunable gate problem.
+
+**Scalping ADX gate (separate, smaller test):** entry-TF ADX ≥23 on the
+existing 15m Scalping leg improved 3 of 4 windows (12mo eval 0.70 → 1.45, bull
+0.80 → 1.18) but left the 2023-07→2024-07 window badly broken regardless of
+threshold (WR 7.1%, netPF ~0.32-0.35 at every ADX level tested) — that
+window's losses aren't chop-related, so the gate isn't a fix for it. **Not
+shipped as default** (mixed, not robust); available as an opt-in
+`typeOverrides.Scalping.minAdx` knob for further investigation. Scalping's
+shipped baseline is untouched. Swing was not touched at all per the review
+recommendation (it's the one leg with a proven track record).
+
+**Conclusion:** Reviving Intraday needs a different signal design (the doc's
+own suggestion of 1h entry was a legitimate hypothesis — worth testing, but it
+didn't survive walk-forward). Displacement/volume hard-gates from the v3.1
+proposal were not implemented at all: they'd require new strategy code (the
+sequence engine currently scores these continuously rather than hard-gating),
+and the closest precedent (AF-SCALP-14's rejection-wick gate) cut Scalping
+volume 43→8 trades with no WR gain — stacking three new hard gates at once
+risks the same failure mode on an already-thin leg. Any future attempt should
+test displacement/volume/ADX **one gate at a time**, exactly as done here.
 
 ---
 
