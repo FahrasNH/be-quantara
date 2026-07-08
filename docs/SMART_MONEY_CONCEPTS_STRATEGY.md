@@ -604,6 +604,47 @@ When enabled, incomplete or weak structure entries are filtered out, reducing no
 
 ---
 
+### AF-SWING-V3: No-Trade Zone + Adaptive Sizing (Swing, opt-in)
+
+**Status:** ⚠️ Experimental — disabled by default (`sacSwingV3Gate: false`)
+**Source:** External proposal `SWING_ENGINE_V3.md` (14 improvements) — **6 of 14 implemented**, the rest deferred (see below).
+**Files:** `SmartMoneyConceptsStrategy._evaluateSwingV3Gate()` + `RealStrategyBacktestService.js` (sizing hook)
+
+**What's implemented (Phase 1 — signal-side gate, no exit-engine changes):**
+
+| # | V3.md Improvement | Implementation |
+|---|---|---|
+| 1 | Market Regime Filter | Blocks entry when weekly `htfTrend` is `SIDEWAYS`/`UNKNOWN` |
+| 7 | Relative Volume Filter | RVOL < 1.0 → blocked; RVOL 1.0–1.2 → size ×0.75 |
+| 8 | ATR Expansion Filter | ATR14/ATR100 < 0.8 → blocked; > 2.5 → size ×0.5 |
+| 9 | Adaptive Position Sizing | Confidence/RVOL/ATR-tiered multiplier applied to `riskPerTrade` for Swing only |
+| 11 | No-Trade Zone | Consolidates regime + RVOL + ATR + confidence floor into one block/allow decision |
+| 12 | Confidence tiers (partial) | Reuses existing FVG/displacement/OB confidence (`confC`); adds ≥70 full-size / 60–69 "Reduce Risk" (×0.5) / <60 no-trade. Does **not** re-weight the underlying score (Trend/Liquidity/BOS components from the original spec) — that would touch the confidence formula validated as capturing 97% of planned RR, which stays untouched. |
+
+**Deferred (NOT implemented — needs larger, riskier changes):**
+- **#2 BOS Quality Score, #4 FVG Quality Score, #5 Order Block Quality** — require tracking freshness/mitigation state across bars (new stateful infra), not just current-bar checks.
+- **#3 Liquidity Sweep Validation** — Swing's entry (`_detectSignalC`) doesn't use a sweep check today; adding one changes the core entry condition, not just a gate.
+- **#6 Entry Confirmation (rejection candle / LTF CHoCH)** — changes the entry trigger itself.
+- **#10 Staged Exit Engine (TP1 30%, BE, trailing, HTF-CHoCH exit)** — requires new exit state machine in the backtest/live position manager, out of scope for a signal-side gate.
+- **#13 Adaptive Fusion Selector** — cross-strategy selection logic, lives outside `SmartMoneyConceptsStrategy`.
+
+**Config (`typeOverrides.Swing`):**
+```javascript
+{
+  sacSwingV3Gate: false,            // master switch (backtest A/B before enabling)
+  sacSwingMinAtrRatio: 0.8,         // ATR14/ATR100 floor
+  sacSwingAtrExtremeRatio: 2.5,     // above this → size ×0.5
+  sacSwingMinRvol: 1.2,             // below this (but ≥1.0) → size ×0.75
+  sacSwingNoTradeRvol: 1.0,         // below this → blocked
+  sacSwingMinConfidenceV3: 70,      // below this (but ≥60) → size ×0.5
+  sacSwingReduceConfidenceV3: 60,   // below this → blocked
+}
+```
+
+**Validation status:** Unit-level gate logic verified (regime/RVOL/ATR/confidence tiers all fire correctly in isolation). Integration smoke test on synthetic candles confirms the gate reduces Swing trade count end-to-end (12→5 trades in one synthetic 4yr run) — but sample size is too small and the candles are synthetic, not real market data, so **no claim is made yet about hitting the V3.md targets (PF >1.45, Sharpe >1.0, DD <18%)**. On that synthetic run win rate actually dropped (33%→20%, n=5), which is inconclusive noise at this sample size but is reported here rather than hidden. **Required before flipping the default:** backtest on real historical candles (multiple pairs, multiple regimes, walk-forward split) via the existing backtest UI/API.
+
+---
+
 ## Practical Tuning Guide
 
 ### Step 1: Test Each Component Independently

@@ -17,9 +17,14 @@
 "use strict";
 
 const StrategyBase = require("../base/StrategyBase");
-const { calcEMA } = require("../../indicators");
+const { calcEMA, calcATR } = require("../../indicators");
 
 const EPSILON = 1e-9;
+
+// AF-SWING-V3: per-indicators-object ATR cache (fast/slow period arrays), so the
+// ATR-ratio regime check reads O(1) per bar instead of recomputing full-array
+// ATR on every bar (same WeakMap-memoization pattern as the TS_TF Donchian fix).
+const _swingAtrCache = new WeakMap();
 
 class SmartMoneyConceptsStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -1220,6 +1225,91 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // AF-SWING-V3: entry-TF ATR-ratio + RVOL + confidence-tier no-trade zone
+  // (SWING_ENGINE_V3.md improvements 1/7/8/9/11 — regime filter, relative volume
+  // filter, ATR expansion filter, adaptive sizing, consolidated no-trade zone).
+  // Opt-in via typeOverrides.Swing.sacSwingV3Gate = true; fail-open (returns
+  // "pass" state) when indicators lack the history needed, same convention as
+  // the existing ADX gate. Does NOT touch the core FVG/displacement/OB entry
+  // logic or confidence formula (_detectSignalC / _componentConfidence "C") —
+  // those stay exactly as validated (AF_SMC Swing captures 97% planned RR).
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  _getCachedATR(indicators, highs, lows, closes, period) {
+    let cache = _swingAtrCache.get(indicators);
+    if (!cache) { cache = {}; _swingAtrCache.set(indicators, cache); }
+    if (!cache[period]) cache[period] = calcATR(highs, lows, closes, period);
+    return cache[period];
+  }
+
+  /** ATR(fast)/ATR(slow) ratio at lastIdx. null when insufficient history (fail-open). */
+  _calcSwingAtrRatio(indicators, lastIdx, fastPeriod = 14, slowPeriod = 100) {
+    const { highs, lows, closes } = indicators;
+    if (!highs || !lows || !closes || lastIdx < slowPeriod) return null;
+    const atrFast = this._getCachedATR(indicators, highs, lows, closes, fastPeriod);
+    const atrSlow = this._getCachedATR(indicators, highs, lows, closes, slowPeriod);
+    const fastVal = atrFast[lastIdx];
+    const slowVal = atrSlow[lastIdx];
+    if (fastVal == null || slowVal == null || slowVal <= 0) return null;
+    return fastVal / slowVal;
+  }
+
+  /**
+   * Consolidated Swing No-Trade Zone. Returns { allow, sizeMultiplier, reason,
+   * atrRatio, rvol } — never throws, fails open (allow:true, sizeMultiplier:1)
+   * when required data is missing so an unconfigured/short-history run behaves
+   * exactly like V3 disabled.
+   */
+  _evaluateSwingV3Gate(indicators, lastIdx, dir, confC, config = {}, typeOverride = {}) {
+    if (!typeOverride?.sacSwingV3Gate) return { allow: true, sizeMultiplier: 1 };
+
+    const { volumes, volSMA } = indicators;
+    const minAtrRatio = typeOverride.sacSwingMinAtrRatio ?? 0.8;
+    const extremeAtrRatio = typeOverride.sacSwingAtrExtremeRatio ?? 2.5;
+    const minRvol = typeOverride.sacSwingMinRvol ?? 1.2;
+    const noTradeRvol = typeOverride.sacSwingNoTradeRvol ?? 1.0;
+    const minConfidence = typeOverride.sacSwingMinConfidenceV3 ?? 70;
+    const reduceConfidence = typeOverride.sacSwingReduceConfidenceV3 ?? 60;
+
+    // Improvement 1 (partial) — weekly/HTF regime must be a real trend, not
+    // SIDEWAYS/UNKNOWN. Direction-alignment vs htfTrend is already enforced
+    // upstream by sacHtfHardBlock/soft-penalty; this only blocks flat regimes.
+    const htfTrend = config.htfTrend ?? null;
+    if (htfTrend === "SIDEWAYS" || htfTrend === "UNKNOWN") {
+      return { allow: false, sizeMultiplier: 0, reason: "regime_flat", htfTrend };
+    }
+
+    // Improvement 7 — Relative Volume filter.
+    const vol = volumes?.[lastIdx] ?? null;
+    const vSMA = volSMA?.[lastIdx] ?? null;
+    const rvol = (vol != null && vSMA) ? vol / Math.max(vSMA, EPSILON) : null;
+    if (rvol != null && rvol < noTradeRvol) {
+      return { allow: false, sizeMultiplier: 0, reason: "rvol_too_low", rvol };
+    }
+
+    // Improvement 1 + 8 — ATR expansion filter (regime + extreme-size reduction).
+    const atrRatio = this._calcSwingAtrRatio(indicators, lastIdx);
+    if (atrRatio != null && atrRatio < minAtrRatio) {
+      return { allow: false, sizeMultiplier: 0, reason: "atr_ratio_too_low", atrRatio };
+    }
+
+    // Improvement 11/12 — confidence no-trade zone + reduce-risk tier.
+    if (confC < reduceConfidence) {
+      return { allow: false, sizeMultiplier: 0, reason: "confidence_too_low", confC };
+    }
+
+    // Improvement 9 — adaptive sizing: full size once confident, reduced size
+    // in the 60-69 "Reduce Risk" band, and RVOL <1.2 (below "Allow" but still
+    // above the hard no-trade floor) also trims size rather than blocking.
+    let sizeMultiplier = 1;
+    if (confC < minConfidence) sizeMultiplier *= 0.5;
+    if (rvol != null && rvol < minRvol) sizeMultiplier *= 0.75;
+    if (atrRatio != null && atrRatio > extremeAtrRatio) sizeMultiplier *= 0.5;
+
+    return { allow: true, sizeMultiplier, reason: "pass", atrRatio, rvol, confC };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Market regime helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1705,7 +1795,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (rawA) { if (confA >= effMinConfA) this._abl("passed"); else this._abl("rejByConf"); }
     const sigScalping = (rawA && confA >= effMinConfA) ? rawA : null;
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;
-    const sigSwing    = (rawC && confC >= effMinConf.C) ? rawC : null;
+    let sigSwing      = (rawC && confC >= effMinConf.C) ? rawC : null;
+
+    // AF-SWING-V3: opt-in no-trade zone + adaptive sizing (typeOverrides.Swing.sacSwingV3Gate).
+    // Disabled by default — behavior identical to pre-V3 when the flag is unset.
+    const swingV3 = sigSwing
+      ? this._evaluateSwingV3Gate(indicators, lastIdx, sigSwing, confC, config, typeOverrides.Swing)
+      : { allow: true, sizeMultiplier: 1 };
+    if (sigSwing && !swingV3.allow) sigSwing = null;
 
     // Set both type names and legacy letter aliases
     result.Scalping = sigScalping; result.A = sigScalping;
@@ -1721,6 +1818,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       confidence: { Scalping: confA, Intraday: confB, Swing: confC, A: confA, B: confB, C: confC },
       aggregateConfidence: Math.round(aggConf),
       marketCond,
+      swingV3: sigSwing ? swingV3 : undefined,
     };
     this._lastSignalMeta = result.meta;
     return result;
