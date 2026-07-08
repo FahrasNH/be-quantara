@@ -801,6 +801,51 @@ volume 43→8 trades with no WR gain — stacking three new hard gates at once
 risks the same failure mode on an already-thin leg. Any future attempt should
 test displacement/volume/ADX **one gate at a time**, exactly as done here.
 
+### v3.1 Final follow-up (2026-07-08): 5m confirmation "light" mode — REJECTED
+
+A follow-up doc ("v3.1 Final") proposed loosening the Scalping 5m confirmation
+gate from requiring BOTH swing-high structure AND multi-candle reversal to a
+"light" check (either condition). Precedent (rejection-wick gate OFF: 43 vs 8
+trades, same WR) suggested loosening gates sometimes recovers volume for free
+— worth a real A/B rather than assuming.
+
+**Tested** (`scalpingChochValidateMode: "light"`, OR-logic instead of AND) on
+the same 4-window standard, BTCUSDT, fees+slip ON:
+
+| Variant | Bear 22-23 | Recovery 23-24 | Bull 24-25 | 12mo eval |
+|---|---|---|---|---|
+| Strict (current, AND-both) | 1.41 | 0.32 | 0.80 | 0.70 |
+| Light (OR-either) | 1.18 | 0.29 | 0.75 | 0.70 |
+| Off (no gate) | 1.18 | 0.29 | 0.75 | 0.70 |
+
+**Result: light mode is WORSE in every window it changes**, and is numerically
+IDENTICAL to turning the gate off entirely — meaning one of the two conditions
+(swing-high or multi-structure) is nearly always true whenever the other is,
+so OR-logic passes almost everything through, same as no gate at all. This
+directly falsifies the "light" proposal: the current strict AND-both gate is
+earning its keep (bear 1.41 vs 1.18, recovery 0.32 vs 0.29) — it's not
+noise-cutting overhead, it's part of the leg's thin edge.
+
+**Not implemented as default.** `scalpingChochValidateMode: "light"` shipped
+as an inert opt-in flag (off by default, current AND-both behavior unchanged)
+for anyone who wants to re-test it later, but the recommendation is: don't.
+
+### v3.1 Final: SL 1.8×ATR and 0.4%/0.4% risk cap — NOT VALIDATED, NOT IMPLEMENTED
+
+The same doc also proposed changing Scalping's SL from the shipped 2.2×ATR
+(RR 2.0, fixed via forensics in AF-SCALP-10 after a prior 4.5 RR was found to
+be "too far, slot-blocked, WR 16%") down to 1.8×ATR, and cutting the combined
+Scalping+Swing risk cap from the shipped 4.5%/2-active-legs (Scalping 1.5%,
+Swing 3%, via `typeRiskLadder.js` weight redistribution once Intraday is
+excluded) down to 0.4%/0.4% (0.8% total). **Neither number was backed by a
+fresh backtest in that doc** — they read as conservative defaults chosen by
+feel, not measurement. Per the standing principle that risk-size changes alone
+never move Profit Factor (only variance/drawdown), and given SL geometry was
+already hard-won via forensics once before, **neither change was implemented**.
+If risk reduction or a new SL geometry is wanted, it should go through the
+same A/B-with-walk-forward process as everything else in this appendix, not be
+adopted on say-so.
+
 ---
 
 ## Related Documentation

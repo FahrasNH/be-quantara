@@ -1581,11 +1581,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // Gate: require BOTH swing high structure AND multi-candle sequence (not just 1-candle wick).
 
     // Validates entry causal context — single swing high insufficient, needs confirmation.
+    // scalpingChochValidateMode "light" (opt-in, default "strict"): require EITHER
+    // condition instead of BOTH. Untested hypothesis from a v3.1 doc proposal —
+    // relaxing gates has previously recovered volume without hurting WR (rejection-
+    // wick gate OFF: 43 vs 8 trades, same WR) but that precedent is for a DIFFERENT
+    // gate; this one needs its own A/B before it becomes default (see
+    // scripts/smc-scalping-choch-light-ab.js).
     if (rawA && config.scalpingChochValidate !== false) {
       const hasSwingHigh = this._detect5mChocH(indicators, lastIdx, config);
       const hasMultiStructure = this._detect5mMultiChoCH(indicators, lastIdx, config);
-      // Require BOTH conditions: swing high (supply) + multi-candle reversal (structure)
-      if (!hasSwingHigh || !hasMultiStructure) {
+      const isLight = config.scalpingChochValidateMode === "light";
+      const passes = isLight ? (hasSwingHigh || hasMultiStructure) : (hasSwingHigh && hasMultiStructure);
+      if (!passes) {
         this._abl("rejByChoch");
         rawA = null;
         confA = 0;
