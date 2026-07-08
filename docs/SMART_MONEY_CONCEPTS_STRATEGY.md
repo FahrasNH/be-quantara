@@ -120,13 +120,11 @@ SMC Sequence Engine (universal)
 ├── Outputs: Raw entry signal (A/B/C component)
 │
 ├── Component A (Scalping) ✅ ACTIVE
-│   ├── Entry TF: 15m (or 5m with structure validation)
-│   ├── Confirm TF: 1h (matched at entry TF level)
-│   ├── Trend TF: 4h
+│   ├── Entry TF: 15m | Confirm: 1h | Trend: 4h
 │   ├── Gate: HTF regime hard-block (4h trend must align direction)
-│   ├── Structure Validation (AF-SCALP-28):
-│   │   └─ At 5m entry TF: Sweep → CHoCH → Displacement → Direction align
-│   │      (Same 4-step sequence as 1h confirmation, but on entry TF)
+│   ├── Optional Gate (AF-SCALP-28): 5m structure validation
+│   │   └─ Validates: Sweep → CHoCH → Displacement → Direction align
+│   │      (enables when validateEntryTFStructure: true)
 │   ├── Confirm: 5m CHoCH validation (rare, high quality)
 │   └── SL/TP: 1.0×ATR / 4.5×ATR (tight stops, large targets)
 │
