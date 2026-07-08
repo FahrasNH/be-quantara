@@ -1240,6 +1240,12 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
   const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
   const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
+  // Ladder trigger R-multiples, per-leg tunable via typeOverrides (cfg here is
+  // the per-type merged config). Mirrors the multi-position engine — the knob
+  // was added there first and this single-position engine (the one TS_TF/MD_MR
+  // actually run through) kept the hardcoded 1.0/2.0, silently ignoring it.
+  const slPlusM1R = cfg.slPlusM1R ?? 1.0;
+  const slPlusM2R = cfg.slPlusM2R ?? 2.0;
 
   function checkPartialMilestones(c, exitIdx) {
     if (!slPlusEnabled || !position || position.remainingSize <= 0) return;
@@ -1284,32 +1290,32 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       });
     };
 
-    // Milestone 1: +1R → partial 40%, SL → +0.3R (NOT pure BEP).
+    // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP).
     // 4yr VAULT backtest showed runners parked at exact BEP died on the first
     // shallow pullback: TF 4/5 and MR 3/3 partial-triggered trades exited via
     // SL_TRAIL at ~breakeven and never reached +2R/full TP. +0.3R keeps a small
     // locked profit while giving the runner breathing room below +1R.
-    if (!position.m1 && rMult >= 1.0) {
+    if (!position.m1 && rMult >= slPlusM1R) {
       position.m1 = true;
       const partial = position.originalSize * slPlusPartial1Pct;
       const newSL = position.side === "LONG"
         ? position.entry + 0.3 * R
         : position.entry - 0.3 * R; // +0.3R buffer
       if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? R : -R), partial, "Partial_1R", newSL);
+        partialAt(position.entry + (position.side === "LONG" ? slPlusM1R * R : -slPlusM1R * R), partial, "Partial_1R", newSL);
       } else {
         position.slCurrent = newSL;
       }
     }
 
-    // Milestone 2: +2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
-    if (position.m1 && !position.m2 && rMult >= 2.0) {
+    // Milestone 2: +slPlusM2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
+    if (position.m1 && !position.m2 && rMult >= slPlusM2R) {
       position.m2 = true;
       const fromOriginal = position.originalSize * slPlusPartial2Pct;
       const partial = Math.min(fromOriginal, position.remainingSize * 0.90);
       const newSL = position.side === "LONG" ? position.entry + R : position.entry - R; // +1R
       if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? 2 * R : -2 * R), partial, "Partial_2R", newSL);
+        partialAt(position.entry + (position.side === "LONG" ? slPlusM2R * R : -slPlusM2R * R), partial, "Partial_2R", newSL);
       } else {
         position.slCurrent = newSL;
       }
@@ -1532,6 +1538,18 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // so Layer 1 reads the previous (closed) bar. -1 when no closed bar yet →
       // strategy degrades to entry-TF fallback for the warmup bars.
       htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
+
+      // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
+      // is a server-startup SINGLETON (new TrendSurgeUmbrella(), no per-request
+      // config), so its internal `this.config.adxMinStrength`/`minVolRatio`
+      // reads were frozen at the constructor defaults (25 / whatever ships)
+      // forever, regardless of what legacyStrategies.js or the FE configured.
+      // Symptom found in the AF-SCALP-24 sweep: testing ADX20 produced results
+      // IDENTICAL to ADX25 (the stale inner gate silently floored it) — invisible
+      // only because the shipped default (30) happens to exceed the stale one.
+      donchianPeriod: cfg.donchianPeriod,
+      adxMinStrength: cfg.adxMinStrength,
+      minVolRatio: cfg.minVolRatio,
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 

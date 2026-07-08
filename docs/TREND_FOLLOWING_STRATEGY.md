@@ -441,6 +441,98 @@ Defaults shipped: `adxMinStrength: 30` (BE `legacyStrategies.js` + FE param, kee
 
 **Interpretation:** In backtest, the strategy shows 45–50% WR. In live execution with fees, it's 38–45% WR. This is **normal** for any strategy.
 
+### 6-Year Reality Check (2026-07-08): PF>1.2 is a trending-year result, not a standing one
+
+User-supplied 6-year backtests (2020-07 → 2026-07, BTCUSDT) surfaced two findings:
+
+**1. Fixed dead-knob bug: `adxMinStrength`/`minVolRatio`/`donchianPeriod` never reached the strategy.**
+`TrendFollowingStrategy` is instantiated ONCE at server startup (`new TrendSurgeUmbrella()`,
+no args) and lives as a shared singleton across every concurrent backtest/live
+bot — its internal `this.config.adxMinStrength` read (constructor default 25)
+could never reflect a per-request value from `legacyStrategies.js` (shipped 30)
+or the backtest UI. Symptom: testing `adxMinStrength: 20` produced results
+IDENTICAL to 25 (silently floored by the stale inner gate) — invisible only
+because the shipped default (30) happens to exceed the stale one. Fixed by
+threading `config.adxMinStrength` / `config.minVolRatio` / `config.donchianPeriod`
+through the same per-request `config` object already used for `htfIdx`
+(commit — see engine `RealStrategyBacktestService.js` whitelist + strategy's
+`detectHTFTrend`/`checkLongEntry`/`checkShortEntry` optional-override params).
+Verified: ADX20/25/30 now produce genuinely different trade counts.
+
+**2. Grok's AI recommendation (ADX24, RR 2.2, Donchian 30) — tested, REJECTED.**
+A Grok-4.3 analysis of a single 6-year All-Type run (WR 71.4%, PF 0.95)
+suggested raising `adxMin`→24, `riskReward`→2.2, `donchianPeriod`→30. Tested
+against the shipped baseline (ADX30/RR1.92/DC20) on the SAME 4-window
+walk-forward standard used throughout this doc:
+
+| Config | Windows PF≥1.0 | Total net (4 windows) |
+|---|---|---|
+| **Shipped (ADX30/RR1.92/DC20)** | **2/4** | **+6.4** |
+| Grok combo (ADX24/RR2.2/DC30) | 1/4 | −156.7 |
+| ADX24 alone | 2/4 | −117.6 |
+| RR2.2 alone | 2/4 | +4.8 (~neutral) |
+| DC30 alone | 2/4 | −29.6 |
+
+Grok's recommendation is WORSE than shipped on every axis. Its analysis was
+built from one run's aggregate stats without walk-forward variance — it's
+fitting the pattern of a single window, not a generalizable edge. **Not
+adopted.** RR2.2 alone is roughly neutral (could be considered, but no clear
+upside over 1.92 — not worth the churn).
+
+**3. Root cause found: "All Type 6yr" export = 100% Swing, zero Intraday — FIXED.**
+The user's "All Type, Partial TP, 6yr" export (28 rows) was **row-for-row
+identical** to the standalone Swing-only 6yr export (16 unique positions,
+matching entry price + open time on every trade) — the Intraday leg
+contributed ZERO trades to the combined run, despite the standalone
+"Intraday, Full TP, 599d" export showing 31 trades in its own window. Two
+bugs converged:
+
+- **Swing's HTF (1w) warmup was insufficient.** A custom 6-year date range
+  fetches HTF (1w) candles for the SAME range as entry — `EMA50` on weekly
+  candles needs 50 CLOSED weeks (≈1 year) before it's valid, so the first
+  year of any custom-range Swing backtest had a dead Layer-1 (fail-closed HTF
+  ADX gate blocked nearly every entry). Fixed: `fetchHistoricalKlines` now
+  accepts `warmupBars` to extend the HTF/daily fetch backward by N bars
+  (60 for the 1w/1d legs) — pre-window HTF history is time-aligned via
+  `htfPtr`, so this is NOT lookahead, just enough runway for the indicator to
+  warm up before the eval window starts.
+- **Intraday's 15m fetch silently failed** for the combined run without
+  surfacing an error — the per-type resilience design (each leg degrades to
+  0 trades independently rather than failing the whole backtest) is correct
+  for robustness, but it made a failed leg invisible: the export just looked
+  like "Intraday didn't fire," not "Intraday's data fetch broke." Fixed:
+  `_runBacktestJobAsync` now stamps a `typeWarnings` array (surfaced via
+  job progress + in the result payload) whenever a leg's data is missing,
+  clamped, or errored — e.g. `"Intraday: SKIPPED — data fetch failed (...)"` —
+  and the mode label itself shows `— SKIPPED, no data` inline. Future runs
+  with a dead leg will say so instead of silently exporting a subset.
+
+**Re-verified with the warmup fix**, Swing 6yr full-TP: 22 trades, WR 40.9%,
+netPF **1.15**, net +34.6 — genuinely profitable, and closer to (though not
+identical to) the user's own CSV shape. Partial-TP ladder mode measured
+WORSE than full TP for Swing specifically (netPF 0.82–0.89 vs 1.15) — the
+milestone-1 SL jump to +0.3R trailed several winners out early that full-TP
+mode rode to the full ~1.9R target. This matches the existing "partial mode
+is a diagnostic, not a fix" guidance, now with a concrete cost figure for
+Swing (~ -27 over 6 years) rather than just a warning.
+
+**4. Grok's recommendation re-tested with the warmup fix — verdict unchanged.**
+Re-running the Swing-only ADX30-vs-Grok comparison with proper HTF warmup
+(small per-window samples, n=1–9, but directionally consistent): shipped
+ADX30/RR1.92 nets **+18.8** total across 4 windows (2/4 ≥1.0) vs Grok's
+ADX24/RR2.2 at **−25.3** (also 2/4 ≥1.0 but the windows that pass are smaller
+wins and the windows that fail are bigger losses). **Rejection stands** —
+correcting the warmup methodology did not change the recommendation.
+
+**5. Regime dependency remains the core finding.** Even with the warmup fix,
+TS_TF is trending-regime-dependent: strongly profitable in trending years
+(bull 24-25, recent 12mo), a net drag in bear/recovery years. No geometry
+tuning (ADX/RR/Donchian — confirmed again above) fixes the non-trending
+years — this is a regime problem, not a parameter problem. The existing
+daily regime gate reduces but does not eliminate this; a portfolio approach
+(running TF alongside uncorrelated strategies, sized down in choppy years)
+is the realistic lever left, not further single-strategy tuning.
+
 ### Recommended Walk-Forward Testing
 
 Before deploying, run a 12-month walk-forward test:

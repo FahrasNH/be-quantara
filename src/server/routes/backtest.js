@@ -1466,8 +1466,14 @@ async function _runBacktestJobAsync(job, userId, opts) {
       job.progress({ phase: "fetch", type, timeframe: tfs.trend, message: `Fetching ${type} HTF candles (${tfs.trend})…`, pct: 0 });
       try {
         const effectiveHtfPeriod = getEffectivePeriod(fetchOpts.periodId, tfs.trend);
+        // warmupBars 60: HTF indicators (EMA50, ADX14) need closed HTF history
+        // BEFORE the eval window. Without padding, a 12m run's Swing leg gets 52
+        // weekly bars → EMA50(1w) valid only for the last ~2 weeks and the
+        // fail-closed HTF ADX gate blocks nearly every Swing entry. Engine
+        // aligns by timestamp (htfPtr), so pre-window HTF bars are NOT lookahead.
         const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
           symbol: sym, timeframe: tfs.trend, ...fetchOpts, periodId: effectiveHtfPeriod, allowClamp: true, abortSignal,
+          warmupBars: 60,
         });
         htfCandles[type] = trendRes.candles || [];
       } catch (e) {
@@ -1553,7 +1559,32 @@ async function _runBacktestJobAsync(job, userId, opts) {
       job.progress(funnel);
     }
 
-    const modeLabel = typeOrder.map(t => `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})`).join(" + ");
+    // Surface silently-degraded legs. Per-type resilience means a failed/short
+    // fetch just skips that leg (0 trades) while the others run — correct for
+    // robustness, but invisible in the result: a 6y "All Type" TS_TF run whose
+    // 15m fetch timed out exported 16 trades that were 100% the Swing leg, and
+    // downstream analysis (user + Grok) read it as combined-strategy performance.
+    // Stamp the skip into the mode label + a warnings array the FE can show.
+    const typeWarnings = [];
+    for (const t of typeOrder) {
+      const di = dataInfo[t] || {};
+      if (di.error) {
+        typeWarnings.push(`${t}: SKIPPED — data fetch failed (${di.error})`);
+      } else if (!di.entryBars || di.entryBars < 60) {
+        typeWarnings.push(`${t}: SKIPPED — insufficient candles (${di.entryBars ?? 0} bars)`);
+      } else if (di.clamped) {
+        typeWarnings.push(`${t}: data clamped to last ${di.entryBars.toLocaleString()} bars (${di.startDate ?? "?"} → ${di.endDate ?? "?"}) — shorter than requested period`);
+      }
+    }
+    if (typeWarnings.length) {
+      job.progress({ phase: "warn", message: `⚠ Type coverage:\n  ${typeWarnings.join("\n  ")}` });
+    }
+
+    const modeLabel = typeOrder.map(t => {
+      const di = dataInfo[t] || {};
+      const skipped = di.error || !di.entryBars || di.entryBars < 60;
+      return `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})${skipped ? " — SKIPPED, no data" : ""}`;
+    }).join(" + ");
 
     job.done({
       ok: true,
@@ -1562,6 +1593,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
       symbol: sym,
       mode: isAF ? `SMC Sequence — ${modeLabel}` : `Multi-TF — ${modeLabel}`,
       dataInfo,
+      typeWarnings,
       computeTimeMs: Date.now() - startMs,
       ...result,
     });
@@ -1627,6 +1659,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     try {
       const htfRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
         symbol: sym, timeframe: htfTf, ...fetchOpts, periodId: getEffectivePeriod(fetchOpts.periodId, htfTf), allowClamp: true, abortSignal,
+        warmupBars: 60, // HTF indicator warmup — see multi-type fetch note
       });
       htfCandles = htfRes.candles || null;
     } catch { htfCandles = null; }

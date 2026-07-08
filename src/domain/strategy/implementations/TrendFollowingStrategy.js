@@ -115,11 +115,21 @@ class TrendFollowingStrategy extends StrategyBase {
    * Trend must be strong (ADX > threshold) to avoid sideways traps.
    * @returns "LONG" | "SHORT" | null
    */
-  detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF, adxHTF) {
+  // adxMinOverride: per-run value from the engine's merged config (2026-07-08
+  // fix). This class is a SERVER-STARTUP SINGLETON shared across all concurrent
+  // backtests/live bots — `this.config.adxMinStrength` is fixed forever at the
+  // constructor default (25) and can never reflect a per-request override
+  // (there is no safe way to mutate shared singleton state per-request without
+  // race conditions across concurrent users). Before this fix, testing
+  // adxMinStrength=20 via config produced IDENTICAL results to 25 (the stale
+  // inner gate silently floored it) — only detectable because the shipped
+  // default of 30 happens to exceed 25, so the bug was invisible until someone
+  // tried to go LOWER than the singleton default.
+  detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF, adxHTF, adxMinOverride) {
     if (!htfClosesLast || !emaFastHTF || !emaMidHTF || !emaSlowHTF) return null;
 
     const close = htfClosesLast;
-    const adxMin = this.config.adxMinStrength ?? 25;
+    const adxMin = adxMinOverride ?? this.config.adxMinStrength ?? 25;
 
     // LONG: EMA aligned upward, price above structure, ADX strong
     if (
@@ -178,7 +188,9 @@ class TrendFollowingStrategy extends StrategyBase {
     htfTrend,
     donchianBroken,
     donchianUpperMTF,
-    adxHTF
+    adxHTF,
+    adxMinOverride,
+    minVolRatioOverride
   ) {
     if (!closesEntry || closesEntry.length === 0) {
       return { valid: false, reason: "No entry closes" };
@@ -192,7 +204,7 @@ class TrendFollowingStrategy extends StrategyBase {
     }
 
     // 2. ADX must be strong (avoid sideways)
-    const adxMin = this.config.adxMinStrength ?? 25;
+    const adxMin = adxMinOverride ?? this.config.adxMinStrength ?? 25;
     if (adxHTF != null && adxHTF < adxMin) {
       return { valid: false, reason: `ADX ${adxHTF.toFixed(1)} below strength threshold ${adxMin}` };
     }
@@ -219,8 +231,9 @@ class TrendFollowingStrategy extends StrategyBase {
     }
 
     // Volume confirmation
-    if (volumeCurrentEntry < volumeSMAEntry * this.config.minVolRatio) {
-      return { valid: false, reason: `Volume below ${this.config.minVolRatio}× SMA` };
+    const minVolRatio = minVolRatioOverride ?? this.config.minVolRatio;
+    if (volumeCurrentEntry < volumeSMAEntry * minVolRatio) {
+      return { valid: false, reason: `Volume below ${minVolRatio}× SMA` };
     }
 
     return { valid: true, reason: "All LONG conditions met" };
@@ -240,7 +253,9 @@ class TrendFollowingStrategy extends StrategyBase {
     htfTrend,
     donchianBroken,
     donchianLowerMTF,
-    adxHTF
+    adxHTF,
+    adxMinOverride,
+    minVolRatioOverride
   ) {
     if (!closesEntry || closesEntry.length === 0) {
       return { valid: false, reason: "No entry closes" };
@@ -252,7 +267,7 @@ class TrendFollowingStrategy extends StrategyBase {
       return { valid: false, reason: "HTF not in downtrend" };
     }
 
-    const adxMin = this.config.adxMinStrength ?? 25;
+    const adxMin = adxMinOverride ?? this.config.adxMinStrength ?? 25;
     if (adxHTF != null && adxHTF < adxMin) {
       return { valid: false, reason: `ADX too low for short` };
     }
@@ -273,7 +288,8 @@ class TrendFollowingStrategy extends StrategyBase {
       return { valid: false, reason: `RSI outside 30-70` };
     }
 
-    if (volumeCurrentEntry < volumeSMAEntry * this.config.minVolRatio) {
+    const minVolRatioS = minVolRatioOverride ?? this.config.minVolRatio;
+    if (volumeCurrentEntry < volumeSMAEntry * minVolRatioS) {
       return { valid: false, reason: `Volume below threshold` };
     }
 
@@ -319,7 +335,7 @@ class TrendFollowingStrategy extends StrategyBase {
     const htfEmaSlow = indicators.emaSlowHTF?.[idxHTF] ?? indicators.emaTrend?.[lastIdx] ?? null;
     const htfAdx     = indicators.adxHTF?.[idxHTF] ?? null;
 
-    const htfTrend = this.detectHTFTrend(htfClose, htfEmaFast, htfEmaMid, htfEmaSlow, htfAdx);
+    const htfTrend = this.detectHTFTrend(htfClose, htfEmaFast, htfEmaMid, htfEmaSlow, htfAdx, config.adxMinStrength);
 
     if (this._trendState.htfTrendDirection && htfTrend && htfTrend !== this._trendState.htfTrendDirection) {
       this.resetTrendState();
@@ -349,10 +365,21 @@ class TrendFollowingStrategy extends StrategyBase {
       // O(n²) over the backtest range).
       const highs = indicators.highs || [];
       const lows = indicators.lows || [];
-      let dc = this._donchianCache.get(highs);
+      // donchianPeriod: prefer per-run config over the singleton constructor
+      // default — this.config on a singleton means the UI/backtest knob was a
+      // dead knob (same class as the calculateRiskConfig 3-arg bug). Cache is
+      // keyed per (candle array, period): one run's period must not leak a
+      // stale channel into another run reusing the same arrays.
+      const donchianPeriod = config.donchianPeriod ?? this.config.donchianPeriod ?? 20;
+      let dcByPeriod = this._donchianCache.get(highs);
+      if (!dcByPeriod) {
+        dcByPeriod = new Map();
+        this._donchianCache.set(highs, dcByPeriod);
+      }
+      let dc = dcByPeriod.get(donchianPeriod);
       if (!dc) {
-        dc = calcDonchian(highs, lows, this.config.donchianPeriod || 20);
-        this._donchianCache.set(highs, dc);
+        dc = calcDonchian(highs, lows, donchianPeriod);
+        dcByPeriod.set(donchianPeriod, dc);
       }
       // BUG FIX: dc.upper[lastIdx]/dc.lower[lastIdx] include the CURRENT bar's own
       // high/low in their rolling window, so close[lastIdx] can never exceed
@@ -379,7 +406,8 @@ class TrendFollowingStrategy extends StrategyBase {
     const longCheck = this.checkLongEntry(
       closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
       volumeCurrentEntry, volumeSMAEntry,
-      htfTrend, donchianBroken, donchianUpperMTF, htfAdx
+      htfTrend, donchianBroken, donchianUpperMTF, htfAdx,
+      config.adxMinStrength, config.minVolRatio
     );
 
     if (longCheck.valid) {
@@ -401,7 +429,8 @@ class TrendFollowingStrategy extends StrategyBase {
     const shortCheck = this.checkShortEntry(
       closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
       volumeCurrentEntry, volumeSMAEntry,
-      htfTrend, donchianBroken, donchianLowerMTF, htfAdx
+      htfTrend, donchianBroken, donchianLowerMTF, htfAdx,
+      config.adxMinStrength, config.minVolRatio
     );
 
     if (shortCheck.valid) {

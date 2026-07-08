@@ -373,6 +373,10 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     autoListing = false,
     allowClamp = false,
     maxBarsOverride,  // per-component cap (e.g. 90k for Scalping 1m)
+    warmupBars = 0,   // extend range BACKWARD by N bars (HTF indicator warmup —
+                      // EMA50 on 1w needs 50 closed weeks before the eval window;
+                      // without it a 12m backtest's Swing HTF layer is dead for
+                      // most of the run and fail-closed gates block every entry)
     onProgress,
     abortSignal,
   } = opts;
@@ -410,6 +414,11 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     }
     startMs = range.startMs;
     endMs = range.endMs;
+  }
+
+  if (warmupBars > 0) {
+    const tfMsPad = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
+    if (tfMsPad) startMs -= warmupBars * tfMsPad;
   }
 
   const client = getPublicClient(exchange);
