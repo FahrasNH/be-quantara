@@ -43,13 +43,13 @@ for the full result. It stays hidden until a design clears the bar.
 - **Fair Value Gaps (FVG)** — Where price is mispriced
 - **Displacement & Premium/Discount** — Market structure zones
 
-The strategy runs **3 independent trade types simultaneously** on different timeframe stacks:
+The strategy runs **2 active trade types simultaneously** on different timeframe stacks (Intraday is currently hidden — see note above):
 
-| Type | Entry TF | Confirm TF | Trend TF | Holding |
-|------|----------|-----------|----------|---------|
-| **Scalping (A)** | 15m | 1h | 4h | 30min–4hr |
-| **Intraday (B)** | 15m | 1h | 4h | 2–8 hours |
-| **Swing (C)** | 4h | 1d | 1w | 1–3 weeks |
+| Type | Entry TF | Confirm TF | Trend TF | Holding | Status |
+|------|----------|-----------|----------|---------|--------|
+| **Scalping (A)** | 15m | 1h | 4h | 30min–4hr | ✅ Active |
+| **Intraday (B)** | 15m | 1h | 4h | 2–8 hours | ⚠️ Hidden |
+| **Swing (C)** | 4h | 1d | 1w | 1–3 weeks | ✅ Active |
 
 ### Key Characteristics
 
@@ -119,19 +119,21 @@ SMC Sequence Engine (universal)
 ├── Detects: Sweep, CHoCH, FVG, OB, Displacement
 ├── Outputs: Raw entry signal (A/B/C component)
 │
-├── Component A (Scalping)
+├── Component A (Scalping) ✅ ACTIVE
 │   ├── Entry TF: 15m | Confirm: 1h | Trend: 4h
 │   ├── Gate: HTF regime hard-block (trend must align)
 │   ├── Confirm: 5m CHoCH validation (rare, high quality)
 │   └── SL/TP: 1.0×ATR / 4.5×ATR (tight stops, large targets)
 │
-├── Component B (Intraday)
+├── Component B (Intraday) ⚠️ HIDDEN
 │   ├── Entry TF: 15m | Confirm: 1h | Trend: 4h
 │   ├── Gate: Softer regime filter (regime bias only)
 │   ├── Confirm: Volume confirmation + EMA structure
-│   └── SL/TP: 1.2×ATR / 2.16×ATR (medium stops/targets)
+│   ├── SL/TP: 1.2×ATR / 2.16×ATR (medium stops/targets)
+│   └── NOTE: 100% signal overlap with Scalping (same TFs) — disabled
+│           to avoid double-counting trades. See Appendix for revival attempt.
 │
-└── Component C (Swing)
+└── Component C (Swing) ✅ ACTIVE
     ├── Entry TF: 4h | Confirm: 1d | Trend: 1w
     ├── Gate: Weekly trend alignment (long-term only)
     ├── Confirm: Daily-level structure + displacement
@@ -157,6 +159,8 @@ Swing (C):
 ```
 
 **Note:** Scalping & Intraday use the same TFs (15m/1h/4h) but with different gate strictness. Swing is pure higher timeframe.
+
+⚠️ **INTRADAY STATUS (2026-07-08):** Intraday is currently **HIDDEN from the UI** because it was running on the exact same candles as Scalping (both 15m entry / 4h trend), creating 100% signal overlap and redundant trades under two labels. A v3.1 revival attempt moved it to 1h entry (a genuinely different signal) plus ADX gates and revised ladder, but **failed walk-forward validation** — no variant achieved netPF ≥ 1.0 across all windows. See [Appendix: Intraday Revival Attempt](#appendix-intraday-revival-attempt-2026-07-08) for full results. It remains hidden until a design clears that bar.
 
 ---
 
@@ -531,6 +535,47 @@ Walk-Forward 2 (Oct–Dec):  PF 1.25, WR 43%, +$1,650
 **Recommendation:**
 - Current implementation: Intraday runs, but expect lower PF than Scalping
 - Alternative: Disable Intraday and allocate risk to Scalping + Swing (simpler)
+
+---
+
+### AF-SCALP-28: Entry TF Structure Validation (Scalping 5m Layer)
+
+**Status:** ✅ AVAILABLE (opt-in, not shipped default)
+
+**Purpose:**
+Scalping 5m entry TF structure validation adds an extra filter to 5m entry signals by verifying that a complete SMC sequence exists at the entry bar's timeframe before confirming. This includes:
+- **Sweep detection:** Price must have hit a recent swing extreme
+- **Change of Character:** Trend must have reversed since the sweep
+- **Displacement:** Price must have moved away from swept level
+- **Retest:** Current bar represents a retest into FVG or order block
+
+When enabled, incomplete or weak structure entries are filtered out, reducing noise and improving precision.
+
+**Configuration:**
+```javascript
+{
+  typeOverrides: {
+    Scalping: {
+      validateEntryTFStructure: true  // Enable 5m structure validation
+    }
+  }
+}
+```
+
+**Expected Impact:**
+- **Win Rate:** +2–3pp (filters false-breakouts and noise entries)
+- **Trade Frequency:** −25–35% fewer trades (only high-conviction structures pass)
+- **Average Winner Size:** +5–10% (structure-validated entries tend to go further)
+- **Risk/Reward:** Improves from filtering low-quality entries
+
+**When to Use:**
+- **DO use** if you prefer fewer, higher-quality trades over maximum frequency
+- **DO use** if backtest shows improvement in your specific pair
+- **DON'T use** if you want to maximize trade count (defeats the purpose of Scalping frequency edge)
+
+**Related Documentation:**
+- [Scalping Entry TF Structure Validation](./SCALPING_ENTRY_TF_STRUCTURE_VALIDATION.md) — Technical deep dive
+- [SMC Sequence Engine](#smc-sequence-engine) — How structure detection works
 
 ---
 
