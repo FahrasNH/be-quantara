@@ -26,7 +26,10 @@
     "lint": "eslint src index.js server.js",
     "lint:fix": "eslint src index.js server.js --fix",
     "format": "prettier --write \"src/**/*.js\" index.js server.js",
-    "test:security-int": "node test/security-fixes.test.js"
+    "test:security-int": "node test/security-fixes.test.js",
+    "scripts:backfill-regime": "node scripts/backfill-regime.js",
+    "test:regime": "node test/regime-classifier.test.js",
+    "test:sprint2": "node test/regime-classifier.test.js && node test/sprint2-analytics-qa.test.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

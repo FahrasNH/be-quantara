@@ -33,6 +33,7 @@ const createLegacyRouter = require("./routes/legacy");
 const createAccountRouter = require("./routes/account");
 const createAdminRouter = require("./routes/admin");
 const createSubscriptionRouter = require("./routes/subscription");
+const createAnalyticsRouter = require("./routes/analytics");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
@@ -333,6 +334,9 @@ app.use("/api/v1/legacy", authMiddleware, createLegacyRouter({ getBot, SYMBOLS_L
 app.use("/api/v1/account", authMiddleware, createAccountRouter({ stopAllUserBotsInMemory }));
 app.use("/api/v1/subscription", authMiddleware, createSubscriptionRouter());
 app.use("/api/v1/admin",   createAdminRouter()); // no authMiddleware — protected by ADMIN_SECRET header
+
+// Sprint 2 / PA-3 — Internal Analytics API
+app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
 
 // 404 handler
 app.use((req, res) => {
