@@ -253,3 +253,40 @@ model StrategyPerformance {
   @@index([periodDate])
   @@index([period])
 }
+
+model PaymentAuditLog {
+  id        String  @id @default(cuid())
+  paymentId String?
+  userId    String?
+  orderId   String?
+
+  event     String
+  detail    String? // JSON string, never card data
+  ipAddress String?
+
+  createdAt DateTime @default(now())
+
+  @@index([paymentId])
+  @@index([orderId])
+  @@index([event])
+}
+
+// ── Sprint 3 / MS-1 ──────────────────────────────────────────────────────────
+
+model MetaSelectorRecommendation {
+  id               String   @id @default(cuid())
+  symbol           String
+  regime           String
+  regimeConfidence Float
+  mode             String   @default("shadow") // shadow | advisory
+  recommendations  Json     // Array<{strategyKey,score,winRate,pf,sharpe,rank}>
+  actualStrategy   String?  // strategy actually used by bot (filled by MS-2)
+  actualOutcome    String?  // win | loss | pending (filled after trade close)
+  tradeId          String?  // linked Trade.id (nullable)
+
+  createdAt DateTime @default(now())
+
+  @@index([symbol, regime])
+  @@index([createdAt])
+  @@index([mode])
+}
