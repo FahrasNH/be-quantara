@@ -38,7 +38,8 @@ const createAdminRouter = require("./routes/admin");
 const createSubscriptionRouter = require("./routes/subscription");
 const createAdminVouchersRouter = require("./routes/adminVouchers");
 const { createPaymentsRouter, createPaymentWebhookRouter } = require("./routes/payments");
-const createAnalyticsRouter = require("./routes/analytics");
+const createAnalyticsRouter    = require("./routes/analytics");
+const createMetaSelectorRouter = require("./routes/metaSelector");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
@@ -538,6 +539,11 @@ app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory, getBot })); 
 // Sprint 2 / PA-3 — Internal Analytics API (authMiddleware already ran)
 app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
 
+// Sprint 3 / MS-3 — MetaSelector API (wss injected lazily after server creation)
+// Route uses a lazy wss reference so advisory WS events work correctly.
+const _metaSelectorWssRef = { current: null };
+app.use("/api/v1/internal/meta-selector", authMiddleware, createMetaSelectorRouter(_metaSelectorWssRef));
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -555,6 +561,9 @@ const server = http.createServer(app);
 
 // ── WebSocket Setup ───────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+// Wire wss into MetaSelector lazy ref (Sprint 3 / MS-3)
+_metaSelectorWssRef.current = wss;
 
 // Helper: ekstrak userId dari JWT di WS handshake request.
 // Token bisa datang dari query string (?token=...) atau header Sec-WebSocket-Protocol.

@@ -93,6 +93,9 @@ class BotEngine extends EventEmitter {
    */
   constructor(configOverrides = {}) {
     super();
+    /** @type {import('../domain/MetaSelectorEngine').MetaSelectorEngine|null} */
+    this.metaSelector = null;
+
     const exchangeType = (configOverrides.exchangeType || "bitget").toLowerCase();
     const ei   = getExchangeInfo(exchangeType);
     // Strategi dari DB (configOverrides.strategyKey/strategy); getStrategy fallback ke "B"
@@ -584,6 +587,15 @@ class BotEngine extends EventEmitter {
 
   getLogs(n = 100) {
     return this.logs.slice(-Math.min(n, 1000));
+  }
+
+  /**
+   * Inject MetaSelectorEngine (Sprint 3 / MS-1).
+   * Called lazily from app.js after bot creation.
+   * @param {object} engine — MetaSelectorEngine singleton or instance
+   */
+  setMetaSelector(engine) {
+    this.metaSelector = engine;
   }
 
   async start() {
@@ -1209,6 +1221,27 @@ class BotEngine extends EventEmitter {
         }, 0);
         const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
         this.config.coordinator.reportRisk(botKey, { realizedLoss: this.state.dailyLoss, floatingLoss });
+      }
+
+      // ── MetaSelector shadow hook (Sprint 3 / MS-1) ───────────────────────
+      // Fire-and-forget — NEVER blocking, never modifies execution
+      if (this.metaSelector && this.config.strategyKey) {
+        const _msIndicators = {
+          ema9:   indicators.emaFast?.[lastIdx]  ?? null,
+          ema21:  indicators.emaSlow?.[lastIdx]  ?? null,
+          ema50:  indicators.emaTrend?.[lastIdx] ?? null,
+          atr:    indicators.atr?.[lastIdx]      ?? null,
+          atrAvg: indicators.atr?.slice(Math.max(0, lastIdx - 19), lastIdx + 1)
+                    .filter(v => v != null)
+                    .reduce((s, v, _, a) => s + v / a.length, 0) || null,
+          volume: indicators.volumes?.[lastIdx]  ?? null,
+          volAvg: indicators.volSMA?.[lastIdx]   ?? null,
+        };
+        this.metaSelector.recommend(
+          this.config.symbol,
+          _msIndicators,
+          [this.config.strategyKey],
+        ).catch(() => {});
       }
 
       if (this.config.strategyKey === "GROK_AI_TRADING") {
