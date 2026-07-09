@@ -1,11 +1,12 @@
 /**
- * performanceAggregationCron.js — Feature Store (Sprint 1 / FS-4, enhanced Sprint 2 / PA-1)
+ * performanceAggregationCron.js — Feature Store (Sprint 1 / FS-4, enhanced Sprint 2 / PA-1, Sprint 4 / WT-3)
  *
  * Schedule:
  *   Daily     — aggregateDaily()          every day at 02:00 UTC
  *   Weekly    — aggregateRolling('7d')    Sunday 03:00 UTC
  *               aggregateRolling('30d')   Sunday 03:00 UTC
  *   Monthly   — aggregateRolling('all-time')  1st of month 04:00 UTC
+ *   Weekly    — WalkForwardJob.run()      Sunday 23:00 UTC  (Sprint 4 / WT-3)
  *
  * Job failures send a Telegram alert via TelegramNotifier.
  */
@@ -14,6 +15,7 @@
 
 const StrategyPerformanceService = require("../../server/services/StrategyPerformanceService");
 const telegram = require("../notifications/TelegramNotifier");
+const walkForwardJob = require("../jobs/WalkForwardJob");
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,9 +69,10 @@ async function alertFailure(label, error) {
 
 // ── Cron state ────────────────────────────────────────────────────────────────
 
-let _dailyTimeout   = null;
-let _weeklyTimeout  = null;
-let _monthlyTimeout = null;
+let _dailyTimeout        = null;
+let _weeklyTimeout       = null;
+let _monthlyTimeout      = null;
+let _walkForwardTimeout  = null;
 
 // ── Daily (02:00 UTC) ─────────────────────────────────────────────────────────
 
@@ -146,6 +149,27 @@ function scheduleMonthly() {
   if (_monthlyTimeout.unref) _monthlyTimeout.unref();
 }
 
+// ── Walk-Forward (Sunday 23:00 UTC) — Sprint 4 / WT-3 ────────────────────────
+
+async function runWalkForward() {
+  console.log("[performanceAggregationCron] Starting walk-forward optimization job");
+  try {
+    const result = await walkForwardJob.run();
+    console.log(`[performanceAggregationCron] Walk-forward done — created=${result.created} skipped=${result.skipped} errors=${result.errors}`);
+  } catch (err) {
+    console.error("[performanceAggregationCron] Walk-forward failed:", err.message);
+    await alertFailure("WalkForwardJob", err);
+  }
+  scheduleWalkForward();
+}
+
+function scheduleWalkForward() {
+  const delay = msUntilNextSundayUTC(23, 0);
+  console.log(`[performanceAggregationCron] Next walk-forward run in ${(delay / 3600000).toFixed(2)}h (Sun 23:00 UTC)`);
+  _walkForwardTimeout = setTimeout(runWalkForward, delay);
+  if (_walkForwardTimeout.unref) _walkForwardTimeout.unref();
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 function start() {
@@ -156,13 +180,14 @@ function start() {
   scheduleDaily();
   scheduleWeekly();
   scheduleMonthly();
-  console.log("[performanceAggregationCron] Started (daily/weekly/monthly)");
+  scheduleWalkForward();
+  console.log("[performanceAggregationCron] Started (daily/weekly/monthly/walk-forward)");
 }
 
 function stop() {
-  [_dailyTimeout, _weeklyTimeout, _monthlyTimeout].forEach(t => t && clearTimeout(t));
-  _dailyTimeout = _weeklyTimeout = _monthlyTimeout = null;
+  [_dailyTimeout, _weeklyTimeout, _monthlyTimeout, _walkForwardTimeout].forEach(t => t && clearTimeout(t));
+  _dailyTimeout = _weeklyTimeout = _monthlyTimeout = _walkForwardTimeout = null;
   console.log("[performanceAggregationCron] Stopped");
 }
 
-module.exports = { start, stop, runDaily, runWeekly, runMonthly };
+module.exports = { start, stop, runDaily, runWeekly, runMonthly, runWalkForward };
