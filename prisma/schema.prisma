@@ -438,12 +438,21 @@ model StrategyPerformance {
   sharpeRatio    Float?
   avgHoldingMs   Float?
 
+  // Sprint 2 / PA-1 additions
+  sortino         Float?
+  expectancy      Float?
+  avgRr           Float?
+  avgHoldingHours Float?
+  period          String  @default("daily")
+  sampleSizeValid Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([strategyKey, symbol, regime, tradeType, pairTier, periodDate])
   @@index([strategyKey, symbol])
   @@index([periodDate])
+  @@index([period])
 }
 
 model PaymentAuditLog {

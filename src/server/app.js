@@ -38,6 +38,7 @@ const createAdminRouter = require("./routes/admin");
 const createSubscriptionRouter = require("./routes/subscription");
 const createAdminVouchersRouter = require("./routes/adminVouchers");
 const { createPaymentsRouter, createPaymentWebhookRouter } = require("./routes/payments");
+const createAnalyticsRouter = require("./routes/analytics");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
@@ -533,6 +534,9 @@ app.use("/api/v1/payments", authMiddleware, createPaymentsRouter());
 app.use("/api/v1/admin/vouchers", createAdminVouchersRouter());
 
 app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory, getBot })); // routes self-guard (JWT+role); ADMIN_SECRET only for the legacy billing stub
+
+// Sprint 2 / PA-3 — Internal Analytics API (authMiddleware already ran)
+app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
 
 // 404 handler
 app.use((req, res) => {
