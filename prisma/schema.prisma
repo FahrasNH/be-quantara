@@ -508,3 +508,36 @@ model MetaSelectorRecommendation {
   @@index([createdAt])
   @@index([mode])
 }
+
+// ── Sprint 5 / RL-1 — Trade Embeddings (pgvector) ────────────────────────────
+// Note: vector type is not natively supported by Prisma — use Unsupported.
+// Actual vector ops are performed via raw pg client in VectorStore.js.
+model TradeEmbedding {
+  id        String   @id @default(cuid())
+  tradeId   String   @unique
+  vector    Unsupported("vector(60)")?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([tradeId])
+  @@index([createdAt])
+}
+
+// ── Sprint 5 / RL-4 — ML Shadow Log ──────────────────────────────────────────
+model MLShadowLog {
+  id            String   @id @default(cuid())
+  tradeId       String?
+  pWin          Float
+  threshold     Float    @default(0.6)
+  prediction    String   // 'win' | 'loss' (pWin >= threshold → 'win')
+  actualOutcome String?  // filled after trade close
+  features      Json?    // optional: feature snapshot
+  strategyKey   String?
+  symbol        String?
+  regime        String?
+  createdAt     DateTime @default(now())
+
+  @@index([tradeId])
+  @@index([createdAt])
+  @@index([strategyKey, symbol])
+}

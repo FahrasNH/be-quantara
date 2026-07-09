@@ -26,6 +26,23 @@ const ShadowCollectionService = require("../services/ShadowCollectionService");
 const { notifyInfo }         = require("../../infrastructure/notifications/TelegramNotifier");
 const prisma                 = require("../../infrastructure/db/prismaClient");
 
+// Sprint 5 / RL-6 — lazy-loaded HybridAdvisor
+let _hybridAdvisor = null;
+function getHybridAdvisor() {
+  if (_hybridAdvisor) return _hybridAdvisor;
+  try {
+    const HybridAdvisor   = require("../../domain/HybridAdvisor");
+    const WinPredictor    = require("../../domain/WinPredictor");
+    const FeatureEngineer = require("../../domain/FeatureEngineer");
+    const wp = new WinPredictor();
+    wp.load().catch(() => {}); // load model if exists (async, fire-and-forget)
+    _hybridAdvisor = new HybridAdvisor(metaSelector, wp, new FeatureEngineer());
+  } catch (err) {
+    console.warn("[MetaSelector] HybridAdvisor unavailable:", err.message);
+  }
+  return _hybridAdvisor;
+}
+
 // ── Feature flag ──────────────────────────────────────────────────────────────
 
 function getMode() {
@@ -188,6 +205,47 @@ module.exports = function createMetaSelectorRouter(wssOrRef = null) {
       });
     } catch (err) {
       console.error("[MetaSelector] promote error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── GET /hybrid-status (RL-6) ─────────────────────────────────────────────
+
+  router.get("/hybrid-status", async (req, res) => {
+    try {
+      const hybrid = getHybridAdvisor();
+      if (!hybrid) {
+        return res.json({ ok: true, mode: "shadow", weights: { rl3: 0, ms1: 1 }, rl3ModelVersion: null, lastTrainedAt: null, promotionReady: false });
+      }
+      const status = await hybrid.getStatus();
+      return res.json({ ok: true, ...status });
+    } catch (err) {
+      console.error("[MetaSelector] hybrid-status error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── POST /set-rl3-weight (SUPER_ADMIN, RL-6) ─────────────────────────────
+
+  router.post("/set-rl3-weight", superAdminGuard, async (req, res) => {
+    try {
+      const { weight } = req.body || {};
+      const w = parseFloat(weight);
+      if (!Number.isFinite(w) || w < 0 || w > 1) {
+        return res.status(400).json({ ok: false, error: "weight must be 0.0-1.0" });
+      }
+
+      const hybrid = getHybridAdvisor();
+      if (!hybrid) {
+        return res.status(503).json({ ok: false, error: "HybridAdvisor not available" });
+      }
+
+      hybrid.setWeights(w);
+      process.env.WEIGHT_RL3 = String(w);
+
+      return res.json({ ok: true, message: `WEIGHT_RL3 set to ${w}`, weights: hybrid.getWeights() });
+    } catch (err) {
+      console.error("[MetaSelector] set-rl3-weight error:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
     }
   });
