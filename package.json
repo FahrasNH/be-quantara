@@ -27,6 +27,7 @@
     "test:integration": "node test/integration-security-risk.test.js",
     "test:strategies": "node test/run-strategies.js",
     "test:watch": "nodemon test/indicators.test.js",
+    "analytics:shadow-report": "node scripts/analytics/shadow-weekly-report.js",
     "lint": "eslint src index.js server.js",
     "lint:fix": "eslint src index.js server.js --fix",
     "format": "prettier --write \"src/**/*.js\" index.js server.js",

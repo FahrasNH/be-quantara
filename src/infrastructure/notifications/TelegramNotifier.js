@@ -180,6 +180,22 @@ function notifyError(message, chatId = null) {
   return send(lines, "HTML", chatId);
 }
 
+/**
+ * Informational alert — used by MetaSelector advisory mode and weekly reports.
+ * @param {string} message
+ * @param {string|null} chatId
+ */
+function notifyInfo(message, chatId = null) {
+  const lines = [
+    `<b>ℹ️ QUANTARA INFO</b>`,
+    ``,
+    `${String(message).slice(0, 800)}`,
+    ``,
+    `<i>${nowStr()} WIB</i>`,
+  ].join("\n");
+  return send(lines, "HTML", chatId);
+}
+
 // ── Export ────────────────────────────────────────────────────────────────
 
-module.exports = { send, notifyOpen, notifyClose, notifyError, enabled: ENABLED };
+module.exports = { send, notifyOpen, notifyClose, notifyError, notifyInfo, enabled: ENABLED };
