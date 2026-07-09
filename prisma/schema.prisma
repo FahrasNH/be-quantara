@@ -164,6 +164,12 @@ model Trade {
   slMultiplier    Float?
   tpMultiplier    Float?
 
+  // ── Feature Store (Sprint 1 / FS-2) ────────────────────────────────────────
+  // JSONB blobs capturing full market state at entry and exit for analytics,
+  // regime-fitness scoring, and ML feature engineering.
+  entryContext Json?
+  exitContext  Json?
+
   enteredAt DateTime  @default(now())
   exitedAt  DateTime?
 
@@ -421,4 +427,38 @@ model PaymentAuditLog {
   @@index([paymentId])
   @@index([orderId])
   @@index([event])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Feature Store — Sprint 1 (FS-4)
+//
+// Daily aggregation of trade performance grouped by
+// (strategyKey, symbol, regime, tradeType, pairTier).
+// Populated by StrategyPerformanceService.aggregateDaily() via cron at 02:00 UTC.
+// ─────────────────────────────────────────────────────────────────────────────
+model StrategyPerformance {
+  id            String   @id @default(cuid())
+  strategyKey   String
+  symbol        String
+  regime        String
+  tradeType     String?
+  pairTier      String?
+  periodDate    DateTime
+
+  tradeCount     Int   @default(0)
+  winCount       Int   @default(0)
+  lossCount      Int   @default(0)
+  winRate        Float @default(0)
+  profitFactor   Float @default(0)
+  avgPnlPct      Float @default(0)
+  maxDrawdownPct Float @default(0)
+  sharpeRatio    Float?
+  avgHoldingMs   Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([strategyKey, symbol, regime, tradeType, pairTier, periodDate])
+  @@index([strategyKey, symbol])
+  @@index([periodDate])
 }
