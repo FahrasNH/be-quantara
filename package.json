@@ -39,7 +39,11 @@
     "test:sprint2": "node test/regime-classifier.test.js && node test/sprint2-analytics-qa.test.js",
     "test:sprint4": "node test/sprint4-parameter-tuning-qa.test.js",
     "jobs:walk-forward-optimize": "node -e \"require('./src/infrastructure/jobs/WalkForwardJob').runStandalone()\"",
-    "jobs:walk-forward-dry": "node -e \"require('./src/infrastructure/jobs/WalkForwardJob').runStandalone({ dryRun: true })\""
+    "jobs:walk-forward-dry": "node -e \"require('./src/infrastructure/jobs/WalkForwardJob').runStandalone({ dryRun: true })\"",
+    "scripts:generate-ml-features": "node scripts/ml/generate-ml-features.js",
+    "ml:train-win-predictor": "node scripts/ml/train-win-predictor.js",
+    "test:sprint5": "node test/sprint5-ml-validation-qa.test.js",
+    "analytics:ml-shadow-report": "node scripts/ml/ml-shadow-report.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -56,6 +60,7 @@
     "midtrans-client": "^1.4.3",
     "nodemailer": "^9.0.0",
     "pg": "^8.21.0",
+    "pgvector": "^0.3.0",
     "prisma": "^6.19.3",
     "ws": "^8.16.0"
   },
