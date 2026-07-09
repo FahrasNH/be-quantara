@@ -36,7 +36,10 @@
     "xai:export": "node scripts/xai-export-training.js",
     "scripts:backfill-regime": "node scripts/backfill-regime.js",
     "test:regime": "node test/regime-classifier.test.js",
-    "test:sprint2": "node test/regime-classifier.test.js && node test/sprint2-analytics-qa.test.js"
+    "test:sprint2": "node test/regime-classifier.test.js && node test/sprint2-analytics-qa.test.js",
+    "test:sprint4": "node test/sprint4-parameter-tuning-qa.test.js",
+    "jobs:walk-forward-optimize": "node -e \"require('./src/infrastructure/jobs/WalkForwardJob').runStandalone()\"",
+    "jobs:walk-forward-dry": "node -e \"require('./src/infrastructure/jobs/WalkForwardJob').runStandalone({ dryRun: true })\""
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
