@@ -16,6 +16,23 @@
 const express = require("express");
 const prisma  = require("../../infrastructure/db/prismaClient");
 
+// Sprint 5 / RL-5 — lazy-loaded to avoid startup failures if pgvector is unavailable
+let _similarTradeAdvisor = null;
+function getSimilarTradeAdvisor() {
+  if (_similarTradeAdvisor) return _similarTradeAdvisor;
+  try {
+    const FeatureEngineer    = require("../../domain/FeatureEngineer");
+    const SimilarTradeAdvisor = require("../../domain/SimilarTradeAdvisor");
+    const VectorStore        = require("../../infrastructure/db/VectorStore");
+    const { _pool }          = require("../../infrastructure/db/database");
+    const vs = new VectorStore(_pool);
+    _similarTradeAdvisor = new SimilarTradeAdvisor(vs, new FeatureEngineer());
+  } catch (err) {
+    console.warn("[Analytics] SimilarTradeAdvisor unavailable:", err.message);
+  }
+  return _similarTradeAdvisor;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // In-memory cache
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,6 +278,34 @@ module.exports = function createAnalyticsRouter() {
     } catch (err) {
       console.error("[analytics /regime-distribution] Error:", err.message);
       return res.status(500).json({ ok: false, message: err.message });
+    }
+  });
+
+  // ── POST /similar-trades (RL-5) ──────────────────────────────────────────────
+  /**
+   * Find similar historical trades and return aggregated stats.
+   * Body: { symbol, strategyKey, entryContext, regime? }
+   */
+  router.post("/similar-trades", async (req, res) => {
+    try {
+      const { symbol, strategyKey, entryContext, regime } = req.body || {};
+      if (!entryContext) {
+        return res.status(400).json({ ok: false, error: "entryContext is required" });
+      }
+
+      const advisor = getSimilarTradeAdvisor();
+      if (!advisor) {
+        return res.status(503).json({ ok: false, error: "SimilarTradeAdvisor not available (pgvector may be disabled)" });
+      }
+
+      const tradeMetadata = { strategyKey, symbol, regime };
+      const analysis = await advisor.findSimilarAndAnalyze(entryContext, tradeMetadata, { k: 20 });
+      const card     = advisor.formatCard(analysis);
+
+      return res.json({ ok: true, ...card });
+    } catch (err) {
+      console.error("[Analytics] similar-trades error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
     }
   });
 
