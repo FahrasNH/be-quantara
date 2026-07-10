@@ -644,6 +644,34 @@ module.exports = function createBacktestRouter(context) {
   }));
 
   /**
+   * GET /api/v1/backtest/rag-gate-status
+   * Check whether RAG Gate (ML) is available for user backtests.
+   */
+  router.get("/rag-gate-status", asyncHandler(async (req, res) => {
+    try {
+      const WinPredictor = require("../../domain/WinPredictor");
+      const wp = new WinPredictor();
+      await wp.load().catch(() => {});
+      let hasVector = false;
+      try {
+        const VectorStore = require("../../infrastructure/db/VectorStore");
+        const { _pool } = require("../../infrastructure/db/database");
+        new VectorStore(_pool);
+        hasVector = true;
+      } catch { /* pgvector may be unavailable */ }
+      const hasModel = !!wp.model;
+      return res.json({
+        ok: true,
+        available: hasModel || hasVector,
+        hasModel,
+        hasVector,
+      });
+    } catch (err) {
+      return res.json({ ok: true, available: false, reason: err.message });
+    }
+  }));
+
+  /**
    * POST /api/v1/backtest/grok-confirm
    * Batch Grok Confirm Gate untuk backtest — 1 call per sinyal rules.
    */
@@ -1179,6 +1207,7 @@ module.exports = function createBacktestRouter(context) {
       htf_timeframe: htfTfOverride,
       debug: debugMode = false,
       grok_gate: grokGate = false,
+      rag_gate: ragGate = false,
     } = req.body;
 
     const sym = (pair || symbol || "").toUpperCase();
@@ -1206,7 +1235,7 @@ module.exports = function createBacktestRouter(context) {
       sym, strategyKey, strategyCfg,
       periodId, customStart, customEnd,
       capital, enableFees, enableSlippage,
-      parameters, entryTfOverride, htfTfOverride, debugMode, grokGate,
+      parameters, entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
     }).catch((err) => {
       if (job.status !== "cancelled") job.fail(err.message || "Backtest failed");
     });
@@ -1375,7 +1404,7 @@ async function _runBacktestJobAsync(job, userId, opts) {
     sym, strategyKey, strategyCfg,
     periodId, customStart, customEnd,
     capital, enableFees, enableSlippage,
-    parameters, entryTfOverride, htfTfOverride, debugMode, grokGate,
+    parameters, entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
   } = opts;
 
   job.status = "running";
@@ -1519,12 +1548,16 @@ async function _runBacktestJobAsync(job, userId, opts) {
       abortSignal,
       // Grok Confirm Gate (AI) — post-hoc filter over produced trades
       grokGate: !!grokGate,
+      ragGate: !!ragGate,
       userId,
       symbol: sym,
       onGrokProgress: (done, total) => {
         // phase:"grok" is routed by the FE to the right-hand Grok drawer (not the
         // inline stream log); done/total let the drawer show an accurate progress bar.
         job.progress({ phase: "grok", done, total, message: `Grok Confirm Gate: ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
+      },
+      onRagProgress: (done, total) => {
+        job.progress({ phase: "rag", done, total, message: `RAG Gate (ML): ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
       },
       onProgress: (pct, _bar, _total, type) => {
         const basePct = Math.round(typesDone / typeTotal * 100);

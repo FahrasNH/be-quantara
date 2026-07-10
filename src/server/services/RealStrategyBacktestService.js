@@ -860,6 +860,157 @@ async function _applyGrokGate(trades, ctx = {}) {
   };
 }
 
+const RAG_CONSERVATIVE_DISCOUNT = 0.9;
+const RAG_APPROVE_THRESHOLD = 0.5;
+
+let _ragGateDeps = null;
+function getRagGateDeps() {
+  if (_ragGateDeps) return _ragGateDeps;
+  try {
+    const FeatureEngineer = require("../../domain/FeatureEngineer");
+    const WinPredictor    = require("../../domain/WinPredictor");
+    const VectorStore     = require("../../infrastructure/db/VectorStore");
+    const { _pool }       = require("../../infrastructure/db/database");
+    const fe = new FeatureEngineer();
+    const wp = new WinPredictor();
+    wp.load().catch(() => {});
+    _ragGateDeps = { fe, wp, vs: new VectorStore(_pool) };
+  } catch (err) {
+    console.warn("[Backtest] RAG gate deps unavailable:", err.message);
+  }
+  return _ragGateDeps;
+}
+
+function _applyConservativeDiscount(score) {
+  if (!Number.isFinite(score)) return 0.5;
+  if (score > 0.5) return 0.5 + (score - 0.5) * RAG_CONSERVATIVE_DISCOUNT;
+  return score;
+}
+
+/**
+ * Post-hoc RAG / ML gate over produced backtest trades (mirrors Grok gate pattern).
+ * Uses WinPredictor + time-aware pgvector similarity; fail-open when ML unavailable.
+ *
+ * @param {Array}  trades
+ * @param {Object} ctx — { strategyKey, symbol, onRagProgress }
+ */
+async function _applyRagGate(trades, ctx = {}) {
+  const deps = getRagGateDeps();
+  if (!deps) {
+    return {
+      trades,
+      rejected: 0,
+      logs: [{ error: true, message: "RAG gate unavailable (fail-open)" }],
+      stats: { total: trades.length, approved: trades.length, rejected: 0, skipped: trades.length, avgScore: null, failOpen: true },
+    };
+  }
+
+  const { fe, wp, vs } = deps;
+  const sorted = [...trades].sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
+  const kept = [];
+  const logs = [];
+  let approved = 0;
+  let rejected = 0;
+  let skipped = 0;
+  let scoreSum = 0;
+  let scoreCount = 0;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const t = sorted[i];
+    const tradeTime = new Date(t.openTime || t.date || Date.now());
+    const entryContext = {
+      rsi: t.entryRsi,
+      side: t.side,
+      confidence: t.confidence,
+      regime: t.regime,
+    };
+    const tradeMetadata = {
+      strategyKey: ctx.strategyKey,
+      symbol: ctx.symbol || t.symbol,
+      side: t.side,
+    };
+
+    let lgbScore = null;
+    let ragScore = null;
+
+    try {
+      const features = fe.buildFeatureVector(entryContext, tradeMetadata);
+      if (wp.model) lgbScore = wp.predict(features).pWin;
+    } catch { /* ignore */ }
+
+    try {
+      const features = fe.buildFeatureVector(entryContext, tradeMetadata);
+      const similar = await vs.findSimilar(features, 20, {
+        symbol: tradeMetadata.symbol,
+        beforeDate: tradeTime.toISOString(),
+      });
+      if (similar.length > 0) {
+        const wins = similar.filter((s) => s.metadata?.outcome === "win").length;
+        const withOutcome = similar.filter(
+          (s) => s.metadata?.outcome === "win" || s.metadata?.outcome === "loss"
+        ).length;
+        if (withOutcome > 0) ragScore = wins / withOutcome;
+      }
+    } catch { /* ignore */ }
+
+    let rawScore;
+    if (lgbScore !== null && ragScore !== null) rawScore = 0.5 * lgbScore + 0.5 * ragScore;
+    else if (lgbScore !== null) rawScore = lgbScore;
+    else if (ragScore !== null) rawScore = ragScore;
+    else {
+      kept.push(t);
+      approved += 1;
+      skipped += 1;
+      logs.push({
+        time: tradeTime.getTime(),
+        symbol: ctx.symbol,
+        side: t.side,
+        approved: true,
+        reason: "no-ml-signal (kept)",
+        ragScore: null,
+        lgbScore: null,
+      });
+      if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
+      continue;
+    }
+
+    const adjusted = _applyConservativeDiscount(rawScore);
+    scoreSum += adjusted;
+    scoreCount += 1;
+    const isApproved = adjusted >= RAG_APPROVE_THRESHOLD;
+
+    logs.push({
+      time: tradeTime.getTime(),
+      symbol: ctx.symbol,
+      side: t.side,
+      approved: isApproved,
+      adjustedScore: adjusted,
+      ragScore,
+      lgbScore,
+      reason: isApproved ? "score >= threshold" : "score below threshold",
+    });
+
+    if (isApproved) { kept.push(t); approved += 1; }
+    else rejected += 1;
+
+    if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
+  }
+
+  return {
+    trades: kept,
+    rejected,
+    logs,
+    stats: {
+      total: trades.length,
+      approved,
+      rejected,
+      skipped,
+      avgScore: scoreCount > 0 ? scoreSum / scoreCount : null,
+      failOpen: false,
+    },
+  };
+}
+
 /**
  * Run AF_SMC triple-timeframe backtest:
  * Each trade type (Scalping/Intraday/Swing) runs on its own candle set independently.
@@ -1040,7 +1191,18 @@ async function runTripleTypeBacktest(opts = {}) {
       onGrokProgress: opts.onGrokProgress,
     });
   }
-  const finalTrades = grokResult ? grokResult.trades : allTrades;
+  let workingTrades = grokResult ? grokResult.trades : allTrades;
+
+  let ragResult = null;
+  if (opts.ragGate) {
+    ragResult = await _applyRagGate(workingTrades, {
+      strategyKey,
+      symbol: opts.symbol,
+      onRagProgress: opts.onRagProgress,
+    });
+    workingTrades = ragResult.trades;
+  }
+  const finalTrades = workingTrades;
 
   const { equity, stats } = _computeTripleStats(finalTrades, startCapital);
 
@@ -1053,7 +1215,18 @@ async function runTripleTypeBacktest(opts = {}) {
     grokGate: !!opts.grokGate,
     grokStats: grokResult?.stats ?? null,
     grokLogs: grokResult?.logs ?? null,
-    meta: { strategyKey, mode: "triple-timeframe", perTypeStats, grokGate: !!opts.grokGate },
+    ragGate: !!opts.ragGate,
+    ragStats: ragResult?.stats ?? null,
+    ragLogs: ragResult?.logs ?? null,
+    meta: {
+      strategyKey,
+      mode: "triple-timeframe",
+      perTypeStats,
+      grokGate: !!opts.grokGate,
+      grokStats: grokResult?.stats ?? null,
+      ragGate: !!opts.ragGate,
+      ragStats: ragResult?.stats ?? null,
+    },
   };
 }
 
@@ -1870,7 +2043,18 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       onGrokProgress: opts.onGrokProgress,
     });
   }
-  const finalTrades = grokResult ? grokResult.trades : allTrades;
+  let workingTrades = grokResult ? grokResult.trades : allTrades;
+
+  let ragResult = null;
+  if (opts.ragGate) {
+    ragResult = await _applyRagGate(workingTrades, {
+      strategyKey,
+      symbol: opts.symbol,
+      onRagProgress: opts.onRagProgress,
+    });
+    workingTrades = ragResult.trades;
+  }
+  const finalTrades = workingTrades;
 
   const { equity, stats } = _computeTripleStats(finalTrades, startCapital);
 
@@ -1883,7 +2067,18 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     grokGate: !!opts.grokGate,
     grokStats: grokResult?.stats ?? null,
     grokLogs: grokResult?.logs ?? null,
-    meta: { strategyKey, mode: `multi-tf (${typeOrder.join("+")})`, perTypeStats, grokGate: !!opts.grokGate },
+    ragGate: !!opts.ragGate,
+    ragStats: ragResult?.stats ?? null,
+    ragLogs: ragResult?.logs ?? null,
+    meta: {
+      strategyKey,
+      mode: `multi-tf (${typeOrder.join("+")})`,
+      perTypeStats,
+      grokGate: !!opts.grokGate,
+      grokStats: grokResult?.stats ?? null,
+      ragGate: !!opts.ragGate,
+      ragStats: ragResult?.stats ?? null,
+    },
   };
 }
 
@@ -1930,4 +2125,4 @@ function buildStats(trades, startCapital, endCapital) {
   };
 }
 
-module.exports = { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, _computeTripleStats, _applyGrokGate };
+module.exports = { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, _computeTripleStats, _applyGrokGate, _applyRagGate };
