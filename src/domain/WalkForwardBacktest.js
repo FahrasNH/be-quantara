@@ -13,13 +13,14 @@
 const TRAIN_DAYS = 90;
 const TEST_DAYS  = 30;
 const N_WINDOWS  = 4;
+const { isRagBacktestAllowed } = require("../config/ragBacktestEnv");
 
 class WalkForwardBacktest {
   /**
    * @param {object} [conservativeEngine] — ConservativeBacktestEngine instance (optional)
    */
   constructor(conservativeEngine = null, ablationTest = null) {
-    if (process.env.NODE_ENV === "production") {
+    if (!isRagBacktestAllowed()) {
       throw new Error(
         "[STAGING_ONLY] WalkForwardBacktest must not run in production."
       );

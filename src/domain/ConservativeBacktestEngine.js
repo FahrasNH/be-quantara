@@ -14,6 +14,7 @@
  */
 
 const CONSERVATIVE_DISCOUNT = 0.9; // -10% on positive scores
+const { isRagBacktestAllowed } = require("../config/ragBacktestEnv");
 
 class ConservativeBacktestEngine {
   /**
@@ -22,10 +23,10 @@ class ConservativeBacktestEngine {
    * @param {object} [winPredictor]    — WinPredictor instance (optional)
    */
   constructor(vectorStore, featureEngineer, winPredictor = null) {
-    if (process.env.NODE_ENV === "production") {
+    if (!isRagBacktestAllowed()) {
       throw new Error(
         "[STAGING_ONLY] ConservativeBacktestEngine must not run in production. " +
-        "Set NODE_ENV to 'staging' or 'test'."
+        "Enable on staging via APP_ENV=staging, PORT=3001, or RAG_BACKTEST_ENABLED=true."
       );
     }
     this.vectorStore     = vectorStore;
