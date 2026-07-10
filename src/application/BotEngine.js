@@ -1279,6 +1279,10 @@ class BotEngine extends EventEmitter {
               const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
               const hAtr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
               if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+              // TS structure gate reads highsHTF/lowsHTF + htfIdx (closed HTF bar).
+              indicators.highsHTF = hHighs;
+              indicators.lowsHTF = hLows;
+              indicators.closesHTF = hCloses;
             }
 
             const signal = detectSignal(indicators, lastIdx, {
@@ -1306,6 +1310,10 @@ class BotEngine extends EventEmitter {
               htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
               pairTier:             this.config.pairTier,
               tierOverrides:        this.config.tierOverrides,
+              htfIdx: htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 1 : undefined,
+              tsUseStructureGate:   this.config.tsUseStructureGate,
+              tsUseVwapPrecision:   this.config.tsUseVwapPrecision,
+              vwapAtrMult:          this.config.vwapAtrMult,
             });
 
 

@@ -174,6 +174,9 @@ function calcIndicators(candles, config = {}) {
   const lows    = candles.map(c => c.low);
   const volumes = candles.map(c => c.volume || 0);
   const opens   = candles.map((c, i) => c.open ?? (i > 0 ? closes[i - 1] : c.close));
+  // Session VWAP (TS_VP) needs bar timestamps; without these the whole series
+  // collapses into one "session" and Value Area blocks almost all trend entries.
+  const timestamps = candles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
 
   const result = {
     emaFast:  calcEMA(closes, emaFast),
@@ -187,6 +190,7 @@ function calcIndicators(candles, config = {}) {
     highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
     lows,
     opens,
+    timestamps,
   };
 
   // EMA trend filter (EMA50 untuk Day Trading, EMA200 untuk Swing)
@@ -776,12 +780,17 @@ function getAdaptiveFusionMeta() {
 }
 
 /**
- * Singleton getter untuk TREND_FOLLOWING strategy
+ * Singleton getter untuk TREND_FOLLOWING / Trend Surge umbrella
+ * (TS_TF + structure gate + VWAP precision — same instance as backtest registry).
  */
 function getTrendFollowingInstance() {
   if (!_trendFollowingInstance) {
-    const TrendFollowingStrategy = require("./strategy/implementations/TrendFollowingStrategy");
-    _trendFollowingInstance = new TrendFollowingStrategy();
+    const { strategyRegistry } = require("./strategy");
+    _trendFollowingInstance = strategyRegistry.get("TS_TF");
+    if (!_trendFollowingInstance) {
+      const TrendSurgeUmbrella = require("./strategy/umbrellas/TrendSurgeUmbrella");
+      _trendFollowingInstance = new TrendSurgeUmbrella();
+    }
   }
   return _trendFollowingInstance;
 }

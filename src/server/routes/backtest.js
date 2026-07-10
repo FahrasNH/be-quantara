@@ -1361,7 +1361,10 @@ module.exports = function createBacktestRouter(context) {
 };
 
 // ─── Async job runner ─────────────────────────────────────────────────────────
-const AF_SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+const AF_SMC_KEYS = new Set([
+  "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
+  "AF_WYCKOFF", "AF_VSA",
+]);
 // Shared across AF_SMC, TS_TF (Intraday+Swing), and MD_MR (Scalping+Intraday) —
 // do not scope changes here to one strategy without checking MULTI_TYPE_STRATEGY_MAP
 // below. (Tried moving Intraday to 1h/4h for an AF_SMC-only experiment; that

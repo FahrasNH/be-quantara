@@ -96,13 +96,24 @@ test("classifies downtrend LH+LL", () => {
   assert.strictEqual(r.structure, "downtrend");
 });
 
-test("insufficient swings → unclear", () => {
+test("insufficient swings → unclear classification, gate passthrough", () => {
   const highs = [1, 2, 1.5, 2.2];
   const lows = [0.5, 1, 0.8, 1.1];
   const r = classifyMarketStructure(highs, lows, 3, {
     leftLook: 2, rightLook: 2, scanBars: 10, minSwingPairs: 3,
   });
   assert.strictEqual(r.structure, "unclear");
+  const g = evaluateMarketStructureGate(highs, lows, 3, "LONG", {
+    leftLook: 2, rightLook: 2, scanBars: 10, minSwingPairs: 3,
+  });
+  assert.strictEqual(g.allowed, true);
+  assert.strictEqual(g.reason, "structure_warmup_passthrough");
+});
+
+test("htfIdx warmup (-1) → gate passthrough", () => {
+  const g = evaluateMarketStructureGate([1, 2, 3], [0.5, 1, 1.5], -1, "LONG");
+  assert.strictEqual(g.allowed, true);
+  assert.ok(String(g.reason).includes("warmup"));
 });
 
 test("gate allows LONG on uptrend", () => {
@@ -160,18 +171,19 @@ test("early session passthrough", () => {
     { highs, lows, closes, volumes, timestamps },
     2,
     "LONG",
-    { minSessionBars: 8 }
+    { minSessionBars: 20 }
   );
   assert.strictEqual(r.allowed, true);
   assert.strictEqual(r.reason, "session_warmup_passthrough");
 });
 
-test("price far from VWAP/VA blocked", () => {
+test("price far from VWAP/VA blocked (ATR tolerance)", () => {
   const n = 30;
   const highs = [];
   const lows = [];
   const closes = [];
   const volumes = [];
+  const atr = [];
   const timestamps = [];
   const day0 = Date.UTC(2026, 0, 2);
   for (let i = 0; i < n; i++) {
@@ -179,6 +191,7 @@ test("price far from VWAP/VA blocked", () => {
     lows.push(99.9);
     closes.push(100);
     volumes.push(1000);
+    atr.push(1.0); // ATR=1 → 0.5×ATR = 0.5 tolerance
     timestamps.push(day0 + i * 60_000); // 1m bars — full session in one UTC day
   }
   // Spike last close far above the session cluster with tiny volume
@@ -188,13 +201,44 @@ test("price far from VWAP/VA blocked", () => {
   lows[n - 1] = 129.9;
   volumes[n - 1] = 1;
   const r = evaluateVolumeProfilePrecision(
-    { highs, lows, closes, volumes, timestamps },
+    { highs, lows, closes, volumes, timestamps, atr },
     n - 1,
     "LONG",
-    { minSessionBars: 8, vwapTolerancePct: 0.002 }
+    { minSessionBars: 8, vwapAtrMult: 0.5 }
   );
   assert.strictEqual(r.allowed, false);
   assert.strictEqual(r.reason, "outside_vwap_value_area");
+  assert.strictEqual(r.meta.tolMode, "atr");
+});
+
+test("price within 0.5×ATR of VWAP allowed", () => {
+  const n = 30;
+  const highs = [];
+  const lows = [];
+  const closes = [];
+  const volumes = [];
+  const atr = [];
+  const timestamps = [];
+  const day0 = Date.UTC(2026, 0, 2);
+  for (let i = 0; i < n; i++) {
+    highs.push(100.1);
+    lows.push(99.9);
+    closes.push(100);
+    volumes.push(1000);
+    atr.push(2.0); // 0.5×ATR = 1.0
+    timestamps.push(day0 + i * 60_000);
+  }
+  closes[n - 1] = 100.8; // within 1.0 of VWAP≈100
+  highs[n - 1] = 100.9;
+  lows[n - 1] = 100.7;
+  const r = evaluateVolumeProfilePrecision(
+    { highs, lows, closes, volumes, timestamps, atr },
+    n - 1,
+    "LONG",
+    { minSessionBars: 8, vwapAtrMult: 0.5 }
+  );
+  assert.strictEqual(r.allowed, true);
+  assert.ok(["vwap_retest", "poc_retest", "value_area_overlap"].includes(r.reason));
 });
 
 test("component bias above VWAP → LONG", () => {

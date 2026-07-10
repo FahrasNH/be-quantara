@@ -10,8 +10,10 @@
 "use strict";
 
 const DEFAULTS = {
-  leftLook: 5,
-  rightLook: 5,
+  // Spec TS-SUB-01 / bug report: confirm swing with 2 bars after pivot (anti-repaint).
+  // rightLook=5 was over-strict on HTF and starved confirmed swings → structure forever unclear.
+  leftLook: 2,
+  rightLook: 2,
   scanBars: 80,
   minSwingPairs: 2,
 };
@@ -143,10 +145,32 @@ function classifyMarketStructure(highs, lows, lastIdx, config = {}) {
  * @returns {{ allowed: boolean, vote: 'LONG'|'SHORT'|'NEUTRAL', confidence: number, reason: string, meta: object }}
  */
 function evaluateMarketStructureGate(highs, lows, lastIdx, direction, config = {}) {
+  // Invalid / warmup HTF index — do not hard-block (mirrors VWAP session warmup).
+  if (!Number.isInteger(lastIdx) || lastIdx < 0) {
+    return {
+      allowed: true,
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "structure_htf_warmup_passthrough",
+      meta: { structure: "unclear", htfIdx: lastIdx },
+    };
+  }
+
   const classified = classifyMarketStructure(highs, lows, lastIdx, config);
   const { structure, confidence, meta } = classified;
 
   if (structure === "unclear") {
+    // Insufficient confirmed swings = not enough history yet, not a bearish/bullish veto.
+    // Hard-blocking here zeroed out entire backtests while HTF warmed up.
+    if (meta?.reason === "insufficient_swings") {
+      return {
+        allowed: true,
+        vote: "NEUTRAL",
+        confidence: 0,
+        reason: "structure_warmup_passthrough",
+        meta: { ...meta, structure },
+      };
+    }
     return {
       allowed: false,
       vote: "NEUTRAL",

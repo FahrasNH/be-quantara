@@ -11,8 +11,11 @@
 const DEFAULTS = {
   bins: 20,
   valueAreaPct: 0.7,
-  vwapTolerancePct: 0.0025, // 0.25% around VWAP
-  minSessionBars: 8,
+  // Spec TS-SUB-02: abs(price - VWAP) <= vwapAtrMult × ATR(14).
+  // 0.5×ATR (was wrongly implemented as 0.25% of price) — 0.3 was too tight on 5m crypto.
+  vwapAtrMult: 0.5,
+  vwapTolerancePct: 0.005, // fallback when ATR unavailable (~0.5%)
+  minSessionBars: 20, // AC5: skip refinement until session has enough bars
 };
 
 /**
@@ -145,9 +148,24 @@ function priceNear(level, price, tolPct) {
   return Math.abs(price - level) <= tol;
 }
 
+function priceNearAbs(level, price, tolAbs) {
+  if (level == null || price == null || !Number.isFinite(level) || !Number.isFinite(price)) return false;
+  if (tolAbs == null || !Number.isFinite(tolAbs) || tolAbs <= 0) return false;
+  return Math.abs(price - level) <= tolAbs;
+}
+
 function priceInBand(price, low, high) {
   if (price == null || low == null || high == null) return false;
   return price >= low && price <= high;
+}
+
+function resolveVwapTolerance(indicators, lastIdx, cfg) {
+  const atr = indicators?.atr?.[lastIdx];
+  const mult = cfg.vwapAtrMult ?? DEFAULTS.vwapAtrMult;
+  if (atr != null && Number.isFinite(atr) && atr > 0 && mult > 0) {
+    return { tolAbs: atr * mult, mode: "atr", atr, mult };
+  }
+  return { tolAbs: null, mode: "pct", atr: null, mult };
 }
 
 /**
@@ -183,9 +201,14 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
   );
 
   const price = closes[lastIdx];
-  const nearVwap = priceNear(vwap, price, cfg.vwapTolerancePct);
+  const { tolAbs, mode, atr, mult } = resolveVwapTolerance(indicators, lastIdx, cfg);
+  const nearVwap = tolAbs != null
+    ? priceNearAbs(vwap, price, tolAbs)
+    : priceNear(vwap, price, cfg.vwapTolerancePct);
   const inValueArea = priceInBand(price, profile.val, profile.vah);
-  const nearPoc = priceNear(profile.poc, price, cfg.vwapTolerancePct);
+  const nearPoc = tolAbs != null
+    ? priceNearAbs(profile.poc, price, tolAbs)
+    : priceNear(profile.poc, price, cfg.vwapTolerancePct);
 
   const overlap = nearVwap || inValueArea || nearPoc;
   const meta = {
@@ -199,6 +222,10 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
     nearPoc,
     bars,
     startIdx,
+    tolMode: mode,
+    tolAbs,
+    atr,
+    vwapAtrMult: mult,
   };
 
   if (!overlap) {
@@ -218,11 +245,12 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
   if (inValueArea) confidence += 0.1;
   confidence = Math.min(1, confidence);
 
-  if (direction === "LONG" && price < vwap * (1 - cfg.vwapTolerancePct * 2) && !nearPoc) {
+  const deepTol = tolAbs != null ? tolAbs * 2 : Math.abs(vwap) * cfg.vwapTolerancePct * 2;
+  if (direction === "LONG" && price < vwap - deepTol && !nearPoc) {
     // Deep discount below VWAP without POC support — weaker long precision
     confidence = Math.max(0.4, confidence - 0.2);
   }
-  if (direction === "SHORT" && price > vwap * (1 + cfg.vwapTolerancePct * 2) && !nearPoc) {
+  if (direction === "SHORT" && price > vwap + deepTol && !nearPoc) {
     confidence = Math.max(0.4, confidence - 0.2);
   }
 
@@ -259,7 +287,11 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
     return { vote: "NEUTRAL", confidence: 0, reason: "no_price", meta: { vwap } };
   }
   const inVA = priceInBand(price, profile.val, profile.vah);
-  if (!inVA && !priceNear(vwap, price, cfg.vwapTolerancePct)) {
+  const { tolAbs } = resolveVwapTolerance(indicators, lastIdx, cfg);
+  const nearVwap = tolAbs != null
+    ? priceNearAbs(vwap, price, tolAbs)
+    : priceNear(vwap, price, cfg.vwapTolerancePct);
+  if (!inVA && !nearVwap) {
     return {
       vote: "NEUTRAL",
       confidence: 0,
@@ -290,4 +322,5 @@ module.exports = {
   buildVolumeProfile,
   evaluateVolumeProfilePrecision,
   evaluateVolumeProfileComponent,
+  resolveVwapTolerance,
 };

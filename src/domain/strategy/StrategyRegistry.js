@@ -45,7 +45,12 @@ class StrategyRegistry {
     // ── Legacy backward-compat aliases (same instances, no extra memory) ──
     this.strategies.set("ADAPTIVE_FUSION",      af);
     this.strategies.set("SMART_MONEY_CONCEPTS", af);
+    // Component keys resolve to the AF umbrella (voting still runs all live components).
+    this.strategies.set("AF_WYCKOFF",           af);
+    this.strategies.set("AF_VSA",               af);
     this.strategies.set("TREND_FOLLOWING",      ts);
+    this.strategies.set("TS_MS",               ts);
+    this.strategies.set("TS_VP",               ts);
     this.strategies.set("MEAN_REVERSION",       md);
     this.strategies.set("BREAKOUT_RETEST",      bs);
 

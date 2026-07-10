@@ -412,6 +412,8 @@ const STRATEGIES = {
     // Set either flag false to rollback that layer independently.
     tsUseStructureGate: true,
     tsUseVwapPrecision: true,
+    // Spec: abs(price-VWAP) <= vwapAtrMult × ATR. 0.5 after 0.3 proved too tight on 5m.
+    vwapAtrMult: 0.5,
 
     trades:        "8-15 trade/hari",
     winrate:       "~54-58%",
@@ -715,7 +717,11 @@ const STRATEGIES = {
 
 // Populate component-key aliases from their parent presets
 STRATEGIES.AF_SMC = { ...STRATEGIES.SMART_MONEY_CONCEPTS, name: "AF_SMC", label: "Adaptive Fusion (AF_SMC)", signalType: "AF_SMC" };
+STRATEGIES.AF_WYCKOFF = { ...STRATEGIES.AF_SMC, name: "AF_WYCKOFF", label: "Wyckoff Method", signalType: "AF_SMC" };
+STRATEGIES.AF_VSA = { ...STRATEGIES.AF_SMC, name: "AF_VSA", label: "Volume Spread Analysis", signalType: "AF_SMC" };
 STRATEGIES.TS_TF  = { ...STRATEGIES.TREND_FOLLOWING,       name: "TS_TF",  label: "Trend Surge (TS_TF)",     signalType: "TS_TF"  };
+STRATEGIES.TS_MS  = { ...STRATEGIES.TS_TF, name: "TS_MS", label: "Market Structure", signalType: "TS_TF" };
+STRATEGIES.TS_VP  = { ...STRATEGIES.TS_TF, name: "TS_VP", label: "Volume Profile + VWAP", signalType: "TS_TF" };
 STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,       name: "MD_MR",  label: "Mean Drift (MD_MR)",      signalType: "MD_MR"  };
 STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST,      name: "BS_BR",  label: "Breakout Storm (BS_BR)",  signalType: "BS_BR"  };
 

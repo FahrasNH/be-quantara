@@ -40,8 +40,11 @@ const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter
 // code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
 const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
 const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
-const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING"]);
-const SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"]);
+const SMC_KEYS = new Set([
+  "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
+  "AF_WYCKOFF", "AF_VSA",
+]);
 const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
 const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
@@ -421,10 +424,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
-    // BT-FIX: yield the event loop every 2000 bars so concurrent job-status polls
-    // get served during heavy compute. Without this, large ranges ("max") block
-    // Node's single thread → poll requests hang → FE aborts at 10s → "Request timed out".
-    if (i % 2000 === 0) {
+    // BT-FIX: yield every 500 bars (was 2000). AF with Wyckoff+VSA is ~3× heavier
+    // per bar; 2000-bar gaps let job-status polls hang past the FE 10s abort.
+    if (i % 500 === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const c = entryCandles[i];
@@ -1382,11 +1384,18 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     // the 15m→4h / 4h→1w legs (measured: PF 0.83 → 0.49 when misaligned).
     if (tfHtfLayer) {
       indicators.closesHTF = htfCloses;
+      indicators.highsHTF = htfHighs;
+      indicators.lowsHTF = htfLows;
       indicators.emaFastHTF = htfIndicators.emaFast;
       indicators.emaMidHTF = htfIndicators.emaSlow;
       indicators.emaSlowHTF = calcEMA(htfCloses, 50); // 50-bar EMA for HTF slow
       indicators.adxHTF = htfAdx;
     }
+  }
+
+  // Session VWAP (TS_VP) needs timestamps even when HTF layer is off.
+  if (!indicators.timestamps) {
+    indicators.timestamps = entryCandles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
   }
 
   const htfPtr = htfCandles?.length
@@ -1640,7 +1649,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
-    if (i % 2000 === 0) {
+    if (i % 500 === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
 
@@ -1788,6 +1797,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // so Layer 1 reads the previous (closed) bar. -1 when no closed bar yet →
       // strategy degrades to entry-TF fallback for the warmup bars.
       htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
+
+      // Sprint 9 TS layers — must be forwarded from cfg (singleton strategy has no per-request config).
+      tsUseStructureGate: cfg.tsUseStructureGate,
+      tsUseVwapPrecision: cfg.tsUseVwapPrecision,
+      marketStructure: cfg.marketStructure,
+      volumeProfile: cfg.volumeProfile,
+      vwapAtrMult: cfg.vwapAtrMult,
 
       // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
       // is a server-startup SINGLETON (new TrendSurgeUmbrella(), no per-request

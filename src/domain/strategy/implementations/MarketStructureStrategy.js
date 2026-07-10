@@ -11,6 +11,16 @@ const {
   DEFAULTS,
 } = require("../ts/marketStructureComponent");
 
+function structureConfigFrom(config = {}) {
+  const src = { ...DEFAULTS, ...(config.marketStructure || {}), ...config };
+  return {
+    leftLook: src.leftLook,
+    rightLook: src.rightLook,
+    scanBars: src.scanBars,
+    minSwingPairs: src.minSwingPairs,
+  };
+}
+
 class MarketStructureStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
@@ -49,11 +59,7 @@ class MarketStructureStrategy extends StrategyBase {
     const highs = indicators.highsHTF || indicators.highs || [];
     const lows = indicators.lowsHTF || indicators.lows || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
-    const result = evaluateMarketStructureComponent(highs, lows, idx, {
-      ...DEFAULTS,
-      ...config.marketStructure,
-      ...config,
-    });
+    const result = evaluateMarketStructureComponent(highs, lows, idx, structureConfigFrom(config));
     this._lastSignalMeta = { component: "TS_MS", ...result };
     return result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
   }
@@ -62,11 +68,7 @@ class MarketStructureStrategy extends StrategyBase {
     const highs = indicators.highsHTF || indicators.highs || [];
     const lows = indicators.lowsHTF || indicators.lows || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
-    const result = evaluateMarketStructureComponent(highs, lows, idx, {
-      ...DEFAULTS,
-      ...config.marketStructure,
-      ...config,
-    });
+    const result = evaluateMarketStructureComponent(highs, lows, idx, structureConfigFrom(config));
     this._lastSignalMeta = { component: "TS_MS", ...result };
     return result;
   }
@@ -75,11 +77,7 @@ class MarketStructureStrategy extends StrategyBase {
     const highs = indicators.highsHTF || indicators.highs || [];
     const lows = indicators.lowsHTF || indicators.lows || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
-    const result = evaluateMarketStructureGate(highs, lows, idx, direction, {
-      ...DEFAULTS,
-      ...config.marketStructure,
-      ...config,
-    });
+    const result = evaluateMarketStructureGate(highs, lows, idx, direction, structureConfigFrom(config));
     this._lastSignalMeta = { component: "TS_MS", ...result };
     return result;
   }
