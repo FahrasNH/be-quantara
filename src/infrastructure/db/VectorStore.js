@@ -31,8 +31,13 @@ class VectorStore {
     if (this._checkedAvailability) return this._available;
     this._checkedAvailability = true;
     try {
-      await this._pool.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'");
-      this._available = true;
+      const { rows } = await this._pool.query(
+        "SELECT 1 FROM pg_extension WHERE extname = 'vector' LIMIT 1"
+      );
+      this._available = (rows?.length ?? 0) > 0;
+      if (!this._available) {
+        console.warn("[VectorStore] pgvector not available — similarity search disabled");
+      }
     } catch {
       this._available = false;
       console.warn("[VectorStore] pgvector not available — similarity search disabled");
