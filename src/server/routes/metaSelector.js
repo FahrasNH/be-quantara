@@ -26,6 +26,19 @@ const ShadowCollectionService = require("../services/ShadowCollectionService");
 const { notifyInfo }         = require("../../infrastructure/notifications/TelegramNotifier");
 const prisma                 = require("../../infrastructure/db/prismaClient");
 
+// Sprint 6 / RAG-PROD-1 — lazy-loaded MLShadowService
+let _mlShadowService = null;
+function getMLShadowService() {
+  if (_mlShadowService) return _mlShadowService;
+  try {
+    const MLShadowService = require("../services/MLShadowService");
+    _mlShadowService = MLShadowService.autoStart();
+  } catch (err) {
+    console.warn("[MetaSelector] MLShadowService unavailable:", err.message);
+  }
+  return _mlShadowService;
+}
+
 // Sprint 5 / RL-6 — lazy-loaded HybridAdvisor
 let _hybridAdvisor = null;
 function getHybridAdvisor() {
@@ -246,6 +259,137 @@ module.exports = function createMetaSelectorRouter(wssOrRef = null) {
       return res.json({ ok: true, message: `WEIGHT_RL3 set to ${w}`, weights: hybrid.getWeights() });
     } catch (err) {
       console.error("[MetaSelector] set-rl3-weight error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── GET /rag/readiness (Sprint 6 / RAG-PROD-1) ───────────────────────────
+  /**
+   * Return Sprint 6 RAG readiness thresholds check.
+   * AUC >= 0.65, Accuracy >= 50%, Precision >= 55%, TradeCount >= 1000.
+   */
+  router.get("/rag/readiness", async (req, res) => {
+    try {
+      const svc = getMLShadowService();
+      if (!svc) {
+        return res.json({
+          ok: true,
+          ready: false,
+          failures: ["MLShadowService not available"],
+          auc: 0, accuracy: 0, precision: 0, tradeCount: 0,
+        });
+      }
+      const readiness = await svc.checkReadinessThresholds();
+      return res.json({ ok: true, ...readiness });
+    } catch (err) {
+      console.error("[MetaSelector] rag/readiness error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── POST /rag/promote (SUPER_ADMIN, Sprint 6 / RAG-PROD-1) ───────────────
+  /**
+   * Promote RAG from shadow to advisory mode.
+   * Requires: checkReadinessThresholds() to pass.
+   * Sets RAG_MODE=advisory in memory and logs to AuditLog.
+   */
+  router.post("/rag/promote", superAdminGuard, async (req, res) => {
+    try {
+      const { confirm } = req.body || {};
+      if (confirm !== true) {
+        return res.status(400).json({ ok: false, error: "confirm: true required in body" });
+      }
+
+      const svc = getMLShadowService();
+      if (!svc) {
+        return res.status(503).json({ ok: false, error: "MLShadowService not available" });
+      }
+
+      // Check readiness thresholds
+      const readiness = await svc.checkReadinessThresholds();
+      if (!readiness.ready) {
+        return res.status(409).json({
+          ok:       false,
+          error:    `RAG not ready for promotion: ${readiness.failures.join(", ")}`,
+          readiness,
+        });
+      }
+
+      // Promote to advisory
+      process.env.RAG_MODE = "advisory";
+
+      // Log to AuditLog (best-effort — table may not exist)
+      const user     = req.user || req.adminUser;
+      const userId   = user?.id ?? user?.userId ?? null;
+      const username = user?.username ?? user?.email ?? "unknown";
+
+      try {
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "AuditLog" (action, entity, "entityId", "userId", metadata, "createdAt")
+           VALUES ('RAG_PROMOTE', 'RAG_MODE', 'advisory', $1::text::uuid, $2::jsonb, NOW())`,
+          userId,
+          JSON.stringify({ from: "shadow", to: "advisory", triggeredBy: username, readiness })
+        );
+      } catch {
+        // AuditLog table may not exist — log to console as fallback
+        console.log(`[MetaSelector] RAG promoted to advisory by ${username} (no AuditLog table)`);
+      }
+
+      await notifyInfo(
+        `[RAG Advisory] RAG mode promoted to ADVISORY by ${username}. ` +
+        `AUC=${readiness.auc.toFixed(3)}, Accuracy=${(readiness.accuracy * 100).toFixed(1)}%, ` +
+        `Precision=${(readiness.precision * 100).toFixed(1)}%, Trades=${readiness.tradeCount}`
+      ).catch(() => {});
+
+      return res.json({
+        ok:       true,
+        message:  "RAG promoted to advisory mode",
+        ragMode:  "advisory",
+        readiness,
+      });
+    } catch (err) {
+      console.error("[MetaSelector] rag/promote error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── POST /rag/revert (SUPER_ADMIN, Sprint 6 / RAG-PROD-1) ────────────────
+  /**
+   * Revert RAG from advisory back to shadow mode.
+   * Instant revert — no readiness check required.
+   */
+  router.post("/rag/revert", superAdminGuard, async (req, res) => {
+    try {
+      const previousMode = process.env.RAG_MODE || "shadow";
+      process.env.RAG_MODE = "shadow";
+
+      const user     = req.user || req.adminUser;
+      const username = user?.username ?? user?.email ?? "unknown";
+
+      try {
+        const userId = user?.id ?? user?.userId ?? null;
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "AuditLog" (action, entity, "entityId", "userId", metadata, "createdAt")
+           VALUES ('RAG_REVERT', 'RAG_MODE', 'shadow', $1::text::uuid, $2::jsonb, NOW())`,
+          userId,
+          JSON.stringify({ from: previousMode, to: "shadow", triggeredBy: username })
+        );
+      } catch {
+        console.log(`[MetaSelector] RAG reverted to shadow by ${username} (no AuditLog table)`);
+      }
+
+      await notifyInfo(
+        `[RAG Advisory] RAG mode REVERTED to shadow by ${username}. Previous mode: ${previousMode}.`
+      ).catch(() => {});
+
+      return res.json({
+        ok:          true,
+        message:     "RAG reverted to shadow mode",
+        ragMode:     "shadow",
+        previousMode,
+      });
+    } catch (err) {
+      console.error("[MetaSelector] rag/revert error:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
     }
   });

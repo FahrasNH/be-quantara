@@ -542,7 +542,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         riskPerTrade,
       });
       if (!regimeResult.allow) continue;
-      const adjustedRiskPerTrade = regimeResult.riskPerTrade;
+
+      // AF-SWING-V3: confidence/RVOL/ATR-tiered position size (SWING_ENGINE_V3.md
+      // improvement 9). No-op (multiplier 1) unless typeOverrides.Swing.sacSwingV3Gate
+      // is enabled — see SmartMoneyConceptsStrategy._evaluateSwingV3Gate.
+      const swingV3Mult = componentId === "Swing" ? (multiSignal.meta?.swingV3?.sizeMultiplier ?? 1) : 1;
+      const adjustedRiskPerTrade = regimeResult.riskPerTrade * swingV3Mult;
 
       // Skip if component already has open position
       if (positions.has(componentId)) continue;

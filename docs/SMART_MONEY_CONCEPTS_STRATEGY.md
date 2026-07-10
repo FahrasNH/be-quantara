@@ -43,13 +43,13 @@ for the full result. It stays hidden until a design clears the bar.
 - **Fair Value Gaps (FVG)** — Where price is mispriced
 - **Displacement & Premium/Discount** — Market structure zones
 
-The strategy runs **3 independent trade types simultaneously** on different timeframe stacks:
+The strategy runs **2 active trade types simultaneously** on different timeframe stacks (Intraday is currently hidden — see note above):
 
-| Type | Entry TF | Confirm TF | Trend TF | Holding |
-|------|----------|-----------|----------|---------|
-| **Scalping (A)** | 15m | 1h | 4h | 30min–4hr |
-| **Intraday (B)** | 15m | 1h | 4h | 2–8 hours |
-| **Swing (C)** | 4h | 1d | 1w | 1–3 weeks |
+| Type | Entry TF | Confirm TF | Trend TF | Holding | Status |
+|------|----------|-----------|----------|---------|--------|
+| **Scalping (A)** | 15m | 1h | 4h | 30min–4hr | ✅ Active |
+| **Intraday (B)** | 15m | 1h | 4h | 2–8 hours | ⚠️ Hidden |
+| **Swing (C)** | 4h | 1d | 1w | 1–3 weeks | ✅ Active |
 
 ### Key Characteristics
 
@@ -119,19 +119,24 @@ SMC Sequence Engine (universal)
 ├── Detects: Sweep, CHoCH, FVG, OB, Displacement
 ├── Outputs: Raw entry signal (A/B/C component)
 │
-├── Component A (Scalping)
+├── Component A (Scalping) ✅ ACTIVE
 │   ├── Entry TF: 15m | Confirm: 1h | Trend: 4h
-│   ├── Gate: HTF regime hard-block (trend must align)
+│   ├── Gate: HTF regime hard-block (4h trend must align direction)
+│   ├── Optional Gate (AF-SCALP-28): 5m structure validation
+│   │   └─ Validates: Sweep → CHoCH → Displacement → Direction align
+│   │      (enables when validateEntryTFStructure: true)
 │   ├── Confirm: 5m CHoCH validation (rare, high quality)
 │   └── SL/TP: 1.0×ATR / 4.5×ATR (tight stops, large targets)
 │
-├── Component B (Intraday)
+├── Component B (Intraday) ⚠️ HIDDEN
 │   ├── Entry TF: 15m | Confirm: 1h | Trend: 4h
 │   ├── Gate: Softer regime filter (regime bias only)
 │   ├── Confirm: Volume confirmation + EMA structure
-│   └── SL/TP: 1.2×ATR / 2.16×ATR (medium stops/targets)
+│   ├── SL/TP: 1.2×ATR / 2.16×ATR (medium stops/targets)
+│   └── NOTE: 100% signal overlap with Scalping (same TFs) — disabled
+│           to avoid double-counting trades. See Appendix for revival attempt.
 │
-└── Component C (Swing)
+└── Component C (Swing) ✅ ACTIVE
     ├── Entry TF: 4h | Confirm: 1d | Trend: 1w
     ├── Gate: Weekly trend alignment (long-term only)
     ├── Confirm: Daily-level structure + displacement
@@ -157,6 +162,8 @@ Swing (C):
 ```
 
 **Note:** Scalping & Intraday use the same TFs (15m/1h/4h) but with different gate strictness. Swing is pure higher timeframe.
+
+⚠️ **INTRADAY STATUS (2026-07-08):** Intraday is currently **HIDDEN from the UI** because it was running on the exact same candles as Scalping (both 15m entry / 4h trend), creating 100% signal overlap and redundant trades under two labels. A v3.1 revival attempt moved it to 1h entry (a genuinely different signal) plus ADX gates and revised ladder, but **failed walk-forward validation** — no variant achieved netPF ≥ 1.0 across all windows. See [Appendix: Intraday Revival Attempt](#appendix-intraday-revival-attempt-2026-07-08) for full results. It remains hidden until a design clears that bar.
 
 ---
 
@@ -534,6 +541,47 @@ Walk-Forward 2 (Oct–Dec):  PF 1.25, WR 43%, +$1,650
 
 ---
 
+### AF-SCALP-28: Entry TF Structure Validation (Scalping 5m Layer)
+
+**Status:** ✅ AVAILABLE (opt-in, not shipped default)
+
+**Purpose:**
+Scalping 5m entry TF structure validation adds an extra filter to 5m entry signals by verifying that a complete SMC sequence exists at the entry bar's timeframe before confirming. This includes:
+- **Sweep detection:** Price must have hit a recent swing extreme
+- **Change of Character:** Trend must have reversed since the sweep
+- **Displacement:** Price must have moved away from swept level
+- **Retest:** Current bar represents a retest into FVG or order block
+
+When enabled, incomplete or weak structure entries are filtered out, reducing noise and improving precision.
+
+**Configuration:**
+```javascript
+{
+  typeOverrides: {
+    Scalping: {
+      validateEntryTFStructure: true  // Enable 5m structure validation
+    }
+  }
+}
+```
+
+**Expected Impact:**
+- **Win Rate:** +2–3pp (filters false-breakouts and noise entries)
+- **Trade Frequency:** −25–35% fewer trades (only high-conviction structures pass)
+- **Average Winner Size:** +5–10% (structure-validated entries tend to go further)
+- **Risk/Reward:** Improves from filtering low-quality entries
+
+**When to Use:**
+- **DO use** if you prefer fewer, higher-quality trades over maximum frequency
+- **DO use** if backtest shows improvement in your specific pair
+- **DON'T use** if you want to maximize trade count (defeats the purpose of Scalping frequency edge)
+
+**Related Documentation:**
+- [Scalping Entry TF Structure Validation](./SCALPING_ENTRY_TF_STRUCTURE_VALIDATION.md) — Technical deep dive
+- [SMC Sequence Engine](#smc-sequence-engine) — How structure detection works
+
+---
+
 ### Issue #3: Component C (Swing) Holds Overnight/Weekend
 
 **Status:** ⚠️ BY DESIGN (not a bug, but a risk)
@@ -553,6 +601,47 @@ Walk-Forward 2 (Oct–Dec):  PF 1.25, WR 43%, +$1,650
 1. Set tighter stop losses on swing before high-impact news
 2. Reduce position size if holding into earnings/economic events
 3. Monitor Friday closes (exit if sentiment is extreme)
+
+---
+
+### AF-SWING-V3: No-Trade Zone + Adaptive Sizing (Swing, opt-in)
+
+**Status:** ⚠️ Experimental — disabled by default (`sacSwingV3Gate: false`)
+**Source:** External proposal `SWING_ENGINE_V3.md` (14 improvements) — **6 of 14 implemented**, the rest deferred (see below).
+**Files:** `SmartMoneyConceptsStrategy._evaluateSwingV3Gate()` + `RealStrategyBacktestService.js` (sizing hook)
+
+**What's implemented (Phase 1 — signal-side gate, no exit-engine changes):**
+
+| # | V3.md Improvement | Implementation |
+|---|---|---|
+| 1 | Market Regime Filter | Blocks entry when weekly `htfTrend` is `SIDEWAYS`/`UNKNOWN` |
+| 7 | Relative Volume Filter | RVOL < 1.0 → blocked; RVOL 1.0–1.2 → size ×0.75 |
+| 8 | ATR Expansion Filter | ATR14/ATR100 < 0.8 → blocked; > 2.5 → size ×0.5 |
+| 9 | Adaptive Position Sizing | Confidence/RVOL/ATR-tiered multiplier applied to `riskPerTrade` for Swing only |
+| 11 | No-Trade Zone | Consolidates regime + RVOL + ATR + confidence floor into one block/allow decision |
+| 12 | Confidence tiers (partial) | Reuses existing FVG/displacement/OB confidence (`confC`); adds ≥70 full-size / 60–69 "Reduce Risk" (×0.5) / <60 no-trade. Does **not** re-weight the underlying score (Trend/Liquidity/BOS components from the original spec) — that would touch the confidence formula validated as capturing 97% of planned RR, which stays untouched. |
+
+**Deferred (NOT implemented — needs larger, riskier changes):**
+- **#2 BOS Quality Score, #4 FVG Quality Score, #5 Order Block Quality** — require tracking freshness/mitigation state across bars (new stateful infra), not just current-bar checks.
+- **#3 Liquidity Sweep Validation** — Swing's entry (`_detectSignalC`) doesn't use a sweep check today; adding one changes the core entry condition, not just a gate.
+- **#6 Entry Confirmation (rejection candle / LTF CHoCH)** — changes the entry trigger itself.
+- **#10 Staged Exit Engine (TP1 30%, BE, trailing, HTF-CHoCH exit)** — requires new exit state machine in the backtest/live position manager, out of scope for a signal-side gate.
+- **#13 Adaptive Fusion Selector** — cross-strategy selection logic, lives outside `SmartMoneyConceptsStrategy`.
+
+**Config (`typeOverrides.Swing`):**
+```javascript
+{
+  sacSwingV3Gate: false,            // master switch (backtest A/B before enabling)
+  sacSwingMinAtrRatio: 0.8,         // ATR14/ATR100 floor
+  sacSwingAtrExtremeRatio: 2.5,     // above this → size ×0.5
+  sacSwingMinRvol: 1.2,             // below this (but ≥1.0) → size ×0.75
+  sacSwingNoTradeRvol: 1.0,         // below this → blocked
+  sacSwingMinConfidenceV3: 70,      // below this (but ≥60) → size ×0.5
+  sacSwingReduceConfidenceV3: 60,   // below this → blocked
+}
+```
+
+**Validation status:** Unit-level gate logic verified (regime/RVOL/ATR/confidence tiers all fire correctly in isolation). Integration smoke test on synthetic candles confirms the gate reduces Swing trade count end-to-end (12→5 trades in one synthetic 4yr run) — but sample size is too small and the candles are synthetic, not real market data, so **no claim is made yet about hitting the V3.md targets (PF >1.45, Sharpe >1.0, DD <18%)**. On that synthetic run win rate actually dropped (33%→20%, n=5), which is inconclusive noise at this sample size but is reported here rather than hidden. **Required before flipping the default:** backtest on real historical candles (multiple pairs, multiple regimes, walk-forward split) via the existing backtest UI/API.
 
 ---
 

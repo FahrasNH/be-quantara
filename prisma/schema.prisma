@@ -102,6 +102,9 @@ model Bot {
   strategyKey String  @default("ADAPTIVE_FUSION")
   dryRun      Boolean @default(true)
 
+  // Sprint 4 / WT-4 — per-bot parameter overrides (walk-forward applied params)
+  configOverrides Json?
+
   // ── Multi-Strategy per Coin (Quantara feature) ──────────────────────────
   // strategyGroup: semua strategi tier yang dijalankan serentak pada koin ini.
   // Kosong = mode legacy single-strategy (pakai strategyKey di atas).
@@ -412,23 +415,6 @@ model VoucherUsage {
 // Immutable payment-lifecycle audit trail (separate from the generic admin
 // AuditLog). Records INITIATED / WEBHOOK_RECEIVED / PAID / SUBSCRIPTION_CREATED /
 // VOUCHER_APPLIED / SIGNATURE_INVALID / DUPLICATE_WEBHOOK ... events.
-model PaymentAuditLog {
-  id        String  @id @default(cuid())
-  paymentId String?
-  userId    String?
-  orderId   String?
-
-  event     String
-  detail    String? // JSON string, never card data
-  ipAddress String?
-
-  createdAt DateTime @default(now())
-
-  @@index([paymentId])
-  @@index([orderId])
-  @@index([event])
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature Store — Sprint 1 (FS-4)
 //
@@ -490,6 +476,50 @@ model PaymentAuditLog {
 }
 
 // ── Sprint 3 / MS-1 ──────────────────────────────────────────────────────────
+
+// ── Sprint 4 / WT-1 — Walk-Forward Parameter Tuning ──────────────────────────
+
+model ParameterSuggestion {
+  id              String    @id @default(cuid())
+  strategyKey     String
+  symbol          String
+  suggestedParams Json
+  currentParams   Json?
+  trainMetrics    Json
+  validMetrics    Json
+  trainDays       Int       @default(90)
+  validDays       Int       @default(30)
+  sampleSize      Int
+  sampleSizeValid Boolean   @default(false)
+  status          String    @default("pending") // pending | applied | rejected | expired
+  appliedAt       DateTime?
+  appliedBy       String?
+  rejectedAt      DateTime?
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([strategyKey, symbol])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ParameterVersion {
+  id          String   @id @default(cuid())
+  strategyKey String
+  symbol      String?
+  params      Json
+  source      String   @default("manual") // manual | walk_forward | rollback
+  appliedAt   DateTime @default(now())
+  appliedBy   String?
+  previousId  String?
+  pnlBefore   Float?
+  pnlAfter    Float?
+  createdAt   DateTime @default(now())
+
+  @@index([strategyKey, symbol])
+  @@index([appliedAt])
+}
 
 model MetaSelectorRecommendation {
   id               String   @id @default(cuid())
