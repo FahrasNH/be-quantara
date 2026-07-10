@@ -20,6 +20,7 @@ const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
 const GrokTradingService = require("../server/services/GrokTradingService");
 const GrokConfirmService = require("../server/services/GrokConfirmService");
+const { onEngineTradeOpen, onEngineTradeClose } = require("../server/services/BotEngineMlHook");
 
 const GROK_CONFIRM_STRATEGIES = new Set([
   "ADAPTIVE_FUSION",
@@ -713,6 +714,7 @@ class BotEngine extends EventEmitter {
                     reason:    "Closed_Offline",
                     closeTime: new Date().toISOString(),
                   });
+                  onEngineTradeClose(dbTrade.id, pnl);
                 } catch { /* jangan crash */ }
               }
             }
@@ -1995,6 +1997,7 @@ class BotEngine extends EventEmitter {
           reason,
           closeTime: new Date().toISOString(),
         });
+        onEngineTradeClose(pos.dbId, pnl);
       } catch (err) {
         this._log("warn", `Gagal tutup trade #${pos.dbId} di DB: ${err.message}`);
       }
@@ -2529,6 +2532,15 @@ class BotEngine extends EventEmitter {
             // BUG-001: denormalisasi nama strategi di kolom eksplisit saat OPEN.
             strategyName: this.config.strategyKey ?? null,
           });
+          onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
+            strategyKey: this.config.strategyKey,
+            symbol:      this.config.symbol,
+            side:        signal,
+            entryPrice:  price,
+            openTime,
+            leverage:    this.config.leverage,
+            capital:     this.state.capital,
+          });
         }
 
         this.state.openPositions.push(pos);
@@ -2595,6 +2607,15 @@ class BotEngine extends EventEmitter {
           // mentah → 33/49 trade dry-run tampil "(belum tercatat)".
           indicators: enrichedSnapshot,
           strategyName: this.config.strategyKey ?? null,
+        });
+        onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
+          strategyKey: this.config.strategyKey,
+          symbol:      this.config.symbol,
+          side:        signal,
+          entryPrice:  price,
+          openTime,
+          leverage:    this.config.leverage,
+          capital:     this.state.capital,
         });
       }
 
@@ -3101,6 +3122,18 @@ class BotEngine extends EventEmitter {
           reason,
           closeTime: new Date().toISOString(),
         });
+        onEngineTradeOpen(partialDbId, pos.entrySnapshot ?? (pos.atr != null
+          ? { atr: pos.atr, atrPct: pos.entry ? parseFloat(((pos.atr / pos.entry) * 100).toFixed(3)) : null }
+          : {}), {
+          strategyKey: pos.strategyName ?? this.config.strategyKey,
+          symbol:      this.config.symbol,
+          side:        pos.side,
+          entryPrice:  pos.entry,
+          openTime:    pos.openTime,
+          leverage:    this.config.leverage,
+          capital:     this.state.capital,
+        });
+        onEngineTradeClose(partialDbId, pnl);
       } catch (e) { this._log("warn", `Gagal catat partial-close di DB: ${e.message}`); }
     }
 
@@ -3390,6 +3423,7 @@ class BotEngine extends EventEmitter {
             try {
               const res = await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() });
               applied = res?.applied !== false;
+              if (applied) onEngineTradeClose(pos.dbId, pnl);
             } catch (err) {
               // Jangan telan diam-diam: posisi yang gagal ditutup di DB akan "hilang"
               // dari history tanpa jejak. Surface + alert untuk rekonsiliasi.
@@ -3534,6 +3568,7 @@ class BotEngine extends EventEmitter {
                     try {
                       const res = await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitSL ? "SL" : "TP", closeTime: new Date().toISOString() });
                       applied = res?.applied !== false;
+                      if (applied) onEngineTradeClose(pos.dbId, pnl);
                     } catch (dbErr) {
                       applied = false;
                       this._log("error", `Gagal tutup trade #${pos.dbId} di DB: ${dbErr.message} — perlu rekonsiliasi`);
@@ -3612,6 +3647,7 @@ class BotEngine extends EventEmitter {
         if (this.sessionId && pos.dbId) {
           try {
             await db.closeTrade(pos.dbId, { exitPrice, pnl, pnlPct, fee, reason, closeTime: new Date(closeTime).toISOString() });
+            onEngineTradeClose(pos.dbId, pnl);
           } catch (dbErr) {
             // Dry-run: tidak fatal, tapi jangan ditelan diam-diam (audit trail).
             this._log("warn", `Gagal tutup trade #${pos.dbId} (dry-run) di DB: ${dbErr.message}`);
