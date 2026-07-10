@@ -32,6 +32,7 @@ const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 const { riskShareForType } = require("../../domain/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../domain/dailyRegimeGate");
+const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter");
 
 // Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
 // the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
@@ -65,6 +66,26 @@ function isoOf(c) {
   if (c.date) return c.date;
   const ts = c.timestamp ?? c.openTime ?? c.time;
   return ts != null ? new Date(ts).toISOString() : null;
+}
+
+/** Attach full entryContext for RAG gate / WinPredictor (mirrors live ML pipeline). */
+function withBacktestEntryContext(tradeObj, position, strategyKey) {
+  const ctxSource = {
+    entry:      tradeObj.entry ?? position?.entry,
+    atr:        position?.atr ?? tradeObj.atr ?? null,
+    entryRsi:   position?.entryRsi ?? tradeObj.entryRsi ?? null,
+    htfTrend:   position?.htfTrend ?? tradeObj.htfTrend ?? null,
+    marketCond: position?.marketCond ?? tradeObj.marketCond ?? null,
+    confidence: position?.confidence ?? tradeObj.confidence ?? null,
+    tradeType:  tradeObj.tradeType ?? tradeObj.component ?? position?.component,
+    strategy:   strategyKey,
+  };
+  tradeObj.entryContext = buildBacktestEntryContext(ctxSource, {
+    strategyKey,
+    openTime: tradeObj.openTime,
+    price:    ctxSource.entry,
+  });
+  return tradeObj;
 }
 
 /**
@@ -255,7 +276,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const tradeTypeLabel = typeof strategy.getTradeTypeLabel === "function"
         ? strategy.getTradeTypeLabel(componentId)
         : componentId;
-      trades.push({
+      trades.push(withBacktestEntryContext({
         date: isoOf(c),
         openTime: isoOf(entryCandles[position.openIdx]),
         closeTime: isoOf(c),
@@ -281,7 +302,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      });
+      }, position, strategyKey));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
@@ -359,7 +380,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       ? strategy.getTradeTypeLabel(componentId)
       : componentId;
 
-    trades.push({
+    trades.push(withBacktestEntryContext({
       date: closeTime,
       openTime: isoOf(entryCandles[position.openIdx]),
       closeTime,
@@ -386,7 +407,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    });
+    }, position, strategyKey));
     positions.delete(componentId);
   }
 
@@ -945,11 +966,10 @@ async function _applyRagGate(trades, ctx = {}) {
   for (let i = 0; i < sorted.length; i++) {
     const t = sorted[i];
     const tradeTime = new Date(t.openTime || t.date || Date.now());
-    const entryContext = {
+    const entryContext = t.entryContext || {
       rsi: t.entryRsi,
       side: t.side,
       confidence: t.confidence,
-      // Backtest trades expose marketCond; live/ML paths use regime — accept either.
       regime: t.regime || t.marketCond,
     };
     const tradeMetadata = {
@@ -1486,7 +1506,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       capital += pnl;
       position.remainingSize -= size;
       position.slCurrent = newSL;
-      trades.push({
+      trades.push(withBacktestEntryContext({
         date: isoOf(c),
         openTime: isoOf(entryCandles[position.openIdx]),
         closeTime: isoOf(c),
@@ -1505,10 +1525,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         pnlPct: (pnl / (position.entry * size)) * 100,
         plannedRR: position.plannedRR,
         confidence: position.confidence ?? null,
+        atr: position.atr ?? null,
+        entryRsi: position.entryRsi ?? null,
+        htfTrend: position.htfTrend ?? null,
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      });
+      }, position, strategyKey));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP).
@@ -1579,7 +1602,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     const closeTime = isoOf(entryCandles[exitIdx]);
-    trades.push({
+    trades.push(withBacktestEntryContext({
       date: closeTime, // display field (FE trade table reads t.date) — close-bar date
       openTime: isoOf(entryCandles[position.openIdx]),
       closeTime,
@@ -1598,10 +1621,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
       confidence: position.confidence ?? null,
+      atr: position.atr ?? null,
+      entryRsi: position.entryRsi ?? null,
+      htfTrend: position.htfTrend ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    });
+    }, position, strategyKey));
     position = null;
   }
 
@@ -1702,6 +1728,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
             marketCond: pendingOrder.marketCond,
             plannedRR: pendingOrder.plannedRR,
             confidence: pendingOrder.confidence,
+            atr: pendingOrder.atr ?? null,
+            entryRsi: pendingOrder.entryRsi ?? null,
+            htfTrend: pendingOrder.htfTrend ?? null,
             R: pendingOrder.slDist,
             slCurrent: openSl,
             remainingSize: size,
@@ -1911,6 +1940,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         marketCond,
         plannedRR,
         confidence,
+        atr,
+        entryRsi: indicators.rsi?.[i] ?? null,
+        htfTrend,
       };
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -1932,6 +1964,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       marketCond,
       plannedRR,
       confidence,
+      atr,
+      entryRsi: indicators.rsi?.[i] ?? null,
+      htfTrend,
       // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
       // slCurrent is the live stop (moves to BEP/+1R after milestones fire),
       // remainingSize shrinks as partials execute; originalSize stays fixed for
