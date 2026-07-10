@@ -2,7 +2,7 @@
 
 > Living doc. Sections are added as subsystems are formalized. This file currently
 > documents the **market / exchange** layer (Tasks A & C, Binance integration) and
-> the **Adaptive Fusion strategy config** (Sprint 8).
+> the **Adaptive Fusion / Trend Surge strategy config** (Sprint 8–9).
 
 ---
 
@@ -34,6 +34,34 @@ Per AF-SUB-03 research gate (do **not** skip):
 - Pairwise vote correlation &lt; 0.5 (`checkVoteCorrelation`)
 - Backtest 12m on BTC/BNB/BGB/TRX: WR ≥35%, PF ≥1.2, Sharpe ≥0.05, ≥30 trades/coin
 - Research Confidence ≥ Medium and verdict ≠ "Needs Significant Improvements"
+
+---
+
+## 5. Strategy Config — Trend Surge (TS_TF)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/TrendSurgeUmbrella.js`
+
+### 5.1 Component model (Sprint 9)
+
+| Slot | Key | Role | Implementation |
+|------|-----|------|----------------|
+| A | `TS_TF` | Trend Following momentum trigger | `TrendFollowingStrategy` |
+| B | `TS_MS` | Market Structure Dow HH/HL gate | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
+| C | `TS_VP` | VWAP + Value Area entry precision | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
+
+Layering (not AF-style voting):
+
+- A must fire (momentum trigger)
+- B is a **required gate** when `tsUseStructureGate !== false` (LONG only if HTF uptrend HH+HL)
+- C **refines timing** when `tsUseVwapPrecision !== false` (pullback must overlap session VWAP / Value Area)
+- Early-session VWAP warmup (`minSessionBars`) passthrough — does not block
+- Rollback: set either flag `false` to disable that layer
+
+### 5.2 Backtest UI visibility
+
+FE Advance multi-select lists all live components under each umbrella
+(`TIER_PACKAGE_COMPONENTS`). Selecting any component under an umbrella maps to a
+single engine run via `COMPONENT_TO_ENGINE` (no N× capital split).
 
 ---
 

@@ -22,11 +22,13 @@ const COMPONENT_STRATEGIES = {
   AF_SMC:     "AF_SMC",     // Smart Money Concepts     ✅ LIVE (Component A)
   AF_WYCKOFF: "AF_WYCKOFF", // Wyckoff Spring/Upthrust  ✅ LIVE (Component B)
   AF_VSA:     "AF_VSA",     // Volume Spread Analysis   ✅ LIVE (Component C)
-  AF_LS:      "AF_LS",      // Liquidity Sweep          ⏳ Sprint 9
-  AF_OBR:     "AF_OBR",     // Order Block Retest       ⏳ Sprint 9
+  AF_LS:      "AF_LS",      // Liquidity Sweep          ⏳ Sprint 9+
+  AF_OBR:     "AF_OBR",     // Order Block Retest       ⏳ Sprint 9+
 
-  // TREND_SURGE — FORGE Tier
-  TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE
+  // TREND_SURGE — FORGE Tier (A trigger + B structure gate + C VWAP precision)
+  TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE (Component A)
+  TS_MS:  "TS_MS",    // Market Structure       ✅ LIVE (Component B — Sprint 9)
+  TS_VP:  "TS_VP",    // Volume Profile + VWAP  ✅ LIVE (Component C — Sprint 9)
   TS_EW:  "TS_EW",    // Elliott Wave           ⏳ Future
   TS_PA:  "TS_PA",    // Price Action           ⏳ Future
 
@@ -64,7 +66,11 @@ const STRATEGY_MIGRATION_MAP = {
 
 const STRATEGY_ABBREV = {
   AF_SMC:               "AF",
+  AF_WYCKOFF:           "AF",
+  AF_VSA:               "AF",
   TS_TF:                "TS",
+  TS_MS:                "TS",
+  TS_VP:                "TS",
   MD_MR:                "MD",
   BS_BR:                "BS",
   // Legacy backward compat
@@ -84,7 +90,12 @@ const TIER_COMPONENT_MAP = {
     abbrev: "AF",
     voting: { defaultMinVotes: 2, altcoinMinVotes: 3 },
   },
-  FORGE:   { active: ["TS_TF"],  umbrella: "TREND_SURGE",     abbrev: "TS" },
+  FORGE: {
+    active: ["TS_TF", "TS_MS", "TS_VP"],
+    umbrella: "TREND_SURGE",
+    abbrev: "TS",
+    layering: { structureGate: true, vwapPrecision: true },
+  },
   MINT:    { active: ["MD_MR"],  umbrella: "MEAN_DRIFT",      abbrev: "MD" },
   VAULT:   { active: ["BS_BR"],  umbrella: "BREAKOUT_STORM",  abbrev: "BS" },
 };
@@ -110,7 +121,11 @@ function getActiveComponentsForTier(tier) {
  * Check if a key is a currently live component (not future).
  */
 function isActiveComponent(key) {
-  const liveKeys = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR", "GROK_AI_TRADING"];
+  const liveKeys = [
+    "AF_SMC", "AF_WYCKOFF", "AF_VSA",
+    "TS_TF", "TS_MS", "TS_VP",
+    "MD_MR", "BS_BR", "GROK_AI_TRADING",
+  ];
   return liveKeys.includes(key);
 }
 

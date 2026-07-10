@@ -1,0 +1,293 @@
+/**
+ * Volume Profile + VWAP entry precision for Trend Surge (TS-SUB-02).
+ *
+ * - Session VWAP resets daily at UTC midnight (aligned with Quantara daily loss counter).
+ * - Volume Profile: 20-bin histogram → POC + Value Area (70% volume).
+ * - Entry refinement: LONG/SHORT pullback must overlap VWAP or Value Area.
+ */
+
+"use strict";
+
+const DEFAULTS = {
+  bins: 20,
+  valueAreaPct: 0.7,
+  vwapTolerancePct: 0.0025, // 0.25% around VWAP
+  minSessionBars: 8,
+};
+
+/**
+ * Find start index of the UTC day containing lastIdx.
+ * Prefer candle timestamps when available; otherwise treat the whole window as one session.
+ */
+function sessionStartIdx(timestamps, lastIdx) {
+  if (!Array.isArray(timestamps) || lastIdx < 0) return 0;
+  const ts = timestamps[lastIdx];
+  if (ts == null || !Number.isFinite(ts)) return 0;
+
+  const dayStart = Math.floor(ts / 86_400_000) * 86_400_000;
+  for (let i = lastIdx; i >= 0; i--) {
+    const t = timestamps[i];
+    if (t == null || !Number.isFinite(t) || t < dayStart) {
+      return Math.min(lastIdx, i + 1);
+    }
+  }
+  return 0;
+}
+
+/**
+ * Session-anchored VWAP up to lastIdx (inclusive).
+ * Typical price = (H+L+C)/3.
+ * @returns {{ vwap: number|null, bars: number, startIdx: number }}
+ */
+function calculateSessionVwap(highs, lows, closes, volumes, timestamps, lastIdx) {
+  const start = sessionStartIdx(timestamps, lastIdx);
+  let pv = 0;
+  let vol = 0;
+  for (let i = start; i <= lastIdx; i++) {
+    const h = highs?.[i];
+    const l = lows?.[i];
+    const c = closes?.[i];
+    const v = volumes?.[i];
+    if (h == null || l == null || c == null || v == null || !Number.isFinite(v) || v <= 0) continue;
+    const typical = (h + l + c) / 3;
+    if (!Number.isFinite(typical)) continue;
+    pv += typical * v;
+    vol += v;
+  }
+  if (vol <= 0) return { vwap: null, bars: 0, startIdx: start };
+  return { vwap: pv / vol, bars: lastIdx - start + 1, startIdx: start };
+}
+
+/**
+ * Build volume profile histogram for [startIdx, lastIdx].
+ * @returns {{ poc: number|null, vah: number|null, val: number|null, bins: Array, totalVolume: number }}
+ */
+function buildVolumeProfile(highs, lows, closes, volumes, startIdx, lastIdx, bins = 20, valueAreaPct = 0.7) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  let totalVolume = 0;
+  const rows = [];
+
+  for (let i = startIdx; i <= lastIdx; i++) {
+    const h = highs?.[i];
+    const l = lows?.[i];
+    const c = closes?.[i];
+    const v = volumes?.[i];
+    if (h == null || l == null || c == null || v == null || !Number.isFinite(v) || v <= 0) continue;
+    lo = Math.min(lo, l);
+    hi = Math.max(hi, h);
+    totalVolume += v;
+    rows.push({ h, l, c, v });
+  }
+
+  if (!rows.length || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo || totalVolume <= 0) {
+    return { poc: null, vah: null, val: null, bins: [], totalVolume: 0 };
+  }
+
+  const nBins = Math.max(5, bins | 0);
+  const step = (hi - lo) / nBins;
+  const hist = Array.from({ length: nBins }, (_, i) => ({
+    idx: i,
+    low: lo + i * step,
+    high: lo + (i + 1) * step,
+    mid: lo + (i + 0.5) * step,
+    volume: 0,
+  }));
+
+  for (const row of rows) {
+    // Attribute volume to the bin of the typical price (stable vs full-range smear).
+    const typical = (row.h + row.l + row.c) / 3;
+    let binIdx = Math.floor((typical - lo) / step);
+    if (binIdx < 0) binIdx = 0;
+    if (binIdx >= nBins) binIdx = nBins - 1;
+    hist[binIdx].volume += row.v;
+  }
+
+  let pocIdx = 0;
+  for (let i = 1; i < hist.length; i++) {
+    if (hist[i].volume > hist[pocIdx].volume) pocIdx = i;
+  }
+
+  // Expand Value Area around POC until valueAreaPct of volume is covered.
+  let covered = hist[pocIdx].volume;
+  let left = pocIdx;
+  let right = pocIdx;
+  const target = totalVolume * valueAreaPct;
+  while (covered < target && (left > 0 || right < nBins - 1)) {
+    const leftVol = left > 0 ? hist[left - 1].volume : -1;
+    const rightVol = right < nBins - 1 ? hist[right + 1].volume : -1;
+    if (rightVol >= leftVol && right < nBins - 1) {
+      right++;
+      covered += hist[right].volume;
+    } else if (left > 0) {
+      left--;
+      covered += hist[left].volume;
+    } else if (right < nBins - 1) {
+      right++;
+      covered += hist[right].volume;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    poc: hist[pocIdx].mid,
+    vah: hist[right].high,
+    val: hist[left].low,
+    bins: hist,
+    totalVolume,
+  };
+}
+
+function priceNear(level, price, tolPct) {
+  if (level == null || price == null || !Number.isFinite(level) || !Number.isFinite(price)) return false;
+  const tol = Math.abs(level) * tolPct;
+  return Math.abs(price - level) <= tol;
+}
+
+function priceInBand(price, low, high) {
+  if (price == null || low == null || high == null) return false;
+  return price >= low && price <= high;
+}
+
+/**
+ * Evaluate VWAP / Value Area entry precision for a proposed direction.
+ *
+ * @returns {{ allowed: boolean, vote: string, confidence: number, reason: string, meta: object }}
+ */
+function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  const highs = indicators.highs || [];
+  const lows = indicators.lows || [];
+  const closes = indicators.closes || [];
+  const volumes = indicators.volumes || [];
+  const timestamps = indicators.timestamps || indicators.times || indicators.openTimes || null;
+
+  const { vwap, bars, startIdx } = calculateSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx
+  );
+
+  if (bars < cfg.minSessionBars || vwap == null) {
+    // Early session: do not block entries (insufficient VWAP/profile data).
+    return {
+      allowed: true,
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "session_warmup_passthrough",
+      meta: { bars, vwap, startIdx },
+    };
+  }
+
+  const profile = buildVolumeProfile(
+    highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
+  );
+
+  const price = closes[lastIdx];
+  const nearVwap = priceNear(vwap, price, cfg.vwapTolerancePct);
+  const inValueArea = priceInBand(price, profile.val, profile.vah);
+  const nearPoc = priceNear(profile.poc, price, cfg.vwapTolerancePct);
+
+  const overlap = nearVwap || inValueArea || nearPoc;
+  const meta = {
+    vwap,
+    poc: profile.poc,
+    vah: profile.vah,
+    val: profile.val,
+    price,
+    nearVwap,
+    inValueArea,
+    nearPoc,
+    bars,
+    startIdx,
+  };
+
+  if (!overlap) {
+    return {
+      allowed: false,
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "outside_vwap_value_area",
+      meta,
+    };
+  }
+
+  // Directional bias: prefer long above VWAP / short below when inside VA.
+  let confidence = 0.55;
+  if (nearPoc) confidence += 0.15;
+  if (nearVwap) confidence += 0.1;
+  if (inValueArea) confidence += 0.1;
+  confidence = Math.min(1, confidence);
+
+  if (direction === "LONG" && price < vwap * (1 - cfg.vwapTolerancePct * 2) && !nearPoc) {
+    // Deep discount below VWAP without POC support — weaker long precision
+    confidence = Math.max(0.4, confidence - 0.2);
+  }
+  if (direction === "SHORT" && price > vwap * (1 + cfg.vwapTolerancePct * 2) && !nearPoc) {
+    confidence = Math.max(0.4, confidence - 0.2);
+  }
+
+  return {
+    allowed: true,
+    vote: direction === "LONG" || direction === "SHORT" ? direction : "NEUTRAL",
+    confidence,
+    reason: nearVwap ? "vwap_retest" : nearPoc ? "poc_retest" : "value_area_overlap",
+    meta,
+  };
+}
+
+/**
+ * Standalone component evaluation (no direction) — bias from price vs VWAP.
+ */
+function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  const highs = indicators.highs || [];
+  const lows = indicators.lows || [];
+  const closes = indicators.closes || [];
+  const volumes = indicators.volumes || [];
+  const timestamps = indicators.timestamps || indicators.times || indicators.openTimes || null;
+  const { vwap, bars, startIdx } = calculateSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx
+  );
+  if (vwap == null || bars < cfg.minSessionBars) {
+    return { vote: "NEUTRAL", confidence: 0, reason: "session_warmup", meta: { bars, vwap } };
+  }
+  const profile = buildVolumeProfile(
+    highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
+  );
+  const price = closes[lastIdx];
+  if (price == null) {
+    return { vote: "NEUTRAL", confidence: 0, reason: "no_price", meta: { vwap } };
+  }
+  const inVA = priceInBand(price, profile.val, profile.vah);
+  if (!inVA && !priceNear(vwap, price, cfg.vwapTolerancePct)) {
+    return {
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "outside_liquidity_zones",
+      meta: { vwap, poc: profile.poc, vah: profile.vah, val: profile.val, price },
+    };
+  }
+  if (price >= vwap) {
+    return {
+      vote: "LONG",
+      confidence: 0.6,
+      reason: "above_vwap",
+      meta: { vwap, poc: profile.poc, vah: profile.vah, val: profile.val, price },
+    };
+  }
+  return {
+    vote: "SHORT",
+    confidence: 0.6,
+    reason: "below_vwap",
+    meta: { vwap, poc: profile.poc, vah: profile.vah, val: profile.val, price },
+  };
+}
+
+module.exports = {
+  DEFAULTS,
+  sessionStartIdx,
+  calculateSessionVwap,
+  buildVolumeProfile,
+  evaluateVolumeProfilePrecision,
+  evaluateVolumeProfileComponent,
+};

@@ -408,6 +408,11 @@ const STRATEGIES = {
     adxMinStrength:    30,
     tfHtfLayerEnabled: true,
 
+    // Sprint 9 (TS-SUB-01/02/03): structure gate + VWAP precision layers.
+    // Set either flag false to rollback that layer independently.
+    tsUseStructureGate: true,
+    tsUseVwapPrecision: true,
+
     trades:        "8-15 trade/hari",
     winrate:       "~54-58%",
     risk:          "Sedang",

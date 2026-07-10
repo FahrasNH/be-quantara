@@ -13,6 +13,8 @@ const SmartMoneyConceptsStrategy = require("./implementations/SmartMoneyConcepts
 const WyckoffStrategy            = require("./implementations/WyckoffStrategy");
 const VsaStrategy                = require("./implementations/VsaStrategy");
 const TrendFollowingStrategy     = require("./implementations/TrendFollowingStrategy");
+const MarketStructureStrategy    = require("./implementations/MarketStructureStrategy");
+const VolumeProfileStrategy      = require("./implementations/VolumeProfileStrategy");
 const MeanReversionStrategy      = require("./implementations/MeanReversionStrategy");
 const BreakoutTradingStrategy    = require("./implementations/BreakoutTradingStrategy");
 const GrokAiTradingStrategy      = require("./implementations/GrokAiTradingStrategy");
@@ -36,6 +38,8 @@ module.exports = {
   WyckoffStrategy,
   VsaStrategy,
   TrendFollowingStrategy,
+  MarketStructureStrategy,
+  VolumeProfileStrategy,
   MeanReversionStrategy,
   BreakoutTradingStrategy,
   GrokAiTradingStrategy,
