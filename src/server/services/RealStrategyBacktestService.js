@@ -1353,7 +1353,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   let htfIndicators = null;
 
   // tfHtfLayerEnabled gates the whole TF Layer-1 path (injection + ADX gate) so
-  // A/B harnesses can run a true control; default ON per TREND_FOLLOWING_STRATEGY.md.
+  // A/B harnesses can run a true control; default ON per TS_TF config defaults.
   const tfHtfLayer = isTFKey(strategyKey) && cfg.tfHtfLayerEnabled !== false;
   const needsHTF = isMeanReversion || tfHtfLayer;
   if (needsHTF && htfCandles?.length >= 30) {
