@@ -836,8 +836,10 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
       return tf.detectSignal(indicators, i, config);
     }
 
-    // MEAN_REVERSION — Bollinger Bands extremes (VAULT tier)
-    case "MEAN_REVERSION": {
+    // MEAN_REVERSION / MD_MR — layered BB+RSI → ADX gate → OB/FVG (MINT tier)
+    case "MEAN_REVERSION":
+    case "MD_MR":
+    case "MR": {
       const mr = getMeanReversionInstance();
       return mr.detectSignal(indicators, i, config);
     }

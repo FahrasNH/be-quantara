@@ -247,11 +247,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
-  // AF_SMC entry-TF ADX (chop gate): SmartMoneyConceptsStrategy reads
-  // indicators.adx but calcIndicators never populated it — the gate has been
-  // permanently fail-open (dead code) regardless of config. Populate it here
-  // so typeOverrides[component].minAdx can actually filter chop bars.
-  if (isSmcKey(strategyKey)) {
+  // AF_SMC entry-TF ADX (chop gate) + MD_MR ADX regime gate (MD-SUB-01):
+  // calcIndicators does not populate adx — attach it for strategies that need it.
+  if (isSmcKey(strategyKey) || isMRKey(strategyKey)) {
     indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
   }
 
@@ -1480,10 +1478,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  // MD_MR entry-TF ADX regime gate (MD-SUB-01)
+  const isMeanReversion = isMRKey(strategyKey);
+  if (isMeanReversion) {
+    indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
+  }
+
   // MR regime filter (FIX-MR-01): precompute HTF indicators once for regime checks
   // per-bar (O(1) lookup). Live BotEngine computes these fresh per tick, but
   // backtest can cache since HTF data is static.
-  const isMeanReversion = isMRKey(strategyKey);
   let htfIndicators = null;
 
   // tfHtfLayerEnabled gates the whole TF Layer-1 path (injection + ADX gate) so

@@ -2,8 +2,14 @@
  * MeanDriftUmbrella.js — MINT Tier umbrella strategy
  *
  * Umbrella key : MD_MR
- * Active now   : MD_MR (MeanReversionStrategy)
- * Future       : MD_BB, MD_RD
+ * Active now   : MD_MR (MeanReversionStrategy — layered A→B→C pipeline)
+ * Future       : MD_BB, MD_RD (possible race participants later)
+ *
+ * Unlike AF/TS race-to-confirm pools, Mean Drift currently runs a single
+ * live key (MD_MR) with internal layers:
+ *   A — BB+RSI mean reversion signal
+ *   B — ADX Auction Market Theory regime gate (MD-SUB-01)
+ *   C — Order Block + FVG entry/TP precision (MD-SUB-02)
  */
 
 const UmbrellaStrategy     = require("../base/UmbrellaStrategy");
@@ -14,8 +20,9 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     super({
       name:        "MD_MR",
       label:       "Mean Drift",
-      description: "Precision mean reversion with Bollinger Bands and RSI extremes",
-      version:     "2.0.0",
+      description:
+        "Precision mean reversion: BB+RSI entry gated by ADX regime, refined by Order Block/FVG",
+      version:     "3.0.0",
       enabled:     true,
       votingThreshold: 0.65,
     });

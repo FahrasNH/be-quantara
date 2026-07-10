@@ -56,10 +56,11 @@ const COMPONENT_STRATEGIES = {
   TS_EW:  "TS_EW",    // Elliott Wave           ⏳ Future
   TS_PA:  "TS_PA",    // Price Action           ⏳ Future
 
-  // MEAN_DRIFT — MINT Tier
-  MD_MR:  "MD_MR",    // Mean Reversion         ✅ LIVE
-  MD_BB:  "MD_BB",    // Bollinger Bands        ⏳ Future
-  MD_RD:  "MD_RD",    // RSI Divergence         ⏳ Future
+  // MEAN_DRIFT — MINT Tier (single live key; A→B→C layers inside MD_MR)
+  //   A: BB+RSI mean reversion · B: ADX regime gate · C: OB/FVG precision
+  MD_MR:  "MD_MR",    // Mean Reversion (layered) ✅ LIVE
+  MD_BB:  "MD_BB",    // Bollinger Bands          ⏳ Future
+  MD_RD:  "MD_RD",    // RSI Divergence           ⏳ Future
 
   // BREAKOUT_STORM — VAULT Tier
   BS_BR:  "BS_BR",    // Breakout Retest        ✅ LIVE
@@ -139,7 +140,13 @@ const TIER_COMPONENT_MAP = {
     abbrev: "TS",
     combination: { mode: "race", participants: ["TS_TF", "TS_MS", "TS_VP"] },
   },
-  MINT:    { active: ["MD_MR"],  umbrella: "MEAN_DRIFT",      abbrev: "MD" },
+  MINT: {
+    active: ["MD_MR"],
+    umbrella: "MEAN_DRIFT",
+    abbrev: "MD",
+    // Layered pipeline inside MD_MR (not a race pool — see MeanReversionStrategy).
+    combination: { mode: "pipeline", layers: ["BB_RSI", "ADX_GATE", "OB_FVG"] },
+  },
   VAULT:   { active: ["BS_BR"],  umbrella: "BREAKOUT_STORM",  abbrev: "BS" },
 };
 

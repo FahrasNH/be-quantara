@@ -111,6 +111,42 @@ keys become the race pool; per-trade `strategyLabel` comes from the winning race
 
 ---
 
+## 6. Strategy Config — Mean Drift (MD_MR)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/implementations/MeanReversionStrategy.js`
++ `src/domain/strategy/md/{adxRegimeGate,orderBlockFvg}.js`
+
+### 6.1 Layered pipeline (MD-SUB-01 / MD-SUB-02 / MD-SUB-03)
+
+Unlike AF/TS race-to-confirm pools, Mean Drift currently has **one live key** (`MD_MR`)
+with an internal A→B→C pipeline:
+
+| Layer | Role | Implementation |
+|-------|------|----------------|
+| A | BB+RSI+VWAP mean-reversion signal (Scalping / Intraday) | `MeanReversionStrategy.detectSignal` |
+| B | Auction Market Theory ADX(14) regime gate | `md/adxRegimeGate.js` |
+| C | Order Block + FVG entry confluence & TP target | `md/orderBlockFvg.js` |
+
+**ADX gate (Component B):**
+- `balance` (ADX &lt; 20) → MR allowed at full confidence
+- `transition` (20–25) → MR allowed at reduced confidence (`mdAdxTransitionConfidenceMult`, default 0.75)
+- `imbalance` (ADX ≥ 25) → MR blocked
+- Missing ADX → fail-open (warmup)
+
+**OB/FVG precision (Component C):**
+- Entry keeps the A signal even without confluence, but confidence drops (`mdNoConfluenceConfidenceMult`, default 0.7)
+- Confluence within `0.5×ATR` of an OB or unfilled FVG boosts confidence
+- TP prefers nearest unfilled FVG midpoint in trade direction; else BB middle; else RR-based TP
+
+**Also retained:** HTF EMA regime filter (`htfRegimeFilter.meanReversionRegimeFilter`) in BotEngine / backtest — complementary to entry-TF ADX.
+
+Config knobs: `mdAdxGateEnabled`, `mdObFvgEnabled`, `mdAdxBalanceMax`, `mdAdxImbalanceMin`,
+`mdConfluenceAtrMult`, `mdFvgScanBars`, `mdObLookback`.
+
+Go/No-Go validation (WR ≥55%, PF ≥1.3, 12m multi-coin) remains a research gate after code lands.
+
+---
+
 ## 3. API Surface
 
 ### 3.4 Market Endpoints

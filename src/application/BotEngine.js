@@ -9,7 +9,7 @@ const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exc
 const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../infrastructure/exchange/candleFetch");
 const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA, calcADX } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter");
@@ -26,8 +26,14 @@ const GROK_CONFIRM_STRATEGIES = new Set([
   "ADAPTIVE_FUSION",
   "TREND_FOLLOWING",
   "MEAN_REVERSION",
+  "MD_MR",
   "BREAKOUT_RETEST",
 ]);
+
+const MR_STRATEGY_KEYS = new Set(["MEAN_REVERSION", "MD_MR", "MR"]);
+function isMeanReversionKey(key) {
+  return MR_STRATEGY_KEYS.has(String(key || "").toUpperCase());
+}
 
 // ── Price formatter for logs ─────────────────────────────────────────────────
 // Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
@@ -1164,6 +1170,11 @@ class BotEngine extends EventEmitter {
         atrPeriod: this.config.atrPeriod,
       });
 
+      // MD_MR ADX regime gate (MD-SUB-01) reads indicators.adx on the entry TF.
+      if (isMeanReversionKey(this.config.strategyKey) || isMeanReversionKey(this.config.signalType)) {
+        indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
+      }
+
       // ── HTF Trend Filter ───────────────────────────────────────────────────
       let htfCandlesCache = null;  // disimpan untuk sideways breakout detection
       if (this.config.higherTf) {
@@ -1329,7 +1340,7 @@ class BotEngine extends EventEmitter {
             // LONG di strong bear, juga saat ATR HTF spike. Fail-open bila HTF
             // tidak bisa diambil (konsisten dgn HTF trend filter di bawah).
             let mrSignal = signal;
-            if (signal && (this.config.strategyKey === "MEAN_REVERSION" || this.config.signalType === "MEAN_REVERSION")) {
+            if (signal && (isMeanReversionKey(this.config.strategyKey) || isMeanReversionKey(this.config.signalType))) {
               try {
                 const htf = htfCandlesCache || await this._fetchHtfCandles();
                 if (htf && htf.length >= 30) {
