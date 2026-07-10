@@ -417,8 +417,14 @@ class BotEngine extends EventEmitter {
       persistBotLog({ botId: this.config.botId, level, message: msg }).catch(() => {});
     }
 
-    // Legacy session logs (trade/error/warn) — backward compat
-    if (this.sessionId && (level === "trade" || level === "error" || level === "warn")) {
+    // Legacy session logs — trade/error only. Skip warn when Prisma already
+    // persisted (dual-write was a major pool-pressure source under tick storms:
+    // 27 coins × warn/tick × 2 pools → connect timeout on reconcile).
+    if (this.sessionId && (level === "trade" || level === "error")) {
+      try {
+        db.insertLog({ sessionId: this.sessionId, level, message: msg });
+      } catch { /* jangan crash bot karena log error */ }
+    } else if (this.sessionId && level === "warn" && !this.config.botId) {
       try {
         db.insertLog({ sessionId: this.sessionId, level, message: msg });
       } catch { /* jangan crash bot karena log error */ }
@@ -803,28 +809,28 @@ class BotEngine extends EventEmitter {
     const jitterMs = (this.config.tickStaggerMs || 0) + baseJitter;
     this._startTimer = setTimeout(() => {
       this._startTimer = null;
-      // Bot sudah di-stop selama warm-up → jangan pasang interval (cegah zombie ticker)
+      // Bot sudah di-stop selama warm-up → jangan pasang ticker (cegah zombie)
       if (!this.state.running || this._stopRequested) return;
-      // OVERLAP GUARD (anti death-spiral): setInterval TIDAK menunggu _tick() async
-      // selesai. Saat exchange timeout, satu tick bisa makan 30–60s+ (getCandles 10s +
-      // getTicker 10s + DB log-write yang ikut lambat). Tanpa guard ini, tick-tick baru
-      // menumpuk di atas yang belum selesai → getCandles + insertLog berlipat → pool
-      // Postgres & Prisma terkuras → login ikut timeout → proses crash → PM2 restart-loop.
-      // Selain itu, promise _tick() yang tak di-handle bisa jadi unhandledRejection →
-      // crash proses. Bungkus: skip bila masih ticking, dan telan rejection.
-      this._interval = setInterval(() => {
-        if (this._ticking) {
-          this._log("warn", "Tick sebelumnya belum selesai (exchange/DB lambat) — lewati tick ini");
-          return;
-        }
-        this._ticking = true;
+      // CHAINED setTimeout (anti death-spiral): setInterval TIDAK menunggu _tick()
+      // async selesai → tick overlap → pool Postgres & Prisma terkuras. Jadwalkan
+      // tick berikutnya HANYA setelah tick selesai; delay = max(0, interval - elapsed)
+      // agar rate tetap ~checkInterval saat tick cepat, dan tidak overlap saat lambat.
+      const scheduleNext = () => {
+        if (!this.state.running || this._stopRequested) return;
+        const started = Date.now();
         Promise.resolve()
           .then(() => this._tick())
           .catch((err) => {
             try { this._log("warn", `Tick error: ${err?.message || err}`); } catch { /* jangan crash */ }
           })
-          .finally(() => { this._ticking = false; });
-      }, this.config.checkInterval);
+          .finally(() => {
+            if (!this.state.running || this._stopRequested) return;
+            const elapsed = Date.now() - started;
+            const delay = Math.max(0, this.config.checkInterval - elapsed);
+            this._interval = setTimeout(scheduleNext, delay);
+          });
+      };
+      scheduleNext();
     }, jitterMs);
 
     // emitStatusReport:false → engine ini bagian dari grup multi-strategi; JANGAN
@@ -868,9 +874,8 @@ class BotEngine extends EventEmitter {
     // Batalkan timer warm-up jitter jika start() masih dalam jendela jitter — tanpa
     // ini setInterval akan terpasang SETELAH stop() → ticker zombie (lihat start()).
     if (this._startTimer)     { clearTimeout(this._startTimer); this._startTimer = null; }
-    if (this._interval)       clearInterval(this._interval);
+    if (this._interval)       { clearTimeout(this._interval); this._interval = null; }
     if (this._reportInterval) clearInterval(this._reportInterval);
-    this._interval       = null;
     this._reportInterval = null;
     this.state.running   = false;
 
@@ -3250,49 +3255,65 @@ class BotEngine extends EventEmitter {
   /**
    * Pulihkan posisi DB yang belum ada di state runtime — UI bisa tampil dari DB
    * (mergeBotWithLiveState fallback) sementara engine tidak memonitor SL/TP.
+   * Throttled (30s) + retry on pool connect timeout so state does not go stale
+   * silently under multi-coin load.
    */
   async _reconcileOpenPositionsFromDb() {
     if (!this.state.running || this._stopRequested) return;
-    try {
-      let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
-      orphans = this._filterOrphanTradesForThisEngine(orphans);
-      if (!orphans.length) return;
+    const RECONCILE_MIN_MS = 30_000;
+    const now = Date.now();
+    if (this._lastReconcileAt && now - this._lastReconcileAt < RECONCILE_MIN_MS) return;
 
-      const knownDbIds = new Set(
-        this.state.openPositions.map(p => p.dbId).filter(Boolean)
-      );
-      let added = 0;
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
+        orphans = this._filterOrphanTradesForThisEngine(orphans);
+        this._lastReconcileAt = Date.now();
+        if (!orphans.length) return;
 
-      if (!this.config.dryRun && this.client?.getPositions) {
-        let liveByKey = new Map();
-        try {
-          const livePosns = await this.client.getPositions(this.config.symbol);
-          liveByKey = new Map(livePosns.map(p => [p.side, p]));
-        } catch { /* fallback dry-style restore below */ }
+        const knownDbIds = new Set(
+          this.state.openPositions.map(p => p.dbId).filter(Boolean)
+        );
+        let added = 0;
 
-        for (const dbTrade of orphans) {
-          if (knownDbIds.has(dbTrade.id)) continue;
-          const lp = liveByKey.get(dbTrade.side);
-          if (lp) {
-            this.state.openPositions.push(this._positionFromDbTrade(dbTrade, lp));
+        if (!this.config.dryRun && this.client?.getPositions) {
+          let liveByKey = new Map();
+          try {
+            const livePosns = await this.client.getPositions(this.config.symbol);
+            liveByKey = new Map(livePosns.map(p => [p.side, p]));
+          } catch { /* fallback dry-style restore below */ }
+
+          for (const dbTrade of orphans) {
+            if (knownDbIds.has(dbTrade.id)) continue;
+            const lp = liveByKey.get(dbTrade.side);
+            if (lp) {
+              this.state.openPositions.push(this._positionFromDbTrade(dbTrade, lp));
+              added += 1;
+            }
+          }
+        } else {
+          for (const dbTrade of orphans) {
+            if (knownDbIds.has(dbTrade.id)) continue;
+            this.state.openPositions.push(this._positionFromDbTrade(dbTrade));
             added += 1;
           }
         }
-      } else {
-        for (const dbTrade of orphans) {
-          if (knownDbIds.has(dbTrade.id)) continue;
-          this.state.openPositions.push(this._positionFromDbTrade(dbTrade));
-          added += 1;
-        }
-      }
 
-      if (added > 0) {
-        this._log("warn",
-          `${added} posisi DB dipulihkan ke state runtime (reconcile) — monitor SL/TP aktif kembali`
-        );
+        if (added > 0) {
+          this._log("warn",
+            `${added} posisi DB dipulihkan ke state runtime (reconcile) — monitor SL/TP aktif kembali`
+          );
+        }
+        return;
+      } catch (err) {
+        const isPoolTimeout = /timeout exceeded when trying to connect/i.test(err?.message || "");
+        if (!isPoolTimeout || attempt === MAX_ATTEMPTS) {
+          this._log("warn", `Reconcile posisi DB gagal (attempt ${attempt}/${MAX_ATTEMPTS}): ${err.message}`);
+          return;
+        }
+        await new Promise(r => setTimeout(r, 400 * attempt));
       }
-    } catch (err) {
-      this._log("warn", `Reconcile posisi DB gagal: ${err.message}`);
     }
   }
 

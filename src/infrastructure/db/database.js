@@ -18,7 +18,11 @@ types.setTypeParser(20, (v) => parseInt(v, 10));
 // gagal cepat (caller menangani) alih-alih membuat server "seakan mati".
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: parseInt(process.env.PG_POOL_MAX, 10) || 10,
+  // Default 35: 27 multi-strategy coins can have ~100 tick loops; each tick needs
+  // 2–4 queries. Old default 10 caused "timeout exceeded when trying to connect"
+  // on position reconcile under staging load. Keep PG_POOL_MAX + PRISMA_CONNECTION_LIMIT
+  // well under Postgres max_connections (prefer PgBouncer in front for prod).
+  max: parseInt(process.env.PG_POOL_MAX, 10) || 35,
   connectionTimeoutMillis: 10000, // tunggu maks 10s ambil koneksi, lalu error
   idleTimeoutMillis: 30000,       // lepas koneksi idle setelah 30s
 });
@@ -1186,34 +1190,34 @@ async function getAllEquity(mode = "live", userId = null) {
 
 const DB_BACKTEST_KLINES_TTL = Number(process.env.BACKTEST_KLINES_DB_TTL_SEC) || 86_400;
 
-/** Fire-and-forget best-effort — upsert dalam transaksi (batch untuk dataset besar). */
+/** Fire-and-forget best-effort — batch upsert via UNNEST (no long-held client). */
 async function cacheCandles(exchange, symbol, interval, candles) {
   if (!candles || candles.length === 0) return;
   const BATCH = 200;
-  const client = await pool.connect();
   try {
     for (let i = 0; i < candles.length; i += BATCH) {
       const slice = candles.slice(i, i + BATCH);
-      await client.query("BEGIN");
-      for (const c of slice) {
-        await client.query(
-          `INSERT INTO candle_cache
-             (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
-           ON CONFLICT (exchange, symbol, "interval", timestamp)
-           DO UPDATE SET
-             open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
-             close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
-          [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
-        );
-      }
-      await client.query("COMMIT");
+      const timestamps = slice.map((c) => c.timestamp);
+      const opens = slice.map((c) => c.open);
+      const highs = slice.map((c) => c.high);
+      const lows = slice.map((c) => c.low);
+      const closes = slice.map((c) => c.close);
+      const volumes = slice.map((c) => c.volume ?? 0);
+      await pool.query(
+        `INSERT INTO candle_cache
+           (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
+         SELECT $1, $2, $3, t, o, h, l, c, v, extract(epoch from now())::bigint
+         FROM UNNEST($4::bigint[], $5::float8[], $6::float8[], $7::float8[], $8::float8[], $9::float8[])
+           AS u(t, o, h, l, c, v)
+         ON CONFLICT (exchange, symbol, "interval", timestamp)
+         DO UPDATE SET
+           open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+           close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
+        [exchange, symbol, interval, timestamps, opens, highs, lows, closes, volumes]
+      );
     }
   } catch (e) {
-    try { await client.query("ROLLBACK"); } catch { /* noop */ }
     console.warn(`[DB] cacheCandles gagal: ${e.message}`);
-  } finally {
-    client.release();
   }
 }
 

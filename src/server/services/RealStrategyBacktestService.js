@@ -52,6 +52,17 @@ const isSmcKey = (k) => SMC_KEYS.has(String(k || "").toUpperCase());
 
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
+/** Typical crypto perpetual funding ~0.01% per 8h (conservative cost model). */
+const FUNDING_RATE_8H = 0.0001;
+const MS_PER_8H = 8 * 60 * 60 * 1000;
+
+/** Accrue absolute funding cost over hold time (parity with live funding drag). */
+function estimateFundingCost(entryPrice, size, openTs, closeTs, enabled) {
+  if (!enabled || !(entryPrice > 0) || !(size > 0)) return 0;
+  const holdMs = Math.max(0, (closeTs || 0) - (openTs || 0));
+  const periods = holdMs / MS_PER_8H;
+  return periods * FUNDING_RATE_8H * entryPrice * size;
+}
 
 /** Map an entry-bar timestamp → index of last CLOSED htf candle at/just before it. */
 function buildHtfIndexPointer(entryCandles, htfCandles) {
@@ -283,9 +294,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   let dailyLoss = 0;
   let dailyStartCapital = startCapital;
 
-  const maxConsecLoss = cfg.maxConsecLoss ?? 2;
+  const maxConsecLoss = cfg.maxConsecLoss ?? 3;
   const maxTradesPerDay = cfg.maxTradesPerDay ?? 6;
-  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
+  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.03;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
 
@@ -420,7 +431,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const entryFeeRate = useMaker ? makerRate : feeRate;
     const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
     const fee = entryFeeRate * position.entry * closeSize + exitFeeRate * px * closeSize;
-    const pnl = grossPnl - fee;
+    const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
+    const closeTs = entryCandles[exitIdx]?.timestamp ?? 0;
+    const funding = estimateFundingCost(
+      position.entry, closeSize, openTs, closeTs, cfg.simulateFunding !== false && feeRate > 0
+    );
+    const pnl = grossPnl - fee - funding;
     capital += pnl;
 
     if (pnl < 0) {
@@ -454,6 +470,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       size: closeSize,
       grossPnl,
       fee,
+      funding,
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
@@ -638,10 +655,17 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const compLoss = componentConsecLoss.get(componentId) || 0;
       if (compLoss >= maxConsecLoss) continue;
 
-      // Check daily limits
+      // Check daily limits — include floating loss (live BotEngine._checkRiskGates parity)
       if (dailyTradeCount >= maxTradesPerDay) continue;
+      const floatingLoss = [...positions.values()].reduce((s, p) => {
+        const sz = p.remainingSize ?? p.size ?? 0;
+        const u = p.side === "LONG"
+          ? (price - p.entry) * sz
+          : (p.entry - price) * sz;
+        return u < 0 ? s + Math.abs(u) : s;
+      }, 0);
       const dailyBase = dailyStartCapital || capital;
-      if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) continue;
+      if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) continue;
 
       // Check ATR gate — relative to the leg's own baseline when enabled
       const atrPct = (atr / price) * 100;
@@ -1175,13 +1199,10 @@ async function runTripleTypeBacktest(opts = {}) {
   // by TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1 : Swing 2) instead of equally,
   // so Swing runners get full size and Scalping chop gets the least. Live parity:
   // BotEngine._handleMultiPositionSignal uses the SAME riskShareForType helper.
-  // cooldownAfterLoss=0: in backtest candle time, cooldown in real minutes is meaningless.
-  // maxConsecLoss raised: daily reset already handles this in _runMultiPositionBacktest;
-  // the higher cap prevents intra-day blocking during heavy drawdown periods.
+  // FULL PARITY: keep cooldownAfterLoss / maxConsecLoss from strategy config
+  // (previously forced cooldown=0 and maxConsecLoss≥5 — broke 1:1 with live).
   const baseTypeConfig = {
     ...cfg,
-    cooldownAfterLoss: 0,
-    maxConsecLoss:    Math.max(cfg.maxConsecLoss ?? 2, 5),
   };
 
 
@@ -1521,9 +1542,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   let dailyLoss = 0;
   let dailyStartCapital = capital;
 
-  const maxConsecLoss = cfg.maxConsecLoss ?? 2;
+  const maxConsecLoss = cfg.maxConsecLoss ?? 3;
   const maxTradesPerDay = cfg.maxTradesPerDay ?? 6;
-  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
+  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.03;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
 
@@ -1666,7 +1687,12 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const entryFeeRate = useMaker ? makerRate : feeRate;
     const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
     const fee = entryFeeRate * position.entry * closeSize + exitFeeRate * px * closeSize;
-    const pnl = grossPnl - fee;
+    const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
+    const closeTs = entryCandles[exitIdx]?.timestamp ?? 0;
+    const funding = estimateFundingCost(
+      position.entry, closeSize, openTs, closeTs, cfg.simulateFunding !== false && feeRate > 0
+    );
+    const pnl = grossPnl - fee - funding;
     capital += pnl;
 
     if (pnl < 0) {
@@ -1693,6 +1719,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       size: closeSize,
       grossPnl,
       fee,
+      funding,
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
@@ -1895,7 +1922,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (tfHtfLayer && htfIndicators?.adx && htfPtr) {
       const j = (htfPtr[i] ?? 0) - 1;
       const adxVal = j >= 0 && j < htfIndicators.adx.length ? htfIndicators.adx[j] : null;
-      const adxMin = cfg.adxMinStrength ?? 25;
+      // Weekly ADX ≥ 30 is rare; soft-cap when HTF is 1w so Swing legs can fire.
+      // Per-leg typeOverrides.Swing.adxMinStrength (20) also merges into cfg.
+      let adxMin = cfg.adxMinStrength ?? 25;
+      const htfLabel = String(higherTf || cfg.higherTf || "").toLowerCase();
+      if (htfLabel === "1w" || htfLabel === "1d") {
+        adxMin = Math.min(adxMin, 20);
+      }
       if (adxVal == null || adxVal < adxMin) {
         diag.adxHTFGate = (diag.adxHTFGate || 0) + 1;
         equity.push({ date: isoOf(c), value: round2(capital) });
@@ -1964,7 +1997,16 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (consecLoss >= maxConsecLoss) { diag.consecLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     if (dailyTradeCount >= maxTradesPerDay) { diag.maxTradesBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const dailyBase = dailyStartCapital || capital;
-    if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) { diag.dailyLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    // Include floating loss on open position (live BotEngine._checkRiskGates parity)
+    let floatingLoss = 0;
+    if (position) {
+      const sz = position.remainingSize ?? position.size ?? 0;
+      const u = position.side === "LONG"
+        ? (price - position.entry) * sz
+        : (position.entry - price) * sz;
+      if (u < 0) floatingLoss = Math.abs(u);
+    }
+    if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) { diag.dailyLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const atrPct = (atr / price) * 100;
     if (atrBaseline) {
       const base = atrBaseline[i];
@@ -2149,6 +2191,13 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
     : typeOrder;
+  // Mirror backtest.js TYPE_TF so ADX weekly soft-cap + HTF directional gates
+  // know which trend TF each leg uses.
+  const TYPE_TF_HTF = {
+    Scalping: "4h",
+    Intraday: "4h",
+    Swing: "1w",
+  };
   for (const tradeType of typeOrder) {
 
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
@@ -2156,6 +2205,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       ...cfg,
 
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
+      higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
     });
     const entryCandles = opts.entryCandles?.[tradeType];

@@ -163,11 +163,14 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   }
 
   _aggregate(componentVotes, config = {}) {
-    // Scale majority threshold to the number of active voters (2/3 of N).
-    const n = componentVotes.length || 3;
-    const scaledMin = config.afMinVotes != null
+    // Scale majority threshold to the number of active voters.
+    // BUG FIX: afMinVotes:2 with a single selected voter (Wyckoff-only / VSA-only)
+    // made majority mathematically impossible → 0 trades. Cap at voter count.
+    const n = componentVotes.length || 1;
+    const rawMin = config.afMinVotes != null
       ? config.afMinVotes
       : Math.max(1, Math.ceil(n * 2 / 3));
+    const scaledMin = Math.min(Math.max(1, rawMin), n);
     const aggregated = aggregateAfVotes(componentVotes, {
       pairTier: config.pairTier,
       symbol: config.symbol,
@@ -235,6 +238,28 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     }
 
     const dir = aggregated.signal;
+    // Wyckoff/VSA-only research mode: when SMC is not an active voter, promote
+    // the majority vote into type legs so the selected component can open trades
+    // without requiring a coincident SMC setup (otherwise sub-strategy backtests
+    // stay near-zero even after afMinVotes is capped to voter count).
+    const voters = this._resolveActiveVoters(config);
+    const smcActive = voters.has("AF_SMC") || voters.has("SMC");
+    if (!smcActive) {
+      return {
+        Scalping: dir,
+        Intraday: dir,
+        Swing:    dir,
+        A: dir,
+        B: dir,
+        C: dir,
+        meta: attachMeta({
+          ...(multi?.meta || {}),
+          gateDirection: dir,
+          standaloneVoterEntry: true,
+        }),
+      };
+    }
+
     const filter = (sig) => (sig === dir ? sig : null);
     return {
       Scalping: filter(multi?.Scalping),

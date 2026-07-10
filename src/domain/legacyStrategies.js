@@ -394,7 +394,9 @@ const STRATEGIES = {
     // best single-window result found). SL/time-stop exits remain taker+slippage.
     typeOverrides: {
       Intraday: { makerEntry: true, makerFeeRate: 0.0002 },
-      Swing:    { makerEntry: true, makerFeeRate: 0.0002 },
+      // Weekly HTF ADX rarely reaches 30 — Swing leg was structurally dead
+      // (0 Swing trades across Dow/AMT/TF). Soften to 20 for the 4h/1w path only.
+      Swing:    { makerEntry: true, makerFeeRate: 0.0002, adxMinStrength: 20 },
     },
 
 

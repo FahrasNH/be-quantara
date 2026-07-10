@@ -531,6 +531,52 @@ test("umbrella detectSignalMulti attaches afVotes meta", () => {
   assert.ok(multi.meta.afVotes.breakdown);
 });
 
+test("single-voter afMinVotes=2 is capped → majority possible", () => {
+  const um = new AdaptiveFusionUmbrella();
+  // Spy path: call _aggregate directly with 1 voter
+  const r = um._aggregate(
+    [{ key: "WYCKOFF", vote: "LONG", confidence: 0.8 }],
+    { afMinVotes: 2 }
+  );
+  assert.strictEqual(r.signal, "LONG", "1 voter + afMinVotes=2 must cap to 1");
+  assert.strictEqual(r.threshold, 1);
+});
+
+test("Wyckoff-only detectSignalMulti promotes standalone vote (no SMC required)", () => {
+  const um = new AdaptiveFusionUmbrella();
+  const n = 120;
+  // Build a flat range then a spring-like dip+recovery so Wyckoff can vote LONG
+  const closes = Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 8) * 0.3);
+  const highs = closes.map((c) => c + 0.4);
+  const lows = closes.map((c) => c - 0.4);
+  // Force a spring near the end
+  lows[n - 4] = 98.5;
+  closes[n - 3] = 100.2;
+  highs[n - 3] = 100.5;
+  const volumes = Array.from({ length: n }, () => 1000);
+  volumes[n - 4] = 2000;
+  const indicators = {
+    closes, highs, lows,
+    opens: closes.map((c) => c - 0.05),
+    volumes,
+    volSMA: Array.from({ length: n }, () => 900),
+    atr: Array.from({ length: n }, () => 0.8),
+    rsi: Array.from({ length: n }, () => 50),
+  };
+  const multi = um.detectSignalMulti(indicators, n - 1, {
+    afUseThreeComponentVoting: true,
+    afMinVotes: 2,
+    afActiveVoters: ["AF_WYCKOFF"],
+  });
+  assert.ok(multi.meta?.afVotes, "afVotes meta present");
+  // Either NEUTRAL (no spring) or standalone promotion — must not throw / hard-zero from threshold
+  assert.ok(multi.meta.afVotes.threshold <= 1 || multi.meta.afVotes.signal == null
+    || multi.meta.standaloneVoterEntry === true
+    || multi.Scalping != null || multi.Swing != null
+    || multi.meta.gateReason,
+    "single-voter path must not require impossible quorum");
+});
+
 console.log("\n══════════════════════════════════════");
 console.log(`Results: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

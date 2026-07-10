@@ -6,6 +6,34 @@
 
 ---
 
+## 3. Backtest ↔ Live Parity (FULL PARITY philosophy)
+
+**Philosophy:** Backtest mode **(A) FULL PARITY** is the default for go-live validation.
+Raw-signal research (mode B) is available by disabling fees/slippage/`simulateFunding`
+and/or setting `afUseThreeComponentVoting: false` — never confuse the two.
+
+| Constraint | Live (`BotEngine`) | Backtest (`RealStrategyBacktestService`) |
+|---|---|---|
+| Consecutive-loss brake | `_checkRiskGates` (`maxConsecLoss`, default 3) | Same defaults; AF triple no longer raises cap to 5 |
+| Daily loss limit | Realized + **floating** (default 3%) | Realized + floating; pair-tier `dailyLossLimit` via FE |
+| Cooldown after loss | Candle/wall-clock minutes | Candle-time cooldown (same config minutes) |
+| Max trades/day | Yes | Yes (+ pair-tier override) |
+| Single-position / per-component | Yes | Yes (account-wide cap still excluded) |
+| Fees | Taker 0.06% / maker 0.02% | Same; `enableFees` |
+| Slippage | Exchange fills | Fixed 0.05% when `enableSlippage` (FE default ON) |
+| Funding | Schema only (not accrued live yet) | `~0.01%/8h` hold-time cost when fees on |
+| HTF / daily regime | HTF directional + MR filter | Same + `dailyRegimeGate` (backtest-only protective gate) |
+| AF voter threshold | `afMinVotes` capped to active voter count | Same (`AdaptiveFusionUmbrella._aggregate`) |
+
+Intentionally excluded from backtest (live-execution concerns): account coordinator
+aggregate gates, signal idempotency cache, exchange min-lot / margin feasibility.
+
+**Pool sizing (live multi-coin):** `PG_POOL_MAX` default 35, `PRISMA_CONNECTION_LIMIT`
+default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throttled
++ retried on pool connect timeout.
+
+---
+
 ## 4. Strategy Config — Adaptive Fusion (AF_SMC)
 
 **Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
@@ -20,12 +48,15 @@
 
 Voting (`af/afVoting.js`):
 
-- Default threshold: **2/3** majority (`afMinVotes: 2`)
-- Altcoin (`pairTier` VOLATILE / SEMI_VOLATILE, or known thin alts): **3/3**
+- Default threshold: **2/3** majority (`afMinVotes: 2`), **capped to active voter count**
+  (Wyckoff-only / VSA-only cannot require 2 votes from 1 voter)
+- When SMC is not an active voter, majority vote is promoted to type legs (standalone
+  sub-strategy research mode)
+- Altcoin (`pairTier` VOLATILE / SEMI_VOLATILE, or known thin alts): **3/3** (still capped to N)
 - Rollback: set `afUseThreeComponentVoting: false` → SMC-only (pre-Sprint-8 behaviour)
 - `entryContext.signalComponents` / `entryContext.afVotes` store per-component vote breakdown
 
-Trade types (Scalping / Intraday / Swing) remain SMC multi-position legs; umbrella voting gates their direction.
+Trade types for AF: **Scalping / Swing** only (Intraday removed AF-SCALP-19). Umbrella voting gates direction when SMC is active.
 
 ### 4.2 Go / No-Go before live promote
 

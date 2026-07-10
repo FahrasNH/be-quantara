@@ -1575,10 +1575,11 @@ async function _runBacktestJobAsync(job, userId, opts) {
       entryCandles,
       htfCandles,
       dailyCandles,
-      // Risk ladder must normalize over the strategy's NATURAL type set, not the
-      // user-filtered one — else "Scalping only" hands the 0.5%-weight leg the
-      // FULL combined 3.5% cap (7x the ladder). See riskShareForType callers.
-      naturalTypeOrder: isAF ? Object.keys(TYPE_TF) : multiTypeOrder,
+      // Risk ladder must normalize over the strategy's NATURAL supported type set,
+      // not Object.keys(TYPE_TF) (which still lists Intraday for AF even though
+      // AF-SCALP-19 removed it) — else Swing risk share is undersized.
+      naturalTypeOrder: STRATEGY_SUPPORTED_TYPES[strategyKey]
+        || (isAF ? ["Scalping", "Swing"] : multiTypeOrder),
       strategyKey,
       capital: Number(capital) || 1000,
       enableFees: enableFees !== false,

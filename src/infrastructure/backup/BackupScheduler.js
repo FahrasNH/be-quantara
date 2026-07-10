@@ -12,14 +12,14 @@
 const { execSync } = require("child_process");
 const path    = require("path");
 const fs      = require("fs");
-const { Pool } = require("pg");
+// Reuse the shared engine pool — a second Pool() here silently added another
+// default-10 connections and competed with live bot ticks under load.
+const { _pool: pool } = require("../db/database");
 
 const BACKUP_DIR     = process.env.BACKUP_DIR     || "/opt/quantara-backups";
 const RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || "30", 10);
 const INTERVAL_MS    = parseInt(process.env.BACKUP_INTERVAL_MS    || String(24 * 60 * 60 * 1000), 10); // 24j
 const ENABLED        = process.env.BACKUP_ENABLED !== "false";
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

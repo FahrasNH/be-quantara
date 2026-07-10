@@ -20,15 +20,17 @@ const DEFAULTS = {
   minBars: 100,
   bbPeriod: 20,
   bbStdDev: 2,
-  bbWidthPercentileMax: 30,
+  // 40 (was 30): 30th-percentile BB compression was too rare on 15m/4h → near-zero
+  // spring/upthrust detections in 12m backtests (Wyckoff 0-trade).
+  bbWidthPercentileMax: 40,
   rangeLookback: 20,
   minRangeWidthPct: 0.005, // 0.5%
   maxRangeWidthPct: 0.05,  // 5.0%
   minBarsInRange: 20,
   atrPeriod: 14,
   penetrationAtrMult: 0.5,
-  recoveryWindow: 3,
-  volumeConfirmMult: 1.2,
+  recoveryWindow: 5,       // was 3 — allow slightly slower recovery confirmation
+  volumeConfirmMult: 1.0,  // was 1.2 — volume ≥ SMA is enough; 1.2× over-filtered
   volumeSmaPeriod: 20,
   cooldownBars: 5,
 };
