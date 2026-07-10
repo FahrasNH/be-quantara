@@ -645,29 +645,62 @@ module.exports = function createBacktestRouter(context) {
 
   /**
    * GET /api/v1/backtest/rag-gate-status
-   * Check whether RAG Gate (ML) is available for user backtests.
+   * Honest availability: WinPredictor model loaded OR enough TradeEmbedding rows.
+   * Constructing VectorStore alone is NOT enough (empty embeddings → RAG ON == OFF).
    */
   router.get("/rag-gate-status", asyncHandler(async (req, res) => {
+    const MIN_EMBEDDINGS = 5;
     try {
       const WinPredictor = require("../../domain/WinPredictor");
       const wp = new WinPredictor();
       await wp.load().catch(() => {});
-      let hasVector = false;
-      try {
-        const VectorStore = require("../../infrastructure/db/VectorStore");
-        const { _pool } = require("../../infrastructure/db/database");
-        new VectorStore(_pool);
-        hasVector = true;
-      } catch { /* pgvector may be unavailable */ }
       const hasModel = !!wp.model;
-      return res.json({
+
+      let hasVector = false;
+      let embeddingCount = 0;
+      try {
+        const { _pool } = require("../../infrastructure/db/database");
+        // Require actual pgvector extension row — constructing VectorStore is not enough.
+        const ext = await _pool.query(
+          "SELECT 1 FROM pg_extension WHERE extname = 'vector' LIMIT 1"
+        );
+        hasVector = (ext.rows?.length ?? 0) > 0;
+        if (hasVector) {
+          try {
+            const cnt = await _pool.query(
+              `SELECT COUNT(*)::int AS cnt FROM "TradeEmbedding"`
+            );
+            embeddingCount = cnt.rows?.[0]?.cnt ?? 0;
+          } catch {
+            embeddingCount = 0;
+          }
+        }
+      } catch {
+        hasVector = false;
+        embeddingCount = 0;
+      }
+
+      const available = hasModel === true || embeddingCount >= MIN_EMBEDDINGS;
+      const payload = {
         ok: true,
-        available: hasModel || hasVector,
+        available,
         hasModel,
         hasVector,
-      });
+        embeddingCount,
+      };
+      if (!available) {
+        payload.reason = "No WinPredictor model and insufficient TradeEmbedding rows";
+      }
+      return res.json(payload);
     } catch (err) {
-      return res.json({ ok: true, available: false, reason: err.message });
+      return res.json({
+        ok: true,
+        available: false,
+        hasModel: false,
+        hasVector: false,
+        embeddingCount: 0,
+        reason: err.message,
+      });
     }
   }));
 
