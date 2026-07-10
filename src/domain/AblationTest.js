@@ -11,8 +11,10 @@
  *   C: RAG alone  — SimilarTradeAdvisor only, no WinPredictor
  *   D: LGB + RAG  — HybridAdvisor (full)
  *
- * STAGING_ONLY: throws if NODE_ENV === 'production'.
+ * STAGING_ONLY: throws if not allowed in production (see ragBacktestEnv).
  */
+
+const { isRagBacktestAllowed } = require("../config/ragBacktestEnv");
 
 class AblationTest {
   /**
@@ -21,7 +23,7 @@ class AblationTest {
    * @param {object} [featureEngineer]     — FeatureEngineer instance
    */
   constructor(winPredictor = null, similarTradeAdvisor = null, featureEngineer = null) {
-    if (process.env.NODE_ENV === "production") {
+    if (!isRagBacktestAllowed()) {
       throw new Error(
         "[STAGING_ONLY] AblationTest must not run in production."
       );
