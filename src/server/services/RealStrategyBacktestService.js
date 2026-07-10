@@ -901,11 +901,38 @@ async function _applyRagGate(trades, ctx = {}) {
       trades,
       rejected: 0,
       logs: [{ error: true, message: "RAG gate unavailable (fail-open)" }],
-      stats: { total: trades.length, approved: trades.length, rejected: 0, skipped: trades.length, avgScore: null, failOpen: true },
+      stats: {
+        total: trades.length,
+        approved: trades.length,
+        rejected: 0,
+        skipped: trades.length,
+        avgScore: null,
+        failOpen: true,
+        ineffective: true,
+        message: "RAG gate deps unavailable — results match baseline (fail-open)",
+      },
     };
   }
 
   const { fe, wp, vs } = deps;
+  // Ensure model load has settled (getRagGateDeps fires load() without awaiting).
+  await wp.load().catch(() => {});
+  const hasModel = !!wp.model;
+  // Pre-check: no model and empty/unavailable vector store → still run fail-open
+  // path so ragStats are honest (skipped/failOpen/ineffective), without inventing filters.
+  let vectorLikelyEmpty = false;
+  try {
+    const available = await vs.checkAvailability();
+    if (!available) {
+      vectorLikelyEmpty = true;
+    } else {
+      const cnt = await vs.count().catch(() => 0);
+      vectorLikelyEmpty = cnt < 1;
+    }
+  } catch {
+    vectorLikelyEmpty = true;
+  }
+
   const sorted = [...trades].sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
   const kept = [];
   const logs = [];
@@ -922,7 +949,8 @@ async function _applyRagGate(trades, ctx = {}) {
       rsi: t.entryRsi,
       side: t.side,
       confidence: t.confidence,
-      regime: t.regime,
+      // Backtest trades expose marketCond; live/ML paths use regime — accept either.
+      regime: t.regime || t.marketCond,
     };
     const tradeMetadata = {
       strategyKey: ctx.strategyKey,
@@ -996,18 +1024,33 @@ async function _applyRagGate(trades, ctx = {}) {
     if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
   }
 
+  // Fail-open visibility: every trade skipped with 0 scores → ON == OFF metrics.
+  const allSkippedNoScores =
+    trades.length > 0 && skipped === trades.length && scoreCount === 0 && rejected === 0;
+  const depsIneffective = !hasModel && vectorLikelyEmpty;
+  const ineffective = allSkippedNoScores || depsIneffective;
+  const failOpen = allSkippedNoScores || depsIneffective;
+
+  const stats = {
+    total: trades.length,
+    approved,
+    rejected,
+    skipped,
+    avgScore: scoreCount > 0 ? scoreSum / scoreCount : null,
+    failOpen,
+  };
+  if (ineffective) {
+    stats.ineffective = true;
+    stats.message = !hasModel && vectorLikelyEmpty
+      ? "No WinPredictor model and empty TradeEmbedding store — RAG ON matches baseline (fail-open)"
+      : "All entries had no ML signal (kept) — RAG ON matches baseline; train a model or seed embeddings";
+  }
+
   return {
     trades: kept,
     rejected,
     logs,
-    stats: {
-      total: trades.length,
-      approved,
-      rejected,
-      skipped,
-      avgScore: scoreCount > 0 ? scoreSum / scoreCount : null,
-      failOpen: false,
-    },
+    stats,
   };
 }
 
