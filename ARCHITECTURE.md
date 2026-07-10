@@ -124,7 +124,7 @@ with an internal A→B→C pipeline:
 | Layer | Role | Implementation |
 |-------|------|----------------|
 | A | BB+RSI+VWAP mean-reversion signal (Scalping / Intraday) | `MeanReversionStrategy.detectSignal` |
-| B | Auction Market Theory ADX(14) regime gate | `md/adxRegimeGate.js` |
+| B | ADX Trend Strength Filter (ADX(14) regime gate) | `md/adxRegimeGate.js` |
 | C | Order Block + FVG entry confluence & TP target | `md/orderBlockFvg.js` |
 
 **ADX gate (Component B):**

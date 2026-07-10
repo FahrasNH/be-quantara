@@ -1,5 +1,6 @@
 /**
- * Auction Market Theory regime gate for Mean Drift (MD-SUB-01).
+ * Auction Market Theory → renamed ADX Trend Strength Filter for Mean Drift (MD-SUB-01).
+ * (TS_VP owns the "Auction Market Theory" display name for VWAP/VA race entries.)
  *
  * Component B — NOT an entry signal. Classifies entry-TF ADX(14) into:
  *   balance    (ADX < 20)  → MR allowed at full confidence
