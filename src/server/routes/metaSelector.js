@@ -21,6 +21,7 @@
 
 const express = require("express");
 
+const { superAdminGuard } = require("../../middleware/adminGuard");
 const metaSelector           = require("../../domain/MetaSelectorEngine");
 const ShadowCollectionService = require("../services/ShadowCollectionService");
 const { notifyInfo }         = require("../../infrastructure/notifications/TelegramNotifier");
@@ -60,17 +61,6 @@ function getHybridAdvisor() {
 
 function getMode() {
   return process.env.META_SELECTOR_MODE || "shadow";
-}
-
-// ── Guards ────────────────────────────────────────────────────────────────────
-
-function superAdminGuard(req, res, next) {
-  const user = req.user || req.adminUser || null;
-  const role = user?.role ?? req._role ?? "";
-  if (role !== "SUPER_ADMIN") {
-    return res.status(403).json({ ok: false, error: "SUPER_ADMIN role required" });
-  }
-  return next();
 }
 
 function disabledGuard(req, res, next) {
