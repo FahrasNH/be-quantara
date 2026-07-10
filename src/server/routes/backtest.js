@@ -654,7 +654,10 @@ module.exports = function createBacktestRouter(context) {
       const WinPredictor = require("../../domain/WinPredictor");
       const wp = new WinPredictor();
       await wp.load().catch(() => {});
-      const hasModel = !!wp.model;
+      const hasModel = !!(wp.model && (
+        (Array.isArray(wp.model.stumps) && wp.model.stumps.length > 0)
+        || (Number(wp.model.tradeCount) >= 5)
+      ));
 
       let hasVector = false;
       let embeddingCount = 0;

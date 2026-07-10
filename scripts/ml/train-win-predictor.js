@@ -121,10 +121,7 @@ async function main() {
 
   if (dataset.length === 0) {
     console.warn("[train-win-predictor] No training data. Run: npm run ml:bootstrap-engine-trades");
-    console.warn("[train-win-predictor] Saving empty fallback model.");
-    const predictor = new WinPredictor();
-    await predictor.train([]);
-    await predictor.save(MODEL_PATH);
+    console.warn("[train-win-predictor] Not saving empty model — RAG gate stays disabled until data exists.");
     const report = {
       auc: 0.5, accuracy: 0.5, splits: [], featureImportance: [],
       hyperparams: {}, trainedAt: new Date().toISOString(), tradeCount: 0,
