@@ -18,13 +18,14 @@ class WalkForwardBacktest {
   /**
    * @param {object} [conservativeEngine] — ConservativeBacktestEngine instance (optional)
    */
-  constructor(conservativeEngine = null) {
+  constructor(conservativeEngine = null, ablationTest = null) {
     if (process.env.NODE_ENV === "production") {
       throw new Error(
         "[STAGING_ONLY] WalkForwardBacktest must not run in production."
       );
     }
     this.conservativeEngine = conservativeEngine;
+    this.ablationTest       = ablationTest;
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -90,6 +91,23 @@ class WalkForwardBacktest {
         metrics = this.evaluateWindow(test, predictions);
       }
 
+      let lgbWr = null;
+      let ragWr = null;
+      let lgbPf = null;
+      let ragPf = null;
+      if (this.ablationTest && test.length > 0) {
+        try {
+          const [lgbM, hybridM] = await Promise.all([
+            this.ablationTest.evaluateVariant(test, "lgbOnly"),
+            this.ablationTest.evaluateVariant(test, "hybrid"),
+          ]);
+          lgbWr = lgbM.wr;
+          ragWr = hybridM.wr;
+          lgbPf = lgbM.pf;
+          ragPf = hybridM.pf;
+        } catch { /* non-fatal */ }
+      }
+
       windowResults.push({
         windowIndex: i + 1,
         startDate:   windowStart.toISOString().slice(0, 10),
@@ -97,6 +115,10 @@ class WalkForwardBacktest {
         testCount:   test.length,
         trainDays,
         testDays,
+        lgbWr: lgbWr ?? metrics.wr,
+        ragWr: ragWr ?? metrics.wr,
+        lgbPf: lgbPf ?? metrics.pf,
+        ragPf: ragPf ?? metrics.pf,
         ...metrics,
       });
     }
