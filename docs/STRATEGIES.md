@@ -60,11 +60,26 @@ Berlaku semua strategi kecuali di-override eksplisit di preset strategi.
 
 ---
 
-## 4. ADAPTIVE_FUSION (AF) - v2.6 Selective & High Probability
+## 4. ADAPTIVE_FUSION (AF) - v3.0 Three-Component Voting (Sprint 8)
 
-**Versi implementasi:** 2.6.0  
+**Versi implementasi:** 3.0.0  
 **Tier:** FOUNDRY+  
-**Fokus:** Kurangi false positive, tingkatkan win probability.
+**Komponen voting:** SMC (A) + Wyckoff (B) + VSA (C) — majority 2/3 (altcoin 3/3)
+
+**Sumber kode:**
+- Umbrella: `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
+- Voting: `src/domain/strategy/af/afVoting.js`
+- Wyckoff: `src/domain/strategy/af/wyckoffComponent.js`
+- VSA: `src/domain/strategy/af/vsaComponent.js`
+- Config: `src/config/strategies.js` (`TIER_COMPONENT_MAP.FOUNDRY`)
+
+| Parameter | Default | Keterangan |
+|-----------|---------|------------|
+| `afUseThreeComponentVoting` | `true` | Aktifkan voting SMC+Wyckoff+VSA |
+| `afMinVotes` | `2` | Kuorum absolut (2/3); altcoin override → 3 |
+| `afRejectOnDissent` | `true` | Tolak bila komponen saling berlawanan |
+
+Trade types Scalping/Intraday/Swing tetap dari SMC multi-position; arah di-gate oleh majority vote.
 
 ### 4.1 Parameter Runtime (legacyStrategies → BotEngine) - v2.6
 

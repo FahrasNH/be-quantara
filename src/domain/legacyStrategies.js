@@ -271,8 +271,11 @@ const STRATEGIES = {
     maxEntryExtensionATR: 1.2,
     minEdgeFeeMultiple:   7,
     strongTrendTPMult:    1.8,
-    // afMinVotes retained for legacy single-position path; multi-position ignores it
-    afMinVotes:           3,
+    // Sprint 8 (AF-SUB-03): 3-component voting (SMC + Wyckoff + VSA).
+    // Default 2/3 majority; altcoin tiers use 3/3 via afVoting.js.
+    // Set afUseThreeComponentVoting:false to rollback to SMC-only multi-position.
+    afUseThreeComponentVoting: true,
+    afMinVotes:           2,   // absolute vote floor (2/3); altcoin override → 3
     afRejectOnDissent:    true,
     // ── Sprint 7 (AF-FIX, 2026-06-29): confidence-gated multi-component ──────────
     // v3.2 disabled A/B (C-only) because, UNGATED, their EMA-crossover designs

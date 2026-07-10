@@ -18,10 +18,12 @@ const UMBRELLA_STRATEGIES = {
 // ─── Active component strategy keys ──────────────────────────────────────────
 
 const COMPONENT_STRATEGIES = {
-  // ADAPTIVE_FUSION — FOUNDRY Tier
-  AF_SMC: "AF_SMC",   // Smart Money Concepts  ✅ LIVE
-  AF_LS:  "AF_LS",    // Liquidity Sweep        ⏳ Sprint 9
-  AF_OBR: "AF_OBR",   // Order Block Retest     ⏳ Sprint 9
+  // ADAPTIVE_FUSION — FOUNDRY Tier (3-component voting: SMC + Wyckoff + VSA)
+  AF_SMC:     "AF_SMC",     // Smart Money Concepts     ✅ LIVE (Component A)
+  AF_WYCKOFF: "AF_WYCKOFF", // Wyckoff Spring/Upthrust  ✅ LIVE (Component B)
+  AF_VSA:     "AF_VSA",     // Volume Spread Analysis   ✅ LIVE (Component C)
+  AF_LS:      "AF_LS",      // Liquidity Sweep          ⏳ Sprint 9
+  AF_OBR:     "AF_OBR",     // Order Block Retest       ⏳ Sprint 9
 
   // TREND_SURGE — FORGE Tier
   TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE
@@ -76,7 +78,12 @@ const STRATEGY_ABBREV = {
 // ─── Tier → component mapping ─────────────────────────────────────────────────
 
 const TIER_COMPONENT_MAP = {
-  FOUNDRY: { active: ["AF_SMC"], umbrella: "ADAPTIVE_FUSION", abbrev: "AF" },
+  FOUNDRY: {
+    active: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+    umbrella: "ADAPTIVE_FUSION",
+    abbrev: "AF",
+    voting: { defaultMinVotes: 2, altcoinMinVotes: 3 },
+  },
   FORGE:   { active: ["TS_TF"],  umbrella: "TREND_SURGE",     abbrev: "TS" },
   MINT:    { active: ["MD_MR"],  umbrella: "MEAN_DRIFT",      abbrev: "MD" },
   VAULT:   { active: ["BS_BR"],  umbrella: "BREAKOUT_STORM",  abbrev: "BS" },

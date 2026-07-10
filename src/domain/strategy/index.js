@@ -10,6 +10,8 @@ const UmbrellaStrategy = require("./base/UmbrellaStrategy");
 
 // Component implementations
 const SmartMoneyConceptsStrategy = require("./implementations/SmartMoneyConceptsStrategy");
+const WyckoffStrategy            = require("./implementations/WyckoffStrategy");
+const VsaStrategy                = require("./implementations/VsaStrategy");
 const TrendFollowingStrategy     = require("./implementations/TrendFollowingStrategy");
 const MeanReversionStrategy      = require("./implementations/MeanReversionStrategy");
 const BreakoutTradingStrategy    = require("./implementations/BreakoutTradingStrategy");
@@ -31,6 +33,8 @@ module.exports = {
 
   // Component implementations
   SmartMoneyConceptsStrategy,
+  WyckoffStrategy,
+  VsaStrategy,
   TrendFollowingStrategy,
   MeanReversionStrategy,
   BreakoutTradingStrategy,

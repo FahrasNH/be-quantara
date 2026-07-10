@@ -104,6 +104,7 @@ class TradeFeatureCollector {
         htfTrend,
         confidence,
         signalComponents,
+        afVotes,
       } = ctx || {};
 
       const price   = indicators.lastClose ?? indicators.close ?? config.lastPrice ?? 1;
@@ -152,6 +153,7 @@ class TradeFeatureCollector {
         tradeType:        resolveTradeType(strategyKey ?? config.strategyKey),
         confidenceScore,
         signalComponents: signalComponents ?? indicators.signalComponents ?? {},
+        afVotes:          afVotes ?? indicators.afVotes ?? null,
         pairTier:         pairTier ?? config.pairTier ?? "LIQUID",
         leverage:         config.leverage ?? 1,
         capitalAllocated: capital ?? config.capital ?? 0,
@@ -308,6 +310,7 @@ class TradeFeatureCollector {
       tradeType:        "Intraday",
       confidenceScore:  0,
       signalComponents: {},
+      afVotes:          null,
       pairTier:         ctx?.pairTier ?? "LIQUID",
       leverage:         1,
       capitalAllocated: 0,

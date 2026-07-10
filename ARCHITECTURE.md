@@ -1,7 +1,39 @@
 # Quantara Backend — Architecture Notes
 
 > Living doc. Sections are added as subsystems are formalized. This file currently
-> documents the **market / exchange** layer (Tasks A & C, Binance integration).
+> documents the **market / exchange** layer (Tasks A & C, Binance integration) and
+> the **Adaptive Fusion strategy config** (Sprint 8).
+
+---
+
+## 4. Strategy Config — Adaptive Fusion (AF_SMC)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
+
+### 4.1 Component model (Sprint 8)
+
+| Slot | Key | Role | Implementation |
+|------|-----|------|----------------|
+| A | `AF_SMC` | Smart Money Concepts (structure) | `SmartMoneyConceptsStrategy` |
+| B | `AF_WYCKOFF` | Wyckoff spring/upthrust (phase + volume) | `WyckoffStrategy` → `af/wyckoffComponent.js` |
+| C | `AF_VSA` | Volume Spread Analysis (conviction) | `VsaStrategy` → `af/vsaComponent.js` |
+
+Voting (`af/afVoting.js`):
+
+- Default threshold: **2/3** majority (`afMinVotes: 2`)
+- Altcoin (`pairTier` VOLATILE / SEMI_VOLATILE, or known thin alts): **3/3**
+- Rollback: set `afUseThreeComponentVoting: false` → SMC-only (pre-Sprint-8 behaviour)
+- `entryContext.signalComponents` / `entryContext.afVotes` store per-component vote breakdown
+
+Trade types (Scalping / Intraday / Swing) remain SMC multi-position legs; umbrella voting gates their direction.
+
+### 4.2 Go / No-Go before live promote
+
+Per AF-SUB-03 research gate (do **not** skip):
+
+- Pairwise vote correlation &lt; 0.5 (`checkVoteCorrelation`)
+- Backtest 12m on BTC/BNB/BGB/TRX: WR ≥35%, PF ≥1.2, Sharpe ≥0.05, ≥30 trades/coin
+- Research Confidence ≥ Medium and verdict ≠ "Needs Significant Improvements"
 
 ---
 

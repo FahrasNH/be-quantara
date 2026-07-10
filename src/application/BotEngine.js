@@ -1374,10 +1374,15 @@ class BotEngine extends EventEmitter {
             }
 
             // ── MULTI-POSITION MODE (v3.0): ADAPTIVE_FUSION independent components ──
+            // Sprint 8: use AdaptiveFusionUmbrella (SMC + Wyckoff + VSA voting).
             if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
-              const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
-              const afStrategy = new SmartMoneyConceptsStrategy();
-              const multiSignal = afStrategy.detectSignalMulti(indicators, lastIdx, {
+              const { strategyRegistry } = require("../domain/strategy");
+              let afInstance = strategyRegistry.get("AF_SMC");
+              if (!afInstance || typeof afInstance.detectSignalMulti !== "function") {
+                const AdaptiveFusionUmbrella = require("../domain/strategy/umbrellas/AdaptiveFusionUmbrella");
+                afInstance = new AdaptiveFusionUmbrella();
+              }
+              const multiSignal = afInstance.detectSignalMulti(indicators, lastIdx, {
                 volatility:           atrPctNow,
                 trend_strength:       trendStr,
                 balance:              this.state.capital,
@@ -1387,12 +1392,22 @@ class BotEngine extends EventEmitter {
                 htfTrendStrength,
                 htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
                 pairTier:             this.config.pairTier,
+                symbol:               this.config.symbol,
                 tierOverrides:        this.config.tierOverrides,
                 volSmaMultiplier:     this.config.volSmaMultiplier,
                 afEnabledComponents:  this.config.afEnabledComponents,
                 afMinComponentConfidence: this.config.afMinComponentConfidence,
                 afMinAggregateConfidence: this.config.afMinAggregateConfidence,
+                afUseThreeComponentVoting: this.config.afUseThreeComponentVoting,
+                afMinVotes:           this.config.afMinVotes,
               });
+              // Persist vote breakdown onto indicator snapshot for entryContext
+              if (multiSignal?.meta?.afVotes || multiSignal?.meta?.signalComponents) {
+                indicatorSnapshot.signalComponents = multiSignal.meta.signalComponents
+                  || multiSignal.meta.afVotes?.breakdown
+                  || {};
+                indicatorSnapshot.afVotes = multiSignal.meta.afVotes || null;
+              }
 
               // Check each component independently for entry
               for (const componentId of ["A", "B", "C"]) {

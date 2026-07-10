@@ -756,8 +756,13 @@ let _meanReversionInstance = null;
 let _breakoutRetestInstance = null;
 function getAdaptiveFusionInstance() {
   if (!_adaptiveFusionInstance) {
-    const SmartMoneyConceptsStrategy = require("./strategy/implementations/SmartMoneyConceptsStrategy");
-    _adaptiveFusionInstance = new SmartMoneyConceptsStrategy();
+    // Sprint 8: use umbrella (SMC + Wyckoff + VSA) so detectSignal runs 3-component voting
+    const { strategyRegistry } = require("./strategy");
+    _adaptiveFusionInstance = strategyRegistry.get("AF_SMC");
+    if (!_adaptiveFusionInstance) {
+      const AdaptiveFusionUmbrella = require("./strategy/umbrellas/AdaptiveFusionUmbrella");
+      _adaptiveFusionInstance = new AdaptiveFusionUmbrella();
+    }
   }
   return _adaptiveFusionInstance;
 }
