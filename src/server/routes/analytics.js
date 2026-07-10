@@ -17,6 +17,7 @@ const express = require("express");
 const prisma  = require("../../infrastructure/db/prismaClient");
 const db      = require("../../infrastructure/db/database");
 const { isRagBacktestAllowed } = require("../../config/ragBacktestEnv");
+const { adminGuard } = require("../../middleware/adminGuard");
 
 // Sprint 5 / RL-5 — lazy-loaded to avoid startup failures if pgvector is unavailable
 let _similarTradeAdvisor = null;
@@ -91,12 +92,8 @@ function internalTokenGate(req, res, next) {
   if (token && process.env.INTERNAL_API_TOKEN && token === process.env.INTERNAL_API_TOKEN) {
     return next(); // valid internal token
   }
-  // Fall back: require authenticated admin session (authMiddleware already ran)
-  if (req.user || req.adminUser) {
-    const role = (req.user || req.adminUser)?.role ?? "";
-    if (role === "ADMIN" || role === "SUPER_ADMIN") return next();
-  }
-  return res.status(401).json({ ok: false, message: "Unauthorized: internal token or admin JWT required" });
+  // Fall back: admin JWT — authMiddleware sets req.userId; adminGuard loads role from DB
+  return adminGuard(req, res, next);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
