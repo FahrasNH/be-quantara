@@ -33,6 +33,35 @@ function getSimilarTradeAdvisor() {
   return _similarTradeAdvisor;
 }
 
+// Sprint 6 / RAG-BT-5 — lazy-loaded backtest engines for RAG analytics
+let _ragBacktestEngines = null;
+function getRAGBacktestEngines() {
+  if (_ragBacktestEngines) return _ragBacktestEngines;
+  try {
+    const FeatureEngineer             = require("../../domain/FeatureEngineer");
+    const VectorStore                 = require("../../infrastructure/db/VectorStore");
+    const { _pool }                   = require("../../infrastructure/db/database");
+    const ConservativeBacktestEngine  = require("../../domain/ConservativeBacktestEngine");
+    const WalkForwardBacktest         = require("../../domain/WalkForwardBacktest");
+    const BiasQuantificationReport    = require("../../domain/BiasQuantificationReport");
+    const AblationTest                = require("../../domain/AblationTest");
+    const SimilarTradeAdvisor         = require("../../domain/SimilarTradeAdvisor");
+
+    const vs = new VectorStore(_pool);
+    const fe = new FeatureEngineer();
+    const sta = new SimilarTradeAdvisor(vs, fe);
+    const cbe = new ConservativeBacktestEngine(vs, fe, null);
+    const wfb = new WalkForwardBacktest(cbe);
+    const bqr = new BiasQuantificationReport();
+    const abl = new AblationTest(null, sta, fe);
+
+    _ragBacktestEngines = { cbe, wfb, bqr, abl, vs, fe };
+  } catch (err) {
+    console.warn("[Analytics] RAG backtest engines unavailable:", err.message);
+  }
+  return _ragBacktestEngines;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // In-memory cache
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,6 +334,195 @@ module.exports = function createAnalyticsRouter() {
       return res.json({ ok: true, ...card });
     } catch (err) {
       console.error("[Analytics] similar-trades error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── GET /rag-backtest/status (Sprint 6 / RAG-BT-5) ───────────────────────
+  /**
+   * Returns component health status for the RAG backtest dashboard.
+   * Checks: pgvector, WinPredictor model, MLShadow active, SimilarTrades count.
+   */
+  router.get("/rag-backtest/status", async (req, res) => {
+    const t0 = Date.now();
+    try {
+      const engines = getRAGBacktestEngines();
+
+      let pgvectorOk       = false;
+      let similarTradeCount = 0;
+      let shadowLogCount    = 0;
+      let winPredictorLoaded = false;
+
+      // pgvector health check
+      try {
+        if (engines?.vs) {
+          await engines.vs.findSimilar(new Array(60).fill(0), 1, {});
+          pgvectorOk = true;
+        }
+      } catch {
+        pgvectorOk = false;
+      }
+
+      // Similar trade count
+      try {
+        similarTradeCount = await prisma.tradeEmbedding.count().catch(() => 0);
+      } catch { /* ignore */ }
+
+      // Shadow log count
+      try {
+        shadowLogCount = await prisma.mLShadowLog.count().catch(() => 0);
+      } catch { /* ignore */ }
+
+      // WinPredictor status
+      winPredictorLoaded = !!(engines?.cbe?.winPredictor?.model);
+
+      const ragMode = process.env.RAG_MODE || "shadow";
+
+      return res.json({
+        ok: true,
+        elapsed: Date.now() - t0,
+        components: {
+          pgvector:           { ok: pgvectorOk,        label: pgvectorOk ? "Connected" : "Unavailable" },
+          winPredictor:       { ok: winPredictorLoaded, label: winPredictorLoaded ? "Model loaded" : "Not loaded" },
+          mlShadow:           { ok: shadowLogCount > 0, count: shadowLogCount, label: `${shadowLogCount} logs` },
+          similarTrades:      { ok: similarTradeCount > 0, count: similarTradeCount, label: `${similarTradeCount} embeddings` },
+        },
+        ragMode,
+        enginesAvailable: !!engines,
+      });
+    } catch (err) {
+      console.error("[Analytics] rag-backtest/status error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── GET /rag-backtest/results (Sprint 6 / RAG-BT-5) ─────────────────────
+  /**
+   * Returns backtest + walk-forward + ablation + bias report results.
+   * Runs on staging trade data from Prisma (Trade model).
+   * Query: ?symbol=&period=30d&limit=500
+   */
+  router.get("/rag-backtest/results", async (req, res) => {
+    const t0 = Date.now();
+    try {
+      const { symbol, period = "30d", limit = "500" } = req.query;
+      const cacheKey = `rag-backtest-results:${symbol ?? ""}:${period}:${limit}`;
+
+      const cached = cacheGet(cacheKey);
+      if (cached) return res.json({ ok: true, fromCache: true, elapsed: 0, ...cached });
+
+      if (process.env.NODE_ENV === "production") {
+        return res.status(403).json({
+          ok: false,
+          error: "[STAGING_ONLY] RAG backtest results are only available in staging/test environments",
+        });
+      }
+
+      const engines = getRAGBacktestEngines();
+      if (!engines) {
+        return res.status(503).json({ ok: false, error: "RAG backtest engines not available" });
+      }
+
+      // Fetch historical trades
+      const dateFilter = buildDateFilter(period);
+      const where = { ...dateFilter };
+      if (symbol) where.symbol = symbol;
+
+      const rawTrades = await prisma.trade.findMany({
+        where,
+        orderBy: { createdAt: "asc" },
+        take:    parseInt(limit, 10) || 500,
+        select: {
+          id: true, symbol: true, strategyKey: true, regime: true,
+          createdAt: true, outcome: true, pnlPct: true, entryContext: true,
+        },
+      }).catch(() => []);
+
+      // Normalize trades
+      const trades = rawTrades.map((t) => ({
+        ...t,
+        entryAt:      t.createdAt,
+        result:       t.outcome,
+        pnl:          t.pnlPct,
+        entryContext: t.entryContext || {},
+      }));
+
+      // Run conservative backtest
+      let backtestResult = null;
+      try {
+        backtestResult = await engines.cbe.runBacktest(trades, {});
+      } catch (err) {
+        console.warn("[Analytics] Conservative backtest failed:", err.message);
+        backtestResult = { results: [], metrics: null, ragUsed: false };
+      }
+
+      // Run walk-forward backtest
+      let walkForwardResult = null;
+      try {
+        walkForwardResult = await engines.wfb.run(trades, {});
+      } catch (err) {
+        console.warn("[Analytics] Walk-forward backtest failed:", err.message);
+        walkForwardResult = { windows: [], aggregate: null, consistencyScore: 0 };
+      }
+
+      // Run ablation test
+      let ablationResult = null;
+      try {
+        ablationResult = await engines.abl.run(trades);
+      } catch (err) {
+        console.warn("[Analytics] Ablation test failed:", err.message);
+        ablationResult = null;
+      }
+
+      // Live metrics from shadow log
+      let liveMetrics = null;
+      try {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+        const shadowLogs = await prisma.mLShadowLog.findMany({
+          where:   { createdAt: { gte: thirtyDaysAgo }, actualOutcome: { not: null } },
+          orderBy: { createdAt: "asc" },
+          take:    1000,
+        });
+        if (shadowLogs.length > 0) {
+          const wins = shadowLogs.filter((l) => l.actualOutcome === "win").length;
+          const losses = shadowLogs.length - wins;
+          const wr = wins / shadowLogs.length;
+          liveMetrics = {
+            tradeCount:   shadowLogs.length,
+            winRate:      +wr.toFixed(4),
+            profitFactor: null, // requires PnL data
+            sharpe:       null,
+            avgPnl:       null,
+          };
+        }
+      } catch { /* ignore */ }
+
+      // Bias report
+      let biasReport = null;
+      if (backtestResult?.metrics && liveMetrics) {
+        try {
+          biasReport = engines.bqr.generate(backtestResult.metrics, liveMetrics);
+        } catch (err) {
+          console.warn("[Analytics] Bias report failed:", err.message);
+        }
+      }
+
+      const payload = {
+        tradeCount:    trades.length,
+        period,
+        symbol:        symbol ?? null,
+        backtest:      backtestResult,
+        walkForward:   walkForwardResult,
+        ablation:      ablationResult,
+        liveMetrics,
+        biasReport,
+        generatedAt:   new Date().toISOString(),
+      };
+
+      cacheSet(cacheKey, payload);
+      return res.json({ ok: true, fromCache: false, elapsed: Date.now() - t0, ...payload });
+    } catch (err) {
+      console.error("[Analytics] rag-backtest/results error:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
     }
   });

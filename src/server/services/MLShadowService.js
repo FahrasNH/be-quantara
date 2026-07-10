@@ -1,16 +1,30 @@
 "use strict";
 
 /**
- * MLShadowService.js — Sprint 5 / RL-4
+ * MLShadowService.js — Sprint 5 / RL-4, enhanced Sprint 6 / RAG-SHADOW-1
  *
  * Shadow mode: logs ML predictions alongside real trades for evaluation.
  * All predictions are fire-and-forget (<10ms). Provides weekly analysis reports
  * and promotion readiness checks.
+ *
+ * Sprint 6 additions:
+ * - computeAUC(predictions) — standalone AUC from logged predictions
+ * - checkReadinessThresholds() — AUC>=0.65, Accuracy>=50%, Precision>=55%
+ * - Auto-log to console every 100 predictions
+ * - Auto-start support via MLShadowService.autoStart()
  */
 
 const prisma = require("../../infrastructure/db/prismaClient");
 
 const DEFAULT_THRESHOLD = 0.6;
+
+// Sprint 6: promoted readiness thresholds
+const THRESHOLDS = {
+  auc:       0.65,
+  accuracy:  0.50,
+  precision: 0.55,
+  tradeCount: 1000,
+};
 
 class MLShadowService {
   /**
@@ -23,6 +37,7 @@ class MLShadowService {
     this.vectorStore    = vectorStore;
     this.featureEngineer = featureEngineer;
     this.threshold       = parseFloat(process.env.ML_WIN_THRESHOLD || DEFAULT_THRESHOLD);
+    this._predictionCount = 0; // in-process counter for auto-log every 100
   }
 
   // ── Prediction logging ────────────────────────────────────────────────────
@@ -52,6 +67,12 @@ class MLShadowService {
           features:    Array.from(features),
         },
       });
+
+      // Auto-log every 100 predictions (Sprint 6)
+      this._predictionCount++;
+      if (this._predictionCount % 100 === 0) {
+        this._logAutoStatus().catch(() => {});
+      }
 
       // Also store in VectorStore for similarity search (best-effort)
       if (tradeId && this.vectorStore) {
@@ -142,23 +163,10 @@ class MLShadowService {
       else fn++;
     }
 
-    // AUC (simple rank-based)
-    const pos = labels.filter(Boolean).length;
-    const neg = labels.length - pos;
-    let auc = 0.5;
-    if (pos > 0 && neg > 0) {
-      const pairs = labels.map((y, i) => ({ y, s: scores[i] })).sort((a, b) => b.s - a.s);
-      let cumPos = 0, cumNeg = 0, prevFpr = 0, prevTpr = 0;
-      for (const { y } of pairs) {
-        if (y) cumPos++; else cumNeg++;
-        const tpr = cumPos / pos, fpr = cumNeg / neg;
-        auc += Math.abs(fpr - prevFpr) * (tpr + prevTpr) / 2;
-        prevFpr = fpr; prevTpr = tpr;
-      }
-    }
+    const auc = this.computeAUC(logs);
 
     const accuracy = (tp + tn) / logs.length;
-    const mlWR     = pos / logs.length;
+    const mlWR     = labels.filter(Boolean).length / logs.length;
     const allWR    = labels.filter(Boolean).length / labels.length;
 
     return {
@@ -169,6 +177,113 @@ class MLShadowService {
       wRateDiff:      mlWR - allWR,
       tradeCount:     logs.length,
       period:         { start: start.toISOString(), end: end.toISOString() },
+    };
+  }
+
+  /**
+   * Sprint 6: Compute AUC (Area Under ROC Curve) from an array of shadow log entries.
+   * Uses rank-based trapezoidal AUC computation (no external library needed).
+   *
+   * @param {Array<{pWin: number, actualOutcome: string}>} predictions
+   * @returns {number} AUC value in [0, 1]
+   */
+  computeAUC(predictions) {
+    if (!Array.isArray(predictions) || predictions.length === 0) return 0.5;
+
+    const pairs = predictions
+      .filter((p) => p.actualOutcome === "win" || p.actualOutcome === "loss")
+      .map((p) => ({
+        y: p.actualOutcome === "win" ? 1 : 0,
+        s: typeof p.pWin === "number" ? p.pWin : 0.5,
+      }));
+
+    if (pairs.length === 0) return 0.5;
+
+    const pos = pairs.filter((p) => p.y === 1).length;
+    const neg = pairs.length - pos;
+
+    if (pos === 0 || neg === 0) return 0.5;
+
+    // Sort by score descending
+    pairs.sort((a, b) => b.s - a.s);
+
+    let cumPos = 0, cumNeg = 0, prevFpr = 0, prevTpr = 0, auc = 0;
+    for (const { y } of pairs) {
+      if (y) cumPos++; else cumNeg++;
+      const tpr = cumPos / pos;
+      const fpr = cumNeg / neg;
+      auc += Math.abs(fpr - prevFpr) * (tpr + prevTpr) / 2;
+      prevFpr = fpr;
+      prevTpr = tpr;
+    }
+
+    return Math.min(1, Math.max(0, auc));
+  }
+
+  /**
+   * Sprint 6: Check all Sprint 6 readiness thresholds.
+   * AUC >= 0.65, Accuracy >= 50%, Precision >= 55%.
+   *
+   * @returns {Promise<{ auc, accuracy, precision, tradeCount, ready, failures }>}
+   */
+  async checkReadinessThresholds() {
+    const thirtyDaysAgo = new Date(Date.now() - 90 * 86400000); // 90-day window for sprint 6
+
+    const logs = await prisma.mLShadowLog.findMany({
+      where: {
+        createdAt:     { gte: thirtyDaysAgo },
+        actualOutcome: { not: null },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    const tradeCount = logs.length;
+
+    if (tradeCount === 0) {
+      return {
+        auc: 0, accuracy: 0, precision: 0,
+        tradeCount: 0, ready: false,
+        failures: ["No trades logged yet"],
+      };
+    }
+
+    // AUC
+    const auc = this.computeAUC(logs);
+
+    // Accuracy = (TP + TN) / total
+    let tp = 0, fp = 0, tn = 0, fn = 0;
+    for (const log of logs) {
+      const pred   = log.prediction === "win" ? 1 : 0;
+      const actual = log.actualOutcome === "win" ? 1 : 0;
+      if (pred === 1 && actual === 1) tp++;
+      else if (pred === 1 && actual === 0) fp++;
+      else if (pred === 0 && actual === 0) tn++;
+      else fn++;
+    }
+
+    const accuracy  = (tp + tn) / tradeCount;
+    const precision = (tp + fp) > 0 ? tp / (tp + fp) : 0;
+
+    const failures = [];
+    if (auc < THRESHOLDS.auc)
+      failures.push(`AUC ${auc.toFixed(3)} < ${THRESHOLDS.auc} required`);
+    if (accuracy < THRESHOLDS.accuracy)
+      failures.push(`Accuracy ${(accuracy * 100).toFixed(1)}% < ${THRESHOLDS.accuracy * 100}% required`);
+    if (precision < THRESHOLDS.precision)
+      failures.push(`Precision ${(precision * 100).toFixed(1)}% < ${THRESHOLDS.precision * 100}% required`);
+    if (tradeCount < THRESHOLDS.tradeCount)
+      failures.push(`Trade count ${tradeCount} < ${THRESHOLDS.tradeCount} required`);
+
+    const ready = failures.length === 0;
+
+    return {
+      auc:        +auc.toFixed(4),
+      accuracy:   +accuracy.toFixed(4),
+      precision:  +precision.toFixed(4),
+      tradeCount,
+      ready,
+      failures,
+      thresholds: THRESHOLDS,
     };
   }
 
@@ -212,18 +327,64 @@ class MLShadowService {
       return { rl3WinRate: 0, ms1WinRate: 0, rl3Sharpe: 0, ms1Sharpe: 0, recommendation: "insufficient_data" };
     }
 
-    // ML win rate among trades where ML predicted 'win'
     const mlPredWins = logs.filter((l) => l.prediction === "win");
     const rl3WinRate = mlPredWins.length > 0
       ? mlPredWins.filter((l) => l.actualOutcome === "win").length / mlPredWins.length
       : 0;
 
-    // Overall baseline WR
     const ms1WinRate = logs.filter((l) => l.actualOutcome === "win").length / logs.length;
 
     const recommendation = rl3WinRate > ms1WinRate + 0.05 ? "promote_rl3" : "keep_ms1";
 
     return { rl3WinRate, ms1WinRate, rl3Sharpe: 0, ms1Sharpe: 0, recommendation };
+  }
+
+  // ── Sprint 6: Auto-log helper ─────────────────────────────────────────────
+
+  async _logAutoStatus() {
+    try {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+      const logs = await prisma.mLShadowLog.findMany({
+        where:   { createdAt: { gte: thirtyDaysAgo }, actualOutcome: { not: null } },
+        orderBy: { createdAt: "asc" },
+        take:    500,
+      });
+      const n   = await prisma.mLShadowLog.count();
+      const auc = logs.length > 0 ? this.computeAUC(logs) : 0.5;
+      console.log(`[MLShadow] ${n} predictions logged, AUC=${auc.toFixed(2)} (last 30d sample: ${logs.length})`);
+    } catch {
+      // non-critical — suppress errors
+    }
+  }
+
+  // ── Sprint 6: Static auto-start factory ──────────────────────────────────
+
+  /**
+   * Create and start a singleton MLShadowService using lazy-loaded dependencies.
+   * Safe to call at server boot — dependencies are loaded lazily.
+   *
+   * @returns {MLShadowService|null}
+   */
+  static autoStart() {
+    try {
+      const WinPredictor    = require("../../domain/WinPredictor");
+      const FeatureEngineer = require("../../domain/FeatureEngineer");
+      const VectorStore     = require("../../infrastructure/db/VectorStore");
+      const { _pool }       = require("../../infrastructure/db/database");
+
+      const wp = new WinPredictor();
+      wp.load().catch(() => {}); // async, fire-and-forget
+
+      const vs      = new VectorStore(_pool);
+      const fe      = new FeatureEngineer();
+      const service = new MLShadowService(wp, vs, fe);
+
+      console.log("[MLShadowService] Auto-started in shadow mode");
+      return service;
+    } catch (err) {
+      console.warn(`[MLShadowService] autoStart failed (non-fatal): ${err.message}`);
+      return null;
+    }
   }
 }
 
