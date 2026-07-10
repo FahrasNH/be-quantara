@@ -1,17 +1,18 @@
 /**
  * AdaptiveFusionUmbrella.js — FOUNDRY Tier umbrella strategy
  *
- * Umbrella key : AF_SMC
- * Components   : AF_SMC (A) · AF_WYCKOFF (B) · AF_VSA (C)
+ * Umbrella key : AF_SMC (tier access bag — not a fusion mechanism)
+ * Components   : AF_SMC (Smart Money Concepts) · AF_WYCKOFF · AF_VSA
  *
- * Voting (AF-SUB-03):
- *   - Default 2/3 majority
- *   - Altcoin (VOLATILE / SEMI_VOLATILE) → 3/3 unanimity
- *   - Vote breakdown stored on lastSignalMeta for entryContext
+ * ARCHITECTURE DECISION (Fahras, 10 Jul 2026) — AF-SUB-03 rescope:
+ *   Race-to-Confirm replaces Sprint 8 2/3 voting. Each unlocked component is an
+ *   independent signal generator. Same-bar winner = highest confidence; ties
+ *   break AF_SMC → AF_WYCKOFF → AF_VSA. Trade attribution = winning component
+ *   only (never joined "SMC + Wyckoff + VSA").
  *
- * Multi-position (Scalping/Intraday/Swing) still comes from SMC; when
- * afUseThreeComponentVoting is enabled (default true), type entries are
- * gated so their direction must match the umbrella majority vote.
+ * Rollback:
+ *   afCombinationMode: "vote"  → Sprint 8 2/3 (altcoin 3/3) voting
+ *   afUseThreeComponentVoting: false → SMC-only passthrough
  */
 
 const UmbrellaStrategy           = require("../base/UmbrellaStrategy");
@@ -19,6 +20,13 @@ const SmartMoneyConceptsStrategy = require("../implementations/SmartMoneyConcept
 const WyckoffStrategy            = require("../implementations/WyckoffStrategy");
 const VsaStrategy                = require("../implementations/VsaStrategy");
 const { aggregateAfVotes }       = require("../af/afVoting");
+
+const RACER_PRIORITY = ["AF_SMC", "AF_WYCKOFF", "AF_VSA"];
+const RACER_LABELS = {
+  AF_SMC:     "Smart Money Concepts",
+  AF_WYCKOFF: "Wyckoff Method",
+  AF_VSA:     "Volume Spread Analysis",
+};
 
 function smcVoteFromMulti(multi) {
   if (!multi) return { vote: "NEUTRAL", confidence: 0, reason: "smc_no_multi" };
@@ -44,10 +52,10 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       name:        "AF_SMC",
       label:       "Adaptive Fusion",
       description:
-        "3-component Adaptive Fusion: SMC + Wyckoff + VSA (2/3 majority; 3/3 altcoin)",
-      version:     "3.0.0",
+        "FOUNDRY umbrella (tier access): Smart Money Concepts, Wyckoff, and VSA race independently — highest confirmation wins.",
+      version:     "4.0.0",
       enabled:     true,
-      // 3 components × 0.67 → ceil = 2 (2/3). Altcoin override uses absolute votes.
+      // Kept for vote-mode rollback (2/3 → ceil). Race mode ignores this.
       votingThreshold: 0.67,
     });
 
@@ -60,17 +68,83 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     this.addComponent("AF_VSA",     this._vsa);
 
     this._lastVoteMeta = null;
+    this._lastRaceMeta = null;
   }
 
   /**
-   * Collect per-component votes (NEUTRAL included) for breakdown logging.
+   * Resolve combination mode.
+   * Default: race (Sprint 12 architecture). Vote kept as explicit rollback.
+   */
+  _resolveMode(config = {}) {
+    if (config.afUseThreeComponentVoting === false) return "smc_only";
+    const raw = String(config.afCombinationMode || "race").toLowerCase();
+    if (raw === "vote" || raw === "voting" || raw === "majority") return "vote";
+    if (raw === "smc" || raw === "smc_only") return "smc_only";
+    return "race";
+  }
+
+  /**
+   * Which AF racers/voters participate. Advance selectedComponents restrict the set;
+   * empty/missing → all three (FOUNDRY default).
+   */
+  _resolveActiveRacers(config = {}) {
+    const raw = config.afActiveRacers || config.afActiveVoters
+      || config.selectedComponents || config.activeStrategyComponents || null;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return new Set(RACER_PRIORITY);
+    }
+    const active = new Set();
+    for (const c of raw) {
+      const k = String(c || "").toUpperCase();
+      if (k === "AF_SMC" || k === "SMART_MONEY_CONCEPTS" || k === "ADAPTIVE_FUSION" || k === "SMC") {
+        active.add("AF_SMC");
+      } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
+        active.add("AF_WYCKOFF");
+      } else if (k === "AF_VSA" || k === "VSA") {
+        active.add("AF_VSA");
+      }
+    }
+    if (active.size === 0) return new Set(RACER_PRIORITY);
+    return active;
+  }
+
+  /** @deprecated alias — vote-mode callers */
+  _resolveActiveVoters(config = {}) {
+    const active = this._resolveActiveRacers(config);
+    // Vote-mode collectComponentVotes also checks short aliases SMC/WYCKOFF/VSA
+    const withAliases = new Set(active);
+    if (active.has("AF_SMC")) { withAliases.add("SMC"); }
+    if (active.has("AF_WYCKOFF")) { withAliases.add("WYCKOFF"); }
+    if (active.has("AF_VSA")) { withAliases.add("VSA"); }
+    return withAliases;
+  }
+
+  _pickRaceWinner(candidates) {
+    if (!candidates.length) return null;
+    let best = candidates[0];
+    for (let i = 1; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (c.confidence > best.confidence + 1e-9) {
+        best = c;
+        continue;
+      }
+      if (Math.abs(c.confidence - best.confidence) <= 1e-9) {
+        const cPri = RACER_PRIORITY.indexOf(c.key);
+        const bPri = RACER_PRIORITY.indexOf(best.key);
+        if (cPri >= 0 && (bPri < 0 || cPri < bPri)) best = c;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Collect per-component votes (NEUTRAL included) for vote-mode breakdown.
    * @param {object} [precomputedMulti] - optional SMC detectSignalMulti result
    */
   collectComponentVotes(indicators, lastIdx, config = {}, precomputedMulti = null) {
     const votes = [];
     const active = this._resolveActiveVoters(config);
 
-    // Component A — SMC
     if (active.has("AF_SMC") || active.has("SMC")) {
       let smc;
       if (precomputedMulti) {
@@ -97,7 +171,6 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       votes.push({ key: "SMC", ...smc });
     }
 
-    // Component B — Wyckoff
     if (active.has("AF_WYCKOFF") || active.has("WYCKOFF")) {
       let wyResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
       try {
@@ -113,7 +186,6 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       });
     }
 
-    // Component C — VSA
     if (active.has("AF_VSA") || active.has("VSA")) {
       let vsaResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
       try {
@@ -132,40 +204,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     return votes;
   }
 
-  /**
-   * Which AF voters participate. Advance selectedComponents (AF_WYCKOFF / AF_VSA / AF_SMC)
-   * restrict the set; empty/missing → all three (default Sprint 8 behaviour).
-   */
-  _resolveActiveVoters(config = {}) {
-    const raw = config.afActiveVoters || config.selectedComponents || null;
-    if (!Array.isArray(raw) || raw.length === 0) {
-      return new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA", "SMC", "WYCKOFF", "VSA"]);
-    }
-    const active = new Set();
-    for (const c of raw) {
-      const k = String(c || "").toUpperCase();
-      if (k === "AF_SMC" || k === "SMART_MONEY_CONCEPTS" || k === "ADAPTIVE_FUSION" || k === "SMC") {
-        active.add("AF_SMC");
-        active.add("SMC");
-      } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
-        active.add("AF_WYCKOFF");
-        active.add("WYCKOFF");
-      } else if (k === "AF_VSA" || k === "VSA") {
-        active.add("AF_VSA");
-        active.add("VSA");
-      }
-    }
-    // If selection had no AF keys (e.g. only TS comps leaked in), fall back to all.
-    if (![...active].some((k) => k.startsWith("AF_") || ["SMC", "WYCKOFF", "VSA"].includes(k))) {
-      return new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA", "SMC", "WYCKOFF", "VSA"]);
-    }
-    return active;
-  }
-
   _aggregate(componentVotes, config = {}) {
-    // Scale majority threshold to the number of active voters.
-    // BUG FIX: afMinVotes:2 with a single selected voter (Wyckoff-only / VSA-only)
-    // made majority mathematically impossible → 0 trades. Cap at voter count.
     const n = componentVotes.length || 1;
     const rawMin = config.afMinVotes != null
       ? config.afMinVotes
@@ -186,42 +225,207 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   }
 
   /**
-   * 3-component voting with altcoin threshold + vote breakdown.
+   * Race-to-confirm: evaluate active racers in parallel; winner takes the trade.
    */
-  detectSignal(indicators, lastIdx, config = {}) {
-    const useVoting = config.afUseThreeComponentVoting !== false;
-    if (!useVoting) {
-      return this._smc.detectSignal(indicators, lastIdx, config);
+  _detectRace(indicators, lastIdx, config = {}, precomputedMulti = null) {
+    const active = this._resolveActiveRacers(config);
+    const candidates = [];
+    const evaluations = {};
+
+    let smcMulti = precomputedMulti;
+    if (active.has("AF_SMC")) {
+      let signal = null;
+      let confidence = 0;
+      let reason = "smc_no_signal";
+      try {
+        if (!smcMulti && typeof this._smc.detectSignalMulti === "function") {
+          smcMulti = this._smc.detectSignalMulti(indicators, lastIdx, config);
+        }
+        if (smcMulti) {
+          const smc = smcVoteFromMulti(smcMulti);
+          signal = smc.vote === "LONG" || smc.vote === "SHORT" ? smc.vote : null;
+          confidence = smc.confidence || 0;
+          reason = smc.reason || (signal ? "smc_signal" : "smc_no_signal");
+        } else {
+          signal = this._smc.detectSignal(indicators, lastIdx, config);
+          const meta = typeof this._smc.getLastSignalMeta === "function"
+            ? this._smc.getLastSignalMeta()
+            : null;
+          confidence = meta?.aggregateConfidence != null
+            ? meta.aggregateConfidence / 100
+            : (signal ? 0.7 : 0);
+          reason = signal ? "smc_signal" : "smc_no_signal";
+        }
+      } catch (err) {
+        reason = `smc_error:${err.message}`;
+      }
+      evaluations.AF_SMC = { signal, confidence, reason };
+      if (signal === "LONG" || signal === "SHORT") {
+        candidates.push({
+          key: "AF_SMC",
+          label: RACER_LABELS.AF_SMC,
+          signal,
+          confidence,
+          reason,
+        });
+      }
     }
 
-    const componentVotes = this.collectComponentVotes(indicators, lastIdx, config);
-    const aggregated = this._aggregate(componentVotes, config);
-    return aggregated.signal;
+    if (active.has("AF_WYCKOFF")) {
+      let signal = null;
+      let confidence = 0;
+      let reason = "wyckoff_no_signal";
+      try {
+        const result = this._wyckoff.evaluate(indicators, lastIdx, config);
+        signal = result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
+        confidence = result.confidence || 0;
+        reason = result.reason || (signal ? "wyckoff_pattern" : "wyckoff_no_signal");
+      } catch (err) {
+        reason = `wyckoff_error:${err.message}`;
+      }
+      evaluations.AF_WYCKOFF = { signal, confidence, reason };
+      if (signal === "LONG" || signal === "SHORT") {
+        candidates.push({
+          key: "AF_WYCKOFF",
+          label: RACER_LABELS.AF_WYCKOFF,
+          signal,
+          confidence,
+          reason,
+        });
+      }
+    }
+
+    if (active.has("AF_VSA")) {
+      let signal = null;
+      let confidence = 0;
+      let reason = "vsa_no_signal";
+      try {
+        const result = this._vsa.evaluate(indicators, lastIdx, config);
+        signal = result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
+        confidence = result.confidence || 0;
+        reason = result.reason || (signal ? "vsa_pattern" : "vsa_no_signal");
+      } catch (err) {
+        reason = `vsa_error:${err.message}`;
+      }
+      evaluations.AF_VSA = { signal, confidence, reason };
+      if (signal === "LONG" || signal === "SHORT") {
+        candidates.push({
+          key: "AF_VSA",
+          label: RACER_LABELS.AF_VSA,
+          signal,
+          confidence,
+          reason,
+        });
+      }
+    }
+
+    const winner = this._pickRaceWinner(candidates);
+    if (!winner) {
+      this._lastRaceMeta = {
+        mode: "race",
+        winner: null,
+        candidates,
+        evaluations,
+        activeRacers: [...active],
+        reason: "no_racer_confirmed",
+        smcMulti: smcMulti || null,
+      };
+      return null;
+    }
+
+    this._lastRaceMeta = {
+      mode: "race",
+      winner,
+      candidates,
+      evaluations,
+      activeRacers: [...active],
+      reason: `race_won_by_${winner.key}`,
+      winningComponent: winner.key,
+      strategyLabel: winner.label,
+      signalComponents: {
+        AF_SMC: evaluations.AF_SMC?.signal || (active.has("AF_SMC") ? "NEUTRAL" : "DISABLED"),
+        AF_WYCKOFF: evaluations.AF_WYCKOFF?.signal || (active.has("AF_WYCKOFF") ? "NEUTRAL" : "DISABLED"),
+        AF_VSA: evaluations.AF_VSA?.signal || (active.has("AF_VSA") ? "NEUTRAL" : "DISABLED"),
+      },
+      smcMulti: smcMulti || null,
+    };
+    return winner.signal;
   }
 
   /**
-   * Multi-position: SMC type legs gated by umbrella majority direction.
-   * When voting disabled, passthrough to SMC unchanged.
+   * Sprint 8 voting (rollback via afCombinationMode:"vote").
+   */
+  _detectVote(indicators, lastIdx, config = {}) {
+    const componentVotes = this.collectComponentVotes(indicators, lastIdx, config);
+    const aggregated = this._aggregate(componentVotes, config);
+    this._lastRaceMeta = {
+      mode: "vote",
+      ...this._lastVoteMeta,
+      winningComponent: aggregated.signal
+        ? (componentVotes.find((v) => v.vote === aggregated.signal)?.key === "SMC"
+          ? "AF_SMC"
+          : componentVotes.find((v) => v.vote === aggregated.signal)?.key === "WYCKOFF"
+            ? "AF_WYCKOFF"
+            : componentVotes.find((v) => v.vote === aggregated.signal)?.key === "VSA"
+              ? "AF_VSA"
+              : null)
+        : null,
+      strategyLabel: aggregated.signal ? "Adaptive Fusion (vote)" : null,
+    };
+    return aggregated.signal;
+  }
+
+  detectSignal(indicators, lastIdx, config = {}) {
+    const mode = this._resolveMode(config);
+    if (mode === "smc_only") {
+      this._lastRaceMeta = { mode: "smc_only", winningComponent: "AF_SMC", strategyLabel: RACER_LABELS.AF_SMC };
+      return this._smc.detectSignal(indicators, lastIdx, config);
+    }
+    if (mode === "vote") {
+      return this._detectVote(indicators, lastIdx, config);
+    }
+    return this._detectRace(indicators, lastIdx, config);
+  }
+
+  /**
+   * Multi-position: race winner drives type legs.
+   * - AF_SMC wins → SMC type legs filtered to winner direction
+   * - Wyckoff/VSA wins → promote direction to all type legs (standalone racer)
+   * Vote mode keeps Sprint 8 gating behaviour.
    */
   detectSignalMulti(indicators, lastIdx, config = {}) {
+    const mode = this._resolveMode(config);
     const multi = this._smc.detectSignalMulti(indicators, lastIdx, config);
-    const useVoting = config.afUseThreeComponentVoting !== false;
 
-    if (!useVoting) {
+    if (mode === "smc_only") {
+      this._lastRaceMeta = {
+        mode: "smc_only",
+        winningComponent: "AF_SMC",
+        strategyLabel: RACER_LABELS.AF_SMC,
+      };
       return multi;
     }
 
+    if (mode === "vote") {
+      return this._detectSignalMultiVote(multi, indicators, lastIdx, config);
+    }
+
+    return this._detectSignalMultiRace(multi, indicators, lastIdx, config);
+  }
+
+  _detectSignalMultiVote(multi, indicators, lastIdx, config = {}) {
     const componentVotes = this.collectComponentVotes(indicators, lastIdx, config, multi);
     const aggregated = this._aggregate(componentVotes, config);
 
     const attachMeta = (base) => ({
       ...(base || {}),
       afVotes: this._lastVoteMeta,
+      afRace: null,
       signalComponents: aggregated.breakdown,
       gatedByVoting: true,
+      combinationMode: "vote",
     });
 
-    // No majority → suppress all type entries
     if (!aggregated.signal) {
       return {
         Scalping: null,
@@ -238,10 +442,6 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     }
 
     const dir = aggregated.signal;
-    // Wyckoff/VSA-only research mode: when SMC is not an active voter, promote
-    // the majority vote into type legs so the selected component can open trades
-    // without requiring a coincident SMC setup (otherwise sub-strategy backtests
-    // stay near-zero even after afMinVotes is capped to voter count).
     const voters = this._resolveActiveVoters(config);
     const smcActive = voters.has("AF_SMC") || voters.has("SMC");
     if (!smcActive) {
@@ -264,7 +464,73 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     return {
       Scalping: filter(multi?.Scalping),
       Intraday: filter(multi?.Intraday),
-      Swing:    filter(multi?.Swing),
+      Swing: filter(multi?.Swing),
+      A: filter(multi?.A),
+      B: filter(multi?.B),
+      C: filter(multi?.C),
+      meta: attachMeta({
+        ...(multi?.meta || {}),
+        gateDirection: dir,
+      }),
+    };
+  }
+
+  _detectSignalMultiRace(multi, indicators, lastIdx, config = {}) {
+    const signal = this._detectRace(indicators, lastIdx, config, multi);
+    const race = this._lastRaceMeta;
+
+    const attachMeta = (base) => ({
+      ...(base || {}),
+      afVotes: null,
+      afRace: race,
+      signalComponents: race?.signalComponents || null,
+      winningComponent: race?.winningComponent || null,
+      strategyLabel: race?.strategyLabel || null,
+      gatedByVoting: false,
+      combinationMode: "race",
+    });
+
+    if (!signal || !race?.winner) {
+      return {
+        Scalping: null,
+        Intraday: null,
+        Swing: null,
+        A: null,
+        B: null,
+        C: null,
+        meta: attachMeta({
+          ...(multi?.meta || {}),
+          gateReason: race?.reason || "no_racer_confirmed",
+        }),
+      };
+    }
+
+    const dir = signal;
+    const winnerKey = race.winningComponent;
+
+    // Non-SMC racers: promote direction into type legs (independent strategy entry)
+    if (winnerKey === "AF_WYCKOFF" || winnerKey === "AF_VSA") {
+      return {
+        Scalping: dir,
+        Intraday: dir,
+        Swing:    dir,
+        A: dir,
+        B: dir,
+        C: dir,
+        meta: attachMeta({
+          ...(multi?.meta || {}),
+          gateDirection: dir,
+          standaloneRacerEntry: true,
+        }),
+      };
+    }
+
+    // SMC wins: keep SMC multi-position type legs matching winner direction
+    const filter = (sig) => (sig === dir ? sig : null);
+    return {
+      Scalping: filter(multi?.Scalping),
+      Intraday: filter(multi?.Intraday),
+      Swing: filter(multi?.Swing),
       A: filter(multi?.A),
       B: filter(multi?.B),
       C: filter(multi?.C),
@@ -276,18 +542,41 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   }
 
   getLastSignalMeta() {
-    const smcMeta = typeof this._smc.getLastSignalMeta === "function"
-      ? this._smc.getLastSignalMeta()
-      : null;
+    const winnerKey = this._lastRaceMeta?.winningComponent;
+    let baseMeta = null;
+    if (winnerKey === "AF_WYCKOFF" && typeof this._wyckoff.getLastSignalMeta === "function") {
+      baseMeta = this._wyckoff.getLastSignalMeta();
+    } else if (winnerKey === "AF_VSA" && typeof this._vsa.getLastSignalMeta === "function") {
+      baseMeta = this._vsa.getLastSignalMeta();
+    } else if (typeof this._smc.getLastSignalMeta === "function") {
+      baseMeta = this._smc.getLastSignalMeta();
+    }
+
+    const label = this._lastRaceMeta?.strategyLabel
+      || (winnerKey ? RACER_LABELS[winnerKey] : null);
+
     return {
-      ...(smcMeta || {}),
+      ...(baseMeta || {}),
+      component: winnerKey || baseMeta?.component || "AF_SMC",
+      winningComponent: winnerKey || null,
+      strategyLabel: label,
+      afRace: this._lastRaceMeta,
       afVotes: this._lastVoteMeta,
-      signalComponents: this._lastVoteMeta?.breakdown || null,
+      signalComponents: this._lastRaceMeta?.signalComponents
+        || this._lastVoteMeta?.breakdown
+        || null,
+      componentConfidence: this._lastRaceMeta?.winner?.confidence != null
+        ? Math.round(this._lastRaceMeta.winner.confidence * 100)
+        : baseMeta?.componentConfidence ?? baseMeta?.aggregateConfidence,
     };
   }
 
   getLastVoteMeta() {
     return this._lastVoteMeta;
+  }
+
+  getLastRaceMeta() {
+    return this._lastRaceMeta;
   }
 
   resetAblation() {
@@ -298,6 +587,13 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   }
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {
+    const winner = this._lastRaceMeta?.winningComponent || component;
+    if (winner === "AF_WYCKOFF" && typeof this._wyckoff.calculateRiskConfig === "function") {
+      return this._wyckoff.calculateRiskConfig(entryPrice, atr, signal, component, opts);
+    }
+    if (winner === "AF_VSA" && typeof this._vsa.calculateRiskConfig === "function") {
+      return this._vsa.calculateRiskConfig(entryPrice, atr, signal, component, opts);
+    }
     if (typeof this._smc.calculateRiskConfig === "function") {
       return this._smc.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }

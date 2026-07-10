@@ -1,7 +1,8 @@
 /**
- * WyckoffStrategy.js — AF Component B (Spring / Upthrust)
+ * WyckoffStrategy.js — AF racer B (Spring / Upthrust)
  *
- * Wraps evaluateWyckoffComponent for AdaptiveFusionUmbrella voting.
+ * Independent race participant under AdaptiveFusionUmbrella (Sprint 12).
+ * Also usable as vote Component B when afCombinationMode:"vote".
  */
 
 "use strict";

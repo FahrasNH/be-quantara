@@ -38,33 +38,46 @@ default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throt
 
 **Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
 
-### 4.1 Component model (Sprint 8)
+### 4.1 Component model (Sprint 12 — Race-to-Confirm; AF-SUB-03 rescope)
 
 | Slot | Key | Role | Implementation |
 |------|-----|------|----------------|
-| A | `AF_SMC` | Smart Money Concepts (structure) | `SmartMoneyConceptsStrategy` |
-| B | `AF_WYCKOFF` | Wyckoff spring/upthrust (phase + volume) | `WyckoffStrategy` → `af/wyckoffComponent.js` |
-| C | `AF_VSA` | Volume Spread Analysis (conviction) | `VsaStrategy` → `af/vsaComponent.js` |
+| A | `AF_SMC` | Smart Money Concepts (independent racer) | `SmartMoneyConceptsStrategy` |
+| B | `AF_WYCKOFF` | Wyckoff spring/upthrust (independent racer) | `WyckoffStrategy` → `af/wyckoffComponent.js` |
+| C | `AF_VSA` | Volume Spread Analysis (independent racer) | `VsaStrategy` → `af/vsaComponent.js` |
 
-Voting (`af/afVoting.js`):
+**ARCHITECTURE DECISION (Fahras, 10 Jul 2026):** Race-to-Confirm replaces Sprint 8 2/3 voting.
 
-- Default threshold: **2/3** majority (`afMinVotes: 2`), **capped to active voter count**
-  (Wyckoff-only / VSA-only cannot require 2 votes from 1 voter)
-- When SMC is not an active voter, majority vote is promoted to type legs (standalone
-  sub-strategy research mode)
-- Altcoin (`pairTier` VOLATILE / SEMI_VOLATILE, or known thin alts): **3/3** (still capped to N)
-- Rollback: set `afUseThreeComponentVoting: false` → SMC-only (pre-Sprint-8 behaviour)
-- `entryContext.signalComponents` / `entryContext.afVotes` store per-component vote breakdown
+- Umbrella `AF_SMC` is a **tier access bag** (FOUNDRY unlocks the pool), not a fusion mechanism.
+- Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
+- Same-bar winner = highest confidence; ties break `AF_SMC` → `AF_WYCKOFF` → `AF_VSA`.
+- Trade attribution label = **winning component only** (never joined "SMC + Wyckoff + VSA").
+- Max 1 position/symbol still enforced by BotEngine / backtest engines.
+- Rollback: `afCombinationMode: "vote"` restores Sprint 8 2/3 (altcoin 3/3) voting;
+  `afUseThreeComponentVoting: false` → SMC-only passthrough.
 
-Trade types for AF: **Scalping / Swing** only (Intraday removed AF-SCALP-19). Umbrella voting gates direction when SMC is active.
+Trade types for AF: **Scalping / Swing** only (Intraday removed AF-SCALP-19). When a
+non-SMC racer wins, direction is promoted to type legs (standalone racer entry).
 
-### 4.2 Go / No-Go before live promote
+### 4.2 Key audit (AF-CONFIG-AUDIT)
 
-Per AF-SUB-03 research gate (do **not** skip):
+Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`, `MD_MR`, `BS_BR`.
 
-- Pairwise vote correlation &lt; 0.5 (`checkVoteCorrelation`)
-- Backtest 12m on BTC/BNB/BGB/TRX: WR ≥35%, PF ≥1.2, Sharpe ≥0.05, ≥30 trades/coin
-- Research Confidence ≥ Medium and verdict ≠ "Needs Significant Improvements"
+Legacy aliases (migrate, do not delete abruptly): `ADAPTIVE_FUSION` / `SMART_MONEY_CONCEPTS` → `AF_SMC`,
+`TREND_FOLLOWING` → `TS_TF`, `MEAN_REVERSION` → `MD_MR`, `BREAKOUT_RETEST` → `BS_BR`.
+
+`A` / `B` / `C` in `legacyStrategies.js` are **PDF trade-type presets** (Scalping/Day/Swing),
+not Adaptive Fusion components — do not confuse with AF racers.
+
+**`GROK_AI_TRADING`:** experimental VAULT bonus that *does* generate LLM entry signals.
+Not a tier umbrella / race-pool member. Prefer `GrokConfirm` overlay on canonical strategies
+for production. Gated by entitlement (VAULT / open mode).
+
+### 4.3 Research monitoring (not a live gate)
+
+Pairwise signal correlation &lt; 0.5 among SMC/Wyckoff/VSA remains a **monitoring metric**
+(coverage diversification insight), not a requirement to fuse votes. Per-strategy go/no-go
+(WR ≥35%, PF ≥1.2, Sharpe ≥0.05, ≥30 trades/coin) is evaluated independently per racer.
 
 ---
 

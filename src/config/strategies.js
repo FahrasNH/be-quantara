@@ -1,9 +1,33 @@
 /**
  * Quantara Strategy Configuration
- * Version: 2.0.0
+ * Version: 2.1.0
  *
  * Umbrella + Component nesting model.
- * Each tier has one umbrella; each umbrella has one or more component strategies.
+ * Each tier unlocks a POOL of independent component strategies (race-to-confirm).
+ * Umbrella names are tier-access bags — not fusion/voting mechanisms.
+ *
+ * ─── Canonical live component keys ───────────────────────────────────────────
+ *   AF_SMC · AF_WYCKOFF · AF_VSA   (FOUNDRY — Adaptive Fusion pool)
+ *   TS_TF  · TS_MS     · TS_VP    (FORGE  — Trend Surge pool)
+ *   MD_MR                          (MINT)
+ *   BS_BR                          (VAULT)
+ *
+ * ─── Legacy aliases (migrate → canonical; do NOT add new top-level presets) ──
+ *   ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS / SAC → AF_SMC
+ *   TREND_FOLLOWING / TF                         → TS_TF
+ *   MEAN_REVERSION / MR                          → MD_MR
+ *   BREAKOUT_RETEST / BR                         → BS_BR
+ *   A / B / C                                    → PDF trade-type presets (NOT AF)
+ *     (legacyStrategies.js A/B/C = Aggressive Scalping / Day / Swing — unrelated
+ *      to AF component slots; never treat as Adaptive Fusion keys)
+ *
+ * ─── GROK_AI_TRADING (experimental / VAULT bonus — NOT a tier umbrella) ──────
+ *   Real strategy key that CAN generate entry/exit via Grok (xAI).
+ *   Architecture principle: LLM should be complementary (context/narrative),
+ *   not a primary signal engine. Kept registered for VAULT bonus + admin
+ *   experiments; gated by entitlement (VAULT / open mode). Do NOT add to
+ *   TIER_COMPONENT_MAP race pools. Prefer GrokConfirm overlay over this key
+ *   for production bots.
  */
 
 // ─── Umbrella identifiers ────────────────────────────────────────────────────
@@ -18,10 +42,10 @@ const UMBRELLA_STRATEGIES = {
 // ─── Active component strategy keys ──────────────────────────────────────────
 
 const COMPONENT_STRATEGIES = {
-  // ADAPTIVE_FUSION — FOUNDRY Tier (3-component voting: SMC + Wyckoff + VSA)
-  AF_SMC:     "AF_SMC",     // Smart Money Concepts     ✅ LIVE (Component A)
-  AF_WYCKOFF: "AF_WYCKOFF", // Wyckoff Spring/Upthrust  ✅ LIVE (Component B)
-  AF_VSA:     "AF_VSA",     // Volume Spread Analysis   ✅ LIVE (Component C)
+  // ADAPTIVE_FUSION — FOUNDRY Tier (3 independent racers: SMC + Wyckoff + VSA)
+  AF_SMC:     "AF_SMC",     // Smart Money Concepts     ✅ LIVE (racer)
+  AF_WYCKOFF: "AF_WYCKOFF", // Wyckoff Spring/Upthrust  ✅ LIVE (racer)
+  AF_VSA:     "AF_VSA",     // Volume Spread Analysis   ✅ LIVE (racer)
   AF_LS:      "AF_LS",      // Liquidity Sweep          ⏳ Sprint 9+
   AF_OBR:     "AF_OBR",     // Order Block Retest       ⏳ Sprint 9+
 
@@ -43,23 +67,40 @@ const COMPONENT_STRATEGIES = {
   BS_LB:  "BS_LB",    // Level Breakout         ⏳ Future
 };
 
+/**
+ * Experimental / bonus keys — registered in StrategyRegistry but NOT part of
+ * umbrella race pools or TIER_COMPONENT_MAP.active.
+ */
+const EXPERIMENTAL_STRATEGIES = {
+  GROK_AI_TRADING: "GROK_AI_TRADING", // VAULT bonus; LLM entry engine — use sparingly
+};
+
 // ─── Migration map: old key → new key ────────────────────────────────────────
 // Used by StrategyRegistry and Prisma migration script.
 // Primary keys: AF_SMC, TS_TF, MD_MR, BS_BR
 // Legacy aliases redirect to primary keys.
+// Component keys AF_WYCKOFF / AF_VSA / TS_MS / TS_VP stay as-is (identity).
 
 const STRATEGY_MIGRATION_MAP = {
   AF_SMC:               "AF_SMC",  // primary: Adaptive Fusion - Smart Money Concepts
-  ADAPTIVE_FUSION:      "AF_SMC",  // legacy: old user name
-  SAC:                  "AF_SMC",  // legacy: old abbreviation (SAC = Smart Money Concepts Abbreviation — confusing)
-  SMART_MONEY_CONCEPTS: "AF_SMC",  // legacy: descriptor
+  AF_WYCKOFF:           "AF_WYCKOFF",
+  AF_VSA:               "AF_VSA",
+  ADAPTIVE_FUSION:      "AF_SMC",  // legacy: old umbrella preset name
+  SAC:                  "AF_SMC",  // legacy: old abbreviation
+  SMART_MONEY_CONCEPTS: "AF_SMC",  // legacy: descriptor preset
   TS_TF:                "TS_TF",   // primary: Trend Surge - Trend Following
+  TS_MS:                "TS_MS",
+  TS_VP:                "TS_VP",
   TREND_FOLLOWING:      "TS_TF",   // legacy: descriptor
   TF:                   "TS_TF",   // legacy: abbreviation
+  MD_MR:                "MD_MR",
   MEAN_REVERSION:       "MD_MR",
   MR:                   "MD_MR",
+  BS_BR:                "BS_BR",
   BREAKOUT_RETEST:      "BS_BR",
   BR:                   "BS_BR",
+  // GROK stays identity — experimental, not migrated into a tier umbrella
+  GROK_AI_TRADING:      "GROK_AI_TRADING",
 };
 
 // ─── Abbreviated labels (for UI display) ─────────────────────────────────────
@@ -73,6 +114,7 @@ const STRATEGY_ABBREV = {
   TS_VP:                "TS",
   MD_MR:                "MD",
   BS_BR:                "BS",
+  GROK_AI_TRADING:      "GA",
   // Legacy backward compat
   ADAPTIVE_FUSION:      "AF",
   SMART_MONEY_CONCEPTS: "AF",
@@ -88,13 +130,13 @@ const TIER_COMPONENT_MAP = {
     active: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
     umbrella: "ADAPTIVE_FUSION",
     abbrev: "AF",
-    voting: { defaultMinVotes: 2, altcoinMinVotes: 3 },
+    // Sprint 12: umbrella is a tier access bag; components race independently.
+    combination: { mode: "race", participants: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"] },
   },
   FORGE: {
     active: ["TS_TF", "TS_MS", "TS_VP"],
     umbrella: "TREND_SURGE",
     abbrev: "TS",
-    // Sprint 12: umbrella is a tier access bag; components race independently.
     combination: { mode: "race", participants: ["TS_TF", "TS_MS", "TS_VP"] },
   },
   MINT:    { active: ["MD_MR"],  umbrella: "MEAN_DRIFT",      abbrev: "MD" },
@@ -120,23 +162,36 @@ function getActiveComponentsForTier(tier) {
 
 /**
  * Check if a key is a currently live component (not future).
+ * GROK_AI_TRADING is live-but-experimental (VAULT bonus), not a race-pool member.
  */
 function isActiveComponent(key) {
   const liveKeys = [
     "AF_SMC", "AF_WYCKOFF", "AF_VSA",
     "TS_TF", "TS_MS", "TS_VP",
-    "MD_MR", "BS_BR", "GROK_AI_TRADING",
+    "MD_MR", "BS_BR",
+    "GROK_AI_TRADING", // experimental — see EXPERIMENTAL_STRATEGIES
   ];
   return liveKeys.includes(key);
+}
+
+/**
+ * True if key is a deprecated alias that should migrate to a canonical key.
+ */
+function isLegacyAlias(key) {
+  const k = String(key || "").toUpperCase();
+  if (!STRATEGY_MIGRATION_MAP[k]) return false;
+  return STRATEGY_MIGRATION_MAP[k] !== k;
 }
 
 module.exports = {
   UMBRELLA_STRATEGIES,
   COMPONENT_STRATEGIES,
+  EXPERIMENTAL_STRATEGIES,
   STRATEGY_MIGRATION_MAP,
   STRATEGY_ABBREV,
   TIER_COMPONENT_MAP,
   normalizeStrategyKey,
   getActiveComponentsForTier,
   isActiveComponent,
+  isLegacyAlias,
 };

@@ -1,12 +1,17 @@
 /**
  * StrategyRegistry.js — Factory Pattern for Strategy Management
  *
- * v2.0 — Umbrella architecture.
- * Primary keys  : AF_SMC · TS_TF · MD_MR · BS_BR · GROK_AI_TRADING
- * Legacy aliases : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SMC
- *                  TREND_FOLLOWING                         → TS_TF
- *                  MEAN_REVERSION                          → MD_MR
- *                  BREAKOUT_RETEST                         → BS_BR
+ * v2.1 — Umbrella architecture (race-to-confirm pools).
+ * Canonical engine keys : AF_SMC · TS_TF · MD_MR · BS_BR
+ * Component aliases     : AF_WYCKOFF / AF_VSA → AF umbrella instance
+ *                         TS_MS / TS_VP → TS umbrella instance
+ * Legacy aliases        : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SMC
+ *                         TREND_FOLLOWING → TS_TF
+ *                         MEAN_REVERSION → MD_MR
+ *                         BREAKOUT_RETEST → BS_BR
+ *
+ * GROK_AI_TRADING — experimental VAULT bonus (LLM entry engine). Registered
+ * but NOT part of any tier race pool. Prefer GrokConfirm overlay in production.
  *
  * Legacy aliases ensure bots created before the v2.0 migration continue to
  * work while the DB migration is applied in the background.
@@ -29,7 +34,7 @@ class StrategyRegistry {
   }
 
   _registerBuiltInStrategies() {
-    // ── Primary (component) keys ──────────────────────────────────────────
+    // ── Primary (umbrella engine) keys ────────────────────────────────────
     const af = new AdaptiveFusionUmbrella();
     const ts = new TrendSurgeUmbrella();
     const md = new MeanDriftUmbrella();
@@ -40,12 +45,13 @@ class StrategyRegistry {
     this.register("TS_TF",           ts);
     this.register("MD_MR",           md);
     this.register("BS_BR",           bs);
+    // Experimental — VAULT bonus; see config/strategies.js EXPERIMENTAL_STRATEGIES
     this.register("GROK_AI_TRADING", ga);
 
-    // ── Legacy backward-compat aliases (same instances, no extra memory) ──
+    // ── Legacy + component aliases (same instances, no extra memory) ──────
     this.strategies.set("ADAPTIVE_FUSION",      af);
     this.strategies.set("SMART_MONEY_CONCEPTS", af);
-    // Component keys resolve to the AF umbrella (voting still runs all live components).
+    // AF component keys resolve to the AF umbrella (race among live components).
     this.strategies.set("AF_WYCKOFF",           af);
     this.strategies.set("AF_VSA",               af);
     this.strategies.set("TREND_FOLLOWING",      ts);

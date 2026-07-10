@@ -593,14 +593,21 @@ const STRATEGY_ALIASES = {
   ADAPTIVE_FUSION: "AF_SMC",
   SMART_MONEY_CONCEPTS: "AF_SMC",
   AF_SMC: "AF_SMC",
+  AF_WYCKOFF: "AF_WYCKOFF",
+  AF_VSA: "AF_VSA",
   TREND_FOLLOWING: "TS_TF",
   TREND_SURGE: "TS_TF",
   TS_TF: "TS_TF",
+  TS_MS: "TS_MS",
+  TS_VP: "TS_VP",
   MEAN_REVERSION: "MD_MR",
   MEAN_DRIFT: "MD_MR",
   MD_MR: "MD_MR",
+  BREAKOUT_RETEST: "BS_BR",
   BREAKOUT_STORM: "BS_BR",
   BS_BR: "BS_BR",
+  // Experimental — identity (not a tier umbrella)
+  GROK_AI_TRADING: "GROK_AI_TRADING",
 };
 
 function normalizeStrategyKey(raw) {

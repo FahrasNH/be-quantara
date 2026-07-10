@@ -169,8 +169,14 @@ function resolveStrategyDisplayName(strategyKey, cfg = {}) {
     });
     if (labels.length === 1) return labels[0];
     if (labels.length > 1) {
-      const mode = String(cfg.tsCombinationMode || "race").toLowerCase();
-      if (mode === "race") return `Trend Surge race (${labels.join(", ")})`;
+      const tsMode = String(cfg.tsCombinationMode || "race").toLowerCase();
+      const afMode = String(cfg.afCombinationMode || "race").toLowerCase();
+      const isTs = comps.some((c) => String(c).startsWith("TS_") || c === "TREND_FOLLOWING");
+      const isAf = comps.some((c) =>
+        ["AF_SMC", "AF_WYCKOFF", "AF_VSA", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"].includes(String(c))
+      );
+      if (isTs && tsMode === "race") return `Trend Surge race (${labels.join(", ")})`;
+      if (isAf && afMode === "race") return `Adaptive Fusion race (${labels.join(", ")})`;
       return labels.join(" + ");
     }
   }

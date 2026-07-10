@@ -1414,14 +1414,22 @@ class BotEngine extends EventEmitter {
                 afMinComponentConfidence: this.config.afMinComponentConfidence,
                 afMinAggregateConfidence: this.config.afMinAggregateConfidence,
                 afUseThreeComponentVoting: this.config.afUseThreeComponentVoting,
+                afCombinationMode:    this.config.afCombinationMode,
                 afMinVotes:           this.config.afMinVotes,
+                selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
+                afActiveRacers:       this.config.afActiveRacers || this.config.afActiveVoters,
               });
               // Persist vote breakdown onto indicator snapshot for entryContext
-              if (multiSignal?.meta?.afVotes || multiSignal?.meta?.signalComponents) {
+              if (multiSignal?.meta?.afVotes || multiSignal?.meta?.signalComponents || multiSignal?.meta?.afRace) {
                 indicatorSnapshot.signalComponents = multiSignal.meta.signalComponents
                   || multiSignal.meta.afVotes?.breakdown
                   || {};
                 indicatorSnapshot.afVotes = multiSignal.meta.afVotes || null;
+                indicatorSnapshot.afRace = multiSignal.meta.afRace || null;
+                if (multiSignal.meta.winningComponent) {
+                  indicatorSnapshot.winningComponent = multiSignal.meta.winningComponent;
+                  indicatorSnapshot.strategyLabel = multiSignal.meta.strategyLabel || null;
+                }
               }
 
               // Check each component independently for entry
@@ -2238,7 +2246,7 @@ class BotEngine extends EventEmitter {
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
     // indikator yang dipersist di kolom trades.indicators agar setiap trade bisa
     // ditelusuri ke strategi yang memfire-nya (AC-04).
-    // Sprint 12 TS race: prefer winning racer label over umbrella key.
+    // Sprint 12 AF/TS race: prefer winning racer label over umbrella key.
     let attributionKey = this.config.strategyKey;
     let attributionLabel = this.config.strategyLabel;
     try {
@@ -2253,6 +2261,29 @@ class BotEngine extends EventEmitter {
             indicatorSnapshot.strategyLabel = attributionLabel;
             indicatorSnapshot.signalComponents = tfMeta.signalComponents || null;
             indicatorSnapshot.tsRace = tfMeta.tsRace || null;
+          }
+        }
+      } else if (
+        sk === "AF_SMC" || sk === "ADAPTIVE_FUSION" || sk === "SMART_MONEY_CONCEPTS"
+        || sk === "AF_WYCKOFF" || sk === "AF_VSA"
+      ) {
+        const afMeta = (() => {
+          try {
+            const { strategyRegistry: reg } = require("../domain/strategy");
+            return reg.get("AF_SMC")?.getLastSignalMeta?.() || null;
+          } catch {
+            return null;
+          }
+        })();
+        if (afMeta?.winningComponent) {
+          attributionKey = afMeta.winningComponent;
+          attributionLabel = afMeta.strategyLabel || attributionLabel;
+          if (indicatorSnapshot) {
+            indicatorSnapshot.winningComponent = afMeta.winningComponent;
+            indicatorSnapshot.strategyLabel = attributionLabel;
+            indicatorSnapshot.signalComponents = afMeta.signalComponents || null;
+            indicatorSnapshot.afRace = afMeta.afRace || null;
+            if (afMeta.afVotes) indicatorSnapshot.afVotes = afMeta.afVotes;
           }
         }
       }

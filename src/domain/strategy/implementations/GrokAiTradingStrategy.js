@@ -9,8 +9,8 @@ class GrokAiTradingStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "GROK_AI_TRADING",
-      label: "Grok AI Trading",
-      description: "Entry, confidence, TP/SL ditentukan Grok (xAI) dari data multi-TF.",
+      label: "Grok AI Trading (experimental)",
+      description: "EXPERIMENTAL VAULT bonus: entry/TP/SL via Grok (xAI). Prefer GrokConfirm overlay on canonical strategies.",
       version: "1.0.0",
       ...config,
     });

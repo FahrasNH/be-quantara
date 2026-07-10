@@ -1,5 +1,5 @@
 /**
- * Sprint 8 AF-SUB-01/02/03 — Wyckoff, VSA, and 3-component voting tests.
+ * Sprint 8/12 AF-SUB-01/02/03 — Wyckoff, VSA, race-to-confirm (+ vote rollback) tests.
  *
  * Run: node test/af-wyckoff-vsa-voting.test.js
  */
@@ -508,7 +508,7 @@ test("umbrella detectSignal with voting off → SMC passthrough path", () => {
   assert.ok(sig === null || sig === "LONG" || sig === "SHORT");
 });
 
-test("umbrella detectSignalMulti attaches afVotes meta", () => {
+test("umbrella detectSignalMulti vote-mode attaches afVotes meta", () => {
   const um = new AdaptiveFusionUmbrella();
   const n = 60;
   const indicators = {
@@ -522,6 +522,7 @@ test("umbrella detectSignalMulti attaches afVotes meta", () => {
     rsi: Array.from({ length: n }, () => 50),
   };
   const multi = um.detectSignalMulti(indicators, n - 1, {
+    afCombinationMode: "vote",
     afUseThreeComponentVoting: true,
     afMinVotes: 2,
   });
@@ -529,6 +530,7 @@ test("umbrella detectSignalMulti attaches afVotes meta", () => {
   assert.ok(multi.meta.afVotes);
   assert.ok(multi.meta.signalComponents);
   assert.ok(multi.meta.afVotes.breakdown);
+  assert.strictEqual(multi.meta.combinationMode, "vote");
 });
 
 test("single-voter afMinVotes=2 is capped → majority possible", () => {
@@ -542,7 +544,7 @@ test("single-voter afMinVotes=2 is capped → majority possible", () => {
   assert.strictEqual(r.threshold, 1);
 });
 
-test("Wyckoff-only detectSignalMulti promotes standalone vote (no SMC required)", () => {
+test("Wyckoff-only detectSignalMulti vote-mode promotes standalone vote (no SMC required)", () => {
   const um = new AdaptiveFusionUmbrella();
   const n = 120;
   // Build a flat range then a spring-like dip+recovery so Wyckoff can vote LONG
@@ -564,6 +566,7 @@ test("Wyckoff-only detectSignalMulti promotes standalone vote (no SMC required)"
     rsi: Array.from({ length: n }, () => 50),
   };
   const multi = um.detectSignalMulti(indicators, n - 1, {
+    afCombinationMode: "vote",
     afUseThreeComponentVoting: true,
     afMinVotes: 2,
     afActiveVoters: ["AF_WYCKOFF"],
@@ -577,7 +580,64 @@ test("Wyckoff-only detectSignalMulti promotes standalone vote (no SMC required)"
     "single-voter path must not require impossible quorum");
 });
 
+test("default race mode: detectSignalMulti attaches afRace meta (not vote gate)", () => {
+  const um = new AdaptiveFusionUmbrella();
+  const n = 60;
+  const indicators = {
+    closes: Array.from({ length: n }, (_, i) => 50000 + i * 10),
+    highs: Array.from({ length: n }, (_, i) => 50000 + i * 10 + 30),
+    lows: Array.from({ length: n }, (_, i) => 50000 + i * 10 - 30),
+    opens: Array.from({ length: n }, (_, i) => 50000 + i * 10 - 5),
+    volumes: Array.from({ length: n }, () => 1000),
+    volSMA: Array.from({ length: n }, () => 900),
+    atr: Array.from({ length: n }, () => 120),
+    rsi: Array.from({ length: n }, () => 50),
+  };
+  const multi = um.detectSignalMulti(indicators, n - 1, {});
+  assert.ok(multi.meta);
+  assert.strictEqual(multi.meta.combinationMode, "race");
+  assert.ok(multi.meta.afRace);
+  assert.strictEqual(multi.meta.gatedByVoting, false);
+  assert.strictEqual(multi.meta.afVotes, null);
+});
+
+test("race tie-break prefers AF_SMC over AF_WYCKOFF at equal confidence", () => {
+  const um = new AdaptiveFusionUmbrella();
+  const winner = um._pickRaceWinner([
+    { key: "AF_WYCKOFF", confidence: 0.8, signal: "LONG", label: "Wyckoff Method" },
+    { key: "AF_SMC", confidence: 0.8, signal: "SHORT", label: "Smart Money Concepts" },
+  ]);
+  assert.strictEqual(winner.key, "AF_SMC");
+  assert.strictEqual(winner.signal, "SHORT");
+});
+
+test("race: higher confidence wins regardless of priority", () => {
+  const um = new AdaptiveFusionUmbrella();
+  const winner = um._pickRaceWinner([
+    { key: "AF_SMC", confidence: 0.5, signal: "LONG", label: "Smart Money Concepts" },
+    { key: "AF_VSA", confidence: 0.9, signal: "SHORT", label: "Volume Spread Analysis" },
+  ]);
+  assert.strictEqual(winner.key, "AF_VSA");
+});
+
+test("FOUNDRY tier map uses race combination (not voting)", () => {
+  const { TIER_COMPONENT_MAP } = require("../src/config/strategies");
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.FOUNDRY.active, ["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+  assert.strictEqual(TIER_COMPONENT_MAP.FOUNDRY.combination.mode, "race");
+  assert.ok(!TIER_COMPONENT_MAP.FOUNDRY.voting, "voting key removed from FOUNDRY map");
+});
+
+test("GROK_AI_TRADING is experimental identity, not migrated to AF/TS", () => {
+  const { normalizeStrategyKey, EXPERIMENTAL_STRATEGIES, isLegacyAlias } = require("../src/config/strategies");
+  assert.strictEqual(normalizeStrategyKey("GROK_AI_TRADING"), "GROK_AI_TRADING");
+  assert.strictEqual(EXPERIMENTAL_STRATEGIES.GROK_AI_TRADING, "GROK_AI_TRADING");
+  assert.strictEqual(isLegacyAlias("GROK_AI_TRADING"), false);
+  assert.strictEqual(isLegacyAlias("ADAPTIVE_FUSION"), true);
+  assert.strictEqual(normalizeStrategyKey("ADAPTIVE_FUSION"), "AF_SMC");
+  assert.strictEqual(normalizeStrategyKey("AF_WYCKOFF"), "AF_WYCKOFF");
+});
+
 console.log("\n══════════════════════════════════════");
 console.log(`Results: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
-console.log("All AF Wyckoff/VSA/voting tests passed.\n");
+console.log("All AF Wyckoff/VSA/race tests passed.\n");

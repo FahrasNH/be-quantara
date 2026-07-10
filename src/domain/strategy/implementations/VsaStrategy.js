@@ -1,7 +1,8 @@
 /**
- * VsaStrategy.js — AF Component C (Volume Spread Analysis)
+ * VsaStrategy.js — AF racer C (Volume Spread Analysis)
  *
- * Wraps evaluateVSAComponent for AdaptiveFusionUmbrella voting.
+ * Independent race participant under AdaptiveFusionUmbrella (Sprint 12).
+ * Also usable as vote Component C when afCombinationMode:"vote".
  */
 
 "use strict";
