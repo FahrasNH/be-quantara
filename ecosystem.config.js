@@ -72,6 +72,8 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT:     3001,
+        APP_ENV:  "staging",
+        RAG_BACKTEST_ENABLED: "true",
         // Profiling heap/RSS tiap 30s di pm2 logs (index.js MEM_DEBUG=1). Matikan di prod.
         MEM_DEBUG: "1",
       },

@@ -16,6 +16,7 @@
 const express = require("express");
 const prisma  = require("../../infrastructure/db/prismaClient");
 const db      = require("../../infrastructure/db/database");
+const { isRagBacktestAllowed } = require("../../config/ragBacktestEnv");
 
 // Sprint 5 / RL-5 — lazy-loaded to avoid startup failures if pgvector is unavailable
 let _similarTradeAdvisor = null;
@@ -52,9 +53,9 @@ function getRAGBacktestEngines() {
     const fe = new FeatureEngineer();
     const sta = new SimilarTradeAdvisor(vs, fe);
     const cbe = new ConservativeBacktestEngine(vs, fe, null);
+    const abl = new AblationTest(null, sta, fe);
     const wfb = new WalkForwardBacktest(cbe, abl);
     const bqr = new BiasQuantificationReport();
-    const abl = new AblationTest(null, sta, fe);
 
     _ragBacktestEngines = { cbe, wfb, bqr, abl, vs, fe };
   } catch (err) {
@@ -441,13 +442,15 @@ module.exports = function createAnalyticsRouter() {
   router.get("/rag-backtest/results", async (req, res) => {
     const t0 = Date.now();
     try {
-      const { symbol, strategyKey, period = "90d", limit = "500", view } = req.query;
+      const { symbol, strategyKey, period = "90d", limit = "500", view, _t } = req.query;
       const cacheKey = `rag-backtest-results:${symbol ?? ""}:${strategyKey ?? ""}:${period}:${limit}:${view ?? ""}`;
 
-      const cached = cacheGet(cacheKey);
-      if (cached) return res.json({ ok: true, fromCache: true, elapsed: 0, ...cached });
+      if (!_t) {
+        const cached = cacheGet(cacheKey);
+        if (cached) return res.json({ ok: true, fromCache: true, elapsed: 0, ...cached });
+      }
 
-      if (process.env.NODE_ENV === "production") {
+      if (!isRagBacktestAllowed()) {
         return res.status(403).json({
           ok: false,
           error: "[STAGING_ONLY] RAG backtest results are only available in staging/test environments",
@@ -592,12 +595,17 @@ function buildDateFilter(period) {
 const STRATEGY_ALIASES = {
   ADAPTIVE_FUSION: "AF_SMC",
   SMART_MONEY_CONCEPTS: "AF_SMC",
+  SMC: "AF_SMC",
+  AF_SMC: "AF_SMC",
   TREND_FOLLOWING: "TS_TF",
   TREND_SURGE: "TS_TF",
+  TS_TF: "TS_TF",
   MEAN_REVERSION: "MD_MR",
   MEAN_DRIFT: "MD_MR",
+  MD_MR: "MD_MR",
   BREAKOUT_RETEST: "BS_BR",
   BREAKOUT_STORM: "BS_BR",
+  BS_BR: "BS_BR",
 };
 
 function normalizeStrategyKey(raw) {
@@ -643,6 +651,11 @@ async function fetchBacktestTrades({ symbol, strategyKey, period, limit = 500 } 
     trades = trades.filter((t) => new Date(t.entryAt).getTime() >= sinceMs);
   }
 
+  // Symbol filter (defense in depth — getTradesExport filters but Prisma fallback may not)
+  if (symbol) {
+    trades = trades.filter((t) => String(t.symbol || "").toUpperCase() === String(symbol).toUpperCase());
+  }
+
   // Strategy filter
   if (strategyKey) {
     const want = normalizeStrategyKey(strategyKey);
@@ -655,7 +668,10 @@ async function fetchBacktestTrades({ symbol, strategyKey, period, limit = 500 } 
       const dateFilter = buildDateFilter(period);
       const where = { status: "CLOSED", ...dateFilter };
       if (symbol) where.symbol = symbol;
-      if (strategyKey) where.firedByStrategy = strategyKey;
+      if (strategyKey) {
+        const want = normalizeStrategyKey(strategyKey);
+        where.firedByStrategy = { in: [strategyKey, want].filter(Boolean) };
+      }
 
       const prismaRows = await prisma.trade.findMany({
         where,
