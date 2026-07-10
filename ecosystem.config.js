@@ -4,7 +4,7 @@
  * Production (dari folder prod):
  *   pm2 start ecosystem.config.js --only be-quantara-prod
  *
- * Staging (dari /opt/quantara-staging/be-bot-trading):
+ * Staging (dari /opt/quantara-staging/be):
  *   pm2 start ecosystem.config.js --only be-quantara-staging
  *
  * OPS-003 hardening:

@@ -8,13 +8,13 @@
 #
 # Env:
 #   VPS_HOST=root@187.77.135.156
-#   REMOTE_BE=/opt/quantara-staging/be-bot-trading
+#   REMOTE_BE=/opt/quantara-staging/be
 #   PM2_APP=be-quantara-staging
 
 set -euo pipefail
 
 VPS_HOST="${VPS_HOST:-root@187.77.135.156}"
-REMOTE_BE="${REMOTE_BE:-/opt/quantara-staging/be-bot-trading}"
+REMOTE_BE="${REMOTE_BE:-/opt/quantara-staging/be}"
 PM2_APP="${PM2_APP:-be-quantara-staging}"
 GIT_BRANCH="${GIT_BRANCH:-staging}"
 MIN_TRADES=5

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 STAGING_ROOT="/opt/quantara-staging"
-BE_DIR="${STAGING_ROOT}/be-bot-trading"
+BE_DIR="${STAGING_ROOT}/be"
 REPO_URL="https://github.com/FahrasNH/be-quantara.git"
 GIT_BRANCH="staging"
 PM2_APP="quantara-staging"

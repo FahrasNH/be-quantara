@@ -12,7 +12,7 @@
 #   bash scripts/backup-db.sh --cleanup         # hapus backup > RETENTION hari
 #
 # Cron (tiap hari jam 02:00):
-#   0 2 * * * /opt/quantara-staging/be-bot-trading/scripts/backup-db.sh >> /var/log/quantara-backup.log 2>&1
+#   0 2 * * * /opt/quantara-staging/be/scripts/backup-db.sh >> /var/log/quantara-backup.log 2>&1
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail

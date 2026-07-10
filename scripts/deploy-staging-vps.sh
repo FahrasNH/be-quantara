@@ -3,7 +3,7 @@
 # Bisa dijalankan langsung di server ATAU via SSH dari deploy-staging.sh (FE).
 #
 # Usage (di VPS):
-#   cd /opt/be-quantara-staging/be-bot-trading && ./scripts/deploy-staging-vps.sh
+#   cd /opt/quantara-staging/be && ./scripts/deploy-staging-vps.sh
 #
 # Env:
 #   PM2_APP     — nama proses PM2 (default: be-quantara-staging)

@@ -6,7 +6,7 @@
 #
 # Env opsional:
 #   VPS_HOST=root@187.77.135.156
-#   REMOTE_BE=/opt/quantara-staging/be-bot-trading
+#   REMOTE_BE=/opt/quantara-staging/be
 
 set -euo pipefail
 
