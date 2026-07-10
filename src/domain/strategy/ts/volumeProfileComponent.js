@@ -1,9 +1,12 @@
 /**
- * Auction Market Theory (VWAP + Value Area) entry precision for Trend Surge (TS-SUB-02).
+ * Auction Market Theory (VWAP + Value Area) for Trend Surge (TS-SUB-02).
  *
  * - Session VWAP resets daily at UTC midnight (aligned with Quantara daily loss counter).
  * - Volume Profile: 20-bin histogram → POC + Value Area (70% volume).
- * - Entry refinement: LONG/SHORT pullback must overlap VWAP or Value Area.
+ *
+ * Sprint 12 architecture decision: race participant (independent signal
+ * generator via VWAP reclaim / VA edge bounce). Precision helpers remain for
+ * `tsCombinationMode: "gate"` rollback / A-B comparison.
  */
 
 "use strict";
@@ -315,6 +318,144 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
   };
 }
 
+/**
+ * Full race-participant entry for Auction Market Theory (Sprint 12).
+ * Edge-triggered only:
+ *   LONG  — VWAP reclaim (prev < VWAP ≤ close) OR bounce off VAL
+ *   SHORT — VWAP lose (prev > VWAP ≥ close) OR rejection off VAH
+ *
+ * @returns {{ vote, confidence, reason, meta, signal }}
+ */
+function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  const highs = indicators.highs || [];
+  const lows = indicators.lows || [];
+  const closes = indicators.closes || [];
+  const opens = indicators.opens || [];
+  const volumes = indicators.volumes || [];
+  const timestamps = indicators.timestamps || indicators.times || indicators.openTimes || null;
+
+  if (!Number.isInteger(lastIdx) || lastIdx < 1) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "session_warmup",
+      meta: {},
+    };
+  }
+
+  const { vwap, bars, startIdx } = calculateSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx
+  );
+  if (bars < cfg.minSessionBars || vwap == null) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "session_warmup",
+      meta: { bars, vwap, startIdx },
+    };
+  }
+
+  const profile = buildVolumeProfile(
+    highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
+  );
+  const price = closes[lastIdx];
+  const prev = closes[lastIdx - 1];
+  const open = opens[lastIdx];
+  const barLow = lows[lastIdx];
+  const barHigh = highs[lastIdx];
+  if (price == null || prev == null || !Number.isFinite(price) || !Number.isFinite(prev)) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "no_price",
+      meta: { vwap },
+    };
+  }
+
+  const { tolAbs, mode, atr, mult } = resolveVwapTolerance(indicators, lastIdx, cfg);
+  const metaBase = {
+    vwap,
+    poc: profile.poc,
+    vah: profile.vah,
+    val: profile.val,
+    price,
+    prev,
+    bars,
+    startIdx,
+    tolMode: mode,
+    tolAbs,
+    atr,
+    vwapAtrMult: mult,
+  };
+
+  // VWAP reclaim / lose (primary AMT entry)
+  if (prev < vwap && price >= vwap) {
+    return {
+      vote: "LONG",
+      signal: "LONG",
+      confidence: 0.72,
+      reason: "vwap_reclaim",
+      meta: metaBase,
+    };
+  }
+  if (prev > vwap && price <= vwap) {
+    return {
+      vote: "SHORT",
+      signal: "SHORT",
+      confidence: 0.72,
+      reason: "vwap_lose",
+      meta: metaBase,
+    };
+  }
+
+  // Value Area edge bounce / rejection
+  const val = profile.val;
+  const vah = profile.vah;
+  const edgeTol = tolAbs != null && tolAbs > 0
+    ? tolAbs
+    : Math.abs(vwap) * cfg.vwapTolerancePct;
+
+  if (val != null && Number.isFinite(val) && barLow != null) {
+    const touchedVal = barLow <= val + edgeTol;
+    const closedAbove = price > val && (open == null || price >= open || price > prev);
+    if (touchedVal && closedAbove && price >= vwap - edgeTol) {
+      return {
+        vote: "LONG",
+        signal: "LONG",
+        confidence: 0.68,
+        reason: "val_bounce",
+        meta: { ...metaBase, edgeTol },
+      };
+    }
+  }
+
+  if (vah != null && Number.isFinite(vah) && barHigh != null) {
+    const touchedVah = barHigh >= vah - edgeTol;
+    const closedBelow = price < vah && (open == null || price <= open || price < prev);
+    if (touchedVah && closedBelow && price <= vwap + edgeTol) {
+      return {
+        vote: "SHORT",
+        signal: "SHORT",
+        confidence: 0.68,
+        reason: "vah_reject",
+        meta: { ...metaBase, edgeTol },
+      };
+    }
+  }
+
+  return {
+    vote: "NEUTRAL",
+    signal: null,
+    confidence: 0,
+    reason: "awaiting_amt_trigger",
+    meta: metaBase,
+  };
+}
+
 module.exports = {
   DEFAULTS,
   sessionStartIdx,
@@ -322,5 +463,6 @@ module.exports = {
   buildVolumeProfile,
   evaluateVolumeProfilePrecision,
   evaluateVolumeProfileComponent,
+  evaluateVolumeProfileEntry,
   resolveVwapTolerance,
 };

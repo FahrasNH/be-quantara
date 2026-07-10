@@ -72,27 +72,29 @@ Per AF-SUB-03 research gate (do **not** skip):
 
 **Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/TrendSurgeUmbrella.js`
 
-### 5.1 Component model (Sprint 9)
+### 5.1 Component model (Sprint 12 — Race-to-Confirm)
 
 | Slot | Key | Role | Implementation |
 |------|-----|------|----------------|
-| A | `TS_TF` | Trend Following momentum trigger | `TrendFollowingStrategy` |
-| B | `TS_MS` | Dow Theory HH/HL gate | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
-| C | `TS_VP` | Auction Market Theory (VWAP + Value Area) | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
+| A | `TS_TF` | Trend Following (independent racer) | `TrendFollowingStrategy` |
+| B | `TS_MS` | Dow Theory HH/HL pullback entries | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
+| C | `TS_VP` | Auction Market Theory (VWAP reclaim / VA edge) | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
 
-Layering (not AF-style voting):
+**ARCHITECTURE DECISION (Fahras, 10 Jul 2026):** Race-to-Confirm replaces Sprint 9 gate/layering.
 
-- A must fire (momentum trigger)
-- B is a **required gate** when `tsUseStructureGate !== false` (LONG only if HTF uptrend HH+HL)
-- C **refines timing** when `tsUseVwapPrecision !== false` (pullback must overlap session VWAP / Value Area)
-- Early-session VWAP warmup (`minSessionBars`) passthrough — does not block
-- Rollback: set either flag `false` to disable that layer
+- Umbrella `TS_TF` is a **tier access bag** (FORGE unlocks the pool), not a fusion mechanism.
+- Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
+- Same-bar winner = highest confidence; ties break `TS_TF` → `TS_MS` → `TS_VP`.
+- Trade attribution label = **winning component only** (never joined "A + B + C").
+- Max 1 position/symbol still enforced by BotEngine / backtest engines.
+- Rollback: `tsCombinationMode: "gate"` restores A→B→C layering; `"hybrid"` keeps A required with B/C as confidence boosters only.
 
 ### 5.2 Backtest UI visibility
 
 FE Advance multi-select lists all live components under each umbrella
 (`TIER_PACKAGE_COMPONENTS`). Selecting any component under an umbrella maps to a
-single engine run via `COMPONENT_TO_ENGINE` (no N× capital split).
+single engine run via `COMPONENT_TO_ENGINE` (no N× capital split). Selected TS
+keys become the race pool; per-trade `strategyLabel` comes from the winning racer.
 
 ---
 

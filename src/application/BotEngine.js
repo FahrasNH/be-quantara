@@ -9,7 +9,7 @@ const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exc
 const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../infrastructure/exchange/candleFetch");
 const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter");
@@ -1316,9 +1316,11 @@ class BotEngine extends EventEmitter {
               pairTier:             this.config.pairTier,
               tierOverrides:        this.config.tierOverrides,
               htfIdx: htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 1 : undefined,
+              tsCombinationMode:    this.config.tsCombinationMode || "race",
               tsUseStructureGate:   this.config.tsUseStructureGate,
               tsUseVwapPrecision:   this.config.tsUseVwapPrecision,
               vwapAtrMult:          this.config.vwapAtrMult,
+              selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
             });
 
 
@@ -2236,10 +2238,30 @@ class BotEngine extends EventEmitter {
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
     // indikator yang dipersist di kolom trades.indicators agar setiap trade bisa
     // ditelusuri ke strategi yang memfire-nya (AC-04).
+    // Sprint 12 TS race: prefer winning racer label over umbrella key.
+    let attributionKey = this.config.strategyKey;
+    let attributionLabel = this.config.strategyLabel;
+    try {
+      const sk = String(this.config.strategyKey || this.config.signalType || "").toUpperCase();
+      if (sk === "TS_TF" || sk === "TREND_FOLLOWING") {
+        const tfMeta = getTrendFollowingInstance()?.getLastSignalMeta?.();
+        if (tfMeta?.winningComponent) {
+          attributionKey = tfMeta.winningComponent;
+          attributionLabel = tfMeta.strategyLabel || attributionLabel;
+          if (indicatorSnapshot) {
+            indicatorSnapshot.winningComponent = tfMeta.winningComponent;
+            indicatorSnapshot.strategyLabel = attributionLabel;
+            indicatorSnapshot.signalComponents = tfMeta.signalComponents || null;
+            indicatorSnapshot.tsRace = tfMeta.tsRace || null;
+          }
+        }
+      }
+    } catch { /* degrade — umbrella attribution still recorded */ }
     const enrichedSnapshot = {
       ...(indicatorSnapshot || {}),
       ...buildTradeAttribution({
-        strategyKey: this.config.strategyKey,
+        strategyKey: attributionKey,
+        strategyLabel: attributionLabel,
         sl, tp, slDist, tpDist, atr,
       }),
     };

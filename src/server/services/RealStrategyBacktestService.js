@@ -107,35 +107,52 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
 }
 
 /**
- * Resolve TS layer flags from Advance selectedComponents.
- * Empty/missing → keep cfg defaults (both layers on for FORGE).
- * Explicit TS_TF-only → disable both gates (baseline trigger).
+ * Resolve TS combination mode + racer set from Advance selectedComponents.
+ *
+ * Sprint 12 default: race-to-confirm (independent TS_TF / TS_MS / TS_VP).
+ * Gate flags only apply when tsCombinationMode is "gate" or "hybrid".
  */
-function resolveTsLayerFlags(cfg = {}) {
+function resolveTsCombination(cfg = {}) {
+  const mode = String(cfg.tsCombinationMode || "race").toLowerCase();
   const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
-  if (!Array.isArray(comps) || comps.length === 0) {
-    return {
-      tsUseStructureGate: cfg.tsUseStructureGate,
-      tsUseVwapPrecision: cfg.tsUseVwapPrecision,
-    };
-  }
-  const tsComps = comps.filter((c) =>
-    ["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"].includes(String(c).toUpperCase())
-  );
-  if (!tsComps.length) {
-    return {
-      tsUseStructureGate: cfg.tsUseStructureGate,
-      tsUseVwapPrecision: cfg.tsUseVwapPrecision,
-    };
-  }
+  const tsComps = Array.isArray(comps)
+    ? comps.filter((c) =>
+      ["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"].includes(String(c).toUpperCase())
+    )
+    : [];
   const upper = tsComps.map((c) => String(c).toUpperCase());
-  const onlyTrigger = upper.every((c) => c === "TS_TF" || c === "TREND_FOLLOWING");
-  if (onlyTrigger) {
-    return { tsUseStructureGate: false, tsUseVwapPrecision: false };
+  const selectedComponents = upper.length
+    ? upper.map((c) => (c === "TREND_FOLLOWING" ? "TS_TF" : c))
+    : null;
+
+  // Legacy gate-flag resolution (only meaningful for gate/hybrid modes).
+  let tsUseStructureGate = cfg.tsUseStructureGate;
+  let tsUseVwapPrecision = cfg.tsUseVwapPrecision;
+  if (upper.length) {
+    const onlyTrigger = upper.every((c) => c === "TS_TF" || c === "TREND_FOLLOWING");
+    if (onlyTrigger) {
+      tsUseStructureGate = false;
+      tsUseVwapPrecision = false;
+    } else if (mode === "gate" || mode === "layering" || mode === "hybrid") {
+      tsUseStructureGate = upper.includes("TS_MS");
+      tsUseVwapPrecision = upper.includes("TS_VP");
+    }
   }
+
   return {
-    tsUseStructureGate: upper.includes("TS_MS"),
-    tsUseVwapPrecision: upper.includes("TS_VP"),
+    tsCombinationMode: mode === "layering" ? "gate" : mode,
+    selectedComponents,
+    tsUseStructureGate,
+    tsUseVwapPrecision,
+  };
+}
+
+/** @deprecated Use resolveTsCombination — kept for older callers/tests. */
+function resolveTsLayerFlags(cfg = {}) {
+  const r = resolveTsCombination(cfg);
+  return {
+    tsUseStructureGate: r.tsUseStructureGate,
+    tsUseVwapPrecision: r.tsUseVwapPrecision,
   };
 }
 
@@ -144,13 +161,28 @@ function resolveStrategyDisplayName(strategyKey, cfg = {}) {
   if (cfg.displayLabel) return cfg.displayLabel;
   const comps = cfg.selectedComponents || cfg.activeStrategyComponents;
   if (Array.isArray(comps) && comps.length) {
+    // Race mode: run header lists the unlocked pool; per-trade labels come from
+    // the winning racer via getLastSignalMeta().strategyLabel.
     const labels = comps.map((c) => {
       const s = STRATEGIES[c];
       return s?.label || c;
     });
-    if (labels.length) return labels.join(" + ");
+    if (labels.length === 1) return labels[0];
+    if (labels.length > 1) {
+      const mode = String(cfg.tsCombinationMode || "race").toLowerCase();
+      if (mode === "race") return `Trend Surge race (${labels.join(", ")})`;
+      return labels.join(" + ");
+    }
   }
   return STRATEGIES[strategyKey]?.label || strategyKey;
+}
+
+function resolveTradeDisplayName(strategyKey, cfg, meta, fallbackDisplayName) {
+  if (meta?.strategyLabel) return meta.strategyLabel;
+  if (meta?.winningComponent && STRATEGIES[meta.winningComponent]?.label) {
+    return STRATEGIES[meta.winningComponent].label;
+  }
+  return fallbackDisplayName || resolveStrategyDisplayName(strategyKey, cfg);
 }
 
 /**
@@ -1415,10 +1447,16 @@ async function runRealBacktest(opts = {}) {
 async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
-  const strategyDisplayName = resolveStrategyDisplayName(strategyKey, cfg);
-  const tsLayers = resolveTsLayerFlags(cfg);
-  const tsUseStructureGate = tsLayers.tsUseStructureGate;
-  const tsUseVwapPrecision = tsLayers.tsUseVwapPrecision;
+  const tsCombo = resolveTsCombination(cfg);
+  const tsCombinationMode = tsCombo.tsCombinationMode;
+  const tsUseStructureGate = tsCombo.tsUseStructureGate;
+  const tsUseVwapPrecision = tsCombo.tsUseVwapPrecision;
+  const tsSelectedComponents = tsCombo.selectedComponents || cfg.selectedComponents;
+  const strategyDisplayName = resolveStrategyDisplayName(strategyKey, {
+    ...cfg,
+    selectedComponents: tsSelectedComponents,
+    tsCombinationMode,
+  });
 
   // TrendSurge/TF is a process singleton — reset directional state between runs
   // so a prior SHORT streak cannot contaminate the next backtest.
@@ -1628,7 +1666,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      }, position, strategyKey, strategyDisplayName));
+      }, position, strategyKey, position.strategyLabel || strategyDisplayName));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP).
@@ -1730,7 +1768,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey, strategyDisplayName));
+    }, position, strategyKey, position.strategyLabel || strategyDisplayName));
     position = null;
   }
 
@@ -1834,6 +1872,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
             atr: pendingOrder.atr ?? null,
             entryRsi: pendingOrder.entryRsi ?? null,
             htfTrend: pendingOrder.htfTrend ?? null,
+            strategyLabel: pendingOrder.strategyLabel || strategyDisplayName,
+            winningComponent: pendingOrder.winningComponent || pendingOrder.component,
             R: pendingOrder.slDist,
             slCurrent: openSl,
             remainingSize: size,
@@ -1892,14 +1932,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // strategy degrades to entry-TF fallback for the warmup bars.
       htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
 
-      // Sprint 9 TS layers — resolved from selectedComponents when Advance mode
-      // sends them; otherwise keep cfg defaults (both on for FORGE).
+      // Sprint 12 TS race — selectedComponents = active racers; gate flags only
+      // apply when tsCombinationMode is "gate"/"hybrid".
+      tsCombinationMode,
       tsUseStructureGate,
       tsUseVwapPrecision,
       marketStructure: cfg.marketStructure,
       volumeProfile: cfg.volumeProfile,
       vwapAtrMult: cfg.vwapAtrMult,
-      selectedComponents: cfg.selectedComponents,
+      selectedComponents: tsSelectedComponents || cfg.selectedComponents,
       afEnabledComponents: cfg.afEnabledComponents || cfg.selectedComponents,
 
       // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
@@ -2024,6 +2065,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 8. Component-aware SL/TP (mirror step 11d) ──────────────────────────
     const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+    const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     if (meta && typeof strategy.calculateRiskConfig === "function") {
@@ -2041,7 +2083,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       });
       slDist = rc.slDistance * pairSlMult;
       tpDist = rc.tpDistance * pairSlMult;
-      component = meta.component;
+      component = meta.winningComponent || meta.component;
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
 
@@ -2071,6 +2113,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
+        strategyLabel: tradeLabel,
+        winningComponent: meta?.winningComponent || component,
       };
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -2095,6 +2139,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       atr,
       entryRsi: indicators.rsi?.[i] ?? null,
       htfTrend,
+      strategyLabel: tradeLabel,
+      winningComponent: meta?.winningComponent || component,
       // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
       // slCurrent is the live stop (moves to BEP/+1R after milestones fire),
       // remainingSize shrinks as partials execute; originalSize stays fixed for
@@ -2340,4 +2386,14 @@ function buildStats(trades, startCapital, endCapital) {
   };
 }
 
-module.exports = { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, _computeTripleStats, _applyGrokGate, _applyRagGate };
+module.exports = {
+  runRealBacktest,
+  runTripleTypeBacktest,
+  runMultiTypeBacktest,
+  _computeTripleStats,
+  _applyGrokGate,
+  _applyRagGate,
+  resolveTsCombination,
+  resolveTsLayerFlags,
+  resolveTradeDisplayName,
+};

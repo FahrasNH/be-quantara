@@ -410,8 +410,10 @@ const STRATEGIES = {
     adxMinStrength:    30,
     tfHtfLayerEnabled: true,
 
-    // Sprint 9 (TS-SUB-01/02/03): structure gate + VWAP precision layers.
-    // Set either flag false to rollback that layer independently.
+    // Sprint 12: TS sub-components race independently (default).
+    // Set tsCombinationMode:"gate" to restore Sprint 9 A→B→C layering for A/B.
+    tsCombinationMode: "race",
+    // Gate flags only apply when tsCombinationMode is "gate" or "hybrid".
     tsUseStructureGate: true,
     tsUseVwapPrecision: true,
     // Spec: abs(price-VWAP) <= vwapAtrMult × ATR. 0.5 after 0.3 proved too tight on 5m.

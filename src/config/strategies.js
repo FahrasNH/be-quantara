@@ -25,10 +25,10 @@ const COMPONENT_STRATEGIES = {
   AF_LS:      "AF_LS",      // Liquidity Sweep          ⏳ Sprint 9+
   AF_OBR:     "AF_OBR",     // Order Block Retest       ⏳ Sprint 9+
 
-  // TREND_SURGE — FORGE Tier (A trigger + B structure gate + C VWAP precision)
-  TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE (Component A)
-  TS_MS:  "TS_MS",    // Dow Theory (HH/HL)     ✅ LIVE (Component B — Sprint 9)
-  TS_VP:  "TS_VP",    // Auction Market Theory  ✅ LIVE (Component C — Sprint 9)
+  // TREND_SURGE — FORGE Tier (Sprint 12: race-to-confirm among independent racers)
+  TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE (race participant)
+  TS_MS:  "TS_MS",    // Dow Theory (HH/HL)     ✅ LIVE (race participant — Sprint 12)
+  TS_VP:  "TS_VP",    // Auction Market Theory  ✅ LIVE (race participant — Sprint 12)
   TS_EW:  "TS_EW",    // Elliott Wave           ⏳ Future
   TS_PA:  "TS_PA",    // Price Action           ⏳ Future
 
@@ -94,7 +94,8 @@ const TIER_COMPONENT_MAP = {
     active: ["TS_TF", "TS_MS", "TS_VP"],
     umbrella: "TREND_SURGE",
     abbrev: "TS",
-    layering: { structureGate: true, vwapPrecision: true },
+    // Sprint 12: umbrella is a tier access bag; components race independently.
+    combination: { mode: "race", participants: ["TS_TF", "TS_MS", "TS_VP"] },
   },
   MINT:    { active: ["MD_MR"],  umbrella: "MEAN_DRIFT",      abbrev: "MD" },
   VAULT:   { active: ["BS_BR"],  umbrella: "BREAKOUT_STORM",  abbrev: "BS" },

@@ -1,5 +1,8 @@
 /**
- * MarketStructureStrategy.js — TS Component B (Dow Theory HH/HL gate)
+ * MarketStructureStrategy.js — TS Component B (Dow Theory HH/HL)
+ *
+ * Sprint 12: independent race participant with full entry logic.
+ * Gate helpers retained for tsCombinationMode:"gate" rollback.
  */
 
 "use strict";
@@ -8,6 +11,7 @@ const StrategyBase = require("../base/StrategyBase");
 const {
   evaluateMarketStructureComponent,
   evaluateMarketStructureGate,
+  evaluateMarketStructureEntry,
   DEFAULTS,
 } = require("../ts/marketStructureComponent");
 
@@ -18,6 +22,8 @@ function structureConfigFrom(config = {}) {
     rightLook: src.rightLook,
     scanBars: src.scanBars,
     minSwingPairs: src.minSwingPairs,
+    entryPullbackPct: src.entryPullbackPct,
+    entryAtrMult: src.entryAtrMult,
   };
 }
 
@@ -27,8 +33,8 @@ class MarketStructureStrategy extends StrategyBase {
       name: "TS_MS",
       label: "Dow Theory",
       description:
-        "TS Component B: Dow Theory causal HH/HL structure gate on HTF before Trend Following entries.",
-      version: "1.0.0",
+        "TS race participant: Dow Theory HH/HL pullback entries on HTF structure (independent of Trend Following).",
+      version: "2.0.0",
       enabled: true,
       ...config,
     });
@@ -55,13 +61,27 @@ class MarketStructureStrategy extends StrategyBase {
     return { allowed: true, reason: "ok" };
   }
 
+  /**
+   * Race-mode entry signal (edge-triggered pullback to HL/LH).
+   */
   detectSignal(indicators, lastIdx, config = {}) {
     const highs = indicators.highsHTF || indicators.highs || [];
     const lows = indicators.lowsHTF || indicators.lows || [];
+    const closes = indicators.closesHTF || indicators.closes || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
-    const result = evaluateMarketStructureComponent(highs, lows, idx, structureConfigFrom(config));
-    this._lastSignalMeta = { component: "TS_MS", ...result };
-    return result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
+    const atr = indicators.atrHTF?.[idx] ?? indicators.atr?.[lastIdx] ?? null;
+    const result = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+      ...structureConfigFrom(config),
+      atr,
+      opens: indicators.opensHTF || indicators.opens || [],
+    });
+    this._lastSignalMeta = {
+      component: "TS_MS",
+      winningComponent: result.signal ? "TS_MS" : null,
+      strategyLabel: "Dow Theory",
+      ...result,
+    };
+    return result.signal || null;
   }
 
   evaluate(indicators, lastIdx, config = {}) {
@@ -88,6 +108,20 @@ class MarketStructureStrategy extends StrategyBase {
 
   getRiskConfig() {
     return { riskPerTrade: 0.015, maxTradesPerDay: 3, slMultiplier: 1.5, tpMultiplier: 3.0 };
+  }
+
+  calculateRiskConfig(entryPrice, atr, signal, _component, opts = {}) {
+    const slMult = opts.slMultiplier ?? 1.5;
+    const tpMult = opts.tpMultiplier ?? 3.0;
+    const slDist = atr * slMult;
+    const tpDist = atr * tpMult;
+    return {
+      stopLoss: signal === "LONG" ? entryPrice - slDist : entryPrice + slDist,
+      takeProfit: signal === "LONG" ? entryPrice + tpDist : entryPrice - tpDist,
+      slDistance: slDist,
+      tpDistance: tpDist,
+      riskReward: tpMult / slMult,
+    };
   }
 
   getTimeframeConfig() {

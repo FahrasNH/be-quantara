@@ -3,8 +3,11 @@
  *
  * Causal fractal swing detection — confirmed only after `rightLook` bars
  * (no look-ahead / no repaint). Classifies structure as uptrend (HH+HL),
- * downtrend (LH+LL), or unclear. Used as a mandatory gate before TS_TF
- * entries on HTF (typically 4h).
+ * downtrend (LH+LL), or unclear.
+ *
+ * Sprint 12 architecture decision: race participant (independent signal
+ * generator), not a hard gate on Trend Following. Gate helpers remain for
+ * `tsCombinationMode: "gate"` rollback / A-B comparison.
  */
 
 "use strict";
@@ -16,6 +19,10 @@ const DEFAULTS = {
   rightLook: 2,
   scanBars: 80,
   minSwingPairs: 2,
+  // Race-mode entry: pullback must land within this fraction of the last swing range.
+  entryPullbackPct: 0.35,
+  // Prefer ATR when available; fallback uses entryPullbackPct × swing span.
+  entryAtrMult: 0.75,
 };
 
 /**
@@ -238,6 +245,136 @@ function evaluateMarketStructureComponent(highs, lows, lastIdx, config = {}) {
   };
 }
 
+function _pullbackTol(lastSwingHigh, lastSwingLow, atr, cfg) {
+  const span = Math.abs((lastSwingHigh?.price ?? 0) - (lastSwingLow?.price ?? 0));
+  const pctTol = span > 0 ? span * (cfg.entryPullbackPct ?? DEFAULTS.entryPullbackPct) : null;
+  if (atr != null && Number.isFinite(atr) && atr > 0) {
+    const atrTol = atr * (cfg.entryAtrMult ?? DEFAULTS.entryAtrMult);
+    return pctTol != null ? Math.max(atrTol, pctTol * 0.5) : atrTol;
+  }
+  return pctTol != null && pctTol > 0 ? pctTol : null;
+}
+
+/**
+ * Full race-participant entry for Dow Theory (Sprint 12).
+ * LONG: HTF uptrend + pullback near last HL + bounce candle.
+ * SHORT: HTF downtrend + rally near last LH + rejection candle.
+ * Edge-triggered so clear structure does not fire every bar.
+ *
+ * @returns {{ vote, confidence, reason, meta, signal }}
+ */
+function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  if (!Number.isInteger(lastIdx) || lastIdx < 1) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "structure_entry_warmup",
+      meta: {},
+    };
+  }
+
+  const classified = classifyMarketStructure(highs, lows, lastIdx, cfg);
+  const { structure, confidence, meta } = classified;
+  if (structure === "unclear") {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: meta?.reason || "structure_unclear",
+      meta: { ...meta, structure },
+    };
+  }
+
+  const price = closes?.[lastIdx];
+  const prev = closes?.[lastIdx - 1];
+  const open = config.opens?.[lastIdx];
+  if (price == null || !Number.isFinite(price)) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "no_price",
+      meta: { ...meta, structure },
+    };
+  }
+
+  const lastSH = meta?.lastSwingHigh;
+  const lastSL = meta?.lastSwingLow;
+  const atr = config.atr ?? null;
+  const tol = _pullbackTol(lastSH, lastSL, atr, cfg);
+  if (tol == null || !Number.isFinite(tol) || tol <= 0) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "no_pullback_tolerance",
+      meta: { ...meta, structure },
+    };
+  }
+
+  const bounce = (open != null && Number.isFinite(open) && price > open)
+    || (prev != null && Number.isFinite(prev) && price > prev);
+  const reject = (open != null && Number.isFinite(open) && price < open)
+    || (prev != null && Number.isFinite(prev) && price < prev);
+
+  if (structure === "uptrend" && lastSL?.price != null) {
+    const dist = Math.abs(price - lastSL.price);
+    const prevDist = prev != null ? Math.abs(prev - lastSL.price) : Infinity;
+    const near = dist <= tol;
+    // Edge: enter the HL zone this bar, or bounce while already near.
+    const edge = near && (prevDist > tol || bounce);
+    if (edge && bounce) {
+      return {
+        vote: "LONG",
+        signal: "LONG",
+        confidence: Math.min(1, 0.55 + confidence * 0.4),
+        reason: "dow_hl_pullback_bounce",
+        meta: { ...meta, structure, tol, dist, lastSwingLow: lastSL },
+      };
+    }
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: near ? "awaiting_hl_bounce" : "awaiting_hl_pullback",
+      meta: { ...meta, structure, tol, dist },
+    };
+  }
+
+  if (structure === "downtrend" && lastSH?.price != null) {
+    const dist = Math.abs(price - lastSH.price);
+    const prevDist = prev != null ? Math.abs(prev - lastSH.price) : Infinity;
+    const near = dist <= tol;
+    const edge = near && (prevDist > tol || reject);
+    if (edge && reject) {
+      return {
+        vote: "SHORT",
+        signal: "SHORT",
+        confidence: Math.min(1, 0.55 + confidence * 0.4),
+        reason: "dow_lh_rally_reject",
+        meta: { ...meta, structure, tol, dist, lastSwingHigh: lastSH },
+      };
+    }
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: near ? "awaiting_lh_reject" : "awaiting_lh_rally",
+      meta: { ...meta, structure, tol, dist },
+    };
+  }
+
+  return {
+    vote: "NEUTRAL",
+    signal: null,
+    confidence: 0,
+    reason: "structure_no_entry",
+    meta: { ...meta, structure },
+  };
+}
+
 module.exports = {
   DEFAULTS,
   findConfirmedSwingHighs,
@@ -245,4 +382,5 @@ module.exports = {
   classifyMarketStructure,
   evaluateMarketStructureGate,
   evaluateMarketStructureComponent,
+  evaluateMarketStructureEntry,
 };

@@ -1,5 +1,8 @@
 /**
  * VolumeProfileStrategy.js — TS Component C (Auction Market Theory / VWAP + Value Area)
+ *
+ * Sprint 12: independent race participant with VWAP reclaim / VA-edge entries.
+ * Precision helpers retained for tsCombinationMode:"gate" rollback.
  */
 
 "use strict";
@@ -8,6 +11,7 @@ const StrategyBase = require("../base/StrategyBase");
 const {
   evaluateVolumeProfileComponent,
   evaluateVolumeProfilePrecision,
+  evaluateVolumeProfileEntry,
   DEFAULTS,
 } = require("../ts/volumeProfileComponent");
 
@@ -17,8 +21,8 @@ class VolumeProfileStrategy extends StrategyBase {
       name: "TS_VP",
       label: "Auction Market Theory",
       description:
-        "TS Component C: Auction Market Theory — session VWAP + Value Area entry precision for Trend Following pullbacks.",
-      version: "1.0.0",
+        "TS race participant: Auction Market Theory — session VWAP reclaim / Value Area edge entries (independent of Trend Following).",
+      version: "2.0.0",
       enabled: true,
       ...config,
     });
@@ -44,14 +48,22 @@ class VolumeProfileStrategy extends StrategyBase {
     return { allowed: true, reason: "ok" };
   }
 
+  /**
+   * Race-mode entry signal (VWAP reclaim/lose or VA edge bounce).
+   */
   detectSignal(indicators, lastIdx, config = {}) {
-    const result = evaluateVolumeProfileComponent(indicators, lastIdx, {
+    const result = evaluateVolumeProfileEntry(indicators, lastIdx, {
       ...DEFAULTS,
       ...config.volumeProfile,
       ...config,
     });
-    this._lastSignalMeta = { component: "TS_VP", ...result };
-    return result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
+    this._lastSignalMeta = {
+      component: "TS_VP",
+      winningComponent: result.signal ? "TS_VP" : null,
+      strategyLabel: "Auction Market Theory",
+      ...result,
+    };
+    return result.signal || null;
   }
 
   evaluate(indicators, lastIdx, config = {}) {
@@ -80,6 +92,20 @@ class VolumeProfileStrategy extends StrategyBase {
 
   getRiskConfig() {
     return { riskPerTrade: 0.015, maxTradesPerDay: 3, slMultiplier: 1.5, tpMultiplier: 3.0 };
+  }
+
+  calculateRiskConfig(entryPrice, atr, signal, _component, opts = {}) {
+    const slMult = opts.slMultiplier ?? 1.5;
+    const tpMult = opts.tpMultiplier ?? 3.0;
+    const slDist = atr * slMult;
+    const tpDist = atr * tpMult;
+    return {
+      stopLoss: signal === "LONG" ? entryPrice - slDist : entryPrice + slDist,
+      takeProfit: signal === "LONG" ? entryPrice + tpDist : entryPrice - tpDist,
+      slDistance: slDist,
+      tpDistance: tpDist,
+      riskReward: tpMult / slMult,
+    };
   }
 
   getTimeframeConfig() {

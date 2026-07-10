@@ -1,5 +1,5 @@
 /**
- * Sprint 9 TS-SUB-01/02/03 — Dow Theory, Auction Market Theory (VWAP/VP), TrendSurge layering tests.
+ * Sprint 9 TS-SUB-01/02 + Sprint 12 race-to-confirm — Dow Theory, AMT, TrendSurge.
  */
 
 "use strict";
@@ -9,12 +9,14 @@ const {
   classifyMarketStructure,
   evaluateMarketStructureGate,
   evaluateMarketStructureComponent,
+  evaluateMarketStructureEntry,
 } = require("../src/domain/strategy/ts/marketStructureComponent");
 const {
   calculateSessionVwap,
   buildVolumeProfile,
   evaluateVolumeProfilePrecision,
   evaluateVolumeProfileComponent,
+  evaluateVolumeProfileEntry,
 } = require("../src/domain/strategy/ts/volumeProfileComponent");
 const { getActiveComponentsForTier, isActiveComponent } = require("../src/config/strategies");
 const TrendSurgeUmbrella = require("../src/domain/strategy/umbrellas/TrendSurgeUmbrella");
@@ -47,16 +49,14 @@ function buildUptrendSeries(waves = 5) {
   for (let wave = 0; wave < waves; wave++) {
     const peak = 110 + wave * 10;
     const trough = 100 + wave * 10;
-    // Approach peak
     push(peak - 4, trough - 2, peak - 3, 1000);
     push(peak - 2, trough - 1, peak - 2, 1000);
-    push(peak, trough + 1, peak - 1, 1200); // swing high
+    push(peak, trough + 1, peak - 1, 1200);
     push(peak - 2, trough + 2, peak - 2, 900);
     push(peak - 3, trough + 1, peak - 3, 900);
-    // Pullback to higher low
     push(peak - 3, trough, peak - 3, 800);
     push(peak - 4, trough - 0.5, trough + 1, 800);
-    push(peak - 3, trough, trough + 0.5, 850); // swing low
+    push(peak - 3, trough, trough + 0.5, 850);
     push(peak - 2, trough + 1, trough + 2, 900);
     push(peak - 1, trough + 2, trough + 3, 950);
   }
@@ -72,7 +72,7 @@ function buildDowntrendSeries(waves = 5) {
     highs.push(peak - 2, peak, peak - 1, peak - 3, peak - 4);
     lows.push(trough + 2, trough + 3, trough + 1, trough, trough + 1);
     highs.push(peak - 3, peak - 2, peak - 4, peak - 3, peak - 2);
-    lows.push(trough + 1, trough + 2, trough - 1, trough, trough + 1); // lower low at trough-1
+    lows.push(trough + 1, trough + 2, trough - 1, trough, trough + 1);
   }
   return { highs, lows };
 }
@@ -141,11 +141,32 @@ test("component vote matches structure", () => {
   assert.strictEqual(r.vote, "LONG");
 });
 
+test("race entry fires LONG on HL pullback bounce", () => {
+  const { highs, lows, closes } = buildUptrendSeries();
+  const classified = classifyMarketStructure(highs, lows, highs.length - 1, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  assert.strictEqual(classified.structure, "uptrend");
+  const hl = classified.meta.lastSwingLow.price;
+  const idx = closes.length - 1;
+  closes[idx - 1] = hl + 5;
+  closes[idx] = hl + 0.2;
+  highs[idx] = hl + 1;
+  lows[idx] = hl - 0.1;
+  const r = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+    atr: 2,
+    entryAtrMult: 1.5,
+    opens: closes.map((c, i) => (i === idx ? hl - 0.05 : c)),
+  });
+  assert.strictEqual(r.signal, "LONG");
+  assert.ok(r.reason.includes("hl_pullback") || r.reason.includes("bounce"));
+});
+
 console.log("\n═══ Auction Market Theory / VWAP (TS-SUB-02) ═══");
 
 test("session VWAP computes", () => {
   const { highs, lows, closes, volumes } = buildUptrendSeries(5);
-  // Keep entire series in one UTC day so session VWAP has enough bars
   const timestamps = closes.map((_, i) => Date.UTC(2026, 0, 1) + i * 60_000);
   const r = calculateSessionVwap(highs, lows, closes, volumes, timestamps, closes.length - 1);
   assert.ok(r.vwap != null && Number.isFinite(r.vwap));
@@ -191,11 +212,9 @@ test("price far from VWAP/VA blocked (ATR tolerance)", () => {
     lows.push(99.9);
     closes.push(100);
     volumes.push(1000);
-    atr.push(1.0); // ATR=1 → 0.5×ATR = 0.5 tolerance
-    timestamps.push(day0 + i * 60_000); // 1m bars — full session in one UTC day
+    atr.push(1.0);
+    timestamps.push(day0 + i * 60_000);
   }
-  // Spike last close far above the session cluster with tiny volume
-  // so VWAP/VA stay near 100 while price is outside.
   closes[n - 1] = 130;
   highs[n - 1] = 130.1;
   lows[n - 1] = 129.9;
@@ -225,10 +244,10 @@ test("price within 0.5×ATR of VWAP allowed", () => {
     lows.push(99.9);
     closes.push(100);
     volumes.push(1000);
-    atr.push(2.0); // 0.5×ATR = 1.0
+    atr.push(2.0);
     timestamps.push(day0 + i * 60_000);
   }
-  closes[n - 1] = 100.8; // within 1.0 of VWAP≈100
+  closes[n - 1] = 100.8;
   highs[n - 1] = 100.9;
   lows[n - 1] = 100.7;
   const r = evaluateVolumeProfilePrecision(
@@ -253,7 +272,37 @@ test("component bias above VWAP → LONG", () => {
   assert.ok(["LONG", "SHORT", "NEUTRAL"].includes(r.vote));
 });
 
-console.log("\n═══ TrendSurge Integration (TS-SUB-03) ═══");
+test("race entry fires on VWAP reclaim", () => {
+  const n = 30;
+  const highs = [];
+  const lows = [];
+  const closes = [];
+  const volumes = [];
+  const atr = [];
+  const timestamps = [];
+  const day0 = Date.UTC(2026, 0, 2);
+  for (let i = 0; i < n; i++) {
+    highs.push(100.1);
+    lows.push(99.9);
+    closes.push(100);
+    volumes.push(1000);
+    atr.push(1.0);
+    timestamps.push(day0 + i * 60_000);
+  }
+  closes[n - 2] = 99.5;
+  closes[n - 1] = 100.2;
+  highs[n - 1] = 100.3;
+  lows[n - 1] = 99.8;
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, volumes, timestamps, atr },
+    n - 1,
+    { minSessionBars: 8, vwapAtrMult: 0.5 }
+  );
+  assert.strictEqual(r.signal, "LONG");
+  assert.strictEqual(r.reason, "vwap_reclaim");
+});
+
+console.log("\n═══ TrendSurge Race (Sprint 12) ═══");
 
 test("FORGE active components include TS_MS + TS_VP", () => {
   const active = getActiveComponentsForTier("FORGE");
@@ -271,21 +320,50 @@ test("FOUNDRY still lists AF Wyckoff + VSA", () => {
 
 test("umbrella registers three components", () => {
   const umb = new TrendSurgeUmbrella();
-  const keys = umb.getComponentKeys ? umb.getComponentKeys() : Object.keys(umb.components || {});
-  // UmbrellaStrategy stores components in a Map/object — probe both shapes
-  const compKeys = keys.length
-    ? keys
-    : [...(umb._components?.keys?.() || []), ...Object.keys(umb._components || {})];
-  // Fallback: check private fields
   assert.ok(umb._tf);
   assert.ok(umb._ms);
   assert.ok(umb._vp);
-  void compKeys;
 });
 
-test("structure gate blocks when forced unclear + TF would fire", () => {
+test("race: highest confidence wins with attribution", () => {
   const umb = new TrendSurgeUmbrella();
-  // Stub TF to always fire LONG
+  umb._tf.detectSignal = () => "LONG";
+  umb._tf.getLastSignalMeta = () => ({ confidence: 0.5, reason: "tf" });
+  umb._ms.detectSignal = () => "LONG";
+  umb._ms.getLastSignalMeta = () => ({ confidence: 0.9, reason: "dow_hl_pullback_bounce" });
+  umb._vp.detectSignal = () => null;
+  umb._vp.getLastSignalMeta = () => ({ confidence: 0, reason: "awaiting" });
+  const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
+    tsCombinationMode: "race",
+    selectedComponents: ["TS_TF", "TS_MS", "TS_VP"],
+  });
+  assert.strictEqual(sig, "LONG");
+  const meta = umb.getLastSignalMeta();
+  assert.strictEqual(meta.winningComponent, "TS_MS");
+  assert.strictEqual(meta.strategyLabel, "Dow Theory");
+  assert.strictEqual(umb.getLastRaceMeta().mode, "race");
+});
+
+test("race: TF-only selected → MS/VP do not participate", () => {
+  const umb = new TrendSurgeUmbrella();
+  umb._tf.detectSignal = () => "SHORT";
+  umb._tf.getLastSignalMeta = () => ({ confidence: 0.7 });
+  let msCalled = false;
+  let vpCalled = false;
+  umb._ms.detectSignal = () => { msCalled = true; return "LONG"; };
+  umb._vp.detectSignal = () => { vpCalled = true; return "LONG"; };
+  const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
+    tsCombinationMode: "race",
+    selectedComponents: ["TS_TF"],
+  });
+  assert.strictEqual(sig, "SHORT");
+  assert.strictEqual(msCalled, false);
+  assert.strictEqual(vpCalled, false);
+  assert.strictEqual(umb.getLastSignalMeta().winningComponent, "TS_TF");
+});
+
+test("gate mode rollback: structure gate still blocks", () => {
+  const umb = new TrendSurgeUmbrella();
   umb._tf.detectSignal = () => "LONG";
   umb._ms.evaluateGate = () => ({
     allowed: false,
@@ -294,6 +372,7 @@ test("structure gate blocks when forced unclear + TF would fire", () => {
     reason: "structure_unclear",
   });
   const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
+    tsCombinationMode: "gate",
     tsUseStructureGate: true,
     tsUseVwapPrecision: false,
   });
@@ -301,7 +380,7 @@ test("structure gate blocks when forced unclear + TF would fire", () => {
   assert.strictEqual(umb.getLastLayerMeta().reason, "structure_unclear");
 });
 
-test("layers pass when gate + precision allow", () => {
+test("gate mode: layers pass when gate + precision allow", () => {
   const umb = new TrendSurgeUmbrella();
   umb._tf.detectSignal = () => "LONG";
   umb._ms.evaluateGate = () => ({
@@ -310,25 +389,25 @@ test("layers pass when gate + precision allow", () => {
   umb._vp.evaluatePrecision = () => ({
     allowed: true, vote: "LONG", confidence: 0.7, reason: "vwap_retest",
   });
-  const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {});
+  const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
+    tsCombinationMode: "gate",
+  });
   assert.strictEqual(sig, "LONG");
   assert.strictEqual(umb.getLastLayerMeta().reason, "ts_layers_passed");
 });
 
-test("rollback flags disable layers", () => {
+test("tie-break prefers TS_TF over TS_MS at equal confidence", () => {
   const umb = new TrendSurgeUmbrella();
-  umb._tf.detectSignal = () => "SHORT";
-  let msCalled = false;
-  let vpCalled = false;
-  umb._ms.evaluateGate = () => { msCalled = true; return { allowed: false }; };
-  umb._vp.evaluatePrecision = () => { vpCalled = true; return { allowed: false }; };
+  umb._tf.detectSignal = () => "LONG";
+  umb._tf.getLastSignalMeta = () => ({ confidence: 0.8 });
+  umb._ms.detectSignal = () => "SHORT";
+  umb._ms.getLastSignalMeta = () => ({ confidence: 0.8 });
+  umb._vp.detectSignal = () => null;
   const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
-    tsUseStructureGate: false,
-    tsUseVwapPrecision: false,
+    tsCombinationMode: "race",
   });
-  assert.strictEqual(sig, "SHORT");
-  assert.strictEqual(msCalled, false);
-  assert.strictEqual(vpCalled, false);
+  assert.strictEqual(sig, "LONG");
+  assert.strictEqual(umb.getLastSignalMeta().winningComponent, "TS_TF");
 });
 
-console.log("\nAll TS Dow Theory / Auction Market Theory / layering tests passed.\n");
+console.log("\nAll TS Dow Theory / Auction Market Theory / race tests passed.\n");

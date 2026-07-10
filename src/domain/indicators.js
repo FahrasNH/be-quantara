@@ -781,7 +781,8 @@ function getAdaptiveFusionMeta() {
 
 /**
  * Singleton getter untuk TREND_FOLLOWING / Trend Surge umbrella
- * (TS_TF + structure gate + VWAP precision — same instance as backtest registry).
+ * (TS_TF race bag: Trend Following + Dow Theory + Auction Market Theory —
+ * same instance as backtest registry; Sprint 12 race-to-confirm).
  */
 function getTrendFollowingInstance() {
   if (!_trendFollowingInstance) {
