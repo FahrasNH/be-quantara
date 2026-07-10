@@ -6,8 +6,8 @@
  *
  * Layering (TS-SUB-03) — NOT AF-style 2/3 voting:
  *   A) Trend Following momentum trigger (required)
- *   B) Market Structure Dow HH/HL gate (required when enabled)
- *   C) VWAP / Value Area entry precision (refines timing when enabled)
+ *   B) Dow Theory HH/HL gate (required when enabled)
+ *   C) Auction Market Theory / VWAP Value Area precision (refines timing when enabled)
  */
 
 const UmbrellaStrategy         = require("../base/UmbrellaStrategy");
@@ -21,7 +21,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       name:        "TS_TF",
       label:       "Trend Surge",
       description:
-        "Trend Following with Market Structure gate + VWAP/Value Area entry precision.",
+        "Trend Following with Dow Theory gate + Auction Market Theory (VWAP/Value Area) entry precision.",
       version:     "2.0.0",
       enabled:     true,
       votingThreshold: 0.65,
@@ -111,6 +111,12 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
 
   getLastLayerMeta() {
     return this._lastLayerMeta;
+  }
+
+  resetTrendState() {
+    if (this._tf && typeof this._tf.resetTrendState === "function") {
+      this._tf.resetTrendState();
+    }
   }
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {

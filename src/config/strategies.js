@@ -27,8 +27,8 @@ const COMPONENT_STRATEGIES = {
 
   // TREND_SURGE — FORGE Tier (A trigger + B structure gate + C VWAP precision)
   TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE (Component A)
-  TS_MS:  "TS_MS",    // Market Structure       ✅ LIVE (Component B — Sprint 9)
-  TS_VP:  "TS_VP",    // Volume Profile + VWAP  ✅ LIVE (Component C — Sprint 9)
+  TS_MS:  "TS_MS",    // Dow Theory (HH/HL)     ✅ LIVE (Component B — Sprint 9)
+  TS_VP:  "TS_VP",    // Auction Market Theory  ✅ LIVE (Component C — Sprint 9)
   TS_EW:  "TS_EW",    // Elliott Wave           ⏳ Future
   TS_PA:  "TS_PA",    // Price Action           ⏳ Future
 

@@ -17,7 +17,9 @@
 
 const StrategyBase = require("../base/StrategyBase");
 const { calcEMA, calcSMA, calcDonchian, calcADX, calcATR } = require("../../indicators");
-const { checkHTFRegime } = require("../../htfRegimeFilter");
+// NOTE: Do NOT import checkHTFRegime here. That helper is Mean-Reversion logic
+// (blocks WITH-trend entries). Applying it to Trend Following inverted the
+// directional gate → 100% SHORT bias in uptrends (Sprint 12 bug analysis).
 
 class TrendFollowingStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -410,21 +412,9 @@ class TrendFollowingStrategy extends StrategyBase {
       config.adxMinStrength, config.minVolRatio
     );
 
-    if (longCheck.valid) {
-      if (config.tierOverrides?.regimeFilterRequired) {
-        const regimeCheck = checkHTFRegime({
-          direction: 'LONG',
-          htfData: {
-            ema9: htfEmaFast,
-            ema50: htfEmaSlow,
-            ema200: indicators.ema200HTF?.[idxHTF] ?? null,
-          },
-          required: true,
-        });
-        if (!regimeCheck.allowed) return null;
-      }
-      return "LONG";
-    }
+    // TF already enforces HTF direction via detectHTFTrend + entry checks.
+    // Never apply MR's checkHTFRegime here (it blocks with-trend entries).
+    if (longCheck.valid) return "LONG";
 
     const shortCheck = this.checkShortEntry(
       closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
@@ -433,21 +423,7 @@ class TrendFollowingStrategy extends StrategyBase {
       config.adxMinStrength, config.minVolRatio
     );
 
-    if (shortCheck.valid) {
-      if (config.tierOverrides?.regimeFilterRequired) {
-        const regimeCheck = checkHTFRegime({
-          direction: 'SHORT',
-          htfData: {
-            ema9: htfEmaFast,
-            ema50: htfEmaSlow,
-            ema200: indicators.ema200HTF?.[idxHTF] ?? null,
-          },
-          required: true,
-        });
-        if (!regimeCheck.allowed) return null;
-      }
-      return "SHORT";
-    }
+    if (shortCheck.valid) return "SHORT";
 
     return null;
   }

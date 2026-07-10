@@ -1,5 +1,5 @@
 /**
- * Sprint 9 TS-SUB-01/02/03 — Market Structure, VWAP/VP, TrendSurge layering tests.
+ * Sprint 9 TS-SUB-01/02/03 — Dow Theory, Auction Market Theory (VWAP/VP), TrendSurge layering tests.
  */
 
 "use strict";
@@ -77,7 +77,7 @@ function buildDowntrendSeries(waves = 5) {
   return { highs, lows };
 }
 
-console.log("\n═══ Market Structure (TS-SUB-01) ═══");
+console.log("\n═══ Dow Theory (TS-SUB-01) ═══");
 
 test("classifies uptrend HH+HL", () => {
   const { highs, lows } = buildUptrendSeries();
@@ -141,7 +141,7 @@ test("component vote matches structure", () => {
   assert.strictEqual(r.vote, "LONG");
 });
 
-console.log("\n═══ Volume Profile + VWAP (TS-SUB-02) ═══");
+console.log("\n═══ Auction Market Theory / VWAP (TS-SUB-02) ═══");
 
 test("session VWAP computes", () => {
   const { highs, lows, closes, volumes } = buildUptrendSeries(5);
@@ -331,4 +331,4 @@ test("rollback flags disable layers", () => {
   assert.strictEqual(vpCalled, false);
 });
 
-console.log("\nAll TS Market Structure / VWAP / layering tests passed.\n");
+console.log("\nAll TS Dow Theory / Auction Market Theory / layering tests passed.\n");

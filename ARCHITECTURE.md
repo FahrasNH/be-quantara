@@ -46,8 +46,8 @@ Per AF-SUB-03 research gate (do **not** skip):
 | Slot | Key | Role | Implementation |
 |------|-----|------|----------------|
 | A | `TS_TF` | Trend Following momentum trigger | `TrendFollowingStrategy` |
-| B | `TS_MS` | Market Structure Dow HH/HL gate | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
-| C | `TS_VP` | VWAP + Value Area entry precision | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
+| B | `TS_MS` | Dow Theory HH/HL gate | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
+| C | `TS_VP` | Auction Market Theory (VWAP + Value Area) | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
 
 Layering (not AF-style voting):
 

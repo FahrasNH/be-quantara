@@ -1,5 +1,5 @@
 /**
- * Volume Profile + VWAP entry precision for Trend Surge (TS-SUB-02).
+ * Auction Market Theory (VWAP + Value Area) entry precision for Trend Surge (TS-SUB-02).
  *
  * - Session VWAP resets daily at UTC midnight (aligned with Quantara daily loss counter).
  * - Volume Profile: 20-bin histogram → POC + Value Area (70% volume).

@@ -72,7 +72,8 @@ function isoOf(c) {
 }
 
 /** Attach full entryContext for RAG gate / WinPredictor (mirrors live ML pipeline). */
-function withBacktestEntryContext(tradeObj, position, strategyKey) {
+function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) {
+  const label = displayName || strategyKey;
   const ctxSource = {
     entry:      tradeObj.entry ?? position?.entry,
     atr:        position?.atr ?? tradeObj.atr ?? null,
@@ -81,14 +82,64 @@ function withBacktestEntryContext(tradeObj, position, strategyKey) {
     marketCond: position?.marketCond ?? tradeObj.marketCond ?? null,
     confidence: position?.confidence ?? tradeObj.confidence ?? null,
     tradeType:  tradeObj.tradeType ?? tradeObj.component ?? position?.component,
-    strategy:   strategyKey,
+    strategy:   label,
   };
+  tradeObj.strategy = label;
+  tradeObj.strategyKey = strategyKey;
+  tradeObj.strategyLabel = label;
   tradeObj.entryContext = buildBacktestEntryContext(ctxSource, {
     strategyKey,
     openTime: tradeObj.openTime,
     price:    ctxSource.entry,
   });
   return tradeObj;
+}
+
+/**
+ * Resolve TS layer flags from Advance selectedComponents.
+ * Empty/missing → keep cfg defaults (both layers on for FORGE).
+ * Explicit TS_TF-only → disable both gates (baseline trigger).
+ */
+function resolveTsLayerFlags(cfg = {}) {
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
+  if (!Array.isArray(comps) || comps.length === 0) {
+    return {
+      tsUseStructureGate: cfg.tsUseStructureGate,
+      tsUseVwapPrecision: cfg.tsUseVwapPrecision,
+    };
+  }
+  const tsComps = comps.filter((c) =>
+    ["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"].includes(String(c).toUpperCase())
+  );
+  if (!tsComps.length) {
+    return {
+      tsUseStructureGate: cfg.tsUseStructureGate,
+      tsUseVwapPrecision: cfg.tsUseVwapPrecision,
+    };
+  }
+  const upper = tsComps.map((c) => String(c).toUpperCase());
+  const onlyTrigger = upper.every((c) => c === "TS_TF" || c === "TREND_FOLLOWING");
+  if (onlyTrigger) {
+    return { tsUseStructureGate: false, tsUseVwapPrecision: false };
+  }
+  return {
+    tsUseStructureGate: upper.includes("TS_MS"),
+    tsUseVwapPrecision: upper.includes("TS_VP"),
+  };
+}
+
+function resolveStrategyDisplayName(strategyKey, cfg = {}) {
+  if (cfg.strategyDisplayName) return cfg.strategyDisplayName;
+  if (cfg.displayLabel) return cfg.displayLabel;
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents;
+  if (Array.isArray(comps) && comps.length) {
+    const labels = comps.map((c) => {
+      const s = STRATEGIES[c];
+      return s?.label || c;
+    });
+    if (labels.length) return labels.join(" + ");
+  }
+  return STRATEGIES[strategyKey]?.label || strategyKey;
 }
 
 /**
@@ -134,6 +185,10 @@ function buildAtrBaseline(atrArr, window = 100) {
 async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
+  const strategyDisplayName = resolveStrategyDisplayName(strategyKey, cfg);
+
+  // AF umbrella is a process singleton — clear ablation counters between runs.
+  if (typeof strategy.resetAblation === "function") strategy.resetAblation();
 
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
@@ -305,7 +360,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      }, position, strategyKey));
+      }, position, strategyKey, strategyDisplayName));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
@@ -410,7 +465,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey));
+    }, position, strategyKey, strategyDisplayName));
     positions.delete(componentId);
   }
 
@@ -1339,6 +1394,18 @@ async function runRealBacktest(opts = {}) {
 async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
+  const strategyDisplayName = resolveStrategyDisplayName(strategyKey, cfg);
+  const tsLayers = resolveTsLayerFlags(cfg);
+  const tsUseStructureGate = tsLayers.tsUseStructureGate;
+  const tsUseVwapPrecision = tsLayers.tsUseVwapPrecision;
+
+  // TrendSurge/TF is a process singleton — reset directional state between runs
+  // so a prior SHORT streak cannot contaminate the next backtest.
+  if (typeof strategy.resetTrendState === "function") {
+    strategy.resetTrendState();
+  } else if (strategy._tf && typeof strategy._tf.resetTrendState === "function") {
+    strategy._tf.resetTrendState();
+  }
 
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
@@ -1540,7 +1607,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      }, position, strategyKey));
+      }, position, strategyKey, strategyDisplayName));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP).
@@ -1636,7 +1703,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey));
+    }, position, strategyKey, strategyDisplayName));
     position = null;
   }
 
@@ -1798,12 +1865,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // strategy degrades to entry-TF fallback for the warmup bars.
       htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
 
-      // Sprint 9 TS layers — must be forwarded from cfg (singleton strategy has no per-request config).
-      tsUseStructureGate: cfg.tsUseStructureGate,
-      tsUseVwapPrecision: cfg.tsUseVwapPrecision,
+      // Sprint 9 TS layers — resolved from selectedComponents when Advance mode
+      // sends them; otherwise keep cfg defaults (both on for FORGE).
+      tsUseStructureGate,
+      tsUseVwapPrecision,
       marketStructure: cfg.marketStructure,
       volumeProfile: cfg.volumeProfile,
       vwapAtrMult: cfg.vwapAtrMult,
+      selectedComponents: cfg.selectedComponents,
+      afEnabledComponents: cfg.afEnabledComponents || cfg.selectedComponents,
 
       // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
       // is a server-startup SINGLETON (new TrendSurgeUmbrella(), no per-request
@@ -2046,7 +2116,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 // strategies (e.g. SMC, where it must stay dead) — mapping it globally would
 // silently change their SL/TP too.
 function normalizeTfGeometryKeys(strategyKey, cfg) {
-  if (strategyKey !== "TS_TF" && strategyKey !== "TREND_FOLLOWING") return cfg;
+  const key = String(strategyKey || "").toUpperCase();
+  if (!TF_KEYS.has(key)) return cfg;
   const out = { ...cfg };
   if (out.slAtrMult == null) out.slAtrMult = out.atrMult ?? out.atrMultiplier;
   if (out.tpAtrMult == null && out.slAtrMult != null) {

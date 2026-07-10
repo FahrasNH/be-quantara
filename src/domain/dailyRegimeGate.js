@@ -89,9 +89,11 @@ function applyRegimeGate(params) {
   }
 
   const key = String(strategyKey || "").toUpperCase();
-  const isMomentum = key.includes("TREND_FOLLOWING") || key.includes("TS_TF") ||
-                     key.includes("BREAKOUT") || key.includes("BS_BR");
-  const isStructure = key.includes("SMART_MONEY") || key.includes("AF_SMC");
+  const isMomentum = key.includes("TREND_FOLLOWING") || key.includes("TS_TF")
+    || key.includes("TS_MS") || key.includes("TS_VP")
+    || key.includes("BREAKOUT") || key.includes("BS_BR");
+  const isStructure = key.includes("SMART_MONEY") || key.includes("AF_SMC")
+    || key.includes("AF_WYCKOFF") || key.includes("AF_VSA");
 
   if (regime === "STRONG_TREND") {
     // Full trading, all strategies enabled

@@ -1,5 +1,5 @@
 /**
- * Market Structure (Dow Theory HH/HL) component for Trend Surge (TS-SUB-01).
+ * Dow Theory (HH/HL) component for Trend Surge (TS-SUB-01).
  *
  * Causal fractal swing detection — confirmed only after `rightLook` bars
  * (no look-ahead / no repaint). Classifies structure as uptrend (HH+HL),

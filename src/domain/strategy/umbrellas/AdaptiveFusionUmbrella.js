@@ -68,68 +68,110 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
    */
   collectComponentVotes(indicators, lastIdx, config = {}, precomputedMulti = null) {
     const votes = [];
+    const active = this._resolveActiveVoters(config);
 
     // Component A — SMC
-    let smc;
-    if (precomputedMulti) {
-      smc = smcVoteFromMulti(precomputedMulti);
-    } else {
-      try {
-        const sig = this._smc.detectSignal(indicators, lastIdx, config);
-        const meta = typeof this._smc.getLastSignalMeta === "function"
-          ? this._smc.getLastSignalMeta()
-          : null;
-        if (sig === "LONG" || sig === "SHORT") {
-          smc = {
-            vote: sig,
-            confidence: (meta?.aggregateConfidence ?? 70) / 100,
-            reason: "smc_signal",
-          };
-        } else {
-          smc = { vote: "NEUTRAL", confidence: 0, reason: "smc_no_signal" };
+    if (active.has("AF_SMC") || active.has("SMC")) {
+      let smc;
+      if (precomputedMulti) {
+        smc = smcVoteFromMulti(precomputedMulti);
+      } else {
+        try {
+          const sig = this._smc.detectSignal(indicators, lastIdx, config);
+          const meta = typeof this._smc.getLastSignalMeta === "function"
+            ? this._smc.getLastSignalMeta()
+            : null;
+          if (sig === "LONG" || sig === "SHORT") {
+            smc = {
+              vote: sig,
+              confidence: (meta?.aggregateConfidence ?? 70) / 100,
+              reason: "smc_signal",
+            };
+          } else {
+            smc = { vote: "NEUTRAL", confidence: 0, reason: "smc_no_signal" };
+          }
+        } catch (err) {
+          smc = { vote: "NEUTRAL", confidence: 0, reason: `smc_error:${err.message}` };
         }
-      } catch (err) {
-        smc = { vote: "NEUTRAL", confidence: 0, reason: `smc_error:${err.message}` };
       }
+      votes.push({ key: "SMC", ...smc });
     }
-    votes.push({ key: "SMC", ...smc });
 
     // Component B — Wyckoff
-    let wyResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
-    try {
-      wyResult = this._wyckoff.evaluate(indicators, lastIdx, config);
-    } catch (err) {
-      wyResult = { vote: "NEUTRAL", confidence: 0, reason: `wyckoff_error:${err.message}` };
+    if (active.has("AF_WYCKOFF") || active.has("WYCKOFF")) {
+      let wyResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
+      try {
+        wyResult = this._wyckoff.evaluate(indicators, lastIdx, config);
+      } catch (err) {
+        wyResult = { vote: "NEUTRAL", confidence: 0, reason: `wyckoff_error:${err.message}` };
+      }
+      votes.push({
+        key: "WYCKOFF",
+        vote: wyResult.vote || "NEUTRAL",
+        confidence: wyResult.confidence || 0,
+        reason: wyResult.reason,
+      });
     }
-    votes.push({
-      key: "WYCKOFF",
-      vote: wyResult.vote || "NEUTRAL",
-      confidence: wyResult.confidence || 0,
-      reason: wyResult.reason,
-    });
 
     // Component C — VSA
-    let vsaResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
-    try {
-      vsaResult = this._vsa.evaluate(indicators, lastIdx, config);
-    } catch (err) {
-      vsaResult = { vote: "NEUTRAL", confidence: 0, reason: `vsa_error:${err.message}` };
+    if (active.has("AF_VSA") || active.has("VSA")) {
+      let vsaResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
+      try {
+        vsaResult = this._vsa.evaluate(indicators, lastIdx, config);
+      } catch (err) {
+        vsaResult = { vote: "NEUTRAL", confidence: 0, reason: `vsa_error:${err.message}` };
+      }
+      votes.push({
+        key: "VSA",
+        vote: vsaResult.vote || "NEUTRAL",
+        confidence: vsaResult.confidence || 0,
+        reason: vsaResult.reason,
+      });
     }
-    votes.push({
-      key: "VSA",
-      vote: vsaResult.vote || "NEUTRAL",
-      confidence: vsaResult.confidence || 0,
-      reason: vsaResult.reason,
-    });
 
     return votes;
   }
 
+  /**
+   * Which AF voters participate. Advance selectedComponents (AF_WYCKOFF / AF_VSA / AF_SMC)
+   * restrict the set; empty/missing → all three (default Sprint 8 behaviour).
+   */
+  _resolveActiveVoters(config = {}) {
+    const raw = config.afActiveVoters || config.selectedComponents || null;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA", "SMC", "WYCKOFF", "VSA"]);
+    }
+    const active = new Set();
+    for (const c of raw) {
+      const k = String(c || "").toUpperCase();
+      if (k === "AF_SMC" || k === "SMART_MONEY_CONCEPTS" || k === "ADAPTIVE_FUSION" || k === "SMC") {
+        active.add("AF_SMC");
+        active.add("SMC");
+      } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
+        active.add("AF_WYCKOFF");
+        active.add("WYCKOFF");
+      } else if (k === "AF_VSA" || k === "VSA") {
+        active.add("AF_VSA");
+        active.add("VSA");
+      }
+    }
+    // If selection had no AF keys (e.g. only TS comps leaked in), fall back to all.
+    if (![...active].some((k) => k.startsWith("AF_") || ["SMC", "WYCKOFF", "VSA"].includes(k))) {
+      return new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA", "SMC", "WYCKOFF", "VSA"]);
+    }
+    return active;
+  }
+
   _aggregate(componentVotes, config = {}) {
+    // Scale majority threshold to the number of active voters (2/3 of N).
+    const n = componentVotes.length || 3;
+    const scaledMin = config.afMinVotes != null
+      ? config.afMinVotes
+      : Math.max(1, Math.ceil(n * 2 / 3));
     const aggregated = aggregateAfVotes(componentVotes, {
       pairTier: config.pairTier,
       symbol: config.symbol,
-      afMinVotes: config.afMinVotes ?? config.afVotingMinVotes,
+      afMinVotes: scaledMin,
       isAltcoin: config.isAltcoin,
     });
     this._lastVoteMeta = {

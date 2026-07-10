@@ -1,5 +1,5 @@
 /**
- * VolumeProfileStrategy.js — TS Component C (VWAP + Value Area precision)
+ * VolumeProfileStrategy.js — TS Component C (Auction Market Theory / VWAP + Value Area)
  */
 
 "use strict";
@@ -15,9 +15,9 @@ class VolumeProfileStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "TS_VP",
-      label: "Volume Profile + VWAP",
+      label: "Auction Market Theory",
       description:
-        "TS Component C: session VWAP + Value Area entry precision for Trend Following pullbacks.",
+        "TS Component C: Auction Market Theory — session VWAP + Value Area entry precision for Trend Following pullbacks.",
       version: "1.0.0",
       enabled: true,
       ...config,

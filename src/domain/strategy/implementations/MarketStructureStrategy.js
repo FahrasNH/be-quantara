@@ -25,9 +25,9 @@ class MarketStructureStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "TS_MS",
-      label: "Market Structure (Dow Theory)",
+      label: "Dow Theory",
       description:
-        "TS Component B: causal HH/HL structure gate on HTF before Trend Following entries.",
+        "TS Component B: Dow Theory causal HH/HL structure gate on HTF before Trend Following entries.",
       version: "1.0.0",
       enabled: true,
       ...config,
