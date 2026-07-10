@@ -7,20 +7,36 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  username  String   @unique
-  password  String
-  
-  balance      Float    @default(0)
-  apiKey       String?
-  apiSecret    String?
+  id       String @id @default(cuid())
+  email    String @unique
+  username String @unique
+  password String
+
+  // Role-based access control (ADMIN-BE-01). Gate /admin/* via adminGuard.
+  role UserRole @default(USER)
+
+  // Admin suspension (ADMIN-BE-03). Non-null = suspended; login is blocked.
+  suspendedAt DateTime?
+
+  balance       Float   @default(0)
+  apiKey        String?
+  apiSecret     String?
   apiPassphrase String?
-  exchangeType  String?  @default("bitget")
+  exchangeType  String? @default("bitget")
   // HMAC fingerprint of apiKey — unique so the same exchange account
   // cannot be connected by two different users (prevents bot conflicts).
-  apiKeyHash    String?  @unique
+  apiKeyHash    String? @unique
+
+  // Email verification — null = belum terverifikasi
+  emailVerifiedAt        DateTime?
+  emailVerificationToken String?   @unique
 
   // Telegram integration — user memasukkan chat ID dari @quantara_trading_bot
   telegramChatId String?
@@ -30,22 +46,27 @@ model User {
   auditLogs  AuditLog[]
   exchanges  UserExchange[]
 
+  // ── Payment & Voucher System (Sprint 5 / PAY-02) ────────────────────────
+  subscriptions Subscription[]
+  payments      Payment[]
+  voucherUsages VoucherUsage[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model UserExchange {
-  id            String   @id @default(cuid())
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String  @id @default(cuid())
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId        String
   exchangeType  String
   apiKey        String
   apiSecret     String
   apiPassphrase String?
-  apiKeyHash    String   @unique
+  apiKeyHash    String  @unique
 
-  label         String?   // future multi-exchange label
-  deletedAt     DateTime? // soft-delete flag (null = active)
+  label     String? // future multi-exchange label
+  deletedAt DateTime? // soft-delete flag (null = active)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -55,31 +76,31 @@ model UserExchange {
 }
 
 model UserStrategy {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String   @unique
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
 
-  strategyKey String  @default("ADAPTIVE_FUSION")
-  balanceTier String  @default("C")
-  tier        String  @default("FOUNDRY")
-  
-  riskPerTrade Float  @default(0.01)
-  maxOpenPositions Int @default(1)
-  leverage    Int     @default(1)
-  
+  strategyKey String @default("ADAPTIVE_FUSION")
+  balanceTier String @default("C")
+  tier        String @default("FOUNDRY")
+
+  riskPerTrade     Float @default(0.01)
+  maxOpenPositions Int   @default(1)
+  leverage         Int   @default(1)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Bot {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String
-  
-  symbol    String
-  capital   Float    @default(500)
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  symbol      String
+  capital     Float   @default(500)
   strategyKey String  @default("ADAPTIVE_FUSION")
-  dryRun    Boolean  @default(true)
+  dryRun      Boolean @default(true)
 
   // Sprint 4 / WT-4 — per-bot parameter overrides (walk-forward applied params)
   configOverrides Json?
@@ -94,41 +115,47 @@ model Bot {
   // ── Take-Profit mode ────────────────────────────────────────────────────
   // "full"    → posisi lari ke TP penuh tanpa dipotong (default, reward optimal)
   // "partial" → partial close di +1R/+2R + SL geser ke BEP/+1R (risiko lebih rendah)
-  tpMode     String   @default("full")
+  tpMode String @default("full")
 
-  running   Boolean  @default(false)
+  // ── Grok Confirm Gate (Mode B — AF/TM/MR/BR) ─────────────────────────────
+  grokConfirmEnabled        Boolean @default(false)
+  grokConfirmTpAdjust       Boolean @default(true)
+  grokConfirmTpBandPct      Float   @default(15)
+  grokConfirmTpRejectAction String  @default("skip")
+
+  running   Boolean   @default(false)
   startedAt DateTime?
   stoppedAt DateTime?
-  
-  totalTrades    Int     @default(0)
-  winningTrades  Int     @default(0)
-  losingTrades   Int     @default(0)
-  
-  trades    Trade[]
-  logs      BotLog[]
-  
+
+  totalTrades   Int @default(0)
+  winningTrades Int @default(0)
+  losingTrades  Int @default(0)
+
+  trades Trade[]
+  logs   BotLog[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   @@unique([userId, symbol])
   @@index([userId])
 }
 
 model Trade {
-  id        String   @id @default(cuid())
-  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  botId     String
-  
-  symbol    String
-  side      String
-  entry     Float
-  exit      Float?
-  quantity  Float
-  
-  pnl       Float?
+  id    String @id @default(cuid())
+  bot   Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  botId String
+
+  symbol   String
+  side     String
+  entry    Float
+  exit     Float?
+  quantity Float
+
+  pnl        Float?
   pnlPercent Float?
 
-  status    String   @default("OPEN")
+  status String @default("OPEN")
 
   // ── Multi-Strategy attribution (Quantara feature) ───────────────────────
   // firedByStrategy: strategi yang memfire entry ini (untuk atribusi & analitik).
@@ -146,7 +173,7 @@ model Trade {
   entryContext Json?
   exitContext  Json?
 
-  enteredAt DateTime @default(now())
+  enteredAt DateTime  @default(now())
   exitedAt  DateTime?
 
   @@index([botId])
@@ -154,42 +181,59 @@ model Trade {
 }
 
 model BotLog {
-  id        String   @id @default(cuid())
-  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  botId     String
-  
-  level     String
-  message   String
-  metadata  String?
-  
+  id    String @id @default(cuid())
+  bot   Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  botId String
+
+  level    String
+  message  String
+  metadata String?
+
   createdAt DateTime @default(now())
-  
+
   @@index([botId])
   @@index([level])
 }
 
-model AuditLog {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+model AiTradeInteraction {
+  id        String   @id @default(uuid())
   userId    String
-  
-  action    String
-  resource  String?
+  botId     String?
+  symbol    String
+  type      String
+  prompt    String   @db.Text
+  response  String   @db.Text
+  parsed    Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([botId])
+  @@index([symbol])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  action     String
+  resource   String?
   resourceId String?
-  
+
   details   String?
   ipAddress String?
   userAgent String?
-  
+
   createdAt DateTime @default(now())
-  
+
   @@index([userId])
   @@index([action])
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
+  id     String @id @default(cuid())
+  userId String
 
   // Only the bcrypt hash is stored — never the raw token.
   // refreshToken plaintext field removed (P1.3 security hardening).
@@ -214,6 +258,163 @@ model PasswordResetToken {
   @@index([userId])
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Payment & Voucher System — Sprint 5 (PAY-02)
+//
+// Entitlement source of truth stays in code (domain/tierConfig.js). These tables
+// store the BILLING state: the tier *catalog* for the pricing UI, the user's
+// active Subscription, Midtrans Payment records, Vouchers, their usage, and an
+// immutable payment-lifecycle audit trail.
+//
+// Status fields are String (not enum) to match the codebase convention
+// (Trade.status, Bot.* ...) and keep the manual SQL migration simple.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tier catalog — DB mirror of domain/tierConfig.js, seeded by prisma/seed-payment.
+// Pricing UI reads from here; entitlement checks still read tierConfig (code).
+model SubscriptionTier {
+  id           String   @id @default(cuid())
+  key          String   @unique // FOUNDRY | FORGE | MINT | VAULT
+  label        String
+  priceMonthly Int // IDR, smallest unit (rupiah)
+  priceYearly  Int // IDR — yearly price (typically 10x monthly)
+  strategies   String[] @default([])
+  maxPositions Int      @default(1)
+  features     Json? // free-form feature flags for the pricing card
+  badge        String?
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// A user's subscription record. "Active" = status ACTIVE && endDate > now().
+// Kept as history: a new paid period inserts a new row; entitlement reads the
+// latest non-expired ACTIVE row.
+model Subscription {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  tier         String // FOUNDRY | FORGE | MINT | VAULT
+  status       String @default("ACTIVE") // ACTIVE | EXPIRED | CANCELLED | PENDING
+  billingCycle String @default("MONTHLY") // MONTHLY | YEARLY
+
+  startDate DateTime @default(now())
+  endDate   DateTime
+  autoRenew Boolean  @default(false)
+
+  // The payment that created/renewed this subscription (nullable for admin grants).
+  paymentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([endDate])
+}
+
+// Midtrans payment record. orderId is OUR generated id (also Midtrans order_id)
+// and is the idempotency key for webhooks.
+model Payment {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  orderId      String @unique // e.g. QTR-<tier>-<ts>-<rand>; = Midtrans order_id
+  tier         String
+  billingCycle String @default("MONTHLY")
+
+  // All amounts in IDR (rupiah), server-computed — never trusted from client.
+  grossAmount    Int // tier price before discount
+  discountAmount Int @default(0)
+  finalAmount    Int // grossAmount - discountAmount
+
+  voucherId   String?
+  voucherCode String?
+
+  status          String  @default("PENDING") // PENDING | PAID | FAILED | EXPIRED | REFUNDED | CHALLENGE
+  snapToken       String?
+  snapRedirectUrl String?
+
+  midtransTransactionId String?
+  paymentType           String? // credit_card | gopay | bank_transfer ...
+  fraudStatus           String? // accept | challenge | deny
+  paidAt                DateTime?
+  expiresAt             DateTime?
+
+  // Raw last notification payload (JSON string) for audit/debug. No card data —
+  // Midtrans Snap never exposes PAN to us.
+  rawNotification String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  voucherUsages VoucherUsage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+// Discount voucher. type = PERCENT (value 0-100, optional maxDiscount cap) or
+// FIXED (value = IDR off). Soft-deleted via deletedAt.
+model Voucher {
+  id          String  @id @default(cuid())
+  code        String  @unique // stored UPPERCASE; matched case-insensitively
+  description String?
+
+  type        String // PERCENT | FIXED
+  value       Float // PERCENT: 0-100 ; FIXED: IDR amount
+  maxDiscount Int? // cap for PERCENT vouchers (IDR), null = no cap
+  minPurchase Int    @default(0) // minimum grossAmount (IDR) to qualify
+
+  maxUses        Int? // null = unlimited global uses
+  currentUses    Int  @default(0)
+  maxUsesPerUser Int  @default(1)
+
+  applicableTiers String[] @default([]) // empty = all tiers
+
+  validFrom  DateTime  @default(now())
+  validUntil DateTime
+  isActive   Boolean   @default(true)
+  deletedAt  DateTime? // soft delete
+
+  createdBy String? // admin userId
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  usages VoucherUsage[]
+
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+// One row per successful voucher application. paymentId is unique → makes the
+// webhook's "increment voucher usage" idempotent. (voucherId,userId) indexed for
+// per-user-limit checks.
+model VoucherUsage {
+  id        String  @id @default(cuid())
+  voucher   Voucher @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  voucherId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  paymentId String  @unique
+
+  discountApplied Int // IDR actually discounted
+
+  createdAt DateTime @default(now())
+
+  @@index([voucherId, userId])
+}
+
+// Immutable payment-lifecycle audit trail (separate from the generic admin
+// AuditLog). Records INITIATED / WEBHOOK_RECEIVED / PAID / SUBSCRIPTION_CREATED /
+// VOUCHER_APPLIED / SIGNATURE_INVALID / DUPLICATE_WEBHOOK ... events.
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature Store — Sprint 1 (FS-4)
 //

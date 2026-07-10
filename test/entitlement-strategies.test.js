@@ -15,12 +15,12 @@ console.log("\n🎫 entitlement strategy-mode Unit Tests\n");
 
 // ── isStrategyLiveReady ─────────────────────────────────────────────────────
 t("ADAPTIVE_FUSION live-ready", isStrategyLiveReady("ADAPTIVE_FUSION") === true);
-t("TREND_MOMENTUM live-ready", isStrategyLiveReady("TREND_MOMENTUM") === true);
+t("TREND_FOLLOWING live-ready", isStrategyLiveReady("TREND_FOLLOWING") === true);
 t("MEAN_REVERSION live-ready", isStrategyLiveReady("MEAN_REVERSION") === true);
 t("AC-07: BREAKOUT_RETEST NOT live-ready (dry-run only)", isStrategyLiveReady("BREAKOUT_RETEST") === false);
 
 // ── filterStrategiesByMode ──────────────────────────────────────────────────
-const vault = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+const vault = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 
 {
   const dry = filterStrategiesByMode(vault, "dry");
@@ -31,7 +31,7 @@ const vault = ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_
   t("AC-07: live mode → BR di-exclude (3 strategi)", live.length === 3);
   t("live mode → BR tidak ada", !live.includes("BREAKOUT_RETEST"));
   t("live mode → AF/TM/MR tetap ada",
-    live.includes("ADAPTIVE_FUSION") && live.includes("TREND_MOMENTUM") && live.includes("MEAN_REVERSION"));
+    live.includes("ADAPTIVE_FUSION") && live.includes("TREND_FOLLOWING") && live.includes("MEAN_REVERSION"));
 }
 {
   t("filter mengembalikan salinan (tidak mutasi input)",

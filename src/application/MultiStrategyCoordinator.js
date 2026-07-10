@@ -98,6 +98,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     this._stopRequested = false; // di-set stop() agar start() yang sedang warm-up bisa batal
     this.lastDecision = null; // hasil resolveConflicts terakhir (untuk getState/UI)
     this._poll = null;
+    this._statusInterval = null; // interval status report teragregasi (di stop() dibersihkan)
 
     // Permukaan kompatibel-BotEngine agar server bisa memperlakukan koordinator
     // ini sama seperti satu BotEngine (mergeBotWithLiveState, dst.).
@@ -115,6 +116,89 @@ class MultiStrategyCoordinator extends EventEmitter {
   _log(level, message) {
     const entry = { time: new Date().toISOString(), level, msg: `[multi:${this.symbol}] ${message}` };
     this.emit("log", entry);
+  }
+
+  /** ADAPTIVE_FUSION → "Adaptive Fusion" */
+  _titleCase(key) {
+    return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  /** ADAPTIVE_FUSION → "AF" (initials) — keeps the startup banner on one line. */
+  _abbrev(key) {
+    const map = { ADAPTIVE_FUSION: "AF", TREND_FOLLOWING: "TM", MEAN_REVERSION: "MR", BREAKOUT_RETEST: "BR" };
+    return map[key] || this._titleCase(key).split(" ").map(w => w[0]).join("").toUpperCase();
+  }
+
+  /**
+   * Emit SATU banner startup terpadu untuk seluruh grup multi-strategi.
+   *
+   * Masalah yang diperbaiki: tiap engine sebelumnya emit banner sendiri →
+   * tergabung jadi blob ambigu di panel log ("cek 60s itu strategi mana?").
+   * Solusi: shared config (Exchange/Mode/Symbol/Modal) ditulis SEKALI, lalu
+   * tabel per-strategi yang menampilkan interval/risk/RR/cek-tiap secara
+   * eksplisit per baris — tiap angka jelas miliknya strategi mana.
+   *
+   * Di-emit lewat engine LEADER (BotEngine) supaya broadcast WS otomatis
+   * menempelkan `symbol` (koordinator sendiri tidak melalui emit yang di-patch).
+   */
+  _emitUnifiedBanner() {
+    const leader = this.engines.get(this.strategies[0]);
+    if (!leader || typeof leader._logBlock !== "function") return;
+    const c0 = leader.config;
+    const coin = String(this.symbol).replace(/USDT$/i, "");
+    const modeStr = this.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING";
+
+    // Banner startup ringkas — hanya konteks penting. Tabel per-strategi (interval/
+    // risk/RR/cek-tiap) DIHAPUS: kurang berguna saat startup & bikin log panjang.
+    // Detail risk/RR per strategi tetap tersedia di config; yang relevan bagi user
+    // saat ada posisi (strategi mana, holding time, Net P&L) ditampilkan di panel
+    // detail koin, bukan diulang tiap startup.
+    // Strategi disingkat ke inisial (AF · TM · MR · BR) agar muat satu baris —
+    // nama lengkap ditampilkan di log entry tiap kali strategi memfire posisi.
+    const names = this.strategies.map(k => this._abbrev(k)).join(" · ");
+    const lines = [];
+    lines.push(`══ QUANTARA BOT — ${coin}/USDT (multi-strategi) ══`);
+    lines.push(`Exchange   : ${c0.exchangeLabel}`);
+    lines.push(`Mode       : ${modeStr}`);
+    lines.push(`Symbol     : ${this.symbol}`);
+    lines.push(`Modal      : $${this.totalCapital.toFixed(2)} total · $${this.capitalPerStrategy.toFixed(2)} / strategi`);
+    lines.push(`Strategi   : ${names}`);
+    leader._logBlock("info", lines);
+  }
+
+  /**
+   * Emit SATU status report terpadu untuk seluruh grup (mirror _emitUnifiedBanner).
+   *
+   * Sebelumnya tiap engine punya _reportInterval sendiri → koin multi-strategi
+   * menumpuk N status report di satu kartu panel log (bug ZEC: 2 strategi = 2 report
+   * dobel; ETH 1 strategi tampak normal). Sekarang report per-engine disuppress
+   * (emitStatusReport:false) dan koordinator emit SATU report TERAGREGASI lintas-engine
+   * — angka total (capital grup, trade gabungan, posisi terbuka gabungan) konsisten
+   * dengan getState() yang dipakai UI card. Di-emit sebagai 1 _logBlock (bukan 4 _log
+   * terpisah) supaya tampil sebagai 1 kartu rapi, tak bergantung window grouping FE.
+   */
+  _emitUnifiedStatus() {
+    const leader = this.engines.get(this.strategies[0]);
+    if (!leader || typeof leader._logBlock !== "function") return;
+
+    let closed = 0, wins = 0, open = 0, pnl = 0;
+    for (const engine of this.engines.values()) {
+      const st = typeof engine.getState === "function" ? engine.getState() : {};
+      for (const t of st.trades || []) {
+        closed += 1;
+        if ((t.pnl || 0) > 0) wins += 1;
+        pnl += t.pnl || 0;
+      }
+      open += (st.openPositions || []).length;
+    }
+    const wr = closed > 0 ? Math.round((wins / closed) * 100) : 0;
+
+    leader._logBlock("info", [
+      "══ STATUS REPORT ══",
+      `Capital: $${this.totalCapital.toFixed(2)} | PnL: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)}`,
+      `Trades: ${closed} | Wins: ${wins} | WR: ${wr}%`,
+      `Open positions: ${open}`,
+    ]);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -148,12 +232,12 @@ class MultiStrategyCoordinator extends EventEmitter {
         const client = createExchangeClient(exchangeType, { apiKey, apiSecret, passphrase });
         sharedBalance = await client.getBalance("USDT");
         if (!this.dryRun) {
-          const leverage = this.engineConfig.leverage || 20;
+          const leverage = this.engineConfig.leverage || 2;
           await client.setLeverage(this.symbol, leverage);
           await client.setMarginMode(this.symbol, "crossed");
           sharedLeverageSet = true;
         }
-        this._log("info", `Pre-flight ✓ balance $${(sharedBalance.equity || sharedBalance.available || 0).toFixed(2)} USDT${sharedLeverageSet ? ` | leverage ${this.engineConfig.leverage || 20}x diset` : ""}`);
+        this._log("info", `Pre-flight ✓ balance $${(sharedBalance.equity || sharedBalance.available || 0).toFixed(2)} USDT${sharedLeverageSet ? ` | leverage ${this.engineConfig.leverage || 2}x diset` : ""}`);
       } catch (err) {
         this._log("warn", `Pre-flight exchange call gagal: ${err.message} — tiap engine retry sendiri`);
       }
@@ -173,6 +257,8 @@ class MultiStrategyCoordinator extends EventEmitter {
         userId: this.userId,
         symbol: this.symbol,
         strategyKey,
+        // Stagger tick antar strategi pada koin sama → kurangi burst getCandles HTF/LTF.
+        tickStaggerMs: i * 15_000,
         capital: this.capitalPerStrategy,
         dryRun: this.dryRun,
         // botKey unik per strategi → AccountCoordinator melacak per-strategi,
@@ -191,6 +277,12 @@ class MultiStrategyCoordinator extends EventEmitter {
         // Pre-fetched balance + leverage flag so engines skip redundant exchange calls
         sharedBalance,
         sharedLeverageSet,
+        // Jangan emit banner startup per-engine — koordinator emit SATU banner
+        // terpadu untuk seluruh grup (config tiap strategi jelas atribusinya).
+        quietStartup: true,
+        // Jangan emit status report per-engine — sama alasannya: N engine = N report
+        // dobel di satu kartu. Koordinator emit SATU report teragregasi via leader.
+        emitStatusReport: false,
       });
 
       // Relay event engine → konsumen koordinator (WS streaming, dll.)
@@ -201,7 +293,7 @@ class MultiStrategyCoordinator extends EventEmitter {
 
       this.engines.set(strategyKey, engine);
       await engine.start();
-      this._log("info", `Engine [${strategyKey}] start — capital $${this.capitalPerStrategy.toFixed(2)}`);
+      this._log("info", `Engine ${this._titleCase(strategyKey)} start — capital $${this.capitalPerStrategy.toFixed(2)}`);
     }
 
     // stop() mendarat selama warm-up → batalkan: hentikan engine yang terlanjur start,
@@ -222,6 +314,14 @@ class MultiStrategyCoordinator extends EventEmitter {
 
     this.running = true;
     this._log("info", `${this.strategies.length} strategi aktif: ${this.strategies.join(", ")}`);
+    // Emit SATU banner terpadu (shared config sekali + tabel per-strategi) lewat
+    // engine leader, agar tampil sebagai 1 kartu yang jelas di panel log.
+    this._emitUnifiedBanner();
+
+    // SATU status report teragregasi per jam (per-engine report sudah disuppress).
+    this._statusInterval = setInterval(() => {
+      try { this._emitUnifiedStatus(); } catch (e) { this._log("error", `status report gagal: ${e.message}`); }
+    }, 60 * 60 * 1000);
 
     if (this.pollIntervalMs > 0) {
       this._poll = setInterval(() => {
@@ -242,13 +342,14 @@ class MultiStrategyCoordinator extends EventEmitter {
     // berikutnya (anti-zombie). Di-set SYNC sebelum await apa pun.
     this._stopRequested = true;
     if (this._poll) { clearInterval(this._poll); this._poll = null; }
+    if (this._statusInterval) { clearInterval(this._statusInterval); this._statusInterval = null; }
 
     for (const [strategyKey, engine] of this.engines) {
       try {
         await engine.stop();
-        this._log("info", `Engine [${strategyKey}] dihentikan`);
+        this._log("info", `Engine ${this._titleCase(strategyKey)} dihentikan`);
       } catch (e) {
-        this._log("error", `Gagal stop engine [${strategyKey}]: ${e.message}`);
+        this._log("error", `Gagal stop engine ${this._titleCase(strategyKey)}: ${e.message}`);
       }
     }
     this.engines.clear();
@@ -275,7 +376,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     for (const [strategyKey, engine] of this.engines) {
       if (allowed.has(strategyKey)) continue;
       try { await engine.stop(); }
-      catch (e) { this._log("error", `reconcile stop [${strategyKey}] gagal: ${e.message}`); }
+      catch (e) { this._log("error", `reconcile stop ${this._titleCase(strategyKey)} gagal: ${e.message}`); }
       this.engines.delete(strategyKey);
       stopped.push(strategyKey);
     }
@@ -461,9 +562,41 @@ class MultiStrategyCoordinator extends EventEmitter {
     const wins      = trades.filter((t) => (t.pnl || 0) > 0).length;
     const winRate   = trades.length > 0 ? Math.round((wins / trades.length) * 100) : 0;
 
+    // Telemetri tick: utamakan engine leader (strategies[0]), fallback engine dengan
+    // lastTick paling baru — agar FE/WS menampilkan lastPrice/sessionId/sparkline
+    // sama seperti BotEngine tunggal (mergeBotWithLiveState, BotCard).
+    let lastTick = null;
+    let lastPrice = null;
+    let sessionId = null;
+
+    const leader = this.engines.get(this.strategies[0]);
+    if (leader && typeof leader.getState === "function") {
+      const lst = leader.getState();
+      lastTick = lst.lastTick ?? null;
+      lastPrice = lst.lastPrice ?? null;
+      sessionId = lst.sessionId ?? leader.sessionId ?? null;
+    }
+
+    if (lastTick == null) {
+      let bestTs = 0;
+      for (const [, engine] of this.engines) {
+        const st = typeof engine.getState === "function" ? engine.getState() : {};
+        const ts = st.lastTick ? new Date(st.lastTick).getTime() : 0;
+        if (ts >= bestTs) {
+          bestTs = ts;
+          lastTick = st.lastTick ?? lastTick;
+          lastPrice = st.lastPrice ?? lastPrice;
+          sessionId = st.sessionId ?? engine.sessionId ?? sessionId;
+        }
+      }
+    }
+
     return {
       running:  this.running,
       starting: this.starting,
+      sessionId,
+      lastTick,
+      lastPrice,
       symbol: this.symbol,
       dryRun: this.dryRun,
       multiStrategy: true,
@@ -471,6 +604,9 @@ class MultiStrategyCoordinator extends EventEmitter {
       capitalPerStrategy: this.capitalPerStrategy,
       capital: this.totalCapital,
       conflictMode: this.conflictMode,
+      // Leverage efektif per-symbol (min lintas-strategi, di-set oleh app.js). Di-expose
+      // agar FE menampilkan angka SEBENARNYA, bukan fallback hardcoded 2×.
+      leverage: this.engineConfig?.leverage ?? null,
       engines,
       signals: this.lastDecision,
       openPositions,

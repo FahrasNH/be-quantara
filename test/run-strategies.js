@@ -18,9 +18,9 @@ global.beforeEach = beforeEach;
 global.expect = expect;
 
 // Register all strategy test suites
-require("./TrendMomentumStrategy.test.js");
+require("./TrendFollowingStrategy.test.js");
 require("./MeanReversionStrategy.test.js");
-require("./BreakoutRetestStrategy.test.js");
+require("./BreakoutTradingStrategy.test.js");
 require("./Simulator.test.js");
 
 // Execute everything and set process exit code on failure

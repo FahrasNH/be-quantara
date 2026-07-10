@@ -6,21 +6,48 @@
 
 const EventEmitter = require("events");
 const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exchange");
+const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../infrastructure/exchange/candleFetch");
+const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../config/env");
 const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
-const { isDuplicate } = require("../domain/signalIdempotency");             // FIX-3
-const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter"); // FIX-4
+const { isDuplicate } = require("../domain/signalIdempotency");
+const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter");
 const { getStrategy } = require("../domain/legacyStrategies");
 const { buildTradeAttribution } = require("../domain/tradeAttribution"); // TASK 2.3
 const db       = require("../infrastructure/db/database");
 const { persistBotLog } = require("../infrastructure/db/botLogRepository");
 const notifier = require("../infrastructure/notifications/TelegramNotifier");
+const GrokTradingService = require("../server/services/GrokTradingService");
+const GrokConfirmService = require("../server/services/GrokConfirmService");
+
+const GROK_CONFIRM_STRATEGIES = new Set([
+  "ADAPTIVE_FUSION",
+  "TREND_FOLLOWING",
+  "MEAN_REVERSION",
+  "BREAKOUT_RETEST",
+]);
 
 // ── Price formatter for logs ─────────────────────────────────────────────────
 // Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
 // ambigu "$0.09" di log. Ini HANYA untuk tampilan log — harga order yang dikirim
 // ke exchange diformat ke tick-size oleh masing-masing client (_fmtPrice).
+// ADAPTIVE_FUSION → "Adaptive Fusion". Dipakai di semua log yang tampil di UI —
+// snake_case strategy key tidak boleh muncul di panel log (selalu Title Case).
+function stratLabel(key) {
+  if (!key) return "—";
+  return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Holding duration of a position → "22H 6M" (or "6M" under an hour).
+function fmtHoldingMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}H ${m}M` : `${m}M`;
+}
+
 function fmtPx(price) {
   const n = Number(price);
   if (!Number.isFinite(n)) return String(price);
@@ -116,11 +143,40 @@ class BotEngine extends EventEmitter {
       atrMultiplier: strat.atrMultiplier,
       riskReward:    strat.riskReward,
       riskPerTrade:  strat.riskPerTrade,
-      maxRiskPerTrade: 0.05,
+      riskPerTradeStrong: strat.riskPerTradeStrong ?? null,
+      // v2.3 spec (STRATEGIES.md §9): maxRiskPerTrade default 0.05 → 0.012.
+      // Tetap bisa di-override per-strategi via strat.maxRiskPerTrade / DB config.
+      maxRiskPerTrade: strat.maxRiskPerTrade ?? 0.012,
 
       // Fee trading per sisi (taker). Bitget USDT-M futures default ~0.06%.
       // Dipakai untuk estimasi fee dry-run/backtest & fallback live.
       feeRate:       strat.feeRate ?? 0.0006,
+
+      // ── FEE-02: Mode entry (taker | maker) ────────────────────────────────
+      // "maker" = limit post-only (fee ~0.02%/sisi vs taker 0.06%). makerFeeRate
+      // dipakai untuk accounting saat entryMode=maker. Order-routing post-only
+      // sebenarnya di-handle di layer eksekusi; di sini knob + akuntansi fee.
+      entryMode:     strat.entryMode   || "taker",
+      makerFeeRate:  strat.makerFeeRate ?? 0.0002,
+
+      // ── FEE-03: Fee-aware min-edge gate ───────────────────────────────────
+      // Reward leg (jarak ke TP, sbg fraksi harga) WAJIB ≥ minEdgeFeeMultiple ×
+      // fee roundtrip (2×feeRate). Mencegah entry yang edge-nya ditelan fee —
+      // akar kerugian net (fee 8× lebih besar dari edge per trade). 0 = nonaktif.
+      minEdgeFeeMultiple: strat.minEdgeFeeMultiple ?? 5,
+
+      // ── FEE-01/01b: ADAPTIVE_FUSION entry-quality knobs ───────────────────
+      // Diteruskan ke AdaptiveFusionStrategy.detectSignal (lewat AdaptiveStrategyEngine)
+      // agar anti-chase & conviction-veto bisa di-tune live tanpa ubah kode.
+      // - maxEntryExtensionATR: tolak entry bila |close−EMA9|/ATR melebihi ini.
+      // - afRejectOnDissent: tolak entry saat komponen saling berlawanan (2-1).
+      // - afMinVotes: kuorum minimum komponen searah (2 = default; 3 = unanim).
+      maxEntryExtensionATR: strat.maxEntryExtensionATR ?? 1.5,
+      afRejectOnDissent:    strat.afRejectOnDissent ?? true,
+      // v2.3 spec (STRATEGIES.md §4): afMinVotes default 2 → 3 (konsensus lebih kuat).
+      afMinVotes:           strat.afMinVotes ?? 3,
+
+      strongTrendTPMult:    strat.strongTrendTPMult ?? 1,
 
       // ── Eksekusi & posisi ─────────────────────────────────────────────────
       maxPositions: 1,
@@ -136,10 +192,24 @@ class BotEngine extends EventEmitter {
       strategyLabel: strat.label,
       signalType:    strat.signalType,
 
+      // ── Grok AI Live Trading ───────────────────────────────────────────────
+      minConfidenceEntry: strat.minConfidenceEntry ?? cfg.GROK_TRADING_MIN_CONFIDENCE_ENTRY,
+      minConfidenceTpSl:  strat.minConfidenceTpSl  ?? cfg.GROK_TRADING_MIN_CONFIDENCE_TP_SL,
+      minRiskReward:      strat.minRiskReward      ?? 1.2,
+
+      // ── Grok Confirm Gate (Mode B) ─────────────────────────────────────────
+      grokConfirmEnabled:        false,
+      grokConfirmTpAdjust:       true,
+      grokConfirmTpBandPct:      cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT,
+      grokConfirmTpRejectAction: cfg.GROK_CONFIRM_TP_REJECT_ACTION,
+      grokConfirmMinEntry:       strat.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY,
+      grokConfirmMinTp:          strat.grokConfirmMinTp    ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE,
+
       // ── HTF trend filter ──────────────────────────────────────────────────
       higherTf:             strat.higherTf             || null,
       htfEmaFast:           strat.htfEmaFast            || 9,
       htfEmaSlow:           strat.htfEmaSlow            || 21,
+      htfTrendStrengthMin:  strat.htfTrendStrengthMin   ?? null,
       sidewaysThresholdPct: strat.sidewaysThresholdPct  || 0.2,
 
       // ── ATR filter ────────────────────────────────────────────────────────
@@ -154,24 +224,27 @@ class BotEngine extends EventEmitter {
       sidewaysBreakoutVolMult: strat.sidewaysBreakoutVolMult || 1.2,
       sidewaysBreakoutBufMult: strat.sidewaysBreakoutBufMult || 0.3,
 
-      // ── Risk management harian ────────────────────────────────────────────
-      maxDailyLossPct:   strat.maxDailyLossPct  || 0.04,
+      // ── Risk management harian (v2.3 spec — STRATEGIES.md §9: diperketat) ──
+      maxDailyLossPct:   strat.maxDailyLossPct  || 0.03,
       maxTradesPerDay:   strat.maxTradesPerDay   || 10,
-      // 30 menit (sebelumnya 5): data dry-run 12 Jun menunjukkan re-entry menit ke-6
-      // pada setup identik setelah SL → loss duplikat beruntun. Strategi bisa
-      // override via strat.cooldownAfterLoss (MR: 15).
-      cooldownAfterLoss: strat.cooldownAfterLoss || 30,
+
+      // re-entry cepat pada setup identik setelah SL → loss duplikat beruntun.
+      // Strategi tetap bisa override via strat.cooldownAfterLoss (MR: 15).
+      cooldownAfterLoss: strat.cooldownAfterLoss || 45,
       maxConsecLoss:     strat.maxConsecLoss     || 3,
 
-      // ── Take-Profit mode ─────────────────────────────────────────────────
+      // ── Take-Profit mode (FEE-04) ────────────────────────────────────────
       // "full"    → posisi lari ke TP penuh tanpa dipotong (default)
-      // "partial" → partial close +1R/+2R + SL geser ke BEP/+1R (risiko ↓, reward ↓)
-      tpMode: "full",
+      // "partial" → partial close +1R/+2R + SL geser ke +0.3R/+1R, sisa dibiarkan
+      //             lari ke TP penuh (~2.5–2.85R). Membiarkan winner lari sambil
+      //             mengunci sebagian profit → ekspektasi net-of-fee membaik di
+      //             strategi tren (TREND_FOLLOWING). Knob per-strategi via strat.tpMode.
+      tpMode: strat.tpMode || "full",
 
       // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
       slPlusEnabled:     true,   // legacy; dikontrol oleh tpMode
-      slPlusPartial1Pct: 0.40,   // +1R → 40% partial, SL ke BEP
-      slPlusPartial2Pct: 0.275,  // +2R → 27.5% partial, SL ke +1R
+      slPlusPartial1Pct: strat.slPlusPartial1Pct ?? 0.40,   // +1R → 40% partial, SL ke +0.3R
+      slPlusPartial2Pct: strat.slPlusPartial2Pct ?? 0.275,  // +2R → 27.5% partial, SL ke +1R
 
       // ── DB overrides (SELALU override semua default di atas) ─────────────
       // apiKey/apiSecret/passphrase sudah dihapus dari safeOverrides (keamanan)
@@ -189,7 +262,7 @@ class BotEngine extends EventEmitter {
       running:       false,
       starting:      false, // set synchronously in start() before first await — prevents double-start race
       openPositions: [],
-      trades:        [],
+      trades:        [],    // CAPPED: keep() shiftoleh saat melebihi 500 (mem leak guard — trades[] naik 436MB/5min)
       capital:       0,
       startCapital:  0,
       lastSignal:    null,
@@ -197,6 +270,10 @@ class BotEngine extends EventEmitter {
       errors:        0,
       lastTick:      null,
       lastPrice:     null,
+
+      // Multi-position tracking (v3.0 — ADAPTIVE_FUSION mode)
+      // Maps componentId (A/B/C) → {side, entry, sl, tp, component, riskAmt, ...}
+      positions:       new Map(),
 
       // Risk management tracking
       dailyTradeCount: 0,        // Jumlah trade hari ini
@@ -206,6 +283,10 @@ class BotEngine extends EventEmitter {
       consecLoss:      0,        // Loss berturut-turut
       cooldownUntil:   null,     // Timestamp cooldown selesai
       lastLossSetup:   null,     // "SIDE@entry" trade loss terakhir — guard anti-churn
+
+      // Per-component risk tracking (multi-position mode)
+      componentCooldown: new Map(),  // componentId → cooldownUntil timestamp
+      componentConsecLoss: new Map(), // componentId → consecutive loss count
 
       // HTF trend state
       htfTrend:        "UNKNOWN", // BULLISH / BEARISH / SIDEWAYS / UNKNOWN
@@ -232,8 +313,8 @@ class BotEngine extends EventEmitter {
    */
   getStrategyRankings() {
     try {
-      const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
-      const afs = new AdaptiveFusionStrategy();
+      const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+      const afs = new SmartMoneyConceptsStrategy();
       
       const volatility = this.state?.volatility || 1.0;
       const trendStrength = this.state?.trendStrength || 0.1;
@@ -348,6 +429,33 @@ class BotEngine extends EventEmitter {
     console.log(`${ts} ${C[level] || "\x1b[37m"}[${prefix[level] || level.toUpperCase()}] ${msg}\x1b[0m`);
   }
 
+  // Throttle untuk log diagnostik "kenapa belum/tidak entry". Bot tick tiap 5–15
+  // menit, tapi sebelumnya log dibatasi per-jumlah-tick (% 5 / % 10) sehingga
+  // reasoning jarang terlihat. Gate berbasis WAKTU ini memastikan user melihat
+  // ringkasan keputusan paling cepat tiap 3 menit per bot — informatif tapi tidak
+  // membanjiri panel log.
+  _shouldLogDecision() {
+    const now = Date.now();
+    if (!this._lastDecisionLogAt || now - this._lastDecisionLogAt >= 180_000) {
+      this._lastDecisionLogAt = now;
+      return true;
+    }
+    return false;
+  }
+
+  _capTrades() {
+    // Maintain trades array at most 500 entries (mem leak guard). Saat .length > 500,
+    // shift (hapus oldest). Rationale: UI laporan menampilkan ~100 trades max, DB sudah
+    // punya full history — in-memory copy di-keep untuk WS stream + getState() reports,
+    // tidak perlu grow unbounded (436MB setiap 5min). Oldest trades paling sering
+    // tidak diakses (sudah lama ditutup). Keep newest 500 untuk 99th percentile user
+    // query (backtest recents, recent P&L calculation).
+    const MAX_TRADES = 500;
+    while (this.state.trades.length > MAX_TRADES) {
+      this.state.trades.shift();
+    }
+  }
+
   _sep(label = "") {
     const line = "─".repeat(50);
     const sep  = label
@@ -355,6 +463,17 @@ class BotEngine extends EventEmitter {
       : `\x1b[90m${line}\x1b[0m`;
     console.log(sep);
     if (label) this._log("info", `══ ${label} ══`);
+  }
+
+  /**
+   * Emit BANYAK baris sebagai SATU entry log (dipisah newline) — supaya panel log
+   * menampilkannya sebagai 1 kartu, bukan belasan kartu terpisah. Dipakai untuk
+   * banner startup ("══ QUANTARA BOT ══ … ══ BOT BERJALAN ══") yang sebelumnya
+   * memenuhi panel dengan ~13 baris terpisah.
+   */
+  _logBlock(level, lines) {
+    const msg = lines.filter(l => l != null).join("\n");
+    this._log(level, msg);
   }
 
   // ─────────────────────────────────────────────
@@ -451,6 +570,12 @@ class BotEngine extends EventEmitter {
         interval:      this.config.interval,
         checkInterval: this.config.checkInterval,
         higherTf:      this.config.higherTf,
+        grokConfirmEnabled:        this.config.grokConfirmEnabled ?? false,
+        grokConfirmTpAdjust:       this.config.grokConfirmTpAdjust ?? true,
+        grokConfirmTpBandPct:      this.config.grokConfirmTpBandPct,
+        grokConfirmTpRejectAction: this.config.grokConfirmTpRejectAction,
+        minConfidenceEntry:        this.config.minConfidenceEntry,
+        minConfidenceTpSl:         this.config.minConfidenceTpSl,
       },
     };
   }
@@ -487,7 +612,7 @@ class BotEngine extends EventEmitter {
     this.state.errors        = 0;
 
     try {
-    await this._startup();
+    const banner = await this._startup();
     // stop() dipanggil selama _startup() (mis. Stop All saat warm-up) → batalkan
     // sebelum membuka sesi & menandai running, agar tidak ada engine zombie.
     if (this._stopRequested) {
@@ -505,7 +630,7 @@ class BotEngine extends EventEmitter {
       config:         this.config,
       userId:         this.config.userId ?? null,  // isolasi data per user
     });
-    this._log("info", `Session DB #${this.sessionId} dibuat`);
+    banner.push(`Session    : DB #${this.sessionId} dibuat`);
 
     // ── Restore posisi terbuka dari SEMUA sesi lama (lintas sesi) ─────────
     // Cari trades dengan close_time IS NULL untuk symbol ini di semua sesi
@@ -662,9 +787,8 @@ class BotEngine extends EventEmitter {
       return;
     }
 
-    // Jitter: sebarkan start-time interval tiap engine secara acak (0–30s) agar
-    // 300+ engines yang start hampir bersamaan tidak semua tick di t=N, N+60s, N+120s…
-    // Tanpa ini, "Start All" → spike event-loop tiap 60s + exchange 429 berulang.
+    // Jitter + stagger antar strategi (tickStaggerMs) sebarkan start-time interval
+    // agar multi-strategy pada koin sama tidak burst getCandles bersamaan.
     //
     // PENTING (anti-zombie): pemasangan setInterval DITUNDA via setTimeout yang
     // handle-nya disimpan (this._startTimer), BUKAN `await new Promise(setTimeout)`.
@@ -673,17 +797,53 @@ class BotEngine extends EventEmitter {
     // stop → ticker zombie jalan selamanya walau bot sudah di-stop. Pola deferred
     // setTimeout membuat stop() bisa membatalkan pemasangan lewat clearTimeout, dan
     // guard di dalam timer mencegah pemasangan bila stop sudah terjadi.
-    const jitterMs = Math.floor(Math.random() * Math.min(this.config.checkInterval, 30_000));
+    const baseJitter = Math.floor(Math.random() * Math.min(this.config.checkInterval, 15_000));
+    const jitterMs = (this.config.tickStaggerMs || 0) + baseJitter;
     this._startTimer = setTimeout(() => {
       this._startTimer = null;
       // Bot sudah di-stop selama warm-up → jangan pasang interval (cegah zombie ticker)
       if (!this.state.running || this._stopRequested) return;
-      this._interval = setInterval(() => this._tick(), this.config.checkInterval);
+      // OVERLAP GUARD (anti death-spiral): setInterval TIDAK menunggu _tick() async
+      // selesai. Saat exchange timeout, satu tick bisa makan 30–60s+ (getCandles 10s +
+      // getTicker 10s + DB log-write yang ikut lambat). Tanpa guard ini, tick-tick baru
+      // menumpuk di atas yang belum selesai → getCandles + insertLog berlipat → pool
+      // Postgres & Prisma terkuras → login ikut timeout → proses crash → PM2 restart-loop.
+      // Selain itu, promise _tick() yang tak di-handle bisa jadi unhandledRejection →
+      // crash proses. Bungkus: skip bila masih ticking, dan telan rejection.
+      this._interval = setInterval(() => {
+        if (this._ticking) {
+          this._log("warn", "Tick sebelumnya belum selesai (exchange/DB lambat) — lewati tick ini");
+          return;
+        }
+        this._ticking = true;
+        Promise.resolve()
+          .then(() => this._tick())
+          .catch((err) => {
+            try { this._log("warn", `Tick error: ${err?.message || err}`); } catch { /* jangan crash */ }
+          })
+          .finally(() => { this._ticking = false; });
+      }, this.config.checkInterval);
     }, jitterMs);
 
-    this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
+    // emitStatusReport:false → engine ini bagian dari grup multi-strategi; JANGAN
+    // pasang report per-engine. Tanpa guard ini, koin dengan N strategi menumpuk N
+    // status report di satu kartu (bug ZEC: 2 strategi → report dobel; ETH 1 strategi
+    // tampak normal). Koordinator emit SATU report teragregasi (_emitUnifiedStatus).
+    if (this.config.emitStatusReport !== false) {
+      this._reportInterval = setInterval(() => this._statusReport(), 60 * 60 * 1000);
+    }
 
-    this._log("info", `Bot berjalan — cek setiap ${this.config.checkInterval / 1000}s`);
+    // ══ BOT BERJALAN ══ + ringkasan boot lengkap → emit SATU kartu log.
+    // quietStartup: engine ini bagian dari grup multi-strategi → JANGAN emit banner
+    // per-engine. Koordinator akan emit SATU banner terpadu untuk seluruh grup
+    // (lihat MultiStrategyCoordinator._emitUnifiedBanner) agar config tiap strategi
+    // jelas atribusinya — tidak ambigu "cek 60s itu strategi mana".
+    if (!this.config.quietStartup) {
+      banner.push("");
+      banner.push("══ BOT BERJALAN ══");
+      banner.push(`Bot aktif  : cek setiap ${this.config.checkInterval / 1000}s`);
+      this._logBlock("info", banner);
+    }
 
     } finally {
       this.state.starting = false;
@@ -694,6 +854,15 @@ class BotEngine extends EventEmitter {
     // Sinyalkan ke start() yang mungkin masih warm-up agar membatalkan diri. Di-set
     // SYNC sebelum await apa pun, sehingga guard di start() melihatnya.
     this._stopRequested = true;
+    // Satu pass SL/TP terakhir sebelum interval dimatikan — hindari posisi "nyangkut"
+    // open walau harga sudah lewat SL (mis. LAB mark $14.65 vs SL $18.05).
+    if (this.state.openPositions.length > 0) {
+      try {
+        await this._monitorOpenPositions(null, null, 0);
+      } catch (e) {
+        this._log("warn", `Final SL/TP check gagal: ${e.message}`);
+      }
+    }
     // Batalkan timer warm-up jitter jika start() masih dalam jendela jitter — tanpa
     // ini setInterval akan terpasang SETELAH stop() → ticker zombie (lihat start()).
     if (this._startTimer)     { clearTimeout(this._startTimer); this._startTimer = null; }
@@ -745,23 +914,27 @@ class BotEngine extends EventEmitter {
   // STARTUP
   // ─────────────────────────────────────────────
   async _startup() {
-    this._sep(`QUANTARA BOT — ${this.config.exchangeLabel.toUpperCase()}`);
-    this._log("info", `Exchange   : ${this.config.exchangeLabel}`);
-    this._log("info", `Mode       : ${this.config.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING"}`);
-    this._log("info", `Strategi   : [${this.config.strategyKey}] ${this.config.strategyLabel}`);
-    this._log("info", `Symbol     : ${this.config.symbol}`);
-    this._log("info", `Interval   : ${this.config.interval}`);
-    this._log("info", `EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
-    this._log("info", `RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
-    this._log("info", `Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
-    this._sep();
+    // Kumpulkan SEMUA baris konfigurasi ke dalam satu array, lalu emit sebagai
+    // SATU kartu log di akhir start() — bukan ~13 kartu terpisah. Mengembalikan
+    // array ini agar start() bisa menambah baris "Session DB" / "cek tiap Ns"
+    // sebelum emit, sehingga seluruh ringkasan boot tampil dalam 1 grup.
+    const banner = [];
+    banner.push(`══ QUANTARA BOT — ${this.config.exchangeLabel.toUpperCase()} ══`);
+    banner.push(`Mode       : ${this.config.dryRun ? "DRY RUN (simulasi)" : "LIVE TRADING"}`);
+    banner.push(`Exchange   : ${this.config.exchangeLabel}`);
+    banner.push(`Symbol     : ${this.config.symbol}`);
+    banner.push(`Interval   : ${this.config.interval}`);
+    banner.push(`Strategi   : ${stratLabel(this.config.strategyKey)}`);
+    banner.push(`EMA        : Fast(${this.config.emaFast}) / Slow(${this.config.emaSlow})`);
+    banner.push(`RSI        : Overbought(${this.config.rsiOverbought}) / Oversold(${this.config.rsiOversold})`);
+    banner.push(`Risk/trade : ${(this.config.riskPerTrade * 100).toFixed(1)}%  |  Leverage: ${this.config.leverage}x  |  RR: 1:${this.config.riskReward}`);
 
     // Gunakan kredensial yang sudah di-resolve (DB key dari Settings > env var)
     const noKey = !this.config._hasCredentials;
 
     if (noKey) {
       if (!this.config.dryRun) throw new Error("API Key exchange belum dikonfigurasi. Tambahkan di menu Settings → API Keys.");
-      this._log("warn", "API Key tidak ditemukan — DRY RUN tanpa koneksi exchange (simulasi)");
+      banner.push("API Key    : tidak ditemukan — DRY RUN tanpa koneksi exchange (simulasi)");
       this.state.capital = this.state.startCapital = this.config.capital || 500;
     } else {
       try {
@@ -778,28 +951,35 @@ class BotEngine extends EventEmitter {
           // Jika engine adalah bagian dari grup multi-strategy, tampilkan modal
           // per-engine DAN total grup agar tidak membingungkan.
           const modalLog = this.config.groupTotalCapital && this.config.groupTotalCapital !== this.state.capital
-            ? `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT per strategi (total bot: $${this.config.groupTotalCapital.toFixed(2)}) (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`
-            : `Modal DRY RUN: $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`;
-          this._log("info", modalLog);
+            ? `Modal      : DRY RUN $${this.state.capital.toFixed(2)} USDT per strategi (total bot: $${this.config.groupTotalCapital.toFixed(2)}) (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`
+            : `Modal      : DRY RUN $${this.state.capital.toFixed(2)} USDT (exchange: $${totalEquity.toFixed(2)} — hanya referensi)`;
+          banner.push(modalLog);
         } else {
           // Live: gunakan equity total (available + margin terkunci).
           this.state.capital      = totalEquity;
           this.state.startCapital = totalEquity;
-          this._log("info", `Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
+          banner.push(`Balance    : $${totalEquity.toFixed(2)} USDT (available: $${bal.available.toFixed(2)})`);
           if (this.config.sharedLeverageSet) {
             // Leverage + margin mode already set once by coordinator for this symbol.
-            this._log("info", `Leverage   : ${this.config.leverage}x diset ✓ (koordinator)`);
+            banner.push(`Leverage   : ${this.config.leverage}x diset ✓ (koordinator)`);
           } else {
             await this.client.setLeverage(this.config.symbol, this.config.leverage);
             await this.client.setMarginMode(this.config.symbol, "crossed");
-            this._log("info", `Leverage   : ${this.config.leverage}x diset ✓`);
+            banner.push(`Leverage   : ${this.config.leverage}x diset ✓`);
           }
         }
       } catch (err) {
-        this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${err.message}`);
+        const _em = err.message || "";
+        const _okxIpCode = _em.match(/"?code"?\s*:\s*"?50110"?/i);
+        const _okxIpAddr = _em.match(/IP\s+([\da-f:.]+)/i)?.[1];
+        const _displayMsg = _okxIpCode
+          ? `IP server tidak di-whitelist OKX${_okxIpAddr ? ` (IP: ${_okxIpAddr})` : ""}. Solusi: buka OKX → Profile → API → Edit API key → hapus semua isian IP whitelist (biarkan kosong), atau tambahkan IP server ke whitelist, lalu simpan.`
+          : _em;
+        // Error koneksi tetap kartu terpisah (level error → merah, mudah terlihat).
+        this._log("error", `Gagal connect ke ${this.config.exchangeLabel}: ${_displayMsg}`);
         if (!this.config.dryRun) throw err;
         this.state.capital = this.state.startCapital = this.config.capital || 500;
-        this._log("warn", `Fallback DRY RUN dengan modal $${this.state.capital.toFixed(2)}`);
+        banner.push(`Modal      : Fallback DRY RUN $${this.state.capital.toFixed(2)} (koneksi exchange gagal)`);
       }
     }
 
@@ -821,16 +1001,16 @@ class BotEngine extends EventEmitter {
       // dailyStartCapital ≈ modal saat ini + loss hari ini (perkiraan modal awal hari).
       this.state.dailyStartCapital = this.state.capital + risk.dailyLoss;
       if (risk.dailyTradeCount > 0) {
-        this._log("info",
-          `🛡️ Risk dipulihkan dari DB — trade hari ini: ${risk.dailyTradeCount}, ` +
-          `daily loss: $${risk.dailyLoss.toFixed(2)}, loss beruntun: ${risk.consecLoss}`
+        banner.push(
+          `🛡️ Risk      : dipulihkan dari DB — trade hari ini ${risk.dailyTradeCount}, ` +
+          `daily loss $${risk.dailyLoss.toFixed(2)}, loss beruntun ${risk.consecLoss}`
         );
       }
     } catch (e) {
-      this._log("warn", `Gagal memulihkan risk state dari DB: ${e.message} — mulai dari 0`);
+      banner.push(`Risk       : gagal dipulihkan dari DB (${e.message}) — mulai dari 0`);
     }
 
-    this._sep("BOT BERJALAN");
+    return banner;
   }
 
   // ─────────────────────────────────────────────
@@ -962,6 +1142,10 @@ class BotEngine extends EventEmitter {
       const candles = await this._fetchCandles();
       if (!candles || candles.length < this.config.emaSlow + 20) {
         this._log("warn", "Candle tidak cukup untuk kalkulasi indikator");
+        // Posisi terbuka tetap wajib dimonitor SL/TP meski indikator belum siap.
+        if (this.state.openPositions.length > 0) {
+          await this._monitorOpenPositions(null, null, 0);
+        }
         return;
       }
 
@@ -977,16 +1161,17 @@ class BotEngine extends EventEmitter {
       let htfCandlesCache = null;  // disimpan untuk sideways breakout detection
       if (this.config.higherTf) {
         try {
-          const htfCandles = await this.client.getCandles(
-            this.config.symbol, this.config.higherTf,
-            Math.max(this.config.htfEmaSlow + 10, 50)
-          );
-          htfCandlesCache = htfCandles;
-          this.state.htfTrend = detectHTFTrend(htfCandles, {
-            htfEmaFast:           this.config.htfEmaFast,
-            htfEmaSlow:           this.config.htfEmaSlow,
-            sidewaysThresholdPct: this.config.sidewaysThresholdPct,
-          });
+          const htfCandles = await this._fetchHtfCandles();
+          if (htfCandles?.length) {
+            htfCandlesCache = htfCandles;
+            this.state.htfTrend = detectHTFTrend(htfCandles, {
+              htfEmaFast:           this.config.htfEmaFast,
+              htfEmaSlow:           this.config.htfEmaSlow,
+              sidewaysThresholdPct: this.config.sidewaysThresholdPct,
+            });
+          } else {
+            this.state.htfTrend = "UNKNOWN";
+          }
         } catch {
           // Tidak bisa fetch HTF → UNKNOWN. Entry baru DIBLOK (fail-closed) di
           // STEP 3 — tanpa data regime, jangan ambil posisi baru. Posisi terbuka
@@ -1021,40 +1206,11 @@ class BotEngine extends EventEmitter {
           `EMA${this.config.emaFast}=${emaF?.toFixed(2)} EMA${this.config.emaSlow}=${emaS?.toFixed(2)}` +
           (emaTrend ? ` EMA${this.config.emaTrend}=${emaTrend?.toFixed(2)}` : "") + ` | ` +
           `RSI=${rsi?.toFixed(1)} ATR=${atr?.toFixed(2)} | ` +
-          `Trend: ${trendLabel}${htfLabel} | Strat: [${this.config.strategyKey}]`
+          `Trend: ${trendLabel}${htfLabel} | Strat: ${stratLabel(this.config.strategyKey)}`
         );
       }
 
-      // Harga real-time untuk monitoring SL/TP (#7). `price` di atas = close candle
-      // ke-2 terakhir (benar untuk deteksi sinyal, tapi BASI untuk cek SL/TP — pada
-      // 15m bisa tertinggal s/d 15 menit). Gunakan ticker.last bila tersedia.
-      //
-      // BUG-TP-INTRABAR: deteksi SL/TP sebelumnya hanya pakai SATU titik harga
-      // (close/last). Wick yang menembus TP lalu retrace di dalam satu candle (atau
-      // di antara dua poll) tidak pernah terdeteksi → posisi yang harusnya kena TP
-      // malah berbalik ke SL. Fix: pakai HIGH/LOW candle berjalan (sudah merekam
-      // wick) sebagai rentang intrabar untuk cek SL/TP, bukan cuma close.
-      let monitorPrice = price;
-      const formingBar = candles[candles.length - 1] || candles[lastIdx];
-      let barHigh = formingBar?.high ?? price;
-      let barLow  = formingBar?.low  ?? price;
-      if (this.state.openPositions.length > 0 && this.client?.getTicker) {
-        try {
-          const ticker = await this.client.getTicker(this.config.symbol);
-          if (ticker?.last > 0) {
-            monitorPrice = ticker.last;
-            // ticker bisa lebih segar dari agregasi candle → perluas rentang.
-            barHigh = Math.max(barHigh, ticker.last);
-            barLow  = Math.min(barLow,  ticker.last);
-          }
-        } catch { /* fallback ke close candle */ }
-      }
-      // Rentang harus selalu mencakup harga monitor.
-      barHigh = Math.max(barHigh, monitorPrice);
-      barLow  = Math.min(barLow,  monitorPrice);
-      this.state.lastPrice = monitorPrice;
-
-      await this._checkOpenPositions(monitorPrice, atr, barHigh, barLow);
+      await this._monitorOpenPositions(candles, price, atr);
 
       // Lapor risk ke koordinator akun tiap tick (#5) — termasuk saat memegang
       // posisi — agar gate daily-loss agregat lintas-bot selalu pakai data segar.
@@ -1094,8 +1250,8 @@ class BotEngine extends EventEmitter {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
         const gate = this._checkRiskGates(atr, price);
         if (!gate.ok) {
-          if (this.state.checkCount % 10 === 1) {
-            this._log("info", `[SKIP] ${gate.reason}`);
+          if (this._shouldLogDecision()) {
+            this._log("info", `⏸ Belum entry — ${gate.reason}`);
           }
         } else {
           // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
@@ -1110,6 +1266,18 @@ class BotEngine extends EventEmitter {
             const atrPctNow = atr && price ? (atr / price) * 100 : 1.0;
             const emaDelta  = emaS > 0 ? Math.abs(emaF - emaS) / emaS : 0;
             const trendStr  = Math.min(emaDelta * 50, 1.0); // normalisasi 0–1
+
+            let htfTrendStrength = null;
+            if (htfCandlesCache?.length >= 30) {
+              const hLast = htfCandlesCache.length - 1;
+              const hCloses = htfCandlesCache.map(c => c.close);
+              const hHighs = htfCandlesCache.map(c => c.high);
+              const hLows = htfCandlesCache.map(c => c.low);
+              const hEmaF = calcEMA(hCloses, this.config.htfEmaFast)[hLast];
+              const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
+              const hAtr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
+              if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+            }
 
             const signal = detectSignal(indicators, lastIdx, {
               rsiOverbought:    this.config.rsiOverbought,
@@ -1126,9 +1294,19 @@ class BotEngine extends EventEmitter {
               volatility:       atrPctNow,
               trend_strength:   trendStr,
               balance:          this.state.capital,
+
+              // alignment, anti-chase, dan SL komponen-C (VOLATILE) aktif live.
+              afMinVotes:           this.config.afMinVotes,
+              afRejectOnDissent:    this.config.afRejectOnDissent,
+              maxEntryExtensionATR: this.config.maxEntryExtensionATR,
+              htfTrend:             this.state.htfTrend,
+              htfTrendStrength,
+              htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
+              pairTier:             this.config.pairTier,
+              tierOverrides:        this.config.tierOverrides,
             });
 
-            // ── STEP 2c: MEAN_REVERSION HTF regime guard (FIX-4) ──────────────
+
             // MR tanpa filter akan counter-trend terus saat strong bull/bear →
             // SL beruntun → daily loss limit. Blokir SHORT di strong bull dan
             // LONG di strong bear, juga saat ATR HTF spike. Fail-open bila HTF
@@ -1136,7 +1314,7 @@ class BotEngine extends EventEmitter {
             let mrSignal = signal;
             if (signal && (this.config.strategyKey === "MEAN_REVERSION" || this.config.signalType === "MEAN_REVERSION")) {
               try {
-                const htf = htfCandlesCache || await this.client.getCandles(this.config.symbol, "1h", 60);
+                const htf = htfCandlesCache || await this._fetchHtfCandles();
                 if (htf && htf.length >= 30) {
                   const hCloses = htf.map(c => c.close);
                   const hHighs  = htf.map(c => c.high);
@@ -1171,8 +1349,8 @@ class BotEngine extends EventEmitter {
                 // (fetch gagal). Sebelumnya fail-open → 10/14 loss dry-run 11-12 Jun
                 // masuk tanpa konfirmasi regime. Tanpa data regime = tanpa entry.
                 filteredSignal = null;
-                if (this.state.checkCount % 10 === 1) {
-                  this._log("info", `[BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed)`);
+                if (this._shouldLogDecision()) {
+                  this._log("info", `⛔ Sinyal dibatalkan — data tren ${this.config.higherTf} tidak tersedia (fail-closed demi keamanan)`);
                 }
               } else if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
                 filteredSignal = null;
@@ -1191,6 +1369,55 @@ class BotEngine extends EventEmitter {
             if (filteredSignal && this.state.lastLossSetup === `${filteredSignal}@${price}`) {
               this._log("info", `[CHURN] Entry diblok — setup identik dengan loss terakhir (${filteredSignal} @ $${price}); tunggu candle baru`);
               filteredSignal = null;
+            }
+
+            // ── MULTI-POSITION MODE (v3.0): ADAPTIVE_FUSION independent components ──
+            if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
+              const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+              const afStrategy = new SmartMoneyConceptsStrategy();
+              const multiSignal = afStrategy.detectSignalMulti(indicators, lastIdx, {
+                volatility:           atrPctNow,
+                trend_strength:       trendStr,
+                balance:              this.state.capital,
+                afRejectOnDissent:    this.config.afRejectOnDissent,
+                maxEntryExtensionATR: this.config.maxEntryExtensionATR,
+                htfTrend:             this.state.htfTrend,
+                htfTrendStrength,
+                htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
+                pairTier:             this.config.pairTier,
+                tierOverrides:        this.config.tierOverrides,
+                volSmaMultiplier:     this.config.volSmaMultiplier,
+                afEnabledComponents:  this.config.afEnabledComponents,
+                afMinComponentConfidence: this.config.afMinComponentConfidence,
+                afMinAggregateConfidence: this.config.afMinAggregateConfidence,
+              });
+
+              // Check each component independently for entry
+              for (const componentId of ["A", "B", "C"]) {
+                const componentSignal = multiSignal[componentId];
+                if (!componentSignal) continue;
+
+                // Check if this component already has an open position
+                if (this.state.positions.has(componentId)) {
+                  continue; // Component already trading
+                }
+
+                // Check component-level risk gates
+                const compCooldown = this.state.componentCooldown.get(componentId);
+                if (compCooldown && Date.now() < compCooldown) {
+                  continue; // Component in cooldown
+                }
+
+                const compConsecLoss = this.state.componentConsecLoss.get(componentId) || 0;
+                if (compConsecLoss >= this.config.maxConsecLoss) {
+                  continue; // Component exceeded max consecutive loss
+                }
+
+                // Multi-position entry (pass the real regime so strong-trend TP can fire)
+                await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot, multiSignal.meta?.marketCond, multiSignal.meta?.confidence?.[componentId]);
+              }
+              // Skip single-position logic below for AF in multi-position mode
+              return;
             }
 
             if (filteredSignal && filteredSignal !== this.state.lastSignal) {
@@ -1214,22 +1441,34 @@ class BotEngine extends EventEmitter {
               if (this.config.signalType === "ADAPTIVE_FUSION") {
                 const meta = getAdaptiveFusionMeta();
                 if (meta) {
-                  const AdaptiveFusionStrategy = require("../domain/strategy/implementations/AdaptiveFusionStrategy");
-                  const afsInstance = new AdaptiveFusionStrategy();
-                  const riskCfg = afsInstance.calculateRiskConfig(price, atr, filteredSignal, meta.component);
+                  const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+                  const afsInstance = new SmartMoneyConceptsStrategy();
+                  const riskCfg = afsInstance.calculateRiskConfig(price, atr, filteredSignal, meta.component, {
+                    marketCond: meta.marketCond,
+                    strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
+                  });
                   signalOptions.slDist = riskCfg.slDistance;
                   signalOptions.tpDist = riskCfg.tpDistance;
+                  if (meta.marketCond === "STRONG_TREND" && this.config.riskPerTradeStrong > 0) {
+                    signalOptions.riskPerTrade = this.config.riskPerTradeStrong;
+                  }
                   indicatorSnapshot.afComponent  = meta.component;
                   indicatorSnapshot.afVotes      = meta.votes;
                   indicatorSnapshot.afMarketCond = meta.marketCond;
+                  indicatorSnapshot.afConfidence = meta.componentConfidence ?? null;
+                  indicatorSnapshot.afAggregateConfidence = meta.aggregateConfidence ?? null;
+                  const tpMultNote = riskCfg.strongTrendTPApplied
+                    ? ` | TP×${this.config.strongTrendTPMult} (STRONG_TREND)`
+                    : "";
+                  const confNote = meta.aggregateConfidence != null ? ` | Conf ${meta.aggregateConfidence}%` : "";
                   this._log("info",
                     `[AF] Component: ${meta.component} | Votes: ${JSON.stringify(meta.votes)} | ` +
-                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+                    `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}${confNote}`
                   );
                 }
               } else if (this.config.signalType === "BREAKOUT_RETEST") {
-                const BreakoutRetestStrategy = require("../domain/strategy/implementations/BreakoutRetestStrategy");
-                const brInstance = new BreakoutRetestStrategy();
+                const BreakoutTradingStrategy = require("../domain/strategy/implementations/BreakoutTradingStrategy");
+                const brInstance = new BreakoutTradingStrategy();
                 const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal);
                 signalOptions.slDist = riskCfg.slDistance;
                 signalOptions.tpDist = riskCfg.tpDistance;
@@ -1239,7 +1478,24 @@ class BotEngine extends EventEmitter {
                 );
               }
 
-              // ── Idempotency guard (FIX-3) ───────────────────────────────────
+              if (signalOptions.slDist == null) {
+                signalOptions.slDist = atr * this.config.atrMultiplier;
+              }
+              if (signalOptions.tpDist == null) {
+                signalOptions.tpDist = signalOptions.slDist * this.config.riskReward;
+              }
+
+              const grokGate = await this._applyGrokConfirmGate(
+                filteredSignal, price, atr, indicatorSnapshot, signalOptions
+              );
+              if (!grokGate.signal) {
+                filteredSignal = null;
+              } else {
+                filteredSignal = grokGate.signal;
+                signalOptions = grokGate.signalOptions;
+              }
+
+
               // Cegah dua posisi terbuka untuk sinyal yang sama bila tick/candle
               // diproses dua kali (mis. polling overlap atau WS reconnect).
               // Key = symbol + strategy + candleOpenTime + direction (TTL 5 menit).
@@ -1259,9 +1515,9 @@ class BotEngine extends EventEmitter {
               }
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
-              // ── Diagnostic: log kenapa tidak ada entry (setiap 5 tick) ──────
-              // Bantu debug tanpa spam log. Tampil di Live Bot log panel.
-              if (this.state.checkCount % 5 === 1) {
+              // ── Diagnostic: log kenapa belum ada entry (throttle 3 menit) ──────
+              // Bantu user paham kondisi bot tanpa spam log. Tampil di Live Bot panel.
+              if (this._shouldLogDecision()) {
                 const rsiMin = this.config.rsiLongMin ?? 50;
                 const rsiMax = this.config.rsiLongMax ?? 70;
                 const emaOk  = emaF > emaS;
@@ -1286,7 +1542,7 @@ class BotEngine extends EventEmitter {
                 if (reasons.length === 0) {
                   reasons.push(`RSI pullback-bounce pattern belum terpenuhi (RSI=${rsi?.toFixed(1)}, perlu pullback ke ${rsiMin}–${rsiMax} lalu naik)`);
                 }
-                this._log("info", `[WAIT] ${reasons.join(" | ")}`);
+                this._log("info", `⏳ Belum entry — menunggu: ${reasons.join(" | ")}`);
               }
             }
           }
@@ -1339,43 +1595,39 @@ class BotEngine extends EventEmitter {
   // FETCH CANDLES — dengan cache DB
   // ─────────────────────────────────────────────
   async _fetchCandles() {
-    // OHLCV adalah endpoint publik — tidak perlu API key.
-    // dryRun hanya mencegah order placement, bukan pengambilan harga nyata.
-    // Selalu coba fetch data real; simulasi hanya jika exchange benar-benar tidak bisa dijangkau.
+    const minBars = this.config.emaSlow + 20;
+    const timeframe = this.config.interval.toLowerCase();
 
-    // 1. Coba cache dulu (valid 15 menit)
     try {
-      const cached = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 900);
-      if (cached && cached.length >= this.config.emaSlow + 20) {
-        return cached;
-      }
-    } catch { /* cache error tidak masalah */ }
-
-    // 2. Fetch dari exchange API (public endpoint — tidak butuh API key)
-    try {
-      const timeframe = this.config.interval.toLowerCase();
-      const candles   = await this.client.getCandles(this.config.symbol, timeframe, 200);
-
-      // Simpan ke cache
-      try {
-        db.cacheCandles(this.config.exchange, this.config.symbol, this.config.interval, candles);
-      } catch { /* cache write error tidak masalah */ }
-
-      return candles;
+      return await fetchCandlesWithCache(this.client, {
+        exchange:         this.config.exchange,
+        symbol:           this.config.symbol,
+        interval:         timeframe,
+        limit:            200,
+        cacheTtlSeconds:  LTF_CACHE_TTL,
+        minBars,
+      });
     } catch (err) {
-      this._log("warn", `Gagal ambil candles dari exchange: ${err.message}`);
-
-      // 2b. Fallback cache stale (hingga 24 jam) saat jaringan ke Bitget bermasalah
-      try {
-        const stale = await db.getCachedCandles(this.config.exchange, this.config.symbol, this.config.interval, 86_400);
-        if (stale && stale.length >= this.config.emaSlow + 20) {
-          this._log("info", `Pakai candle cache (${stale.length} bar) — exchange tidak terjangkau`);
-          return stale;
-        }
-      } catch { /* abaikan */ }
+      // THROTTLE (anti DB-storm): saat exchange DOWN, tiap tick gagal → tiap _log warn
+      // memicu DUA tulisan DB (persistBotLog Prisma + insertLog pg pool). Dikali N bot ×
+      // tiap tick = badai koneksi yang menguras pool Postgres (akar insiden "insertLog
+      // gagal: timeout" + login timeout). Coalesce: hanya log sekali per 60s selama
+      // kegagalan beruntun, sertakan hitungan agar tetap terlihat.
+      const nowTs = Date.now();
+      this._candleFailStreak = (this._candleFailStreak || 0) + 1;
+      const throttleMs = 60_000;
+      if (!this._lastCandleFailLogTs || nowTs - this._lastCandleFailLogTs >= throttleMs) {
+        const streak = this._candleFailStreak;
+        this._lastCandleFailLogTs = nowTs;
+        this._candleFailStreak = 0;
+        this._log(
+          isRateLimitError(err) ? "info" : "warn",
+          `Gagal ambil candles dari exchange${streak > 1 ? ` (${streak}× dalam 60s)` : ""}: ${err.message}`
+        );
+      }
     }
 
-    // 3. Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
+    // Fallback simulasi — coba ambil harga terkini dulu via ticker (juga public),
     //    sehingga ATR / SL / TP simulasi tetap proporsional dengan harga nyata.
     let seedPrice = null;
     try {
@@ -1387,6 +1639,388 @@ class BotEngine extends EventEmitter {
     } catch { /* ticker juga gagal — gunakan harga hardcode sebagai last resort */ }
 
     return this._generateDryRunCandles(seedPrice);
+  }
+
+  /** HTF candles dengan cache DB (10 menit) — hindari fetch tiap tick / tiap strategi. */
+  async _fetchHtfCandles() {
+    if (!this.config.higherTf) return null;
+    const limit = Math.max(this.config.htfEmaSlow + 10, 50);
+    const minBars = Math.max(this.config.htfEmaSlow + 5, 30);
+    try {
+      return await fetchCandlesWithCache(this.client, {
+        exchange:        this.config.exchange,
+        symbol:          this.config.symbol,
+        interval:        this.config.higherTf,
+        limit,
+        cacheTtlSeconds: HTF_CACHE_TTL,
+        minBars,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /** Multi-TF candles untuk Grok AI prompt builder. */
+  async _fetchMultiTfCandles(timeframes = ["1m", "5m", "15m", "30m", "1h", "4h"]) {
+    const out = {};
+    await Promise.all(
+      timeframes.map(async (tf) => {
+        try {
+          const candles = await fetchCandlesWithCache(this.client, {
+            exchange:        this.config.exchange,
+            symbol:          this.config.symbol,
+            interval:        tf,
+            limit:           200,
+            cacheTtlSeconds: tf === "1m" || tf === "5m" ? LTF_CACHE_TTL : HTF_CACHE_TTL,
+            minBars:         30,
+          });
+          if (candles?.length) out[tf] = candles;
+        } catch { /* skip TF */ }
+      })
+    );
+    return out;
+  }
+
+  /**
+   * Siklus Grok AI — evaluasi posisi terbuka + entry baru dengan TP/SL eksplisit.
+   */
+  async _tickGrokAi(price, indicators, lastIdx, htfCandlesCache) {
+    const cycleMs = cfg.GROK_TRADING_CYCLE_MS;
+    const now = Date.now();
+    if (this._lastGrokCallAt && now - this._lastGrokCallAt < cycleMs) {
+      return;
+    }
+
+    const atr = indicators.atr[lastIdx];
+    const gate = this._checkRiskGates(atr, price);
+
+    let multiTfCandles = {};
+    try {
+      multiTfCandles = await this._fetchMultiTfCandles(["1m", "5m", "15m", "30m", "1h", "4h"]);
+    } catch (err) {
+      this._log("warn", `[GROK] Gagal fetch multi-TF: ${err.message}`);
+    }
+
+    const grokCtx = {
+      symbol: this.config.symbol,
+      price,
+      indicators,
+      lastIdx,
+      multiTfCandles,
+      htfCandles: htfCandlesCache,
+      minConfidenceEntry: this.config.minConfidenceEntry ?? cfg.GROK_TRADING_MIN_CONFIDENCE_ENTRY,
+      minConfidenceTpSl:  this.config.minConfidenceTpSl  ?? cfg.GROK_TRADING_MIN_CONFIDENCE_TP_SL,
+      atrMinMult:         this.config.atrMinMult ?? 1.0,
+      minRiskReward:      this.config.minRiskReward ?? 1.2,
+      atr,
+      leverage:           this.config.leverage,
+      riskPerTrade:       this.config.riskPerTrade,
+      maxConcurrentPositions: this.config.maxPositions,
+      account: {
+        balance: this.state.capital,
+        openPositions: this.state.openPositions.map(p => ({
+          side: p.side, entry: p.entry, sl: p.sl, tp: p.tp,
+        })),
+        unrealizedPnl: this.state.openPositions.reduce((s, p) => s + (p.unrealizedPL || 0), 0),
+      },
+      hasOpenPosition: this.state.openPositions.length > 0,
+      botId: this.config.botId,
+      userId: this.config.userId,
+    };
+
+    this._lastGrokCallAt = now;
+
+    if (this.state.openPositions.length > 0) {
+      const pos = this.state.openPositions[0];
+      try {
+        const action = await GrokTradingService.requestPositionAction({ ...grokCtx, position: pos });
+        if (action?.action === "CLOSE") {
+          this._log("trade", `[GROK] Tutup posisi — ${action.reasoning || "AI decision"}`);
+          await this._closePosition("GROK_AI_DECISION", price);
+          return;
+        }
+      } catch (err) {
+        this._log("error", `[GROK] Evaluasi posisi gagal: ${err.message}`);
+      }
+    }
+
+    if (this.state.openPositions.length >= this.config.maxPositions) return;
+    if (!gate.ok) {
+      if (this._shouldLogDecision()) {
+        this._log("info", `[GROK] Belum entry — ${gate.reason}`);
+      }
+      return;
+    }
+
+    try {
+      const decision = await GrokTradingService.requestTradeDecision(grokCtx);
+      if (!decision || !decision.valid) {
+        if (decision?.rejected) {
+          this._log("info", `[GROK] Sinyal ditolak — ${decision.rejected}`);
+        }
+        return;
+      }
+
+      if (!decision.entryAllowed) {
+        this._log("info",
+          `[GROK] TP/SL valid (conf ${decision.confidence}) — entry ditolak, perlu conf >= ${grokCtx.minConfidenceEntry}`
+        );
+        return;
+      }
+
+      const logLine =
+        `[GROK] ${decision.side} ${this.config.symbol} | conf ${decision.confidence}/10 | ` +
+        `TP ${decision.take_profit} | SL ${decision.stop_loss}` +
+        (decision.reasoning ? ` | ${decision.reasoning}` : "");
+      this._log("trade", logLine);
+
+      const grokDryRun = this.config.dryRun || cfg.GROK_TRADING_DRY_RUN;
+      if (grokDryRun) {
+        this._log("info",
+          `[GROK DRY-RUN] ${decision.side} conf=${decision.confidence} TP=${decision.take_profit} SL=${decision.stop_loss}`
+        );
+        return;
+      }
+
+      await this._openPositionWithExplicitTpSl(decision, price, atr);
+    } catch (err) {
+      this._log("error", `[GROK] Request trade gagal: ${err.message}`);
+    }
+  }
+
+  /**
+   * Buka posisi dengan TP/SL absolut dari respons Grok (bukan ATR×RR default).
+   */
+  async _openPositionWithExplicitTpSl(decision, price, atr) {
+    const { side, take_profit, stop_loss, confidence, reasoning } = decision;
+    const slDist = Math.abs(price - stop_loss);
+    const tpDist = Math.abs(take_profit - price);
+
+    const indicatorSnapshot = {
+      source: "GROK_AI",
+      confidence,
+      reasoning,
+      grokTp: take_profit,
+      grokSl: stop_loss,
+      htfTrend: this.state.htfTrend ?? null,
+      strategy: this.config.strategyKey,
+      atr: atr != null ? parseFloat(Number(atr).toFixed(4)) : null,
+    };
+
+    await this._handleSignal(side, price, atr, indicatorSnapshot, { slDist, tpDist });
+  }
+
+  /**
+   * Mode B — Grok Confirm Gate: konfirmasi entry + optional TP adjust (SL tetap rules).
+   * @returns {{ signal: string|null, signalOptions: object }}
+   */
+  async _applyGrokConfirmGate(signal, price, atr, indicatorSnapshot, signalOptions) {
+    const noop = { signal, signalOptions };
+
+    if (
+      !signal ||
+      !cfg.GROK_CONFIRM_ENABLED ||
+      !this.config.grokConfirmEnabled ||
+      this.config.strategyKey === "GROK_AI_TRADING" ||
+      !GROK_CONFIRM_STRATEGIES.has(this.config.strategyKey)
+    ) {
+      return noop;
+    }
+
+    const slDist = signalOptions.slDist;
+    const tpDist = signalOptions.tpDist;
+    const slPrice = signal === "LONG" ? price - slDist : price + slDist;
+    const tpRules = signal === "LONG" ? price + tpDist : price - tpDist;
+
+    let signalReason = "";
+    if (indicatorSnapshot.afComponent) {
+      signalReason =
+        `Component ${indicatorSnapshot.afComponent}, votes ${JSON.stringify(indicatorSnapshot.afVotes ?? {})}, ` +
+        `marketCond ${indicatorSnapshot.afMarketCond ?? "N/A"}`;
+    }
+
+    try {
+      const confirm = await GrokConfirmService.requestConfirmation({
+        symbol: this.config.symbol,
+        strategyKey: this.config.strategyKey,
+        side: signal,
+        price,
+        atr,
+        sl_rules: slPrice,
+        tp_rules: tpRules,
+        indicatorSnapshot,
+        htfTrend: this.state.htfTrend,
+        signalReason,
+        minConfidenceEntry: this.config.grokConfirmMinEntry ?? cfg.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY,
+        minTpConfidence: this.config.grokConfirmMinTp ?? cfg.GROK_CONFIRM_MIN_TP_CONFIDENCE,
+        userId: this.config.userId,
+        botId: this.config.botId,
+      });
+
+      if (confirm.failOpen) {
+        this._log("warn", `[GROK CONFIRM] API error — fail-open, lanjut dengan SL/TP rules`);
+        return noop;
+      }
+
+      if (!confirm?.confirm_entry) {
+        this._log("info",
+          `[GROK CONFIRM] REJECT entry — conf ${confirm?.confidence ?? 0}/10` +
+          (confirm?.reasoning ? ` | ${confirm.reasoning}` : "")
+        );
+        return { signal: null, signalOptions };
+      }
+
+      const tpRejectAction = this.config.grokConfirmTpRejectAction ?? cfg.GROK_CONFIRM_TP_REJECT_ACTION;
+
+      if (!confirm.tp_approved && tpRejectAction === "skip") {
+        this._log("info",
+          `[GROK CONFIRM] REJECT TP — ${confirm.tp_reasoning || "not approved"}`
+        );
+        return { signal: null, signalOptions };
+      }
+
+      let finalTp = tpRules;
+      const useGrokTp = this.config.grokConfirmTpAdjust !== false &&
+        confirm.tp_approved &&
+        confirm.suggested_tp != null &&
+        Number.isFinite(confirm.suggested_tp);
+
+      if (useGrokTp) {
+        finalTp = GrokConfirmService.resolveTakeProfit({
+          tpRules,
+          suggestedTp: confirm.suggested_tp,
+          side: signal,
+          price,
+          atr,
+          bandPct: this.config.grokConfirmTpBandPct ?? cfg.GROK_CONFIRM_TP_ADJUST_BAND_PCT,
+          maxAtrMult: cfg.GROK_CONFIRM_TP_MAX_ATR_MULT,
+        });
+      } else if (!confirm.tp_approved && tpRejectAction === "use_rules_tp") {
+        finalTp = tpRules;
+      }
+
+      const rrCheck = GrokConfirmService.validateRiskReward({
+        side: signal,
+        price,
+        slPrice,
+        tpPrice: finalTp,
+        minRiskReward: this.config.minRiskReward ?? 1.2,
+      });
+      if (!rrCheck.valid) {
+        this._log("info",
+          `[GROK CONFIRM] REJECT — R:R ${rrCheck.riskReward} < min setelah TP adjust`
+        );
+        return { signal: null, signalOptions };
+      }
+
+      const nextOptions = {
+        ...signalOptions,
+        tpDist: Math.abs(finalTp - price),
+        tpMode: confirm.tp_mode ?? "full",
+      };
+
+      const tpModeLabel = (confirm.tp_mode ?? "full") === "partial" ? "Partial TP" : "Full TP";
+      const tpNote = finalTp !== tpRules
+        ? `TP ${tpRules.toFixed(2)}→${finalTp.toFixed(2)} (Grok adjust)`
+        : `TP ${finalTp.toFixed(2)} (rules)`;
+
+      // Detail Grok masuk kartu ENTRY terpadu — bukan log INFO terpisah (UX Bot Logs).
+      indicatorSnapshot.grokConfirm = {
+        confidence: confirm.confidence,
+        tp_confidence: confirm.tp_confidence,
+        tp_mode: confirm.tp_mode,
+        tp_mode_confidence: confirm.tp_mode_confidence,
+        reasoning: confirm.reasoning,
+        tp_reasoning: confirm.tp_reasoning,
+        tp_rules: tpRules,
+        tp_final: finalTp,
+        sl_rules: slPrice,
+        tp_mode_label: tpModeLabel,
+        tp_note: tpNote,
+      };
+
+      return { signal, signalOptions: nextOptions };
+    } catch (err) {
+      if (cfg.GROK_CONFIRM_FAIL_MODE === "open") {
+        this._log("warn", `[GROK CONFIRM] Error — fail-open: ${err.message}`);
+        return noop;
+      }
+      this._log("error", `[GROK CONFIRM] Error — skip trade: ${err.message}`);
+      return { signal: null, signalOptions };
+    }
+  }
+
+  /**
+   * Tutup posisi terbuka pertama (market) — dipakai Grok position_actions CLOSE.
+   */
+  async _closePosition(reason = "MANUAL", exitPrice = null) {
+    const pos = this.state.openPositions[0];
+    if (!pos) return;
+
+    const price = exitPrice ?? this.state.lastPrice ?? pos.entry;
+    const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
+
+    if (!this.config.dryRun) {
+      try {
+        const closeSide = pos.side === "LONG" ? "close_long" : "close_short";
+        await this.client.closePosition(this.config.symbol, closeSide, remaining);
+      } catch (err) {
+        this._log("error", `[GROK] Gagal tutup posisi: ${err.message}`);
+        return;
+      }
+    }
+
+    const pnl = pos.side === "LONG"
+      ? (price - pos.entry) * remaining
+      : (pos.entry - price) * remaining;
+    const pnlPct = pos.entry > 0
+      ? ((price - pos.entry) / pos.entry) * 100 * (pos.side === "LONG" ? 1 : -1)
+      : 0;
+    const fee = await this._resolveFee(pos, price, remaining);
+
+    if (this.config.dryRun) {
+      const marginBack = pos.marginReserved != null
+        ? pos.marginReserved
+        : pos.entry * remaining * this.config.riskPerTrade;
+      this.state.capital += pnl - fee + marginBack;
+    }
+
+    if (this.sessionId && pos.dbId) {
+      try {
+        await db.closeTrade(pos.dbId, {
+          exitPrice: price,
+          pnl,
+          pnlPct,
+          fee,
+          reason,
+          closeTime: new Date().toISOString(),
+        });
+      } catch (err) {
+        this._log("warn", `Gagal tutup trade #${pos.dbId} di DB: ${err.message}`);
+      }
+    }
+
+    this._log("trade",
+      `[GROK] Posisi ditutup (${reason}) ${pos.side} @ $${fmtPx(price)} | Net ${pnl - fee >= 0 ? "+" : ""}$${(pnl - fee).toFixed(2)}`
+    );
+
+    this._notifyClose({
+      symbol:     this.config.symbol,
+      side:       pos.side,
+      entryPrice: pos.entry,
+      exitPrice:  price,
+      pnl,
+      pnlPct,
+      reason,
+      dryRun:     this.config.dryRun,
+    });
+
+    this.state.trades.push({ ...pos, size: remaining, exit: price, pnl, pnlPct, fee, reason, closedAt: Date.now() });
+    this._capTrades();
+    this._updateRiskAfterClose(pnl, pos);
+    this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
+    this._releaseMarginIfFlat();
+    this._syncSessionStats();
   }
 
   // seedPrice: harga real dari ticker (null = tidak tersedia, pakai hardcode per simbol)
@@ -1435,6 +2069,44 @@ class BotEngine extends EventEmitter {
    *                     Dipakai untuk sideways breakout/retest entry dimana
    *                     SL ditempatkan di tepi range, bukan berbasis ATR.
    */
+  /**
+   * Gate cap posisi-terbuka AKUN per-tier (per-tier account open-position cap).
+   *
+   * Menghitung posisi terbuka NYATA milik user dari DB (close_time IS NULL) lintas
+   * SEMUA koin/strategi — SENGAJA BUKAN AccountCoordinator.openCount()/reservations.size,
+   * karena reservasi dibuat saat bot START (satu per strategi per koin) & baru dilepas
+   * saat stop → reservations.size ≈ jumlah slot strategi ter-arm (~100 utk 27 bot),
+   * memakainya sebagai cap akan memblokir SEMUA entry. Cap berlaku di dry-run & live.
+   *
+   * Resilient: bila jumlah posisi tak bisa dibaca (DB error / helper absen) → FAIL-OPEN
+   * dengan warning (jangan crash entry), karena gate ini sifatnya proteksi tambahan.
+   *
+   * @returns {Promise<{allowed: boolean, reason?: string}>}
+   */
+  async _checkAccountOpenCap() {
+    const cap = Number(this.config.maxAccountOpenPositions) || 0;
+    if (!(cap > 0)) return { allowed: true }; // belum dikonfigurasi → tidak membatasi
+    const userId = this.config.userId;
+    if (!userId) return { allowed: true };    // tanpa userId tak bisa hitung → jangan blokir
+    try {
+      const db = require("../infrastructure/db/database");
+      if (typeof db.countOpenTradesByUser !== "function") return { allowed: true };
+      // Filter per-mode (dry/live) agar konsisten dgn MultiStrategyCoordinator.canEnter.
+      const currentOpen = await db.countOpenTradesByUser(userId, this.config.dryRun);
+      if (currentOpen >= cap) {
+        return {
+          allowed: false,
+          reason: `Batas posisi terbuka akun tercapai (${currentOpen}/${cap}) untuk tier kamu — ` +
+                  `entry ditahan sampai ada posisi yang tutup`,
+        };
+      }
+      return { allowed: true };
+    } catch (e) {
+      this._log("warn", `Cap posisi akun: gagal baca jumlah posisi terbuka (${e.message}) — fail-open`);
+      return { allowed: true };
+    }
+  }
+
   async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
     if (!atr) { this._log("warn", "ATR tidak tersedia, skip signal"); return; }
 
@@ -1454,11 +2126,32 @@ class BotEngine extends EventEmitter {
       this._log("warn", `Dedup: sudah ada posisi ${signal} ${this.config.symbol} terbuka — skip open duplikat`);
       return;
     }
+
+    // ── Per-tier account open-position cap ────────────────────────────────────
+    // Fix bug meter "Account Risk → Open positions" yang menampilkan "8 / 4":
+    // cap account-wide TAK PERNAH ditegakkan. Gate INDEPENDEN dari anggaran margin
+    // (canOpen/reserveGroup) — membatasi JUMLAH posisi terbuka serentak LINTAS
+    // semua koin/strategi sesuai tier user. Chokepoint tunggal di sini meng-cover
+    // kedua jalur (engine tunggal & multi-strategi: AdaptiveStrategyEngine memanggil
+    // super._handleSignal). WAJIB jalan di DRY-RUN juga (kasus dilaporkan = simulasi)
+    // — TIDAK ditempatkan di balik guard !dryRun. Sumber hitung = posisi terbuka
+    // NYATA dari DB, BUKAN reservations.size (= slot strategi ter-arm).
+    const capVerdict = await this._checkAccountOpenCap();
+    if (!capVerdict.allowed) {
+      this._log("warn", `🚦 ${capVerdict.reason}`);
+      return;
+    }
+
     this._lastOpenAt[dedupKey] = now0;
 
-    const slDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
+    // Pair-tier SL override: VOLATILE 1.5× / STABLE 1.1× / LIQUID 1.0×. Memperlebar
+    // SL agar tidak ter-stop oleh noise di koin volatil; sizing berbasis-risk otomatis
+    // memperkecil posisi saat SL lebih lebar (risk $ tetap). Default 1 bila tak diset.
+    const pairSlMult = this.config.pairSlMultiplier || 1;
+    const baseSlDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
+    const slDist = baseSlDist * pairSlMult;
     // tpDist can be overridden independently (used by ADAPTIVE_FUSION per-component RR)
-    const tpDist = options.tpDist != null ? options.tpDist : slDist * this.config.riskReward;
+    const tpDist = options.tpDist != null ? options.tpDist * pairSlMult : slDist * this.config.riskReward;
     const sl = signal === "LONG" ? price - slDist : price + slDist;
     const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
@@ -1484,6 +2177,29 @@ class BotEngine extends EventEmitter {
       return;
     }
 
+    // ── FEE-03: Fee-aware min-edge gate ───────────────────────────────────────
+    // Edge per trade harus jauh lebih besar dari biaya. Roundtrip fee =
+    // entry+exit = 2×fee (pakai makerFeeRate bila entryMode=maker). Tolak entry
+    // bila reward leg (jarak ke TP sbg fraksi harga) tak menutup
+    // minEdgeFeeMultiple× fee roundtrip → mencegah scalp marginal yang fee-nya
+    // menelan profit (akar kerugian net: fee 8× lebih besar dari edge per trade).
+    const minEdgeMult = this.config.minEdgeFeeMultiple ?? 0;
+    if (minEdgeMult > 0 && price > 0) {
+      const perSideFee     = this.config.entryMode === "maker"
+        ? (this.config.makerFeeRate ?? 0.0002)
+        : (this.config.feeRate ?? 0.0006);
+      const roundtripFee   = 2 * perSideFee;
+      const tpFrac         = tpDist / price;
+      if (tpFrac < minEdgeMult * roundtripFee) {
+        this._log("warn",
+          `[FEE-GATE] Edge terlalu tipis vs fee — sinyal ${signal} diabaikan. ` +
+          `TP=${(tpFrac * 100).toFixed(3)}% < ${minEdgeMult}× fee roundtrip ` +
+          `(${(minEdgeMult * roundtripFee * 100).toFixed(2)}% minimum)`
+        );
+        return;
+      }
+    }
+
     // ── Atribusi strategi per-trade (TASK 2.3 — Multi-Strategy per Coin) ───────
     // Tiap engine (termasuk yang di-spawn MultiStrategyCoordinator) punya satu
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
@@ -1496,10 +2212,8 @@ class BotEngine extends EventEmitter {
         sl, tp, slDist, tpDist, atr,
       }),
     };
-    this._log("info",
-      `[TRADE] Fired by: ${enrichedSnapshot.firedByStrategy ?? "UNKNOWN"} | ` +
-      `SL: ${enrichedSnapshot.slMultiplier ?? "?"}xATR | TP: ${enrichedSnapshot.tpMultiplier ?? "?"}xATR`
-    );
+    // NOTE: "Fired by" attribution folded into the consolidated entry banner below
+    // (one card per entry instead of six). enrichedSnapshot still persisted to DB.
 
     // Tentukan modal acuan untuk sizing.
     // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.
@@ -1526,7 +2240,12 @@ class BotEngine extends EventEmitter {
       }
     }
 
-    const size = calcPositionSize(availCap, this.config.riskPerTrade, price, sl);
+    // Pair-tier position adjustment (v2.3): VOLATILE 0.55× / SEMI_VOLATILE 0.75× /
+    // STABLE 0.95× / LIQUID 1.0×. Mengecilkan posisi (manajemen risiko) di koin
+    // berisiko tinggi. SELALU dikalikan ke sizing (STRATEGIES.md §9). Default 1.
+    const pairPosAdj = this.config.pairPositionSizeAdjustment || 1;
+    const riskPct = options.riskPerTrade ?? this.config.riskPerTrade;
+    const size = calcPositionSize(availCap, riskPct, price, sl) * pairPosAdj;
     if (size <= 0) { this._log("warn", "Position size terlalu kecil, skip signal"); return; }
 
     // ── Minimum lot size Bitget — flexible leverage guard ─────────────────────
@@ -1538,13 +2257,13 @@ class BotEngine extends EventEmitter {
     const minLot  = MIN_LOT[sym] ?? 0.001;
 
     let finalSize    = size;
-    let actualRiskPct = this.config.riskPerTrade;
+    let actualRiskPct = riskPct;
 
     if (finalSize < minLot) {
       const riskIfMinLot = (minLot * Math.abs(price - sl)) / availCap;
       // Batas penerimaan min-lot dibuat lebih ketat (#11): maksimal 2x risk normal,
       // dan tidak boleh melewati maxRiskPerTrade. Sebelumnya boleh sampai 5% (5x niat).
-      const minLotRiskCap = Math.min(this.config.maxRiskPerTrade, this.config.riskPerTrade * 2);
+      const minLotRiskCap = Math.min(this.config.maxRiskPerTrade, riskPct * 2);
       if (riskIfMinLot <= minLotRiskCap) {
         finalSize    = minLot;
         actualRiskPct = riskIfMinLot;
@@ -1556,7 +2275,7 @@ class BotEngine extends EventEmitter {
         this._log("warn",
           `Size ideal ${size.toFixed(4)} < min lot ${minLot} ${sym}. ` +
           `Risk jika pakai min lot: ${(riskIfMinLot * 100).toFixed(2)}% > batas ${(minLotRiskCap * 100).toFixed(2)}% → skip. ` +
-          `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / this.config.riskPerTrade).toFixed(2)} untuk trade ${sym} normal)`
+          `(Butuh modal ~$${((minLot * Math.abs(price - sl)) / riskPct).toFixed(2)} untuk trade ${sym} normal)`
         );
         return;
       }
@@ -1632,10 +2351,42 @@ class BotEngine extends EventEmitter {
     // Increment trade counter harian
     this.state.dailyTradeCount += 1;
 
-    this._sep(`SINYAL ${signal}`);
-    this._log("trade", `SINYAL: ${signal} ${this.config.symbol}`);
-    this._log("trade", `Entry: $${fmtPx(price)} | SL: $${fmtPx(sl)} | TP: $${fmtPx(tp)} | Size: ${finalSize} | Risk: ${(actualRiskPct * 100).toFixed(2)}%`);
-    this._log("info",  `[STATS] Trade hari ini: ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} | Loss beruntun: ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
+    // ── Entry banner terpadu — SATU kartu, bukan 6 log terpisah ──────────────
+    // Sebelumnya: SINYAL + alasan + Entry detail + STATS + Fired-by + DRY RUN
+    // masing-masing emit sendiri → panel log penuh kartu kembar di satu detik.
+    const why = [];
+    if (indicatorSnapshot) {
+      const s = indicatorSnapshot;
+      if (s.emaTrendBias)        why.push(`tren ${s.emaTrendBias}`);
+      if (s.htfTrend)            why.push(`HTF ${s.htfTrend}`);
+      if (s.rsi != null)         why.push(`RSI ${s.rsi}`);
+      if (s.volumeRatio != null) why.push(`volume ${s.volumeRatio}× SMA`);
+      if (s.afComponent)         why.push(`komponen ${s.afComponent}`);
+    }
+    const slMult = enrichedSnapshot.slMultiplier;
+    const tpMult = enrichedSnapshot.tpMultiplier;
+    const entryLines = [
+      `══ ENTRY ${signal} — ${this.config.symbol} · ${stratLabel(this.config.strategyKey)} ══`,
+    ];
+    if (why.length) entryLines.push(`Sinyal     : ${why.join(" · ")}`);
+    const grok = indicatorSnapshot?.grokConfirm;
+    if (grok) {
+      const tpModeLabel = grok.tp_mode_label
+        ?? ((grok.tp_mode ?? "full") === "partial" ? "Partial TP" : "Full TP");
+      entryLines.push(
+        `Grok       : conf ${grok.confidence ?? "?"}/10 · ${tpModeLabel}` +
+        (grok.tp_mode_confidence != null ? ` (mode ${grok.tp_mode_confidence}/10)` : "") +
+        (grok.tp_confidence != null ? ` · TP conf ${grok.tp_confidence}/10` : "")
+      );
+      if (grok.reasoning) entryLines.push(`Konfirmasi : ${grok.reasoning}`);
+      if (grok.tp_note) entryLines.push(`TP Grok    : ${grok.tp_note}`);
+    }
+    entryLines.push(`Entry      : $${fmtPx(price)}`);
+    entryLines.push(`SL / TP    : $${fmtPx(sl)} / $${fmtPx(tp)}${slMult ? `  (${slMult}×/${tpMult}× ATR)` : ""}`);
+    entryLines.push(`Size       : ${finalSize} · Risk ${(actualRiskPct * 100).toFixed(2)}%`);
+    entryLines.push(`Stats      : Trade ${this.state.dailyTradeCount}/${this.config.maxTradesPerDay} · Loss beruntun ${this.state.consecLoss}/${this.config.maxConsecLoss}`);
+    entryLines.push(`Mode       : ${this.config.dryRun ? "DRY RUN (order tidak dikirim)" : "LIVE"}`);
+    this._logBlock("trade", entryLines);
 
     const openTime = Date.now();
 
@@ -1647,9 +2398,20 @@ class BotEngine extends EventEmitter {
         // ── Buka posisi + embed preset SL/TP atomik (CCXT v4.5 Bitget V2) ──────
         // Kirim harga SL/TP MENTAH — client yang format ke tick-size. toFixed(2)
         // lama merusak trigger price koin murah (mis. XPL → SL/TP jadi $0.09).
-        const order = await this.client.openPosition(
-          this.config.symbol, side, finalSize, "USDT", sl, tp
-        );
+        // FEE-02: entryMode="maker" → rute limit post-only (fee maker) dengan
+        // fallback taker bila tak ke-fill. Default taker → jalur lama identik.
+        const useMaker = this.config.entryMode === "maker" &&
+          typeof this.client.openPositionMaker === "function";
+        const order = useMaker
+          ? await this.client.openPositionMaker(this.config.symbol, side, finalSize, "USDT", sl, tp)
+          : await this.client.openPosition(this.config.symbol, side, finalSize, "USDT", sl, tp);
+        if (order?.entryFill) {
+          enrichedSnapshot.entryFill = order.entryFill;
+          this._log("trade",
+            `Entry fill: ${order.entryFill}` +
+            (order.filledMaker ? ` (maker ${order.filledMaker}/${finalSize})` : "")
+          );
+        }
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
         // Reservasi margin di koordinator akun bersama (#5)
@@ -1665,6 +2427,7 @@ class BotEngine extends EventEmitter {
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
           marginReserved: finalMargin,
+          tpMode: options.tpMode ?? this.config.tpMode ?? "full",
           // BUG-004: simpan snapshot indikator entry agar partial-close bisa
           // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
           entrySnapshot: enrichedSnapshot,
@@ -1673,7 +2436,7 @@ class BotEngine extends EventEmitter {
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
           slCurrent:     sl,       // SL aktif saat ini (bergerak setelah milestone)
-          m1: false,               // +1R milestone: partial 40%, SL → BEP
+          m1: false,               // +1R milestone: partial 40%, SL → +0.3R
           m2: false,               // +2R milestone: partial 27.5%, SL → +1R
           m3: false,               // +3R: biarkan menuju TP
         };
@@ -1716,6 +2479,13 @@ class BotEngine extends EventEmitter {
             if (!slOk) this._log("error", `SL gagal: ${slErr}`);
             if (!tpOk) this._log("error", `TP gagal: ${tpErr}`);
             this._log("error", `🚨 SL tidak terkonfirmasi — TUTUP posisi darurat (anti naked position)`);
+            // Anti-churn: tanpa cooldown, tick berikutnya membuka simbol yang sama →
+            // gagal SL → tutup darurat lagi (insiden LAB live: 5× open/tutup dalam 6 menit,
+            // bocor fee + spam Telegram). Kunci re-entry beberapa menit lewat mekanisme
+            // cooldown yang sudah ada (dicek di gate entry _checkRiskGates).
+            const slFailCd = Math.max(this.config.cooldownAfterLoss || 30, 15);
+            this.state.cooldownUntil = Date.now() + slFailCd * 60 * 1000;
+            this._log("warn", `🕐 Cooldown ${slFailCd} menit (SL gagal) — hindari buka ulang tanpa proteksi`);
             try {
               const closeSide = signal === "LONG" ? "close_long" : "close_short";
               await this.client.closePosition(this.config.symbol, closeSide, finalSize);
@@ -1777,7 +2547,7 @@ class BotEngine extends EventEmitter {
         this._log("error", `Gagal buka posisi: ${err.message}`);
       }
     } else {
-      this._log("trade", "[DRY RUN] Order tidak dikirim ke exchange");
+      // (mode "DRY RUN" sudah tertera di entry banner — tak perlu log terpisah)
       // Margin yang "dikunci" disimpan persis di posisi (#9) agar saat close
       // dikembalikan dalam jumlah yang sama — sebelumnya open & close memakai
       // rumus berbeda → equity simulasi drift.
@@ -1786,7 +2556,8 @@ class BotEngine extends EventEmitter {
 
       const pos = {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
-        marginReserved,        // margin terkunci, dikembalikan tepat saat close
+        marginReserved,
+        tpMode: options.tpMode ?? this.config.tpMode ?? "full",
         // BUG-004: snapshot entry untuk diwariskan ke partial-close.
         entrySnapshot: enrichedSnapshot,
         strategyName:  this.config.strategyKey ?? null,
@@ -1839,6 +2610,116 @@ class BotEngine extends EventEmitter {
         leverage:   this.config.leverage,
         dryRun:     true,
       });
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // MULTI-POSITION SIGNAL HANDLING (v3.0)
+  // ─────────────────────────────────────────────
+
+  async _handleMultiPositionSignal(componentId, signal, price, atr, indicators, lastIdx, indicatorSnapshot, marketCond = "NORMAL", confidence = null) {
+    if (!signal || !atr) return;
+
+    const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
+    const afStrategy = new SmartMoneyConceptsStrategy();
+
+    // Calculate risk config for this component. Pass the real regime so
+    // strongTrendTPMult (let winners run in STRONG_TREND) can fire.
+    const riskCfg = afStrategy.calculateRiskConfig(price, atr, signal, componentId, {
+      marketCond: marketCond || "NORMAL",
+      strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
+    });
+
+    const baseSlDist = riskCfg.slDistance;
+    const slDist = baseSlDist * (this.config.pairSlMultiplier || 1);
+    const tpDist = riskCfg.tpDistance * (this.config.pairSlMultiplier || 1);
+
+    const sl = signal === "LONG" ? price - slDist : price + slDist;
+    const tp = signal === "LONG" ? price + tpDist : price - tpDist;
+
+    // Validate SL/TP
+    if (!Number.isFinite(sl) || sl <= 0 || !Number.isFinite(tp) || tp <= 0) {
+      this._log("warn", `[Multi-AF:${componentId}] Invalid SL/TP — sl=${sl} tp=${tp}`);
+      return;
+    }
+    if ((signal === "LONG" && sl >= price) || (signal === "SHORT" && sl <= price)) {
+      this._log("warn", `[Multi-AF:${componentId}] SL on wrong side for ${signal}`);
+      return;
+    }
+
+    // Calculate position size based on risk — loss when SL hits must equal
+    // riskAmt, so qty = riskAmt / slDist. Dividing by the full SL→TP span (as
+    // before) silently under-sized every position ~2.8×.
+    //
+    // riskPerTrade is the COMBINED cap across all concurrent AF components, not
+
+    // (A/Scalping 0.5 : B/Intraday 1 : C/Swing 2) via the SAME riskShareForType
+    // helper the backtest engines use — single source of truth, so live sizing
+    // can never silently drift from the backtest (the 3× SMC live-risk bug
+    // class, 311e18d). With combined 0.035 → A 0.5%, B 1%, C 2%.
+    const { riskShareForType } = require("../domain/typeRiskLadder");
+    const enabledComponents =
+      this.config.afEnabledComponents ||
+      this.config.sacEnabledComponents ||
+      ["A", "B", "C"];
+    const riskPerTrade = riskShareForType(
+      componentId,
+      enabledComponents,
+      this.config.riskPerTrade || 0.01,
+    );
+    const riskAmt = this.state.capital * riskPerTrade;
+    const qty = slDist > 0 ? riskAmt / slDist : 0;
+
+    if (qty <= 0) {
+      this._log("warn", `[Multi-AF:${componentId}] Invalid qty=${qty}`);
+      return;
+    }
+
+    // Create position object
+    const positionId = `${componentId}-${Date.now()}`;
+    const position = {
+      positionId,
+      componentId,
+      symbol: this.config.symbol,
+      side: signal,
+      entry: price,
+      sl,
+      tp,
+      qty,
+      riskAmt,
+      openTime: new Date().toISOString(),
+      openCandle: lastIdx,
+      unrealizedPL: 0,
+      confidence: confidence ?? null,
+    };
+
+    // Store position
+    this.state.positions.set(componentId, position);
+
+    const confNote = confidence != null ? ` | Conf ${confidence}%` : "";
+    this._log("info",
+      `[Multi-AF:${componentId}] ENTRY ${signal} @ $${price.toFixed(2)} | ` +
+      `SL $${sl.toFixed(2)} TP $${tp.toFixed(2)} | ` +
+      `RR 1:${riskCfg.riskReward.toFixed(2)} | Qty ${qty.toFixed(4)}${confNote}`
+    );
+
+    // Execute order in live mode
+    if (!this.config.dryRun && this.client) {
+      try {
+        const order = await this.client.createOrder({
+          symbol: this.config.symbol,
+          side: signal,
+          type: "MARKET",
+          quantity: qty,
+          takeProfitPrice: tp,
+          stopLossPrice: sl,
+        });
+        position.orderId = order.id;
+        this._log("info", `[Multi-AF:${componentId}] Order placed: ${order.id}`);
+      } catch (err) {
+        this._log("error", `[Multi-AF:${componentId}] Order failed: ${err.message}`);
+        this.state.positions.delete(componentId);
+      }
     }
   }
 
@@ -2059,7 +2940,7 @@ class BotEngine extends EventEmitter {
   async _checkSLPlusMilestones(pos, price) {
     // tpMode "full" → skip semua milestone; posisi lari ke TP penuh tanpa dipotong.
     // Backward compat: bila tpMode belum diset (bot lama), default ke "full".
-    if ((this.config.tpMode ?? "full") === "full") return;
+    if ((pos.tpMode ?? this.config.tpMode ?? "full") === "full") return;
     if (!this.config.slPlusEnabled) return;
     if (pos.remainingSize <= 0) return;
 
@@ -2082,20 +2963,24 @@ class BotEngine extends EventEmitter {
     const sym     = (this.config.symbol || "").replace("/", "").replace(":USDT", "");
     const minLot  = MIN_LOT[sym] ?? 0.001;
 
-    // ── Milestone 1: +1R → partial 40%, SL ke BEP ───────────────────────────
+    // ── Milestone 1: +1R → partial 40%, SL ke +0.3R (bukan BEP murni) ───────
+    // 4yr VAULT backtest: runner yang diparkir tepat di BEP mati kena pullback
+    // dangkal pertama (TF 4/5 & MR 3/3 keluar via SL_TRAIL ~breakeven, tak pernah
+    // sampai +2R). +0.3R tetap mengunci profit kecil tapi memberi ruang napas.
+    // HARUS identik dengan RealStrategyBacktestService.checkPartialMilestones.
     if (!pos.m1 && rMult >= 1.0) {
       const pct     = this.config.slPlusPartial1Pct;
       const partial = parseFloat((pos.size * pct).toFixed(8));
-      const newSL   = pos.entry; // Break-Even Point
+      const newSL   = pos.side === "LONG" ? pos.entry + 0.3 * R : pos.entry - 0.3 * R; // +0.3R
       pos.m1 = true;
 
       if (partial >= minLot) {
-        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "BEP");
+        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "+0.3R");
       } else {
-        // Size terlalu kecil untuk partial — geser SL ke BEP saja agar tetap terlindungi
+        // Size terlalu kecil untuk partial — geser SL ke +0.3R saja agar tetap terlindungi
         this._log("info",
           `SL+ M1: partial ${partial.toFixed(4)} < min lot ${minLot} ${sym} ` +
-          `— skip partial, SL digeser ke BEP $${newSL.toFixed(2)} ✓`
+          `— skip partial, SL digeser ke +0.3R $${newSL.toFixed(2)} ✓`
         );
         pos.slCurrent = newSL;
         if (!this.config.dryRun) await this._updateSLOnExchange(pos, newSL);
@@ -2180,6 +3065,7 @@ class BotEngine extends EventEmitter {
       closedAt:  Date.now(),
       partial:   true,
     });
+    this._capTrades();
     this._updateRiskAfterClose(pnl, pos);
 
     // ── Catat ke DB (insert + langsung close) ────────────────────────────────
@@ -2259,6 +3145,157 @@ class BotEngine extends EventEmitter {
     if (pos.tp) {
       await this.client.setTPSL(this.config.symbol, "profit_plan", pos.tp.toFixed(2), holdSide, remaining);
     }
+  }
+
+  // ─────────────────────────────────────────────
+  // SL/TP MONITOR — harga real-time + rentang intrabar
+  // ─────────────────────────────────────────────
+
+  _filterOrphanTradesForThisEngine(orphans) {
+    if (!this.config.groupKey || !this.config.strategyKey) return orphans;
+    return orphans.filter((row) => {
+      let stratOfTrade = null;
+      try { stratOfTrade = row.indicators ? JSON.parse(row.indicators)?.strategy : null; } catch { /* ignore */ }
+      if (stratOfTrade === null) return !!this.config.isGroupLeader;
+      return stratOfTrade === this.config.strategyKey;
+    });
+  }
+
+  _positionFromDbTrade(dbTrade, livePos = null) {
+    const size = dbTrade.size || 0;
+    const markPrice = livePos?.markPrice || dbTrade.entry_price;
+    const upnlFromExchange = livePos?.unrealizedPL ?? 0;
+    const upnlCalc = markPrice > 0 && dbTrade.entry_price > 0
+      ? (dbTrade.side === "LONG"
+        ? (markPrice - dbTrade.entry_price) * size
+        : (dbTrade.entry_price - markPrice) * size)
+      : 0;
+    return {
+      id:            dbTrade.order_id || `restored_${dbTrade.id}`,
+      dbId:          dbTrade.id,
+      side:          dbTrade.side,
+      entry:         dbTrade.entry_price,
+      sl:            dbTrade.sl,
+      tp:            dbTrade.tp,
+      size,
+      remainingSize: size,
+      openTime:      new Date(dbTrade.open_time).getTime(),
+      atr:           dbTrade.atr,
+      manualSLTP:    false,
+      unrealizedPL:  livePos ? (upnlFromExchange !== 0 ? upnlFromExchange : upnlCalc) : undefined,
+      markPrice:     livePos ? markPrice : undefined,
+      restoredFrom:  dbTrade.session_id,
+      R:             dbTrade.atr ? dbTrade.atr * (this.config.atrMultiplier || 1) : 0,
+      slCurrent:     dbTrade.sl,
+      m1: false, m2: false, m3: false,
+    };
+  }
+
+  /**
+   * Pulihkan posisi DB yang belum ada di state runtime — UI bisa tampil dari DB
+   * (mergeBotWithLiveState fallback) sementara engine tidak memonitor SL/TP.
+   */
+  async _reconcileOpenPositionsFromDb() {
+    if (!this.state.running || this._stopRequested) return;
+    try {
+      let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
+      orphans = this._filterOrphanTradesForThisEngine(orphans);
+      if (!orphans.length) return;
+
+      const knownDbIds = new Set(
+        this.state.openPositions.map(p => p.dbId).filter(Boolean)
+      );
+      let added = 0;
+
+      if (!this.config.dryRun && this.client?.getPositions) {
+        let liveByKey = new Map();
+        try {
+          const livePosns = await this.client.getPositions(this.config.symbol);
+          liveByKey = new Map(livePosns.map(p => [p.side, p]));
+        } catch { /* fallback dry-style restore below */ }
+
+        for (const dbTrade of orphans) {
+          if (knownDbIds.has(dbTrade.id)) continue;
+          const lp = liveByKey.get(dbTrade.side);
+          if (lp) {
+            this.state.openPositions.push(this._positionFromDbTrade(dbTrade, lp));
+            added += 1;
+          }
+        }
+      } else {
+        for (const dbTrade of orphans) {
+          if (knownDbIds.has(dbTrade.id)) continue;
+          this.state.openPositions.push(this._positionFromDbTrade(dbTrade));
+          added += 1;
+        }
+      }
+
+      if (added > 0) {
+        this._log("warn",
+          `${added} posisi DB dipulihkan ke state runtime (reconcile) — monitor SL/TP aktif kembali`
+        );
+      }
+    } catch (err) {
+      this._log("warn", `Reconcile posisi DB gagal: ${err.message}`);
+    }
+  }
+
+  /** Evaluasi hit SL/TP — intrabar + fallback harga monitor (ticker/last). */
+  _evaluateSlTpHit(pos, price, barHigh, barLow) {
+    const px = Number(price);
+    const hi = Number.isFinite(barHigh) ? barHigh : px;
+    const lo = Number.isFinite(barLow) ? barLow : px;
+    const sl = Number(pos.sl);
+    const tp = Number(pos.tp);
+    const hasSL = Number.isFinite(sl) && sl > 0;
+    const hasTP = Number.isFinite(tp) && tp > 0;
+    const hitSL = hasSL && (pos.side === "LONG"
+      ? (lo <= sl || px <= sl)
+      : (hi >= sl || px >= sl));
+    const hitTP = hasTP && (pos.side === "LONG"
+      ? (hi >= tp || px >= tp)
+      : (lo <= tp || px <= tp));
+    return { hitSL, hitTP, isTP: hitTP && !hitSL, sl, tp };
+  }
+
+  /**
+   * Resolve monitor price + high/low intrabar untuk cek SL/TP.
+   * Dipakai BotEngine._tick(), AdaptiveStrategyEngine override, dan pass final saat stop().
+   */
+  async _resolveSlTpMonitor(candles, confirmedClose, atr) {
+    let price = confirmedClose ?? this.state.lastPrice ?? 0;
+    const formingBar = candles?.length
+      ? (candles[candles.length - 1] || candles[candles.length - 2])
+      : null;
+    let barHigh = formingBar?.high ?? price;
+    let barLow  = formingBar?.low  ?? price;
+    let monitorPrice = price;
+
+    if (this.state.openPositions.length > 0 && this.client?.getTicker) {
+      try {
+        const ticker = await this.client.getTicker(this.config.symbol);
+        if (ticker?.last > 0) {
+          monitorPrice = ticker.last;
+          barHigh = Math.max(barHigh, ticker.last);
+          barLow  = Math.min(barLow,  ticker.last);
+        }
+      } catch { /* fallback ke close candle / lastPrice */ }
+    }
+
+    barHigh = Math.max(barHigh, monitorPrice);
+    barLow  = Math.min(barLow,  monitorPrice);
+    this.state.lastPrice = monitorPrice;
+
+    return { monitorPrice, barHigh, barLow, atr: atr ?? 0 };
+  }
+
+  /** Monitor SL/TP posisi terbuka — wrapper agar semua jalur pakai logika yang sama. */
+  async _monitorOpenPositions(candles, confirmedClose, atr) {
+    await this._reconcileOpenPositionsFromDb();
+    if (this.state.openPositions.length === 0) return;
+    const { monitorPrice, barHigh, barLow, atr: a } =
+      await this._resolveSlTpMonitor(candles, confirmedClose, atr);
+    await this._checkOpenPositions(monitorPrice, a, barHigh, barLow);
   }
 
   // ─────────────────────────────────────────────
@@ -2374,14 +3411,22 @@ class BotEngine extends EventEmitter {
             continue;
           }
 
-          this._sep(`POSISI DITUTUP — SL/TP Hit di Bitget`);
-          this._log("trade", `CLOSE ${pos.side} — ditutup oleh exchange`);
-          this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} [${priceSource}] | Size sisa: ${remaining.toFixed(4)}`);
-          this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} — balance dari exchange`);
+          // ── Close banner terpadu — SATU kartu dengan Holding time + Net P&L ──
+          const net      = pnl - fee;
+          const openMs   = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+          const holdStr  = fmtHoldingMs(Date.now() - openMs);
+          const closeLines = [
+            `══ POSISI DITUTUP — ${exitReason || "SL/TP"} ══`,
+            `${pos.side} ${this.config.symbol} · ${stratLabel(pos.strategyName ?? this.config.strategyKey)}`,
+            `Entry → Exit : $${pos.entry} → $${exitPrice.toFixed(2)} [${priceSource}]`,
+            `Holding time : ${holdStr}`,
+            `Net P&L      : ${net > 0 ? "+" : ""}$${net.toFixed(2)}  (gross ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} · fee -$${fee.toFixed(4)})`,
+          ];
           if (pos.m1 || pos.m2) {
             const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
-            this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
+            closeLines.push(`Total (partial+sisa) : ${partialPnL + net > 0 ? "+" : ""}$${(partialPnL + net).toFixed(2)}`);
           }
+          this._logBlock("trade", closeLines);
 
           // Notifikasi Telegram — SELALU dikirim terlepas dari cross-session atau tidak
           const pnlPct = pos.entry > 0 ? ((exitPrice - pos.entry) / pos.entry * 100 * (pos.side === "LONG" ? 1 : -1)) : 0;
@@ -2408,6 +3453,7 @@ class BotEngine extends EventEmitter {
           } else {
             // Trade milik sesi saat ini — masukkan ke state.trades normal
             this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
+            this._capTrades();
           }
 
           this._updateRiskAfterClose(pnl, pos);
@@ -2448,12 +3494,8 @@ class BotEngine extends EventEmitter {
 
           // Jika SL/TP gagal dipasang tadi, monitor manual sekarang
           if (pos.manualSLTP) {
-            // Intrabar (BUG-TP-INTRABAR): TP kena bila high menembus TP, SL kena
-            // bila low menembus SL — bukan cuma satu titik harga.
-            const hitSL = pos.side === "LONG" ? barLow  <= pos.sl : barHigh >= pos.sl;
-            const hitTP = pos.side === "LONG" ? barHigh >= pos.tp : barLow  <= pos.tp;
+            const { hitSL, hitTP } = this._evaluateSlTpHit(pos, price, barHigh, barLow);
             if (hitSL || hitTP) {
-              // Bila satu bar menyentuh dua-duanya → asumsikan SL lebih dulu (konservatif).
               const reason = hitSL ? "SL" : "TP";
               this._log("warn", `Manual close ${pos.side} — ${reason} (manual monitor) @ $${price.toFixed(2)}`);
               try {
@@ -2502,6 +3544,7 @@ class BotEngine extends EventEmitter {
                   // Hanya bukukan stats/trade bila DB-close benar-benar berlaku (anti double-book).
                   if (applied && (!pos.restoredFrom || pos.restoredFrom === this.sessionId)) {
                     this.state.trades.push({ ...pos, exit: exitPrice, pnl, fee, reason: "Exchange", closedAt: Date.now() });
+                    this._capTrades();
                   }
                   if (applied) this._updateRiskAfterClose(pnl, pos);
                   this.state.openPositions = this.state.openPositions.filter(p => p.id !== pos.id);
@@ -2526,17 +3569,11 @@ class BotEngine extends EventEmitter {
       // ── SL+ milestone check (dry run) ─────────────────────────────────────
       await this._checkSLPlusMilestones(pos, price);
 
-      // Cek SL / TP secara INTRABAR (BUG-TP-INTRABAR): TP kena bila HIGH menembus
-      // TP, SL kena bila LOW menembus SL — bukan cuma close/last (yang melewatkan
-      // wick). pos.sl/pos.tp sudah diperbarui oleh milestone bila aktif.
-      const hitTP = pos.side === "LONG" ? barHigh >= pos.tp : barLow  <= pos.tp;
-      const hitSL = pos.side === "LONG" ? barLow  <= pos.sl : barHigh >= pos.sl;
+      // Cek SL / TP — intrabar wick + fallback harga monitor (ticker).
+      const { hitSL, hitTP, isTP } = this._evaluateSlTpHit(pos, price, barHigh, barLow);
 
       if (hitTP || hitSL) {
-        // Bila satu bar menyentuh SL & TP sekaligus → asumsikan SL lebih dulu
-        // (konservatif; urutan intrabar tak bisa dipastikan tanpa data tick).
-        const isTP      = hitTP && !hitSL;
-        const exitPrice = isTP ? pos.tp : pos.sl;
+        const exitPrice = isTP ? Number(pos.tp) : Number(pos.sl);
         // Pakai remainingSize (bukan size asli) — partial sudah dicatat terpisah
         const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
         const pnl       = pos.side === "LONG"
@@ -2555,14 +3592,22 @@ class BotEngine extends EventEmitter {
         const reason    = isTP ? "TP" : "SL";
         const closeTime = Date.now();
 
-        this._sep(`POSISI DITUTUP — ${isTP ? "TAKE PROFIT" : "STOP LOSS"}`);
-        this._log("trade", `CLOSE ${pos.side} — ${isTP ? "TAKE PROFIT" : "STOP LOSS"}`);
-        this._log("trade", `Entry: $${pos.entry} | Exit: $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`);
-        this._log("trade", `PnL gross: ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} | Fee: -$${fee.toFixed(4)} | Net: ${pnl - fee > 0 ? "+" : ""}$${(pnl - fee).toFixed(2)} | Modal: $${this.state.capital.toFixed(2)}`);
+        // ── Close banner terpadu (dry-run SL/TP) — SATU kartu ──
+        const net      = pnl - fee;
+        const openMs   = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+        const holdStr  = fmtHoldingMs(closeTime - openMs);
+        const closeLines = [
+          `══ POSISI DITUTUP — ${isTP ? "TAKE PROFIT" : "STOP LOSS"} ══`,
+          `${pos.side} ${this.config.symbol} · ${stratLabel(pos.strategyName ?? this.config.strategyKey)}`,
+          `Entry → Exit : $${pos.entry} → $${exitPrice.toFixed(2)} | Size: ${remaining.toFixed(4)}`,
+          `Holding time : ${holdStr}`,
+          `Net P&L      : ${net > 0 ? "+" : ""}$${net.toFixed(2)}  (gross ${pnl > 0 ? "+" : ""}$${pnl.toFixed(2)} · fee -$${fee.toFixed(4)})`,
+        ];
         if (pos.m1 || pos.m2) {
           const partialPnL = this.state.trades.filter(t => t.partial && t.id === pos.id).reduce((s, t) => s + (t.pnl || 0), 0);
-          this._log("trade", `Total PnL trade ini (partial + sisa): $${(partialPnL + pnl).toFixed(2)}`);
+          closeLines.push(`Total (partial+sisa) : ${partialPnL + net > 0 ? "+" : ""}$${(partialPnL + net).toFixed(2)}`);
         }
+        this._logBlock("trade", closeLines);
 
         if (this.sessionId && pos.dbId) {
           try {
@@ -2585,6 +3630,7 @@ class BotEngine extends EventEmitter {
         });
 
         this.state.trades.push({ ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee, reason, closedAt: closeTime });
+        this._capTrades();
         this._updateRiskAfterClose(pnl, pos);
         toClose.push(pos.id);
       }
@@ -2604,9 +3650,15 @@ class BotEngine extends EventEmitter {
    * Inilah penyebab gap "Net PnL gross" vs balance riil: fee tak pernah dikurangi.
    */
   _estimateFee(entryPrice, exitPrice, size) {
-    const rate = this.config.feeRate ?? 0.0006;
-    const notional = (Math.abs(entryPrice) + Math.abs(exitPrice)) * Math.abs(size);
-    return notional * rate;
+    const sz = Math.abs(size);
+    const takerRate = this.config.feeRate ?? 0.0006;
+    // FEE-02: entry pakai maker rate bila entryMode="maker" (limit post-only);
+    // exit (SL/TP) selalu market → taker. Memodelkan penghematan maker di sisi
+    // entry saja, sesuai realita eksekusi.
+    const entryRate = this.config.entryMode === "maker"
+      ? (this.config.makerFeeRate ?? 0.0002)
+      : takerRate;
+    return Math.abs(entryPrice) * sz * entryRate + Math.abs(exitPrice) * sz * takerRate;
   }
 
   /**

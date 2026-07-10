@@ -17,6 +17,12 @@ const TIER_CONFIG = {
     // satu koin, dan maks satu posisi per strategi per simbol.
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
+    // Cap JUMLAH posisi terbuka serentak LINTAS-AKUN (semua koin/strategi digabung).
+    // Field BARU & terpisah dari maxPositions/maxPositionsPerSymbol (yang per-simbol):
+    // ini batas account-wide yang ditegakkan di gate buka posisi (fix meter "8/4").
+    maxConcurrentPositions: 4,
+    // Hard cap jumlah bot (running + configured/stopped) per akun.
+    maxActiveBots: 10,
     autoSelector: false,
     aiOptimizer: false,
     supportSLA: null,       // self-service
@@ -27,10 +33,13 @@ const TIER_CONFIG = {
   FORGE: {
     label: "Forge",
     price: 24,
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
     maxPositions: 2,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 2,
+    // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
+    maxConcurrentPositions: 8,
+    maxActiveBots: 25,
     autoSelector: false,
     aiOptimizer: false,
     supportSLA: "48h",
@@ -41,10 +50,13 @@ const TIER_CONFIG = {
   MINT: {
     label: "Mint",
     price: 54,
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
     maxPositions: 3,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 3,
+    // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
+    maxConcurrentPositions: 12,
+    maxActiveBots: 40,
     autoSelector: true,
     aiOptimizer: false,     // static equal-weight allocation
     supportSLA: "24h",
@@ -54,11 +66,14 @@ const TIER_CONFIG = {
   VAULT: {
     label: "Vault",
     price: 99,
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     maxPositions: 4,
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
     capitalAllocation: { equal: true /* dynamic: false */ },
     maxPositionsPerSymbol: 4,   // bukan maxPositions global
+    // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
+    maxConcurrentPositions: 16,
+    maxActiveBots: 50,
     autoSelector: true,
     // AI optimizer feature flag — disabled until Fase 3
     aiOptimizer: process.env.VAULT_AI_OPTIMIZER_ENABLED === "true",
@@ -102,6 +117,31 @@ function canUseStrategy(tier, strategyKey) {
 }
 
 /**
+ * Cap JUMLAH posisi terbuka serentak LINTAS-AKUN untuk sebuah tier.
+ * Sumber kebenaran tunggal gate "per-tier account open-position cap" (fix bug
+ * meter Account Risk yang menampilkan "8 / 4" karena cap tak pernah ditegakkan
+ * & angka 4 di-hardcode di UI). Tier tak dikenal → fallback aman ke FOUNDRY (4),
+ * BUKAN unlimited (backward-compatible & konservatif).
+ * @param {string} tier
+ * @returns {number}
+ */
+function getMaxConcurrentPositions(tier) {
+  const config = getTierConfig(tier);
+  return config?.maxConcurrentPositions ?? TIER_CONFIG.FOUNDRY.maxConcurrentPositions;
+}
+
+/**
+ * Cap JUMLAH bot aktif (running + configured/stopped) per akun untuk sebuah tier.
+ * Tier tak dikenal → fallback aman ke FOUNDRY (10).
+ * @param {string} tier
+ * @returns {number}
+ */
+function getMaxActiveBots(tier) {
+  const config = getTierConfig(tier);
+  return config?.maxActiveBots ?? TIER_CONFIG.FOUNDRY.maxActiveBots;
+}
+
+/**
  * Map legacy balanceTier (A/B/C) to new tier name.
  * Used only for the one-time migration.
  * @param {string} legacy  "A" | "B" | "C"
@@ -128,6 +168,8 @@ module.exports = {
   TIER_ORDER,
   getTierConfig,
   canUseStrategy,
+  getMaxConcurrentPositions,
+  getMaxActiveBots,
   migrateLegacyTier,
   listTiers,
 };

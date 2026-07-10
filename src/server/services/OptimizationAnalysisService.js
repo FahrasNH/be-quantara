@@ -10,29 +10,119 @@ class OptimizationAnalysisService {
   /**
    * Analisis backtest dan berikan rekomendasi
    */
-  static async analyzeBacktest(symbol, backtest_id = null) {
+  static async analyzeBacktest(symbol, backtest_id = null, opts = {}) {
     try {
-      const backtest = await this._getBacktestData(symbol, backtest_id);
-      const metrics = backtest.metrics;
+      const { metricsOverride = null, useAi = false, userId = null, strategyKey = null } = opts;
+      let backtest;
 
-      // Hitung scores dan rekomendasi
-      const overallScore = this._calculateOverallScore(metrics);
-      const recommendations = this._generateRecommendations(metrics);
-      const opportunities = this._identifyOpportunities(metrics);
-      const comparison = this._performanceComparison(metrics);
-      const riskAssessment = this._assessRisk(metrics);
+      if (metricsOverride && typeof metricsOverride === "object") {
+        backtest = { symbol, metrics: metricsOverride };
+      } else {
+        backtest = await this._getBacktestData(symbol, backtest_id);
+      }
 
-      return {
-        overall_score: overallScore,
-        recommendations,
-        opportunities,
-        comparison,
-        risk_assessment: riskAssessment,
-      };
+      const metrics = this._normalizeMetrics(backtest.metrics);
+
+      // Rule-based analysis (always computed as baseline)
+      const ruleResult = this._buildRuleAnalysis(metrics);
+
+      // Optional xAI enhancement
+      if (useAi && userId) {
+        const XaiTrainingService = require("./XaiTrainingService");
+        const access = await XaiTrainingService.canUseAiOptimizer(userId);
+        if (access.allowed && XaiTrainingService.isEnabled()) {
+          try {
+            const ragQuery = `optimize ${strategyKey ?? ""} ${symbol ?? ""} trading strategy parameters`;
+            const aiResult = await XaiTrainingService.analyzeBacktest(metrics, {
+              symbol,
+              strategyKey,
+              ragQuery,
+            });
+            return this.mergeAiWithRules(ruleResult, aiResult);
+          } catch (aiErr) {
+            console.warn(`[OptimizationAnalysis] xAI fallback to rules: ${aiErr.message}`);
+            return { ...ruleResult, ai_error: aiErr.message, source: "rules" };
+          }
+        }
+      }
+
+      return { ...ruleResult, source: "rules" };
     } catch (err) {
       console.error(`[OptimizationAnalysis] Error: ${err.message}`);
       throw err;
     }
+  }
+
+  /** Build rule-based analysis payload */
+  static _buildRuleAnalysis(metrics) {
+    return {
+      overall_score: this._calculateOverallScore(metrics),
+      recommendations: this._generateRecommendations(metrics),
+      opportunities: this._identifyOpportunities(metrics),
+      comparison: this._performanceComparison(metrics),
+      risk_assessment: this._assessRisk(metrics),
+    };
+  }
+
+  /**
+   * Gabungkan hasil rule-based + xAI Grok.
+   * AI score & summary diprioritaskan; rekomendasi digabung (dedupe by title).
+   */
+  static mergeAiWithRules(rules, ai) {
+    if (!ai) return { ...rules, source: "rules" };
+    if (!rules) return { ...ai, source: "xai" };
+
+    const seen = new Set();
+    const mergedRecs = [];
+    for (const rec of [...(ai.recommendations ?? []), ...(rules.recommendations ?? [])]) {
+      const key = (rec.title ?? "").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      mergedRecs.push(rec);
+    }
+
+    return {
+      overall_score: ai.overall_score ?? rules.overall_score,
+      ai_summary: ai.ai_summary ?? "",
+      recommendations: mergedRecs.slice(0, 6),
+      opportunities: [
+        ...(ai.opportunities ?? []),
+        ...(rules.opportunities ?? []),
+      ].slice(0, 8),
+      parameter_suggestions: ai.parameter_suggestions ?? [],
+      comparison: rules.comparison,
+      risk_assessment: {
+        ...rules.risk_assessment,
+        level: ai.risk_assessment?.level ?? rules.risk_assessment?.level,
+        summary: ai.risk_assessment?.summary || rules.risk_assessment?.summary,
+        key_risks: ai.risk_assessment?.key_risks ?? [],
+      },
+      source: "xai+rules",
+      model: ai.model,
+    };
+  }
+
+  /** Alias untuk route AI — reuse _getBacktestData */
+  static async _getBacktestDataForAi(symbol, backtest_id) {
+    return this._getBacktestData(symbol, backtest_id);
+  }
+
+  /** Normalisasi metrik FE (camelCase) dan BE (snake_case) */
+  static _normalizeMetrics(raw = {}) {
+    const winRate = parseFloat(raw.win_rate_pct ?? raw.winRate ?? 0);
+    let maxDd = parseFloat(raw.max_drawdown_pct ?? raw.maxDrawdown ?? 0);
+    if (maxDd > 0) maxDd = -maxDd;
+
+    return {
+      win_rate_pct: winRate,
+      profit_factor: parseFloat(raw.profit_factor ?? raw.profitFactor ?? 0),
+      max_drawdown_pct: maxDd,
+      roi_pct: parseFloat(raw.roi_pct ?? raw.totalReturn ?? 0),
+      sharpe_ratio: parseFloat(raw.sharpe_ratio ?? raw.sharpe ?? 0),
+      total_trades: parseInt(raw.total_trades ?? raw.totalTrades ?? 0, 10) || 0,
+      expectancy: parseFloat(raw.expectancy ?? 0),
+      average_r: parseFloat(raw.average_r ?? raw.averageR ?? 0),
+    };
   }
 
   /**
@@ -254,12 +344,42 @@ class OptimizationAnalysisService {
    * Assess risk across different dimensions
    */
   static _assessRisk(metrics) {
+    const dd = Math.abs(metrics.max_drawdown_pct || 0);
+    const wr = metrics.win_rate_pct || 0;
+    const pf = metrics.profit_factor || 0;
+
+    let level = "Moderate";
+    if (dd > 30 || wr < 40 || pf < 1) level = "High";
+    else if (dd < 15 && wr > 55 && pf >= 1.5) level = "Low";
+
+    const summary = `Drawdown ${dd.toFixed(1)}%, win rate ${wr.toFixed(1)}%, profit factor ${pf.toFixed(2)}`;
+
     return {
-      drawdown_risk: Math.min(100, Math.max(0, Math.abs(metrics.max_drawdown_pct || 0) * 2)),
+      level,
+      summary,
+      drawdown_risk: Math.min(100, Math.max(0, dd * 2)),
       concentration_risk: metrics.total_trades > 100 ? 20 : 50,
-      win_rate_variance: metrics.win_rate_pct && metrics.win_rate_pct < 50 ? 60 : 30,
+      win_rate_variance: wr < 50 ? 60 : 30,
       expectancy_risk: metrics.expectancy && metrics.expectancy < 0.05 ? 70 : 20,
       volatility_risk: metrics.roi_pct && metrics.roi_pct > 100 ? 65 : 35,
+    };
+  }
+
+  /**
+   * Map stats dari FE backtest session → metrik analisis
+   */
+  static mapSessionStats(stats = {}) {
+    const winRate = parseFloat(stats.winRate ?? stats.win_rate_pct ?? 0);
+    const maxDd = parseFloat(stats.maxDrawdown ?? stats.max_drawdown_pct ?? 0);
+    return {
+      win_rate_pct: winRate,
+      profit_factor: parseFloat(stats.profitFactor ?? stats.profit_factor ?? 0),
+      max_drawdown_pct: maxDd > 0 ? -maxDd : maxDd,
+      roi_pct: parseFloat(stats.totalReturn ?? stats.roi_pct ?? 0),
+      sharpe_ratio: parseFloat(stats.sharpe ?? stats.sharpe_ratio ?? 0),
+      total_trades: parseInt(stats.totalTrades ?? stats.total_trades ?? 0, 10) || 0,
+      expectancy: parseFloat(stats.expectancy ?? 0),
+      average_r: parseFloat(stats.averageR ?? stats.average_r ?? 0),
     };
   }
 
@@ -269,13 +389,26 @@ class OptimizationAnalysisService {
   static async _getBacktestData(symbol, backtest_id = null) {
     if (backtest_id) {
       const backtest = await BacktestHistoryService.getById(backtest_id);
-      if (!backtest) throw new Error(`Backtest ${backtest_id} not found`);
+      if (!backtest) {
+        const err = new Error(`Backtest ${backtest_id} not found`);
+        err.statusCode = 404;
+        throw err;
+      }
       return backtest;
-    } else {
-      const summary = await BacktestLoader.loadSummary(symbol);
-      if (!summary) throw new Error(`No backtest data found for ${symbol}`);
-      return { symbol, metrics: summary.metrics || {} };
     }
+
+    if (symbol) {
+      const history = await BacktestHistoryService.getHistory(symbol.toUpperCase(), 1);
+      if (history?.length) return history[0];
+    }
+
+    const summary = await BacktestLoader.loadSummary(symbol);
+    if (!summary) {
+      const err = new Error(`No backtest data found for ${symbol}`);
+      err.statusCode = 404;
+      throw err;
+    }
+    return { symbol, metrics: summary.metrics || {} };
   }
 }
 

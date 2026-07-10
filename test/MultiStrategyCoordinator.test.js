@@ -43,7 +43,7 @@ console.log("\n🎛️  MultiStrategyCoordinator Unit Tests\n");
 
   const c = new MultiStrategyCoordinator({
     userId: "u1", symbol: "ETHUSDT",
-    strategies: ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"],
+    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
   });
 
@@ -145,6 +145,14 @@ function runStateAggTest() {
       t("agregasi totalPnL = 15 (25-10)", st.totalPnL === 15);
       t("engines summary berisi 2 entri", st.engines.length === 2);
       t("multiStrategy flag = true", st.multiStrategy === true);
+
+      engines.AF.state.lastTick = "2026-06-26T10:00:00.000Z";
+      engines.AF.state.lastPrice = 3500;
+      engines.AF.sessionId = "sess-leader";
+      const st2 = c.getState();
+      t("getState lastTick dari leader", st2.lastTick === "2026-06-26T10:00:00.000Z");
+      t("getState lastPrice dari leader", st2.lastPrice === 3500);
+      t("getState sessionId dari leader", st2.sessionId === "sess-leader");
 
       runCanEnterTests();
     });

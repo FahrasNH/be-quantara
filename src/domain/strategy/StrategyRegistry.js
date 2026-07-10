@@ -1,16 +1,24 @@
 /**
- * ─────────────────────────────────────────────
  * StrategyRegistry.js — Factory Pattern for Strategy Management
  *
- * Centralized registry for all trading strategies.
- * Allows runtime strategy loading, registration, and management.
- * ─────────────────────────────────────────────
+ * v2.0 — Umbrella architecture.
+ * Primary keys  : AF_SMC · TS_TF · MD_MR · BS_BR · GROK_AI_TRADING
+ * Legacy aliases : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SMC
+ *                  TREND_FOLLOWING                         → TS_TF
+ *                  MEAN_REVERSION                          → MD_MR
+ *                  BREAKOUT_RETEST                         → BS_BR
+ *
+ * Legacy aliases ensure bots created before the v2.0 migration continue to
+ * work while the DB migration is applied in the background.
  */
 
-const AdaptiveFusionStrategy  = require("./implementations/AdaptiveFusionStrategy");
-const TrendMomentumStrategy   = require("./implementations/TrendMomentumStrategy");
-const MeanReversionStrategy   = require("./implementations/MeanReversionStrategy");
-const BreakoutRetestStrategy  = require("./implementations/BreakoutRetestStrategy");
+const AdaptiveFusionUmbrella = require("./umbrellas/AdaptiveFusionUmbrella");
+const TrendSurgeUmbrella     = require("./umbrellas/TrendSurgeUmbrella");
+const MeanDriftUmbrella      = require("./umbrellas/MeanDriftUmbrella");
+const BreakoutStormUmbrella  = require("./umbrellas/BreakoutStormUmbrella");
+const GrokAiTradingStrategy  = require("./implementations/GrokAiTradingStrategy");
+
+const { normalizeStrategyKey } = require("../../config/strategies");
 
 class StrategyRegistry {
   constructor() {
@@ -21,17 +29,33 @@ class StrategyRegistry {
   }
 
   _registerBuiltInStrategies() {
-    this.register("ADAPTIVE_FUSION",  new AdaptiveFusionStrategy());
-    this.register("TREND_MOMENTUM",   new TrendMomentumStrategy());
-    this.register("MEAN_REVERSION",   new MeanReversionStrategy());
-    this.register("BREAKOUT_RETEST",  new BreakoutRetestStrategy());
-    this.defaultKey = "ADAPTIVE_FUSION";
+    // ── Primary (component) keys ──────────────────────────────────────────
+    const af = new AdaptiveFusionUmbrella();
+    const ts = new TrendSurgeUmbrella();
+    const md = new MeanDriftUmbrella();
+    const bs = new BreakoutStormUmbrella();
+    const ga = new GrokAiTradingStrategy();
+
+    this.register("AF_SMC",          af);
+    this.register("TS_TF",           ts);
+    this.register("MD_MR",           md);
+    this.register("BS_BR",           bs);
+    this.register("GROK_AI_TRADING", ga);
+
+    // ── Legacy backward-compat aliases (same instances, no extra memory) ──
+    this.strategies.set("ADAPTIVE_FUSION",      af);
+    this.strategies.set("SMART_MONEY_CONCEPTS", af);
+    this.strategies.set("TREND_FOLLOWING",      ts);
+    this.strategies.set("MEAN_REVERSION",       md);
+    this.strategies.set("BREAKOUT_RETEST",      bs);
+
+    this.defaultKey = "AF_SMC";
   }
 
   /**
-   * Register a new strategy
-   * @param {string} key - Unique strategy identifier
-   * @param {StrategyBase} instance - Strategy instance
+   * Register a strategy.
+   * @param {string} key
+   * @param {StrategyBase} instance
    */
   register(key, instance) {
     if (!key || typeof key !== "string") {
@@ -40,111 +64,87 @@ class StrategyRegistry {
     if (!instance || typeof instance.detectSignal !== "function") {
       throw new Error("Strategy must be a StrategyBase instance");
     }
-
     this.strategies.set(key, instance);
-
-    if (!this.defaultKey) {
-      this.defaultKey = key;
-    }
-
+    if (!this.defaultKey) this.defaultKey = key;
     return this;
   }
 
   /**
-   * Get a strategy by key
-   * @param {string} key - Strategy identifier
-   * @returns {StrategyBase|null}
+   * Get a strategy by key.
+   * Automatically resolves legacy keys via the migration map.
    */
   get(key) {
     if (!key) return null;
-    return this.strategies.get(key) || null;
+    // Try direct lookup first
+    let instance = this.strategies.get(key);
+    if (!instance) {
+      // Try normalized key (legacy → new)
+      const normalized = normalizeStrategyKey(key);
+      instance = this.strategies.get(normalized) || null;
+    }
+    return instance;
   }
 
-  /**
-   * Get default strategy
-   */
   getDefault() {
     return this.defaultKey ? this.get(this.defaultKey) : null;
   }
 
-  /**
-   * List all registered strategies
-   */
   listAll() {
-    return Array.from(this.strategies.values());
+    // Return unique instances (dedup aliases)
+    const seen = new Set();
+    const result = [];
+    for (const instance of this.strategies.values()) {
+      if (!seen.has(instance)) {
+        seen.add(instance);
+        result.push(instance);
+      }
+    }
+    return result;
   }
 
-  /**
-   * List enabled strategies only
-   */
   listEnabled() {
     return this.listAll().filter((s) => s.config.enabled);
   }
 
-  /**
-   * Check if strategy exists and is enabled
-   */
   validate(key) {
     const strategy = this.get(key);
-
     if (!strategy) {
-      return {
-        valid: false,
-        error: `Strategy "${key}" not found`,
-        available: this.getUIChoices(),
-      };
+      return { valid: false, error: `Strategy "${key}" not found`, available: this.getUIChoices() };
     }
-
     if (!strategy.config.enabled) {
-      return {
-        valid: false,
-        error: `Strategy "${key}" is disabled`,
-        available: this.getUIChoices(),
-      };
+      return { valid: false, error: `Strategy "${key}" is disabled`, available: this.getUIChoices() };
     }
-
     return { valid: true, strategy };
   }
 
-  /**
-   * Get UI choices (for dropdowns, etc)
-   */
   getUIChoices() {
     return this.listEnabled().map((s) => ({
-      value: s.config.name,
-      label: s.config.label,
+      value:       s.config.name,
+      label:       s.config.label,
       description: s.config.description,
-      version: s.config.version,
+      version:     s.config.version,
     }));
   }
 
-  /**
-   * Get strategy info for API response
-   */
   getInfo(key) {
     const strategy = this.get(key);
     if (!strategy) return null;
-
     return {
-      name: strategy.config.name,
-      label: strategy.config.label,
-      description: strategy.config.description,
-      version: strategy.config.version,
-      enabled: strategy.config.enabled,
-      riskConfig: strategy.getRiskConfig(),
+      name:            strategy.config.name,
+      label:           strategy.config.label,
+      description:     strategy.config.description,
+      version:         strategy.config.version,
+      enabled:         strategy.config.enabled,
+      riskConfig:      strategy.getRiskConfig(),
       timeframeConfig: strategy.getTimeframeConfig(),
     };
   }
 
-  /**
-   * Count registered strategies
-   */
   count() {
     return this.strategies.size;
   }
 }
 
-// Create singleton instance
 const strategyRegistry = new StrategyRegistry();
 
 module.exports = { StrategyRegistry, strategyRegistry };

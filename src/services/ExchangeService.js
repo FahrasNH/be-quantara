@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ccxt = require("ccxt");
+const { withExchangeGate } = require("../infrastructure/exchange/exchangeRateGate");
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 
 const prisma = require("../infrastructure/db/prismaClient");
@@ -212,6 +213,85 @@ async function validateExchangeKey(exchangeType, { apiKey, apiSecret, apiPassphr
   return { ok: true, checked: false };
 }
 
+// Bar duration per timeframe (ms) — used to page historical OHLCV windows.
+const CANDLE_INTERVAL_MS = {
+  "1m":  60_000,      "3m":  180_000,    "5m":  300_000,
+  "15m": 900_000,     "30m": 1_800_000,  "1h":  3_600_000,
+  "2h":  7_200_000,   "4h":  14_400_000, "6h":  21_600_000,
+  "12h": 43_200_000,  "1d":  86_400_000, "1w":  604_800_000,
+};
+
+/**
+ * Fetch historical OHLCV for backtest from the USER's CONNECTED exchange.
+ *
+ * Candle data is PUBLIC (no API key) — we resolve which exchange the user
+ * connected (getConnectedExchange) then use the keyless CCXT public client.
+ * This fixes the old behaviour where backtest always hit Bitget (operator
+ * sharedClient) regardless of which exchange the user was actually on, so
+ * Binance-only symbols (e.g. 1000000BOBUSDT) failed to fetch.
+ *
+ * @returns {Promise<{exchange,candles:Array}>} candles: {timestamp,date,open,high,low,close,volume}
+ * @throws {Error&{statusCode,code}} 400 no exchange / unsupported, 503 unavailable
+ */
+async function getCandlesForUser(userId, symbol, timeframe = "1d", limit = 500) {
+  const exchange = await getConnectedExchange(userId);
+  if (!exchange) {
+    const e = new Error("Belum ada exchange yang terhubung. Hubungkan exchange di Settings.");
+    e.statusCode = 400; e.code = "NO_EXCHANGE_CONNECTED";
+    throw e;
+  }
+  if (!SUPPORTED.has(exchange)) {
+    const e = new Error(`Exchange "${exchange}" belum didukung untuk backtest.`);
+    e.statusCode = 400; e.code = "EXCHANGE_NOT_SUPPORTED";
+    throw e;
+  }
+
+  // BASEUSDT → CCXT unified linear-perp symbol (BTCUSDT → BTC/USDT:USDT).
+  const sym = String(symbol || "").toUpperCase().trim();
+  const marketSymbol = sym.includes("/") ? sym : `${sym.replace(/USDT$/, "")}/USDT:USDT`;
+
+  const total    = Math.min(Math.max(parseInt(limit, 10) || 500, 50), 1000);
+  const msPerBar = CANDLE_INTERVAL_MS[timeframe] || 86_400_000;
+  const PAGE     = 500;
+
+  try {
+    const client = getPublicClient(exchange);
+    await client.loadMarkets();
+
+    const all = [];
+    let since = Date.now() - total * msPerBar;
+    while (all.length < total) {
+      const remaining = total - all.length;
+      const batch = await withExchangeGate(exchange, () =>
+        client.fetchOHLCV(marketSymbol, timeframe, since, Math.min(remaining, PAGE))
+      );
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      all.push(...batch);
+      since = batch[batch.length - 1][0] + msPerBar;
+      if (batch.length < Math.min(remaining, PAGE)) break;
+    }
+
+    const seen = new Set();
+    const candles = all
+      .filter(c => Array.isArray(c) && !seen.has(c[0]) && seen.add(c[0]))
+      .sort((a, b) => a[0] - b[0])
+      .map(c => ({
+        timestamp: c[0],
+        date: new Date(c[0]).toISOString(),
+        open: parseFloat(c[1]), high: parseFloat(c[2]),
+        low: parseFloat(c[3]),  close: parseFloat(c[4]),
+        volume: parseFloat(c[5]),
+      }));
+
+    return { exchange, candles };
+  } catch (err) {
+    const e = new Error(`Gagal ambil data ${sym} dari ${exchange}: ${err.message}`);
+    e.statusCode = 503; e.code = "CANDLES_UNAVAILABLE";
+    e.exchange = exchange;
+    throw e;
+  }
+}
+
 /** Test-only: clear caches so unit tests are deterministic. */
 function _clearCaches() {
   clientCache.clear();
@@ -225,6 +305,7 @@ function _expireCaches() {
 
 module.exports = {
   getPerpetualSymbols,
+  getCandlesForUser,
   getConnectedExchange,
   validateExchangeKey,
   normalizeMarkets,

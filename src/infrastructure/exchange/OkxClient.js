@@ -66,16 +66,19 @@ class OkxClient extends CcxtFuturesClient {
   /**
    * Override setTPSL for OKX USDT perpetual swap.
    *
-   * CcxtFuturesClient.setTPSL method 1 (MARKET + stopLossPrice) fails for OKX
-   * because OKX algo orders use a separate endpoint. Method 2 would work but
-   * defaults to "last" price trigger (manipulation risk). This override uses:
-   *   - triggerPriceType: "mark"  → trigger on mark price (OKX: triggerPxType)
-   *     safer than last price — avoids flash-spike from firing SL/TP early
-   *   - tdMode: "cross"           → already in _orderParams() for OKX but
-   *     explicitly set here for clarity
-   *   - reduceOnly: true          → ensure order only reduces position, no flip
+   * ⚠️ BUG FIX (same class as the Binance naked-position incident): the previous
+   * version passed type:"stopMarket" / "takeProfitMarket" — NOT OKX-native CCXT
+   * types. OKX SL/TP are algo orders reached via the unified `stopLossPrice` /
+   * `takeProfitPrice` PARAM (→ slTriggerPx / tpTriggerPx), see okx.js createOrderRequest.
+   * Passing a bogus type risks rejection/mishandling → SL never placed → naked position.
    *
-   * Falls back to last-price trigger if mark-price trigger is rejected.
+   * Correct approach:
+   *   - type:"market" + stopLossPrice|takeProfitPrice → OKX conditional/algo order
+   *   - slTriggerPxType|tpTriggerPxType:"mark" → trigger on mark price (anti-manipulation,
+   *     avoids a flash-spike on last price firing SL/TP early)
+   *   - tdMode:"cross", reduceOnly:true → only reduces the position, never flips it
+   *
+   * Falls back to the default (last-price) trigger if the mark-price trigger is rejected.
    */
   async setTPSL(symbol, planType, triggerPrice, holdSide, size) {
     const isTP      = planType === "profit_plan";
@@ -83,22 +86,24 @@ class OkxClient extends CcxtFuturesClient {
     const closeSide = isLong ? "sell" : "buy";
     const marketSymbol = this._marketSymbol(symbol);
     const trigPrice = this._fmtPrice(marketSymbol, triggerPrice);
-    const orderType    = isTP ? "takeProfitMarket" : "stopMarket";
+    // Unified param CCXT maps to OKX slTriggerPx / tpTriggerPx, + its mark-price type.
+    const priceKey    = isTP ? "takeProfitPrice"  : "stopLossPrice";
+    const trigTypeKey = isTP ? "tpTriggerPxType"  : "slTriggerPxType";
     const errors = [];
 
     // ── Pendekatan 1: mark price trigger (anti-manipulation) ──────────────────
     try {
       const order = await this.exchange.createOrder(
         marketSymbol,
-        orderType,
+        "market",
         closeSide,
         size,
-        trigPrice,
+        undefined,
         {
-          tdMode:           "cross",
-          triggerPrice:     trigPrice,
-          triggerPriceType: "mark",  // CCXT unified → OKX triggerPxType: mark
-          reduceOnly:       true,
+          [priceKey]:    trigPrice,
+          [trigTypeKey]: "mark",  // OKX triggerPxType: mark price
+          tdMode:        "cross",
+          reduceOnly:    true,
         }
       );
       return { success: true, method: "okxMarkPrice", orderId: order.id };
@@ -110,14 +115,14 @@ class OkxClient extends CcxtFuturesClient {
     try {
       const order = await this.exchange.createOrder(
         marketSymbol,
-        orderType,
+        "market",
         closeSide,
         size,
-        trigPrice,
+        undefined,
         {
-          tdMode:       "cross",
-          triggerPrice: trigPrice,
-          reduceOnly:   true,
+          [priceKey]: trigPrice,
+          tdMode:     "cross",
+          reduceOnly: true,
         }
       );
       return { success: true, method: "okxLastPrice", orderId: order.id };
@@ -178,21 +183,26 @@ class OkxClient extends CcxtFuturesClient {
         "50110": "IP Anda tidak di-whitelist pada API key OKX. Hapus IP whitelist di pengaturan API key OKX, ATAU whitelist IP server tempat bot berjalan (187.77.135.156).",
       };
 
-      // 50110 = IP whitelist (PermissionDenied) → JANGAN block; key valid, hanya
-      // IP yang perlu disesuaikan. Surface alasannya, izinkan koneksi tersimpan.
-      if (code === "50110" || err instanceof ccxt.PermissionDenied) {
+      // 50110 = IP whitelist ONLY → key valid, IP saja yang perlu disesuaikan.
+      // Jangan gunakan `instanceof PermissionDenied` secara luas — API key dari
+      // exchange lain (Bitget/Binance) juga bisa menimbulkan PermissionDenied
+      // dengan kode bukan 50110, dan harus ditolak.
+      if (code === "50110") {
         return { ok: true, checked: false, warning: HINTS["50110"] || msg };
       }
 
       const isAuthError =
         err instanceof ccxt.AuthenticationError ||
-        (code && HINTS[code]) ||
+        err instanceof ccxt.PermissionDenied ||
+        (code && /^5[01]\d{3}$/.test(code)) ||  // semua kode OKX 50xxx/51xxx
         /invalid\s*(ok-?access-?)?key|invalid\s*sign|passphrase/i.test(msg);
 
       if (isAuthError) {
         const e = new Error(
           (code && HINTS[code]) ||
-          "API key OKX tidak valid atau API passphrase salah. API passphrase = kata sandi yang Anda BUAT saat membuat API key (bukan password login). Jika lupa, buat API key baru."
+          (code
+            ? `Kredensial OKX ditolak (kode: ${code}). Pastikan API key, secret, dan passphrase berasal dari akun OKX — bukan exchange lain (Bitget/Binance). Buat ulang API key di OKX jika perlu.`
+            : "API key OKX tidak valid atau API passphrase salah. API passphrase = kata sandi yang Anda BUAT saat membuat API key (bukan password login). Jika lupa, buat API key baru.")
         );
         e.statusCode = 422;
         e.code = code ? `OKX_${code}` : "OKX_VALIDATION_FAILED";
@@ -200,8 +210,7 @@ class OkxClient extends CcxtFuturesClient {
         throw e;
       }
 
-      // Non-auth failure (account mode / dana di Funding / network): izinkan
-      // koneksi, alasan asli muncul di balance card.
+      // Hanya error TANPA kode OKX (network timeout, dsb.) yang boleh lolos.
       return { ok: true, checked: false, warning: msg };
     }
   }

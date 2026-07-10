@@ -17,7 +17,7 @@ const t = (name, cond) => {
 // SL/TP "config" per strategi (meniru atrMultiplier/RR berbeda tiap strategi).
 const STRAT_CFG = {
   ADAPTIVE_FUSION: { slMult: 1.5, rr: 2.0 },
-  TREND_MOMENTUM:  { slMult: 1.2, rr: 1.92 },
+  TREND_FOLLOWING:  { slMult: 1.2, rr: 1.92 },
   MEAN_REVERSION:  { slMult: 2.0, rr: 3.0 },
   BREAKOUT_RETEST: { slMult: 1.0, rr: 2.0 },
 };
@@ -69,21 +69,21 @@ console.log("\n🎬 Multi-Strategy Integration Scenarios (1-3)\n");
   {
     const { engines, coord } = buildCoord(
       "vault1", "ETHUSDT",
-      ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION", "BREAKOUT_RETEST"], 100
+      ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"], 100
     );
     await coord.start();
     t("S1: 4 engine berjalan (VAULT)", coord.engines.size === 4);
 
-    const res = engines.TREND_MOMENTUM.fire("LONG", 100, 2);
+    const res = engines.TREND_FOLLOWING.fire("LONG", 100, 2);
     t("S1: TM entry berhasil", res.ok === true);
-    t("S1: firedByStrategy = TREND_MOMENTUM", res.attribution.firedByStrategy === "TREND_MOMENTUM");
+    t("S1: firedByStrategy = TREND_FOLLOWING", res.attribution.firedByStrategy === "TREND_FOLLOWING");
     // TM config: slMult 1.2 → slPrice 100-2.4=97.6 ; tpMult = 1.2*1.92=2.304 → tp 100+4.608=104.608
     t("S1: SL pakai config TM (97.6)", res.attribution.slPrice === 97.6);
     t("S1: slMultiplier = 1.2 (TM, bukan default)", res.attribution.slMultiplier === 1.2);
 
     const st = coord.getState();
     t("S1: hanya 1 posisi terbuka (TM)", st.openPositions.length === 1);
-    t("S1: posisi ter-atribusi ke TM", st.openPositions[0].firedByStrategy === "TREND_MOMENTUM");
+    t("S1: posisi ter-atribusi ke TM", st.openPositions[0].firedByStrategy === "TREND_FOLLOWING");
     await coord.stop();
   }
 
@@ -91,20 +91,20 @@ console.log("\n🎬 Multi-Strategy Integration Scenarios (1-3)\n");
   {
     const { engines, coord } = buildCoord(
       "mint1", "BTCUSDT",
-      ["ADAPTIVE_FUSION", "TREND_MOMENTUM", "MEAN_REVERSION"], 90
+      ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"], 90
     );
     await coord.start();
     t("S2: 3 engine berjalan (MINT)", coord.engines.size === 3);
 
     const af = engines.ADAPTIVE_FUSION.fire("LONG");
     t("S2: AF LONG masuk lebih dulu", af.ok === true);
-    const tm = engines.TREND_MOMENTUM.fire("SHORT");
+    const tm = engines.TREND_FOLLOWING.fire("SHORT");
     t("S2: TM SHORT DITOLAK (conflict direction lock)", tm.ok === false);
 
     // resolveConflicts batch juga menandai konflik (skip-all semantik).
     const decision = coord.resolveConflicts([
       { strategyKey: "ADAPTIVE_FUSION", direction: "LONG" },
-      { strategyKey: "TREND_MOMENTUM", direction: "SHORT" },
+      { strategyKey: "TREND_FOLLOWING", direction: "SHORT" },
     ]);
     t("S2: resolver menandai conflict", decision.conflict === true);
     await coord.stop();

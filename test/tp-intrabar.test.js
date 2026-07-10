@@ -99,6 +99,18 @@ function basePos(overrides = {}) {
     assert(trade && trade.reason === "TP", `reason harus TP, dapat: ${trade?.reason}`);
   });
 
+  // ── 7. Monitor price (ticker) di bawah SL walau barLow stale di atas SL ───────
+  await t("LONG: monitor price <= SL walau barLow stale → ditutup SL", async () => {
+    const pos = basePos({ entry: 18.56, sl: 18.05, tp: 19.84, size: 24.6, remainingSize: 24.6, marginReserved: 50 });
+    const bot = makeDryBotWithPosition(pos);
+    // Candle cache stale: low masih di atas SL, tapi ticker/mark sudah jatuh (LAB/USDT).
+    await bot._checkOpenPositions(/*price*/ 17.50, 0.5, /*barHigh*/ 18.60, /*barLow*/ 18.20);
+    assert(bot.state.openPositions.length === 0, "posisi harus tertutup");
+    const trade = bot.state.trades[bot.state.trades.length - 1];
+    assert(trade && trade.reason === "SL", `reason harus SL, dapat: ${trade?.reason}`);
+    assert(trade.exit === 18.05, `exit harus di SL 18.05, dapat: ${trade.exit}`);
+  });
+
   console.log(`\n${fail === 0 ? "✅" : "❌"} TP-INTRABAR: ${pass} lulus, ${fail} gagal\n`);
   if (fail > 0) { failures.forEach(f => console.log(`   - ${f.name}: ${f.message}`)); process.exit(1); }
 })();

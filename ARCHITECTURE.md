@@ -69,6 +69,223 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 > structurally valid value. Gating is enforced at the application layer via
 > `cfg.allowedExchanges` and `POST /account/keys`.
 
+### 3.6 Admin Endpoints — `routes/admin.js`
+
+The Admin Dashboard backend (Tasks ADMIN-BE-01..08, incl. the Admin v2 pages
+ADMIN-FE-05..13). All routes are mounted under `/api/v1/admin`. Source:
+`src/server/routes/admin.js`.
+
+#### Auth model
+
+Two layers run in front of every dashboard route:
+
+1. `authMiddleware` — verifies the Bearer JWT → `req.userId`.
+2. `adminGuard` (`src/middleware/adminGuard.js`) — loads the caller's **role from
+   the DB** (not the token, so a demotion takes effect immediately), allows
+   `ADMIN`/`SUPER_ADMIN`, and caches the row on `req.adminUser`. `superAdminGuard`
+   is the same guard narrowed to `SUPER_ADMIN` only, for destructive
+   admin-management actions.
+
+Composed as `requireAdmin = [authMiddleware, adminGuard]` and
+`requireSuperAdmin = [authMiddleware, superAdminGuard]`. Responses use the standard
+envelope: success `{ ok: true, ... }`, error `{ ok: false, statusCode, message }`
+(401 unauthorized, 403 forbidden).
+
+> **Legacy billing stub.** `PUT /admin/users/:userId/tier` and
+> `GET /admin/users/:userId/tier` predate the role system and still use a separate
+> secret-header scheme (`requireAdminSecret` → `x-admin-secret` matched against
+> `process.env.ADMIN_SECRET`). They are server-to-server tier assignments with no
+> JWT and are **not** covered by `adminGuard`.
+
+#### Schema additions (`prisma/schema.prisma`)
+
+| Addition | Detail |
+|----------|--------|
+| `enum UserRole { USER ADMIN SUPER_ADMIN }` | RBAC roles (ADMIN-BE-01). |
+| `User.role UserRole @default(USER)` | Gate for `/admin/*` via `adminGuard`. |
+| `User.suspendedAt DateTime?` | Non-null = suspended; login is blocked. |
+
+Migrations: `20260620120000_add_user_role`, `20260620130000_add_user_suspended`.
+
+> `prisma migrate dev` is **broken in this repo** (shadow-DB issue — see
+> `prisma-shadow-db-broken-migration`). Migrations are applied via
+> `prisma db execute` + `prisma migrate resolve` instead.
+
+**Seed:** `scripts/seed-super-admin.js` (`npm run seed:admin`) — idempotent;
+reads `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` from env.
+
+#### Endpoint surface
+
+| Method | Path | Guard | Purpose | FE consumer |
+|--------|------|-------|---------|-------------|
+| GET | `/admin/stats` | adminGuard | Headline KPI cards (ADMIN-BE-03 AC-02). | `useAdminStats` → stat cards |
+| GET | `/admin/users` | adminGuard | User list + derived trading stats; `?status=Flagged` filters store-flagged users. | `useAdminUsers` → Users / Flagged |
+| GET | `/admin/users/:id` | adminGuard | One user + aggregated trade stats. | `useAdminUserDetail` → UserDetail |
+| PATCH | `/admin/users/:id/status` | adminGuard | Suspend / activate a user. | UserDetail / FlaggedUsers |
+| PATCH | `/admin/users/:id/role` | superAdminGuard | Change a user's role. | UserDetail |
+| POST | `/admin/users/:id/flag` | adminGuard | Flag a user for review (ADMIN-FE-05). | FlaggedUsers |
+| DELETE | `/admin/users/:id/flag` | adminGuard | Clear a user's review flag. | FlaggedUsers |
+| GET | `/admin/bots` | adminGuard | Running bots across all users. | `useAdminBots` → BotsPage |
+| POST | `/admin/bots/stop-all` | superAdminGuard | **Emergency** stop every running bot + AuditLog + Telegram (ADMIN-BE-05). | BotsPage danger zone |
+| GET | `/admin/health` | adminGuard | Platform health snapshot. | `useAdminHealth` |
+| GET | `/admin/trades` | adminGuard | Recent trades across users + KPI summary. | `useAdminTrades` → Trades |
+| GET | `/admin/activity` | adminGuard | Latest 12 audit events (dashboard feed). | `useAdminActivity` |
+| GET | `/admin/audit` | adminGuard | Paginated + filterable AuditLog viewer (ADMIN-FE-12). | `useAdminAudit` → AuditLogPage |
+| GET | `/admin/subscriptions` | adminGuard | Tier breakdown + MRR estimate. | `useAdminSubscriptions` → Subscriptions / Revenue |
+| GET | `/admin/strategy-stats` | adminGuard | Aggregate performance per strategy (`?days=`) (ADMIN-FE-08). | `useAdminStrategyStats` → StrategyStats |
+| GET | `/admin/alerts` | adminGuard | Operational alert feed from real signals (ADMIN-FE-10). | `useAdminAlerts` → AlertsPage |
+| GET | `/admin/settings` | superAdminGuard | Env flags (read-only) + maintenance/feature flags (ADMIN-FE-11). | `useAdminSettings` → SettingsPage |
+| PATCH | `/admin/settings` | superAdminGuard | Toggle maintenance / feature flags (audited). | SettingsPage |
+| GET | `/admin/apikeys` | superAdminGuard | Masked exchange-connection audit — never secrets (ADMIN-FE-07). | `useAdminApiKeys` → APIKeysPage |
+| GET | `/admin/trades/export` | adminGuard | Streaming CSV of all trades (ADMIN-BE-04). | ExportButton |
+| GET | `/admin/backtest/export` | adminGuard | 501 — backtests not persisted yet. | ExportButton |
+| GET | `/admin/admins` | superAdminGuard | List ADMIN + SUPER_ADMIN accounts (ADMIN-BE-07). | `useAdmins` → AdminManagement |
+| POST | `/admin/admins` | superAdminGuard | Create a new admin. | AdminManagement |
+| PATCH | `/admin/admins/:id` | superAdminGuard | Edit username / email. | AdminManagement |
+| PATCH | `/admin/admins/:id/role` | superAdminGuard | Change an admin's role. | AdminManagement |
+| POST | `/admin/admins/:id/reset-password` | superAdminGuard | Set a new password. | AdminManagement |
+| DELETE | `/admin/admins/:id` | superAdminGuard | Remove an admin. | AdminManagement |
+
+#### Platform state store (`src/infrastructure/store/platformStore.js`)
+
+The Admin v2 endpoints need two pieces of platform state that don't warrant a
+Prisma model + migration (the schema has no `Settings` table and `migrate dev`
+is broken here): **maintenance mode / feature flags** and the **flagged-users
+set**. Both live in a file-backed JSON store (`data/platform-store.json`, which
+is git-ignored). `GET/PATCH /admin/settings` and the `/admin/users/:id/flag`
+routes read/write it; `GET /admin/users` annotates each user with `flagged`.
+`ALLOWED_TIERS` / `ALLOWED_EXCHANGES` remain **env-derived and read-only** in the
+Settings page — they are set at deploy, not via the API.
+
+> **Security.** `/admin/apikeys` returns only a masked fingerprint
+> (`maskKey`, last 4 chars) + metadata — it never selects or transmits
+> `apiKey`/`apiSecret`. Covered by `test/admin-v2.test.js`.
+
+#### `GET /api/v1/admin/stats` — adminGuard
+
+Headline KPI cards. MRR estimate = Σ (tier price × subscribers on that tier).
+
+```json
+{
+  "ok": true,
+  "stats": {
+    "totalUsers":     { "value": 0, "deltaLabel": "+0 this week", "up": true },
+    "activeBots":     { "value": 0, "deltaLabel": "Live trading",  "up": true },
+    "totalTrades":    { "value": 0, "deltaLabel": "+0 today",      "up": true },
+    "monthlyRevenue": { "value": 0, "deltaLabel": "from active tiers", "up": true, "currency": "$" }
+  }
+}
+```
+
+Each stat is `{ value, deltaLabel, up }`; `monthlyRevenue` also carries `currency`.
+
+#### `GET /api/v1/admin/users?limit&search&tier&status` — adminGuard
+
+User list with derived per-user trade counts + realized PnL (`limit` ≤ 500;
+optional `search` / `tier` / `status` filters, also applied client-side by the FE).
+
+```json
+{
+  "ok": true,
+  "users": [
+    { "id": "...", "name": "...", "email": "...", "joined": "2026-06-20",
+      "tier": "FOUNDRY", "exchange": "Binance", "bots": 0, "trades": 0,
+      "netPnl": 0, "status": "Active" }
+  ],
+  "total": 0
+}
+```
+
+#### `GET /api/v1/admin/users/:id` — adminGuard
+
+One user's profile + per-bot summary + aggregated stats.
+
+```json
+{
+  "ok": true,
+  "user": {
+    "id": "...", "name": "...", "email": "...", "role": "USER",
+    "status": "Active", "tier": "FOUNDRY", "exchange": "Binance",
+    "bots": [ { "symbol": "BTCUSDT", "mode": "Live", "strategy": "AF", "status": "Running" } ],
+    "stats": { "trades": 0, "netPnl": 0, "wins": 0, "winRate": 0, "openPositions": 0 }
+  }
+}
+```
+
+#### `PATCH /api/v1/admin/users/:id/status` — adminGuard
+
+Body `{ "action": "suspend" | "activate" }`. SUPER_ADMIN targets are protected
+(403). Suspending sets `suspendedAt` **and deletes the user's sessions** so the
+suspension takes effect immediately.
+
+#### `PATCH /api/v1/admin/users/:id/role` — superAdminGuard
+
+Body `{ "role": "USER" | "ADMIN" | "SUPER_ADMIN" }`. Guards against demoting the
+**last** SUPER_ADMIN (400).
+
+#### `GET /api/v1/admin/bots` — adminGuard
+
+Currently-running bots across all users.
+
+```json
+{
+  "ok": true,
+  "bots": [
+    { "user": "...", "symbol": "BTCUSDT", "mode": "Live", "strategy": "AF",
+      "capital": "$500", "openPos": "None", "roi": 0, "since": "20/06 09:30",
+      "status": "Running" }
+  ]
+}
+```
+
+#### `GET /api/v1/admin/health` — adminGuard
+
+Reports only what the API can actually verify — DB ping (`SELECT 1`),
+running-bot count, and process uptime. **No fabricated exchange ping.**
+
+```json
+{
+  "ok": true,
+  "services": [ { "label": "Database", "state": "ok", "note": "Healthy" } ],
+  "uptime": "3h 12m"
+}
+```
+
+#### `GET /api/v1/admin/trades/export` — adminGuard
+
+Streaming, **cursor-paginated** CSV of all trades across all users
+(ADMIN-BE-04). Batched (500/page) so memory stays flat on large tables;
+`Content-Disposition: attachment`.
+
+#### `GET /api/v1/admin/backtest/export` — adminGuard
+
+Returns **501** — backtests are computed on demand and not persisted (no
+`Backtest`/`BacktestRun` model in the schema yet). The dashboard's Backtest tab
+uses client-side sample data in the meantime.
+
+#### Admin management — superAdminGuard (ADMIN-BE-07)
+
+`GET /admin/admins` (list), `POST /admin/admins` (create — bcrypt-hashes the
+password, seeds a default `ADAPTIVE_FUSION` strategy), `PATCH /admin/admins/:id`
+(edit username/email), `PATCH /admin/admins/:id/role` (change role),
+`POST /admin/admins/:id/reset-password` (set new password + kill sessions), and
+`DELETE /admin/admins/:id`. Delete guards against removing **yourself** and the
+**last** SUPER_ADMIN; create/edit return 409 on email/username clash.
+
+#### Audit logging
+
+Every admin **mutation** writes an `AuditLog` row (best-effort — logging never
+breaks the action). Actor = `req.adminUser.id`; actions include
+`ADMIN_USER_STATUS`, `ADMIN_CHANGE_ROLE`, `ADMIN_CREATE_ADMIN`,
+`ADMIN_EDIT_ADMIN`, `ADMIN_RESET_PASSWORD`, and `ADMIN_DELETE_ADMIN`.
+
+#### Pending (engine integration not yet wired)
+
+| Endpoint | Status |
+|----------|--------|
+| `POST /admin/bots/:id/stop` (force-stop one user's bot) | **Not implemented** — needs the bot engine/coordinator wired into the admin router. |
+| Emergency stop-all (ADMIN-BE-05) | **Not implemented** — same dependency on the engine/coordinator. |
+
 ---
 
 ## Appendix A — IDOR Audit: Market & Symbol Endpoints (Task C)

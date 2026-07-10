@@ -95,17 +95,20 @@ function notifyOpen(trade) {
     sl, tp, leverage = 1, dryRun = false, chatId = null,
   } = trade;
 
-  const coin    = symbol.replace("USDT", "");
-  const modeTag = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
+  const coin      = symbol.replace("USDT", "");
+  const modeTag   = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
+  const isLong    = side.toLowerCase().includes("long");
+  const dirIcon   = isLong ? "🟢" : "🔴";
+  const dirLabel  = isLong ? "📈 LONG" : "📉 SHORT";
 
   const lines = [
-    `<b>OPEN POSISI${modeTag}</b>`,
-    `<b>${coin}/USDT</b> — ${side}`,
+    `${dirIcon} <b>OPEN POSISI${modeTag}</b>`,
+    `<b>${coin}/USDT</b> — ${dirLabel}`,
     ``,
     `Entry      : <code>$${fmtPrice(entryPrice)}</code>`,
     size  != null ? `Size       : <code>${Number(size).toFixed(4)} ${coin}</code>` : null,
-    sl    != null ? `Stop Loss  : <code>$${fmtPrice(sl)}</code>` : null,
-    tp    != null ? `Take Profit: <code>$${fmtPrice(tp)}</code>` : null,
+    sl    != null ? `🛑 Stop Loss  : <code>$${fmtPrice(sl)}</code>` : null,
+    tp    != null ? `🎯 Take Profit: <code>$${fmtPrice(tp)}</code>` : null,
     leverage > 1  ? `Leverage   : <code>${leverage}x</code>` : null,
     ``,
     `<i>${nowStr()} WIB</i>`,
@@ -128,20 +131,24 @@ function notifyClose(trade) {
 
   const coin        = symbol.replace("USDT", "");
   const isWin       = (pnl ?? 0) >= 0;
+  const resultIcon  = isWin ? "✅" : "❌";
   const resultLabel = isWin ? "WIN" : "LOSS";
   const modeTag     = dryRun ? " <b>[DRY RUN]</b>" : " <b>[LIVE]</b>";
+  const isLong      = side.toLowerCase().includes("long");
+  const dirIcon     = isLong ? "🟢" : "🔴";
+  const dirLabel    = isLong ? "📈 LONG" : "📉 SHORT";
 
   const reasonMap = {
-    TP:       "Take Profit",
-    SL:       "Stop Loss",
-    Reversal: "Reversal",
-    Exchange: "Ditutup Exchange",
+    TP:       "🎯 Take Profit",
+    SL:       "🛑 Stop Loss",
+    Reversal: "🔄 Reversal",
+    Exchange: "⚡ Ditutup Exchange",
   };
   const reasonStr = reasonMap[reason] ?? reason ?? "—";
 
   const lines = [
-    `<b>CLOSE POSISI [${resultLabel}]${modeTag}</b>`,
-    `<b>${coin}/USDT</b> — ${side}`,
+    `${resultIcon} <b>CLOSE POSISI [${resultLabel}]${modeTag}</b>`,
+    `${dirIcon} <b>${coin}/USDT</b> — ${dirLabel}`,
     ``,
     `Entry  : <code>$${fmtPrice(entryPrice)}</code>`,
     `Exit   : <code>$${fmtPrice(exitPrice)}</code>`,

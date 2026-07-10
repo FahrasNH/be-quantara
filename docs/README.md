@@ -5,6 +5,8 @@ Indeks dokumentasi operasional & teknis (Priority 5).
 | Dokumen | Isi |
 |---------|-----|
 | [STRATEGIES.md](STRATEGIES.md) | Logika, parameter, & edge case tiap strategi (TM/MR/BR/AF) |
+| [STRATEGIES.html](STRATEGIES.html) | Versi HTML — tabel parameter rapi + navigasi sidebar |
+| [PAIR_VOLATILITY.md](PAIR_VOLATILITY.md) | Klasifikasi volatilitas koin (LIQUID / STABLE / VOLATILE) & dampak ke bot |
 | [API.md](API.md) | Semua endpoint REST + checklist QA (termasuk regresi IDOR) |
 | [MONITORING.md](MONITORING.md) | Threshold risk per-bot & akun, yang dipantau, sinyal alert |
 | [EMERGENCY.md](EMERGENCY.md) | Prosedur darurat: naked position, stop-all, key bocor, rollback |

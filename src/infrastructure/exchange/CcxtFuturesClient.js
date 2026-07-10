@@ -5,6 +5,7 @@
 
 const ccxt = require("ccxt");
 const { toRawSymbol, toCcxtSymbol } = require("./ccxtSymbol");
+const { withExchangeGate } = require("./exchangeRateGate");
 
 const BALANCE_TYPE = {
   binance: "future",
@@ -71,29 +72,48 @@ class CcxtFuturesClient {
   // ── MARKET DATA ───────────────────────────────────────────────────────────
 
   async getCandles(symbol, timeframe = "4h", limit = 200, since = undefined) {
-    try {
-      const marketSymbol = this._marketSymbol(symbol);
-      const candles = await this.exchange.fetchOHLCV(
-        marketSymbol,
-        timeframe,
-        since,
-        Math.min(limit, 500)
-      );
-      if (!Array.isArray(candles) || candles.length === 0) {
-        throw new Error("No candles data received");
+    // OKX/Binance rate-limit per IP (OKX candles ≈ 40 req/2s). Beberapa koin ×
+    // strategy-engine berbagi satu IP → burst memicu "Too many requests" (OKX 50011).
+    // CCXT enableRateLimit hanya men-throttle PER client, tak terkoordinasi lintas N
+    // client per-koin → retry error rate-limit dengan backoff sebelum menyerah ke
+    // cache basi (yang membuat sinyal jadi stale). Error lain (simbol salah, jaringan
+    // mati) gagal cepat agar fallback cache 24 jam tetap jalan.
+    const RATE_LIMIT_RE = /Too many requests|rate.?limit|ratelimit|\b50011\b|\b429\b/i;
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const marketSymbol = this._marketSymbol(symbol);
+        const candles = await withExchangeGate(this.exchangeId, () =>
+          this.exchange.fetchOHLCV(
+            marketSymbol,
+            timeframe,
+            since,
+            Math.min(limit, 500)
+          )
+        );
+        if (!Array.isArray(candles) || candles.length === 0) {
+          throw new Error("No candles data received");
+        }
+        return candles.map((c) => ({
+          timestamp: c[0],
+          date: new Date(c[0]).toISOString(),
+          open: parseFloat(c[1]),
+          high: parseFloat(c[2]),
+          low: parseFloat(c[3]),
+          close: parseFloat(c[4]),
+          volume: parseFloat(c[5]),
+        }));
+      } catch (err) {
+        lastErr = err;
+        // Hanya retry rate-limit; backoff 600ms → 1800ms beri waktu window OKX pulih.
+        if (attempt < 2 && RATE_LIMIT_RE.test(err.message || "")) {
+          await new Promise((r) => setTimeout(r, 600 * Math.pow(3, attempt)));
+          continue;
+        }
+        throw new Error(`getCandles error: ${err.message}`);
       }
-      return candles.map((c) => ({
-        timestamp: c[0],
-        date: new Date(c[0]).toISOString(),
-        open: parseFloat(c[1]),
-        high: parseFloat(c[2]),
-        low: parseFloat(c[3]),
-        close: parseFloat(c[4]),
-        volume: parseFloat(c[5]),
-      }));
-    } catch (err) {
-      throw new Error(`getCandles error: ${err.message}`);
     }
+    throw new Error(`getCandles error: ${lastErr && lastErr.message}`);
   }
 
   async getTicker(symbol) {
@@ -283,6 +303,100 @@ class CcxtFuturesClient {
     } catch (err) {
       throw new Error(`openPosition error: ${err.message}`);
     }
+  }
+
+  /**
+   * FEE-02 — Entry maker/post-only dengan fallback taker.
+   *
+   * Limit post-only di sisi pasif (buy @ bestBid / sell @ bestAsk) untuk kena fee
+   * maker, bukan taker. Post-only tak dijamin fill → requote beberapa kali; bila
+   * belum penuh sampai timeout, sisa diselesaikan market (taker) agar size utuh.
+   * Binance/OKX tak mendukung embed SL/TP di market order → presetSLTP selalu
+   * false (BotEngine pasang SL/TP terpisah). Default entryMode tetap taker;
+   * rute ini hanya aktif saat entryMode="maker" (lihat A/B FEE-06).
+   *
+   * @returns {{orderId, presetSLTP:false, entryFill:"maker"|"maker_partial"|"taker", filledMaker:number}}
+   */
+  async openPositionMaker(symbol, side, size, _marginCoin = "USDT", _slPrice = undefined, _tpPrice = undefined, opts = {}) {
+    const {
+      maxRequotes    = 2,
+      fillTimeoutMs  = 4000,
+      pollIntervalMs = 700,
+      fallbackTaker  = true,
+    } = opts;
+
+    const marketSymbol = this._marketSymbol(symbol);
+    const isBuy        = side.includes("long");
+    const direction    = isBuy ? "buy" : "sell";
+    const sleep        = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    let filledMaker = 0;
+    let lastOrderId = null;
+
+    for (let attempt = 0; attempt <= maxRequotes; attempt++) {
+      const remaining = parseFloat((size - filledMaker).toFixed(10));
+      if (remaining <= 0) break;
+
+      let quote;
+      try { quote = await this.getTicker(symbol); } catch { break; }
+      const passive = isBuy ? quote.bestBid : quote.bestAsk;
+      if (!(passive > 0)) break;
+      const limitPrice = this._fmtPrice(marketSymbol, passive);
+
+      let order;
+      try {
+        order = await this.exchange.createOrder(
+          marketSymbol, "limit", direction, remaining, limitPrice,
+          this._orderParams({ postOnly: true })
+        );
+      } catch (err) {
+        if (/post.?only|immediately|would match/i.test(err.message || "")) {
+          await sleep(150);
+          continue;
+        }
+        throw new Error(`openPositionMaker error: ${err.message}`);
+      }
+      lastOrderId = order.id;
+
+      let status = order.status, filled = order.filled || 0;
+      const deadline = Date.now() + fillTimeoutMs;
+      while (Date.now() < deadline && status !== "closed" && status !== "canceled") {
+        await sleep(pollIntervalMs);
+        try {
+          const o = await this.exchange.fetchOrder(order.id, marketSymbol);
+          status = o.status; filled = o.filled || 0;
+        } catch { /* terus polling */ }
+      }
+
+      if (status === "closed") {
+        filledMaker = parseFloat((filledMaker + (filled || remaining)).toFixed(10));
+        break;
+      }
+
+      try { await this.exchange.cancelOrder(order.id, marketSymbol); } catch { /* mungkin sudah ke-fill/cancel */ }
+      try {
+        const o = await this.exchange.fetchOrder(order.id, marketSymbol);
+        filled = o.filled || filled;
+      } catch { /* pakai nilai terakhir */ }
+      filledMaker = parseFloat((filledMaker + (filled || 0)).toFixed(10));
+
+      if (filled > 0) break;
+    }
+
+    const remaining = parseFloat((size - filledMaker).toFixed(10));
+
+    if (remaining > 0 && fallbackTaker) {
+      const taker = await this.openPosition(symbol, side, remaining, _marginCoin);
+      return {
+        ...taker,
+        orderId:    taker.orderId || lastOrderId,
+        presetSLTP: false,
+        entryFill:  filledMaker > 0 ? "maker_partial" : "taker",
+        filledMaker,
+      };
+    }
+
+    return { orderId: lastOrderId, presetSLTP: false, entryFill: "maker", filledMaker };
   }
 
   async closePosition(symbol, side, size) {

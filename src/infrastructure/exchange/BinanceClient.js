@@ -31,39 +31,49 @@ class BinanceClient extends CcxtFuturesClient {
   /**
    * Override setTPSL for Binance USDT-M Futures.
    *
-   * CcxtFuturesClient.setTPSL uses generic CCXT params that Binance rejects or
-   * misinterprets (unknown triggerPrice param, lot-size precision issues with
-   * size+reduceOnly). Binance-native approach:
-   *   - closePosition: "true"  → exchange closes the full position when triggered
-   *                              (no quantity needed, no lot-size mismatch)
-   *   - workingType: MARK_PRICE → triggers on mark price (anti-manipulation)
-   *   - priceProtect: "true"   → rejects orders whose trigger is far from mark price
+   * ⚠️ BUG FIX (naked-position incident, LAB/USDT live): the previous version passed
+   * type:"stopMarket" / "takeProfitMarket" as the CCXT order type. CCXT does NOT
+   * recognise those as unified types — it uppercases to "STOPMARKET", which is not in
+   * the market's `info.orderTypes`, so Binance rejects with
+   *   "binance stopMarket is not a valid order type for the X market".
+   * SL/TP then never placed → position ran naked → BotEngine emergency-closed in a
+   * loop (5×/6min). See binance.js createOrderRequest: STOP_MARKET / TAKE_PROFIT_MARKET
+   * are reached ONLY via the unified `stopLossPrice` / `takeProfitPrice` PARAM on a
+   * `market` order (isStopLoss / isTakeProfit), never via a type string.
    *
-   * Falls back to explicit size+reduceOnly if closePosition is rejected (e.g.
-   * position partially filled before SL is placed).
+   * Correct Binance-native approach:
+   *   - type:"market" + stopLossPrice|takeProfitPrice → CCXT maps to STOP_MARKET / TAKE_PROFIT_MARKET
+   *   - closePosition:true  → close the FULL position on trigger (no quantity → no lot-size mismatch;
+   *                           binance.js keeps quantityIsRequired=false when closePosition is set)
+   *   - workingType:MARK_PRICE → trigger on mark price (anti-manipulation)
+   *   - priceProtect:true   → reject triggers too close to mark price
+   *
+   * Falls back to explicit size+reduceOnly if closePosition is rejected (e.g. the
+   * position was partially filled before the SL is placed).
    */
   async setTPSL(symbol, planType, triggerPrice, holdSide, size) {
     const isTP     = planType === "profit_plan";
     const isLong   = holdSide === "long";
     const closeSide = isLong ? "sell" : "buy";
-    const trigPrice = parseFloat(triggerPrice);
     const marketSymbol = this._marketSymbol(symbol);
-    const orderType    = isTP ? "takeProfitMarket" : "stopMarket";
+    const trigPrice = this._fmtPrice(marketSymbol, triggerPrice);
+    // The unified param that CCXT translates into STOP_MARKET / TAKE_PROFIT_MARKET.
+    const priceKey = isTP ? "takeProfitPrice" : "stopLossPrice";
     const errors = [];
 
     // ── Pendekatan 1: closePosition (tidak perlu size — paling robust) ────────
     try {
       const order = await this.exchange.createOrder(
         marketSymbol,
-        orderType,
+        "market",
         closeSide,
         undefined,  // no quantity when closePosition=true
-        trigPrice,
+        undefined,
         {
-          stopPrice:    trigPrice,
+          [priceKey]:    trigPrice,
           closePosition: "true",
-          workingType:  "MARK_PRICE",
-          priceProtect: "true",
+          workingType:   "MARK_PRICE",
+          priceProtect:  "true",
         }
       );
       return { success: true, method: "binanceClosePosition", orderId: order.id };
@@ -75,12 +85,12 @@ class BinanceClient extends CcxtFuturesClient {
     try {
       const order = await this.exchange.createOrder(
         marketSymbol,
-        orderType,
+        "market",
         closeSide,
         size,
-        trigPrice,
+        undefined,
         {
-          stopPrice:   trigPrice,
+          [priceKey]:  trigPrice,
           reduceOnly:  true,
           workingType: "MARK_PRICE",
         }

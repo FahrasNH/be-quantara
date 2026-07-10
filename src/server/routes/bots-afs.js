@@ -1,7 +1,11 @@
 // Updated bots-afs.js to use passed-in helper functions and support userId filtering
 
 module.exports = function createBotsRouter(helpers) {
-  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator } = helpers;
+  const { getBot, getAllBots, createBotInstance, createMultiStrategyInstance, removeBotInstance, sharedClient, getCoordinator, acquireStartLock } = helpers;
+  // Fallback no-op lock bila helper tidak di-inject (mis. unit test router lama).
+  const _acquireStartLock = typeof acquireStartLock === "function"
+    ? acquireStartLock
+    : async () => () => {};
   const express = require("express");
   const router = express.Router();
   const { asyncHandler } = require("../../middleware/errorHandler");
@@ -11,8 +15,11 @@ module.exports = function createBotsRouter(helpers) {
   const AuthService = require("../../services/AuthService");
   const { decrypt, isEncrypted } = require("../../infrastructure/security/crypto");
   const { getUserBotLogs, deleteUserBotLogs } = require("../../infrastructure/db/botLogRepository");
-  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies } = require("../../services/entitlement");
+  const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies, getUserTier, shouldAutoEnableGrokConfirm, getGrokConfirmEntitlement } = require("../../services/entitlement");
+  // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
+  const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../domain/tierConfig");
   const db = require("../../infrastructure/db/database");
+  const envCfg = require("../../config/env");
 
   // Feature flag: Auto Multi-Strategy Execution per Coin. Default ON untuk staging
   // dry-run (TASK 4.3), OFF di production via MULTI_STRATEGY_ENABLED=false.
@@ -22,17 +29,80 @@ module.exports = function createBotsRouter(helpers) {
   const { strategyGuard } = require("../../middleware/strategyGuard");
   const { strategyChangeLimiter, emergencyStopConfirmGuard } = require("../../middleware/strategyRateLimiter");
   const { analyzeStrategyFit } = require("../../domain/strategyAnalysis");
-  const { getMarketSnapshot } = require("../services/MarketSnapshotService");
+  const { getMarketSnapshot, getPairTierMetrics } = require("../services/MarketSnapshotService");
   const { issueConfirmToken, DEFAULT_MAX_AGE_MS } = require("../../infrastructure/security/confirmToken");
   const { createBotOpLock } = require("../../middleware/botOpLock");
   // SEC-002 GAP1: satu lock dibagi start+stop agar start & stop untuk bot yang
   // sama juga saling-eksklusif, bukan hanya start vs start.
   const botOpLock = createBotOpLock();
+  // PAIR-TIER-05: pair classification for strategy override + VOLATILE guard
+  const { pairClassifier } = require("../../infrastructure/classification/PairClassifier");
 
   // Decrypt value dari DB (toleran terhadap plaintext lama)
   function safeDecrypt(value) {
     if (!value) return null;
     return isEncrypted(value) ? decrypt(value) : value;
+  }
+
+  /** Mirror BotEngine.getState() — unrealized PnL per posisi dari mark price. */
+  function calcPositionUnrealizedPL(position, markPrice) {
+    if (position.unrealizedPL && position.unrealizedPL !== 0) return position.unrealizedPL;
+    if (!markPrice || !position.entry) return 0;
+    const sz = position.remainingSize || position.size || 0;
+    return position.side === "LONG"
+      ? (markPrice - position.entry) * sz
+      : (position.entry - markPrice) * sz;
+  }
+
+  function sumUnrealizedPnL(positions) {
+    return positions.reduce((s, p) => s + (p.unrealizedPL || 0), 0);
+  }
+
+  /**
+   * Enforce per-tier hard cap on total bots (running + configured/stopped).
+   * @param {string} userId
+   * @param {{ isNewBot?: boolean }} [opts]
+   * @returns {Promise<{ ok: true, cap: number, count: number, tier: string } | { ok: false, cap: number, count: number, tier: string, message: string }>}
+   */
+  async function assertBotCap(userId, { isNewBot = true } = {}) {
+    let tier;
+    try {
+      tier = await getUserTier(userId);
+    } catch (_e) {
+      tier = "FOUNDRY";
+    }
+    const cap = getMaxActiveBots(tier);
+    const count = await prisma.bot.count({ where: { userId } });
+    if (isNewBot && count >= cap) {
+      const label = getTierConfig(tier)?.label ?? tier;
+      return {
+        ok: false,
+        cap,
+        count,
+        tier,
+        message:
+          `Batas bot tier ${label} tercapai (${count}/${cap}). ` +
+          `Hapus bot yang tidak dipakai atau upgrade tier untuk menambah bot.`,
+      };
+    }
+    return { ok: true, cap, count, tier };
+  }
+
+  async function fetchMarkPrice(symbol) {
+    if (!sharedClient?.getTicker) return null;
+    try {
+      const ticker = await sharedClient.getTicker(symbol);
+      return ticker?.last > 0 ? ticker.last : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function enrichPositionsWithUnrealized(positions, markPrice) {
+    return positions.map(p => ({
+      ...p,
+      unrealizedPL: calcPositionUnrealizedPL(p, markPrice),
+    }));
   }
 
   /**
@@ -41,7 +111,42 @@ module.exports = function createBotsRouter(helpers) {
    * agar GET /bots tidak fan-out N query ke pool (1 per bot). Bila tidak diberikan,
    * fallback query per-symbol (dipakai endpoint single-bot).
    */
-  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null, tierStrategies = []) {
+  async function mergeBotWithLiveState(userId, botRecord, openTradesMap = null, tierStrategies = [], closedPnlMap = null) {
+    // Posisi terbuka dari DB = sumber kebenaran yang BERTAHAN lintas restart proses
+    // & warm-up engine. Dipakai sebagai fallback agar sebuah posisi terbuka TIDAK
+    // pernah menghilang dari kartu hanya karena instance in-memory belum sempat
+    // dipulihkan (auto-resume) atau masih warm-up. Inilah akar bug "open posisi
+    // muncul/hilang antar hard-refresh": sebelumnya posisi 100% bergantung pada
+    // keberadaan instance live yang tidak stabil saat server habis restart.
+    async function readDbOpenPositions(enrichUnrealized = false) {
+      try {
+        const dbTrades = openTradesMap
+          ? (openTradesMap.get(botRecord.symbol) || [])
+          : await db.getOpenTradesBySymbol(botRecord.symbol, userId);
+        const positions = dbTrades.map(t => ({
+          id:          t.order_id || `db_${t.id}`,
+          dbId:        t.id,
+          side:        t.side,
+          entry:       t.entry_price,
+          sl:          t.sl,
+          tp:          t.tp,
+          size:        t.size ?? 0,
+          openTime:    new Date(t.open_time).getTime(),
+          atr:         t.atr,
+          restoredFrom: t.session_id,
+        }));
+        if (!enrichUnrealized || positions.length === 0) return positions;
+        const markPrice = await fetchMarkPrice(botRecord.symbol);
+        return enrichPositionsWithUnrealized(positions, markPrice);
+      } catch { return []; /* non-critical — fall back to empty */ }
+    }
+
+    // Tier pair (LIQUID/STABLE/VOLATILE) — di-expose agar FE bisa menampilkan
+    // klasifikasi NYATA dari bot user (bukan cache FE yang ephemeral).
+    const pc = pairClassifier.classify(botRecord.symbol);
+    const pairTier = pc.tier;
+    const pairRiskLevel = pc.riskLevel;
+
     const instance = getBot(userId, botRecord.symbol);
     if (instance) {
       const live = instance.getState();
@@ -50,52 +155,67 @@ module.exports = function createBotsRouter(helpers) {
       // instance is a legacy BotEngine (will be upgraded on next restart).
       const liveSg = live.strategyGroup ?? botRecord.strategyGroup ?? [];
       const effectiveSg = liveSg.length > 0 ? liveSg : tierStrategies;
+      // Posisi: utamakan live (sudah di-enrich unrealizedPL/mark). Bila engine baru
+      // warm-up & belum memuat posisinya, fallback ke DB → posisi tetap tampil.
+      const livePositions = Array.isArray(live.openPositions) ? live.openPositions : [];
+      const openPositions = livePositions.length > 0
+        ? livePositions
+        : await readDbOpenPositions(true);
+      const unrealizedPnL = livePositions.length > 0
+        ? (live.unrealizedPnL ?? sumUnrealizedPnL(openPositions))
+        : sumUnrealizedPnL(openPositions);
       return {
         ...botRecord,
         ...live,
         id:          botRecord.id,
         botId:       botRecord.symbol,
         running:     botRecord.running ? live.running : false,
+        starting:    botRecord.running ? (live.starting ?? false) : false,
         strategyKey: botRecord.strategyKey,
+        // Modal SELALU dari DB (yang dikonfigurasi user). getState() melaporkan
+        // `capital` versi engine (mis. per-strategi / agregat) yang bisa BERBEDA
+        // antar warm-up vs cold → menimpa nilai DB & menimbulkan kedip $250 ↔ $1000
+        // antar refresh. Kunci ke `botRecord.capital` agar Modal & denominator ROI
+        // stabil dan identik di semua tampilan (dashboard, kartu bot, risk panel).
+        capital:      botRecord.capital,
+        startCapital: botRecord.capital,
+        pairTier,
+        pairRiskLevel,
+        openPositions,
+        openTradeCount: openPositions.length,
+        unrealizedPnL,
         params: {
-          leverage:     instance.config?.leverage ?? null,
+          // Single-strategy engine punya `instance.config`; MultiStrategyCoordinator
+          // tidak (config-nya per-engine) → pakai leverage efektif dari getState (`live`).
+          leverage:     instance.config?.leverage ?? live.leverage ?? null,
           riskPerTrade: instance.config?.riskPerTrade ?? null,
         },
         strategyGroup: effectiveSg,
         multiStrategy: live.multiStrategy || effectiveSg.length > 1,
       };
     }
-    // Stopped bot path: use DB strategyGroup, fall back to tier strategies for legacy bots.
-    let openPositions = [];
-    try {
-      const dbTrades = openTradesMap
-        ? (openTradesMap.get(botRecord.symbol) || [])
-        : await db.getOpenTradesBySymbol(botRecord.symbol, userId);
-      openPositions = dbTrades.map(t => ({
-        id:          t.order_id || `db_${t.id}`,
-        dbId:        t.id,
-        side:        t.side,
-        entry:       t.entry_price,
-        sl:          t.sl,
-        tp:          t.tp,
-        size:        t.size ?? 0,
-        openTime:    new Date(t.open_time).getTime(),
-        atr:         t.atr,
-        restoredFrom: t.session_id,
-      }));
-    } catch { /* non-critical — fall back to empty */ }
+    // Stopped / belum-resume: DB authoritative. Posisi terbuka tetap diambil dari DB
+    // agar bot yang running=true (menunggu auto-resume) tetap menampilkan posisinya.
+    const openPositions = await readDbOpenPositions(true);
+    const unrealizedPnL = sumUnrealizedPnL(openPositions);
     const dbSg = Array.isArray(botRecord.strategyGroup) && botRecord.strategyGroup.length > 0
       ? botRecord.strategyGroup
       : tierStrategies;  // legacy bots with strategyGroup=[] show tier count
+    const historicalPnL = closedPnlMap ? (closedPnlMap.get(botRecord.symbol) ?? 0) : 0;
     return {
       ...botRecord,
       botId:          botRecord.symbol,
+      running:        false,
+      starting:       !!botRecord.running,
+      capital:        botRecord.capital,
       startCapital:   botRecord.capital,
+      pairTier,
+      pairRiskLevel,
       openPositions,
       openTradeCount: openPositions.length,
       closedTrades:   botRecord.totalTrades ?? 0,
-      totalPnL:       0,
-      unrealizedPnL:  0,
+      totalPnL:       historicalPnL,
+      unrealizedPnL,
       strategyGroup:  dbSg,
       multiStrategy:  dbSg.length > 1,
     };
@@ -134,6 +254,11 @@ module.exports = function createBotsRouter(helpers) {
       try { openTradesMap = await db.getOpenTradesByUser(userId); }
       catch { /* non-critical — mergeBot fallback ke array kosong */ }
 
+      // Batch-fetch historical closed PnL per symbol so stopped bots show real ROI.
+      let closedPnlMap = new Map();
+      try { closedPnlMap = await db.getClosedPnlByUser(userId); }
+      catch { /* non-critical — stopped bots show 0 pnl as fallback */ }
+
       // Fetch tier strategies ONCE for this user (for stopped bots with empty strategyGroup).
       // This ensures legacy bots with strategyGroup=[] display the correct tier count.
       let tierStrategies = [];
@@ -144,7 +269,7 @@ module.exports = function createBotsRouter(helpers) {
       res.json({
         ok: true,
         count: bots.length,
-        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap, tierStrategies))),
+        bots: await Promise.all(bots.map(b => mergeBotWithLiveState(userId, b, openTradesMap, tierStrategies, closedPnlMap))),
       });
     })
   );
@@ -198,6 +323,29 @@ module.exports = function createBotsRouter(helpers) {
       const coordinator = getCoordinator(userId);
       const snap = coordinator.snapshot();
 
+      // Per-tier account open-position cap (fix meter "8/4"): resolusi tier user →
+      // cap, agar FE punya DENOMINATOR sebenarnya (4/8/12/16), bukan hardcoded 4.
+      // Diresolusi langsung di sini supaya benar walau belum ada bot yang start
+      // (coordinator.maxAccountOpenPositions masih 0). Fallback FOUNDRY(4) bila error.
+      let maxConcurrentPositions;
+      let maxActiveBots;
+      let botCount = null;
+      try {
+        const tier = await getUserTier(userId);
+        maxConcurrentPositions = getMaxConcurrentPositions(tier);
+        maxActiveBots = getMaxActiveBots(tier);
+        botCount = await prisma.bot.count({ where: { userId } });
+      } catch (_e) {
+        maxConcurrentPositions = getMaxConcurrentPositions(undefined);
+        maxActiveBots = getMaxActiveBots(undefined);
+      }
+      // openCount = jumlah posisi terbuka NYATA dari DB (sumber kebenaran tunggal,
+      // bukan reservations.size). Best-effort: gagal → null (FE jatuh ke agregat state).
+      let openCount = null;
+      try {
+        openCount = await db.countOpenTradesByUser(userId, null);
+      } catch (_e) { /* biarkan null — fail-open utk display */ }
+
       // Hitung minimum margin per pair (leverage 2x, SL=1.5×ATR, asumsi ATR% pasar)
       // Diperhitungkan dari: margin = (notional) / leverage = (price × size) / 2
       // Untuk user, kami estimasi dengan asumsi size minimum per pair + ATR% rata-rata
@@ -224,12 +372,16 @@ module.exports = function createBotsRouter(helpers) {
         committed: committedBySymbol,
         remaining: snap.budget - snap.committedMargin,
         minimumForLeverage2x: minMarginEstimate,
+        // Cap account-wide posisi terbuka per-tier + jumlah terbuka NYATA (DB).
+        maxConcurrentPositions,
+        openCount,
+        maxActiveBots,
+        botCount,
       });
     })
   );
 
   /**
-   * GET /api/v1/bots/:symbol/strategy-analysis  (FIX-2)
    * Analisis kondisi market + rekomendasi strategi.
    * Ditaruh SEBELUM "/:symbol" agar tidak tertangkap route generik.
    *
@@ -382,6 +534,21 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+      // Per-tier bot cap — hanya saat menambah bot BARU (upsert simbol baru).
+      if (!existing) {
+        const capVerdict = await assertBotCap(userId, { isNewBot: true });
+        if (!capVerdict.ok) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message: capVerdict.message,
+            maxActiveBots: capVerdict.cap,
+            botCount: capVerdict.count,
+            tier: capVerdict.tier,
+          });
+        }
+      }
+
       const botData = {
         strategyKey:        strategies[0],
         strategyGroup:      useMulti ? strategies : [],
@@ -395,7 +562,12 @@ module.exports = function createBotsRouter(helpers) {
       const bot = await prisma.bot.upsert({
         where:  { userId_symbol: { userId, symbol } },
         update: botData,
-        create: { userId, symbol, ...botData },
+        create: {
+          userId,
+          symbol,
+          ...botData,
+          grokConfirmEnabled: await shouldAutoEnableGrokConfirm(userId),
+        },
       });
 
       await AuthService.logAction(
@@ -452,12 +624,72 @@ module.exports = function createBotsRouter(helpers) {
         strategies = [strategyKey];
       }
 
+      // ── PAIR-TIER-05: classify pair → filter + merge tier overrides ──────────
+      // v2.0 Hybrid Score: hitung HV30 + ATR%14 + liquidityRatio + beta/rank dari
+      // candle harian + CoinGecko, lalu sertakan ke classify(). Non-fatal: bila
+      // gagal/null → classify jatuh ke tier rank/static (backward-compatible).
+      const pairMetrics = await getPairTierMetrics(sharedClient, symbol).catch(() => null);
+
+      // proxy / static fallback) berarti sizing satu tingkat lebih konservatif.
+      const pairClass = pairClassifier.applyConfidenceGate(
+        pairClassifier.classify(symbol, pairMetrics)
+      );
+      if (pairClass.gated) {
+        console.warn(`[PairTier] ${symbol}: confidence ${pairClass.confidence} < gate — sizing bumped one notch conservative (tier ${pairClass.tier}, path ${pairClass.dataPath})`);
+      }
+      const tierOverrides = pairClass.paramOverrides;
+
+      // Block strategies the classifier itself marks blocked for this tier (AC-PAIR-04).
+      // AF-FIX-REGIME (Sprint 7, re-scoped 2026-07-02): previously only checked
+      // tier === "VOLATILE", but STRATEGIES_BY_PAIR_TIER.SEMI_VOLATILE.blocked also
+      // lists ADAPTIVE_FUSION — that block was defined but never enforced here, so
+      // AF could still be started live on SEMI_VOLATILE altcoins (thin-book risk).
+      if (pairClass.blockedStrategies.length) {
+        const blockedStrategies = strategies.filter(s => pairClass.blockedStrategies.includes(s));
+        if (blockedStrategies.length) {
+          // Allow if user explicitly chose a strategy (legacy path) and it's MR
+          if (!useMulti || blockedStrategies.length === strategies.length) {
+            return res.status(400).json({
+              ok: false,
+              statusCode: 400,
+              message: `${symbol} adalah pair ${pairClass.tier}. Strategi ${blockedStrategies.join(", ")} diblokir — hanya ${pairClass.recommendedStrategies.join(", ")} yang diizinkan untuk pasangan berisiko ini.`,
+              pairTier: pairClass.tier,
+              blockedStrategies,
+              allowedStrategies: pairClass.recommendedStrategies,
+            });
+          }
+          // Filter out blocked strategies for multi mode
+          strategies = strategies.filter(s => !pairClass.blockedStrategies.includes(s));
+          if (!strategies.length) strategies = ["MEAN_REVERSION"];
+        }
+      }
+
+      // Build strategy warning if pair tier is not LIQUID
+      const strategyWarning = pairClass.tier !== "LIQUID"
+        ? `${symbol} adalah pair ${pairClass.tier} (risiko ${pairClass.riskLevel}). SL diperlebar ${tierOverrides.slMultiplier}×, ukuran posisi dikurangi ke ${Math.round(tierOverrides.positionSizeAdjustment * 100)}%.`
+        : null;
+
       const capitalPerStrategy = (capital || 500) / strategies.length;
 
       // Check if bot exists for this user
       let bot = await prisma.bot.findUnique({
         where: { userId_symbol: { userId, symbol } },
       });
+
+      // Per-tier bot cap — hanya saat start akan membuat bot BARU.
+      if (!bot) {
+        const capVerdict = await assertBotCap(userId, { isNewBot: true });
+        if (!capVerdict.ok) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message: capVerdict.message,
+            maxActiveBots: capVerdict.cap,
+            botCount: capVerdict.count,
+            tier: capVerdict.tier,
+          });
+        }
+      }
 
       const botData = {
         // strategyKey[0] disimpan untuk backward-compat (kolom lama tetap terisi).
@@ -468,47 +700,31 @@ module.exports = function createBotsRouter(helpers) {
         tpMode,
       };
 
+      const grokAuto = await shouldAutoEnableGrokConfirm(userId);
+
       // Create if doesn't exist
       if (!bot) {
         bot = await prisma.bot.create({
-          data: { userId, symbol, capital: capital || 500, ...botData },
+          data: {
+            userId,
+            symbol,
+            capital: capital || 500,
+            ...botData,
+            grokConfirmEnabled: grokAuto,
+          },
         });
       } else {
         bot = await prisma.bot.update({
           where: { userId_symbol: { userId, symbol } },
           data: {
-            capital:   capital || bot.capital,
+            capital: capital || bot.capital,
             ...botData,
-            running:   true,
-            startedAt: new Date(),
+            ...(grokAuto && !bot.grokConfirmEnabled ? { grokConfirmEnabled: true } : {}),
           },
         });
       }
 
-      // BUG-03: Pre-flight margin budget check — reject early if live mode and
-      // available margin is clearly insufficient (avoids bot starting then hanging).
-      if (!bot.dryRun) {
-        const coordinator = getCoordinator(userId);
-        const snap = coordinator.snapshot();
-        if (snap.accountEquity > 0) {
-          const remaining = snap.budget - snap.committedMargin;
-          // Conservative estimate: assume minimum 5× leverage so margin = capital / 5.
-          // Real leverage check happens at entry time via canOpen(). This guards
-          // obvious over-allocation (e.g. $500 capital, only $5 budget left).
-          const DEFAULT_LEVERAGE = 5;
-          const estimatedMargin = bot.capital / DEFAULT_LEVERAGE;
-          if (estimatedMargin > remaining) {
-            return res.status(400).json({
-              ok: false,
-              statusCode: 400,
-              message: `Margin akun tidak cukup untuk start bot ${symbol}. Tersedia: $${remaining.toFixed(2)}, dibutuhkan: ≈$${estimatedMargin.toFixed(2)} (estimasi leverage ${DEFAULT_LEVERAGE}×). Kurangi capital, stop bot lain, atau top up balance.`,
-              available: remaining,
-              required: estimatedMargin,
-            });
-          }
-        }
-      }
-
+      // ── Resolve exchange + credentials (dibutuhkan gate margin & start) ──────
       const { getExchangeCredentials } = require("../../services/userExchange");
       const { getConnectedExchange } = require("../../services/ExchangeService");
       const connectedExchange = await getConnectedExchange(userId);
@@ -517,6 +733,7 @@ module.exports = function createBotsRouter(helpers) {
       const decryptedApiKey     = creds?.apiKey;
       const decryptedApiSecret  = creds?.apiSecret;
       const decryptedPassphrase = creds?.apiPassphrase;
+      const exchangeType = (connectedExchange || "bitget").toLowerCase();
 
       if (!decryptedApiKey || !decryptedApiSecret) {
         return res.status(400).json({
@@ -526,7 +743,6 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      const exchangeType = (connectedExchange || "bitget").toLowerCase();
       if (exchangeType === "okx" && !decryptedPassphrase) {
         return res.status(400).json({
           ok: false,
@@ -535,9 +751,90 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+
+      // Bagian kritis ini DI-SERIALISASI per user (mutex) supaya reservasi bot
+      // ke-1 sudah terlihat oleh bot ke-2 saat "Start All" (anti TOCTOU). Isinya:
+      //  (1) refresh equity dari balance (cache TTL + backoff). FAIL-CLOSED bila
+      //      tidak terbaca — JANGAN arm bot "buta" (ini akar utilisasi 536%).
+      //  (2) gate footprint MODAL PENUH (canStartBot), bukan capital/leverage yang
+      //      mengecilkan footprint 5× dan meloloskan over-allocation.
+      //  (3) reserve modal lebih awal (idempotent) agar start berikutnya melihat;
+      //      reservasi margin RIIL per posisi menggantikannya saat entry.
+      if (!bot.dryRun) {
+        const { getCachedBalance } = require("../../services/balanceCache");
+        const coordinator = getCoordinator(userId);
+        const exName = exchangeType.charAt(0).toUpperCase() + exchangeType.slice(1);
+        const unlock = await _acquireStartLock(userId);
+        try {
+          let equity = 0;
+          try {
+            const bal = await getCachedBalance(userId, exchangeType, {
+              apiKey: decryptedApiKey, apiSecret: decryptedApiSecret, apiPassphrase: decryptedPassphrase,
+            });
+            equity = (bal?.equity > 0 ? bal.equity : bal?.available) || 0;
+          } catch (e) {
+            return res.status(503).json({
+              ok: false,
+              statusCode: 503,
+              message: `Tidak bisa memulai bot ${symbol} sekarang — balance ${exName} belum terbaca (kemungkinan rate-limit exchange). Coba lagi beberapa detik lagi.`,
+            });
+          }
+          if (!(equity > 0)) {
+            return res.status(503).json({
+              ok: false,
+              statusCode: 503,
+              message: `Tidak bisa memulai bot ${symbol} — equity akun ${exName} terbaca $0. Pastikan saldo mencukupi lalu coba lagi.`,
+            });
+          }
+          coordinator.setAccountEquity(equity);
+
+          const verdict = coordinator.canStartBot({ capital: bot.capital, exceptSymbol: symbol });
+          if (!verdict.ok) {
+            return res.status(400).json({
+              ok: false,
+              statusCode: 400,
+              message: `Margin akun tidak cukup untuk start bot ${symbol}. ${verdict.reason}. ` +
+                       `Kurangi modal, stop bot lain, atau top up balance ${exName}.`,
+              available: verdict.remaining,
+              required: bot.capital,
+            });
+          }
+
+          // Reserve lebih awal — di bawah lock — agar start serentak saling lihat.
+          if (useMulti) {
+            coordinator.reserveGroup(userId, symbol, strategies, bot.capital);
+          } else {
+            coordinator.reserve(`${userId}:${symbol}`, { symbol, margin: bot.capital });
+          }
+        } finally {
+          unlock();
+        }
+      }
+
+      // ── Per-tier account open-position cap (fix meter "8/4") ─────────────────
+      // Resolusi tier user → cap JUMLAH posisi terbuka serentak lintas-akun, lalu:
+      //  (a) set di coordinator agar dilaporkan ke FE (denominator meter),
+      //  (b) teruskan ke engine config → gate BotEngine._checkAccountOpenCap aktif.
+      // Gate ini INDEPENDEN dari anggaran margin (canStartBot/reserveGroup) — tidak
+      // mengganggunya. Fail-safe: tier tak terbaca → fallback FOUNDRY(4), bukan unlimited.
+      let accountOpenCap;
+      try {
+        accountOpenCap = getMaxConcurrentPositions(await getUserTier(userId));
+      } catch (_e) {
+        accountOpenCap = getMaxConcurrentPositions(undefined); // FOUNDRY fallback
+      }
+      getCoordinator(userId).setMaxAccountOpenPositions(accountOpenCap);
+
+      // Semua validasi start lulus — baru persist running=true (hindari zombie
+      // running di DB bila API key / margin gate gagal).
+      bot = await prisma.bot.update({
+        where: { userId_symbol: { userId, symbol } },
+        data:  { running: true, startedAt: new Date() },
+      });
+
       // Create or get instance — koordinator multi-strategi ATAU engine tunggal legacy.
       const instance = useMulti
-        ? createMultiStrategyInstance(userId, symbol, {
+        ? await createMultiStrategyInstance(userId, symbol, {
             strategies,
             capital:    bot.capital,
             dryRun:     bot.dryRun,
@@ -547,6 +844,12 @@ module.exports = function createBotsRouter(helpers) {
             apiKey:     decryptedApiKey,
             apiSecret:  decryptedApiSecret,
             passphrase: decryptedPassphrase,
+            pairMetrics,
+            maxAccountOpenPositions: accountOpenCap,
+            grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+            grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+            grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+            grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
           })
         : createBotInstance(userId, symbol, {
             capital:     bot.capital,
@@ -559,6 +862,12 @@ module.exports = function createBotsRouter(helpers) {
             apiKey:      decryptedApiKey,
             apiSecret:   decryptedApiSecret,
             passphrase:  decryptedPassphrase,
+            pairMetrics,
+            maxAccountOpenPositions: accountOpenCap,
+            grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+            grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+            grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+            grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
           });
 
       const instState = instance.getState();
@@ -575,6 +884,12 @@ module.exports = function createBotsRouter(helpers) {
           message: `Bot ${symbol} starting...`,
           symbol,
           config: bot,
+          appliedTierAdjustments: {
+            pairTier:    pairClass.tier,
+            riskLevel:   pairClass.riskLevel,
+            ...tierOverrides,
+          },
+          strategyWarning,
         });
 
         startPromise
@@ -583,6 +898,15 @@ module.exports = function createBotsRouter(helpers) {
           )
           .catch(async (err) => {
             console.error(`[bot-start:${symbol}] startup gagal: ${err.message}`);
+
+            // gagal sebelum bot sempat entry → kalau tidak, anggaran "tersedot" hantu.
+            if (!bot.dryRun) {
+              try {
+                const coordinator = getCoordinator(userId);
+                if (useMulti) coordinator.releaseGroup(userId, symbol);
+                else coordinator.release(`${userId}:${symbol}`);
+              } catch { /* ignore */ }
+            }
             try {
               await prisma.bot.update({
                 where: { userId_symbol: { userId, symbol } },
@@ -600,6 +924,12 @@ module.exports = function createBotsRouter(helpers) {
         message: `Bot ${symbol} started`,
         symbol,
         config: bot,
+        appliedTierAdjustments: {
+          pairTier:    pairClass.tier,
+          riskLevel:   pairClass.riskLevel,
+          ...tierOverrides,
+        },
+        strategyWarning,
       });
     })
   );
@@ -782,13 +1112,17 @@ module.exports = function createBotsRouter(helpers) {
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
-      const { strategyKey, capital, tpMode } = req.body ?? {};
+      const { strategyKey, capital, tpMode, grokConfirmEnabled, grokConfirmTpAdjust, grokConfirmTpBandPct, grokConfirmTpRejectAction } = req.body ?? {};
 
-      if (strategyKey === undefined && capital === undefined && tpMode === undefined) {
+      if (
+        strategyKey === undefined && capital === undefined && tpMode === undefined &&
+        grokConfirmEnabled === undefined && grokConfirmTpAdjust === undefined &&
+        grokConfirmTpBandPct === undefined && grokConfirmTpRejectAction === undefined
+      ) {
         return res.status(400).json({
           ok: false,
           statusCode: 400,
-          message: "Tidak ada perubahan. Kirim strategyKey, capital, dan/atau tpMode.",
+          message: "Tidak ada perubahan. Kirim strategyKey, capital, tpMode, dan/atau grokConfirm*.",
         });
       }
 
@@ -844,6 +1178,26 @@ module.exports = function createBotsRouter(helpers) {
           return res.status(400).json({ ok: false, statusCode: 400, message: "tpMode harus 'full' atau 'partial'" });
         }
         data.tpMode = tpMode;
+      }
+
+      if (grokConfirmEnabled !== undefined) {
+        data.grokConfirmEnabled = grokConfirmEnabled === true || grokConfirmEnabled === "true";
+      }
+      if (grokConfirmTpAdjust !== undefined) {
+        data.grokConfirmTpAdjust = grokConfirmTpAdjust !== false && grokConfirmTpAdjust !== "false";
+      }
+      if (grokConfirmTpBandPct !== undefined) {
+        const band = Number(grokConfirmTpBandPct);
+        if (!Number.isFinite(band) || band < 1 || band > 50) {
+          return res.status(400).json({ ok: false, statusCode: 400, message: "grokConfirmTpBandPct harus 1–50" });
+        }
+        data.grokConfirmTpBandPct = band;
+      }
+      if (grokConfirmTpRejectAction !== undefined) {
+        if (!["skip", "use_rules_tp"].includes(grokConfirmTpRejectAction)) {
+          return res.status(400).json({ ok: false, statusCode: 400, message: "grokConfirmTpRejectAction harus 'skip' atau 'use_rules_tp'" });
+        }
+        data.grokConfirmTpRejectAction = grokConfirmTpRejectAction;
       }
 
       const updated = await prisma.bot.update({
@@ -1090,6 +1444,7 @@ module.exports = function createBotsRouter(helpers) {
     const { isStrategyLiveReady } = require("../../services/entitlement");
 
     const { tier, allowed, locked } = await getStrategyEntitlements(req.userId);
+    const { grokConfirmAvailable, grokConfirmIncluded } = await getGrokConfirmEntitlement(req.userId);
 
     // TASK 3.2: tandai status tiap strategi. Pada flow Multi-Strategy per Coin,
     // SEMUA strategi tier berjalan otomatis — ini hanya untuk display (bukan pilihan).
@@ -1111,6 +1466,8 @@ module.exports = function createBotsRouter(helpers) {
     res.json({
       ok: true,
       tier,
+      grokConfirmAvailable,
+      grokConfirmIncluded,
       // Multi-Strategy per Coin: strategi yang akan jalan OTOMATIS (display-only).
       autoRun: true,
       capitalAllocation: equalWeight ? `${(100 / count).toFixed(0)}% each` : "custom",

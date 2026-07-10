@@ -41,6 +41,19 @@ function filterStrategiesByMode(strategies, mode) {
  * @returns {Promise<string>} tier key e.g. "FOUNDRY"
  */
 async function getUserTier(userId) {
+  // Sprint 5 (PAY-07): an active, non-expired Subscription is the authoritative
+  // tier. The legacy UserStrategy.tier is kept in sync by PaymentService on
+  // grant, but the Subscription is the source of truth (and carries expiry).
+  const activeSub = await getActiveSubscription(userId);
+  if (activeSub) return activeSub.tier;
+
+  // Once a user has entered the paid system (any Subscription row), it is
+  // authoritative: no active sub → they drop to the free base tier. This makes
+  // expiry/cancellation actually revoke access (PAY-07) instead of leaving the
+  // synced legacy UserStrategy.tier granting the old paid tier forever.
+  const hadSub = await prisma.subscription.count({ where: { userId } });
+  if (hadSub > 0) return "FOUNDRY";
+
   const record = await prisma.userStrategy.findUnique({
     where:  { userId },
     select: { tier: true, balanceTier: true },
@@ -73,6 +86,24 @@ async function getUserTier(userId) {
  * @throws {{ status: number, body: object }}
  */
 async function assertStrategyAllowed(userId, strategyKey) {
+  if (strategyKey === "GROK_AI_TRADING") {
+    const GrokTradingService = require("../server/services/GrokTradingService");
+    const access = await GrokTradingService.canUseGrokTrading(userId);
+    if (!access.allowed) {
+      throw {
+        status: 403,
+        body: {
+          ok: false,
+          statusCode: 403,
+          message: access.reason || "Grok Live Trading tidak tersedia untuk tier kamu.",
+          tier: access.tier ?? null,
+          requiredTier: "VAULT",
+        },
+      };
+    }
+    return getUserTier(userId);
+  }
+
   const tier = await getUserTier(userId);
   const result = canUseStrategy(tier, strategyKey);
 
@@ -119,7 +150,51 @@ async function getStrategyEntitlements(userId) {
     }
   }
 
-  return { tier, allowed, locked };
+  // Grok AI Trading — tier gate terpisah (VAULT / open mode)
+  const grokExtras = [];
+  try {
+    const GrokTradingService = require("../server/services/GrokTradingService");
+    const access = await GrokTradingService.canUseGrokTrading(userId);
+    if (access.allowed) grokExtras.push("GROK_AI_TRADING");
+    else if (!locked.find(l => l.key === "GROK_AI_TRADING")) {
+      locked.push({ key: "GROK_AI_TRADING", requiredTier: "VAULT" });
+    }
+  } catch { /* ignore */ }
+
+  const allowedWithGrok = [...allowed, ...grokExtras.filter(k => !allowed.includes(k))];
+
+  return { tier, allowed: allowedWithGrok, locked };
+}
+
+/**
+ * Grok Confirm Gate otomatis untuk live bot bila server siap + user berhak (Vault / open mode).
+ * @param {string} userId
+ * @returns {Promise<boolean>}
+ */
+async function shouldAutoEnableGrokConfirm(userId) {
+  try {
+    const GrokConfirmService = require("../server/services/GrokConfirmService");
+    if (!GrokConfirmService.isEnabled()) return false;
+    const access = await GrokConfirmService.canUseGrokConfirm(userId, { backtest: false });
+    return access.allowed === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Status Grok Confirm untuk UI bot (auto-include Vault, ketersediaan server).
+ * @param {string} userId
+ */
+async function getGrokConfirmEntitlement(userId) {
+  try {
+    const GrokConfirmService = require("../server/services/GrokConfirmService");
+    const available = GrokConfirmService.isEnabled();
+    const included = available ? await shouldAutoEnableGrokConfirm(userId) : false;
+    return { grokConfirmAvailable: available, grokConfirmIncluded: included };
+  } catch {
+    return { grokConfirmAvailable: false, grokConfirmIncluded: false };
+  }
 }
 
 /**
@@ -138,11 +213,39 @@ async function getTierStrategies(userId, mode = "dry") {
   return filterStrategiesByMode(config?.strategies ?? [], mode);
 }
 
+/**
+ * Return the user's currently-active subscription, or null. "Active" =
+ * status ACTIVE && endDate in the future. Lazily expires a stale ACTIVE row it
+ * encounters (defensive — a cron could also do this) so entitlement never
+ * over-grants past endDate.
+ *
+ * @param {string} userId
+ * @returns {Promise<{ id, tier, status, billingCycle, startDate, endDate }|null>}
+ */
+async function getActiveSubscription(userId) {
+  const sub = await prisma.subscription.findFirst({
+    where:   { userId, status: "ACTIVE" },
+    orderBy: { endDate: "desc" },
+    select:  { id: true, tier: true, status: true, billingCycle: true, startDate: true, endDate: true },
+  });
+  if (!sub) return null;
+
+  if (sub.endDate && new Date(sub.endDate).getTime() <= Date.now()) {
+    // Expired but not yet swept — flip it and treat as no active sub.
+    await prisma.subscription.update({ where: { id: sub.id }, data: { status: "EXPIRED" } }).catch(() => {});
+    return null;
+  }
+  return sub;
+}
+
 module.exports = {
   getUserTier,
+  getActiveSubscription,
   assertStrategyAllowed,
   getStrategyEntitlements,
   getTierStrategies,
   isStrategyLiveReady,
   filterStrategiesByMode,
+  shouldAutoEnableGrokConfirm,
+  getGrokConfirmEntitlement,
 };

@@ -32,6 +32,13 @@ class AccountCoordinator {
     this.userId = userId;
     this.maxAccountUtilization = maxAccountUtilization;
     this.maxConcurrentPositions = maxConcurrentPositions;
+    // Cap JUMLAH posisi terbuka serentak LINTAS-AKUN per-tier (fix meter "8/4").
+    // SENGAJA dipisah dari maxConcurrentPositions: gate itu menghitung
+    // reservations.size (= slot strategi ter-arm, bisa ~100) sehingga TIDAK boleh
+    // dipakai sbg cap posisi terbuka. Field ini HANYA untuk dilaporkan ke FE
+    // (snapshot/margin-budget); penegakan riil ada di BotEngine yang menghitung
+    // posisi terbuka NYATA dari DB. 0 = belum di-set (FE fallback ke default tier).
+    this.maxAccountOpenPositions = 0;
     // Batas kerugian harian AGREGAT lintas-bot (#5 residual). 0 = nonaktif.
     // Mencegah skenario tiap bot menembus 4%-nya sendiri → akun rugi 3×4%=12%.
     this.maxAccountDailyLossPct = maxAccountDailyLossPct;
@@ -47,6 +54,18 @@ class AccountCoordinator {
   /** Update snapshot equity akun (semua bot user ini berbagi akun yang sama). */
   setAccountEquity(equity) {
     if (Number.isFinite(equity) && equity > 0) this.accountEquity = equity;
+  }
+
+  /**
+   * Set cap account-wide posisi terbuka serentak per-tier (per-tier account
+   * open-position cap). Dipanggil saat bot START / resume setelah tier diketahui.
+   * Hanya dipakai untuk pelaporan ke FE — penegakan riil di BotEngine via DB.
+   * @param {number} n
+   */
+  setMaxAccountOpenPositions(n) {
+    const v = Number(n);
+    if (Number.isFinite(v) && v > 0) this.maxAccountOpenPositions = v;
+    return this;
   }
 
   /**
@@ -201,6 +220,49 @@ class AccountCoordinator {
   }
 
   /**
+   *
+   * Berbeda dari canOpen() yang menilai margin entry RIIL (notional/leverage),
+   * gate START ini menilai FOOTPRINT MODAL PENUH karena reserveGroup() me-reserve
+   * `totalCapital` penuh sebagai margin grup saat bot start. Gate lama memakai
+   * `capital/leverage` (mis. /5) sehingga MENGECILKAN footprint 5× → user bisa
+   * meng-arm 9 bot @ $50 di akun $105 (utilisasi 536%). Invarian yang dijaga:
+   *   Σ(modal semua bot ter-arm) ≤ equity × maxAccountUtilization
+   *
+   * @param {Object} p
+   * @param {number} p.capital            — modal bot yang akan di-start (USDT)
+   * @param {string} [p.exceptSymbol]     — abaikan reservasi simbol ini (restart bot
+   *                                         yang sama → jangan dihitung dobel)
+   * @returns {{ ok, reason?, budget, committed, remaining }}
+   */
+  canStartBot({ capital, exceptSymbol = null }) {
+    // Equity belum diketahui → caller WAJIB fail-closed (jangan arm "buta").
+    if (!(this.accountEquity > 0)) {
+      return { ok: false, reason: "EQUITY_UNKNOWN", budget: 0, committed: 0, remaining: 0 };
+    }
+    const budget = this.accountEquity * this.maxAccountUtilization;
+    let committed = 0;
+    for (const r of this.reservations.values()) {
+      if (exceptSymbol && r.symbol === exceptSymbol) continue;
+      committed += r.margin || 0;
+    }
+    const remaining = budget - committed;
+    if (!Number.isFinite(capital) || capital <= 0) {
+      return { ok: false, reason: "INVALID_CAPITAL", budget, committed, remaining };
+    }
+    if (committed + capital > budget + 1e-9) {
+      return {
+        ok: false,
+        reason: `Modal $${capital.toFixed(2)} melebihi sisa anggaran: ` +
+                `terpakai $${committed.toFixed(2)} / anggaran $${budget.toFixed(2)} ` +
+                `(${(this.maxAccountUtilization * 100).toFixed(0)}% dari equity $${this.accountEquity.toFixed(2)}), ` +
+                `sisa $${remaining.toFixed(2)}`,
+        budget, committed, remaining,
+      };
+    }
+    return { ok: true, budget, committed, remaining };
+  }
+
+  /**
    * Apakah grup ini sudah memegang posisi dengan arah tertentu pada simbol tsb?
    * Dipakai untuk direction lock (AC-05).
    */
@@ -327,6 +389,8 @@ class AccountCoordinator {
       committedMargin: this.committedMargin(),
       openCount: this.openCount(),
       maxConcurrentPositions: this.maxConcurrentPositions,
+      // Cap account-wide posisi terbuka per-tier (untuk denominator meter FE).
+      maxAccountOpenPositions: this.maxAccountOpenPositions,
       reservations: Array.from(this.reservations.entries()).map(([botKey, r]) => ({
         botKey, symbol: r.symbol, margin: r.margin,
       })),

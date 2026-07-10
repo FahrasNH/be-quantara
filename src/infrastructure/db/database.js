@@ -180,8 +180,40 @@ const SCHEMA_SQL = `
  * Buat tabel + index, lalu jalankan startup repair untuk sinkronkan stats sesi
  * dengan trade records aktual. Harus dipanggil & di-await sebelum server.listen.
  */
+const BACKTEST_MIGRATION_SQL = `
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS user_id TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS strategy_key TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS timeframe TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS period_label TEXT;
+
+  CREATE TABLE IF NOT EXISTS strategy_presets (
+    id            SERIAL PRIMARY KEY,
+    user_id       TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    strategy_key  TEXT NOT NULL,
+    parameters    TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_backtest_user     ON backtest_history(user_id, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_history(strategy_key, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_preset_user       ON strategy_presets(user_id, created_at DESC);
+
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS canonical_key TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS data_start TIMESTAMPTZ;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS data_end TIMESTAMPTZ;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS hit_count INT DEFAULT 1;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS engine_version TEXT;
+  ALTER TABLE backtest_history ADD COLUMN IF NOT EXISTS created_by_user_id TEXT;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_backtest_canonical
+    ON backtest_history(canonical_key) WHERE canonical_key IS NOT NULL;
+`;
+
 async function init() {
   await pool.query(SCHEMA_SQL);
+  await pool.query(BACKTEST_MIGRATION_SQL);
 
   // Startup repair: perbaiki bug cross-session (trade buka di sesi A, tutup di B)
   try {
@@ -560,6 +592,124 @@ async function getTrades({ sessionId = null, symbol = null, limit = 100, userId 
   return rows;
 }
 
+// ── Admin: platform-wide trades (across ALL users) ───────────────────────────
+// The admin dashboard previously queried the unused Prisma `Trade` table, which
+// is never written to — real trades live in this `trades` table (written by the
+// engine via insertTrade). These helpers read the real store, joined to
+// bot_sessions → "User" so each row carries the owner's username.
+async function getAdminTrades({ limit = 5000 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT t.id, t.symbol, t.side, t.entry_price, t.exit_price, t.pnl,
+            COALESCE(t.fee, 0) AS fee, COALESCE(t.funding, 0) AS funding,
+            t.sl, t.size, t.reason, t.is_partial,
+            t.status, t.open_time, t.close_time, t.strategy_name, t.dry_run,
+            u.username AS username
+       FROM trades t
+       LEFT JOIN bot_sessions s ON s.id = t.session_id
+       LEFT JOIN "User" u       ON u.id = s.user_id
+      ORDER BY t.open_time DESC
+      LIMIT $1`,
+    [Math.min(limit, 5000)]
+  );
+  return rows;
+}
+
+// Admin CSV export: ALL users' trades with the SAME rich fields as the
+// user-facing insight export (mapExportRow), plus the owner's username. Reads
+// the real `trades` store (the Prisma Trade table is unused/empty).
+async function getAdminTradesExport({ limit = 5000 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT t.*, s.mode, s.exchange AS session_exchange, u.username AS username
+       FROM trades t
+       LEFT JOIN bot_sessions s ON s.id = t.session_id
+       LEFT JOIN "User" u       ON u.id = s.user_id
+      ORDER BY t.open_time DESC
+      LIMIT $1`,
+    [Math.min(limit, 5000)]
+  );
+  return rows.map(r => ({ ...mapExportRow(r), user: r.username || "" }));
+}
+
+// Admin: aggregate performance per strategy across ALL users (ADMIN-BE-08 /
+// strategy-stats). Reads the REAL trades store. `sinceDays` optionally limits
+// to the trailing window (null = all time). Untracked trades (no strategy_name)
+// are grouped under "Untracked" so the totals always reconcile.
+async function getAdminStrategyStats({ sinceDays = null } = {}) {
+  const params = [];
+  let timeFilter = "";
+  if (sinceDays && Number.isFinite(sinceDays)) {
+    params.push(sinceDays);
+    timeFilter = `WHERE t.open_time >= now() - ($${params.length} || ' days')::interval`;
+  }
+  const { rows } = await pool.query(
+    `SELECT COALESCE(t.strategy_name, 'Untracked')                                                        AS strategy,
+            COUNT(*)::int                                                                                  AS total,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL)::int                                          AS closed,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                            AS wins,
+            COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL), 0)::float                                            AS net_pnl,
+            COALESCE(AVG((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL), 0)::float                                            AS avg_pnl
+       FROM trades t
+       ${timeFilter}
+      GROUP BY COALESCE(t.strategy_name, 'Untracked')
+      ORDER BY total DESC`,
+    params
+  );
+  return rows;
+}
+
+// Daily PnL per strategy for time-series line chart (Admin strategy-pnl-history endpoint).
+// Returns rows [{day: "2026-06-10", strategy: "ADAPTIVE_FUSION", daily_pnl: 5.5}, ...]
+// covering the trailing `days` window (default 30). Only closed trades are counted.
+async function getAdminStrategyPnlHistory({ days = 30 } = {}) {
+  const d = Math.min(Math.max(parseInt(days, 10) || 30, 1), 365);
+  const { rows } = await pool.query(
+    `SELECT date_trunc('day', close_time)::date::text AS day,
+            COALESCE(strategy_name, 'Untracked')       AS strategy,
+            SUM(pnl)::float                             AS daily_pnl
+       FROM trades
+      WHERE close_time IS NOT NULL
+        AND pnl IS NOT NULL
+        AND close_time >= now() - ($1 || ' days')::interval
+      GROUP BY day, strategy
+      ORDER BY day ASC`,
+    [d]
+  );
+  return rows;
+}
+
+// Platform-wide trade KPIs for the admin dashboard + stat cards.
+async function getAdminTradeStats() {
+  // SEMUA metrik trading (win/loss, profit factor, expectancy, gross pnl)
+  // dihitung pada pnl GROSS (sebelum biaya) agar internally consistent — Profit
+  // Factor, Expectancy, dan Gross PnL memakai basis yang sama. Biaya exchange
+  // (fee + funding) TIDAK dibakar diam-diam ke dalam "net pnl"; ia dikeluarkan
+  // sebagai `total_fee` dan ditampilkan sebagai KPI terpisah "Fee Exchange",
+  // sehingga admin melihat dua komponen jelas: hasil trading kotor vs biaya.
+  // (Sebelumnya net_pnl = pnl-fee-funding sementara metrik lain gross → panel
+  // menampilkan PF/Expectancy POSITIF tapi Net PnL NEGATIF. Lihat memory
+  // gross-vs-net fee fix.)
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*)::int                                                                        AS total,
+       COUNT(*) FILTER (WHERE t.open_time >= date_trunc('day', now()))::int                 AS today,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl IS NOT NULL)::int           AS closed,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0)::int                   AS wins,
+       COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0)::int                  AS losses,
+       -- Gross trading PnL (fee & funding DIKECUALIKAN) — konsisten dgn PF & expectancy
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL), 0)::float                AS net_pnl,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float  AS gross_pnl,
+       COALESCE(SUM(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float AS gross_loss,
+       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl > 0), 0)::float  AS avg_win,
+       COALESCE(AVG(t.pnl) FILTER (WHERE t.close_time IS NOT NULL AND t.pnl <= 0), 0)::float AS avg_loss,
+       -- Biaya exchange (fee + funding) — ditampilkan TERPISAH sebagai "Fee Exchange"
+       COALESCE(SUM(COALESCE(t.fee,0) + COALESCE(t.funding,0)) FILTER (WHERE t.close_time IS NOT NULL), 0)::float AS total_fee
+     FROM trades t`
+  );
+  return rows[0] || { total: 0, today: 0, closed: 0, wins: 0, losses: 0, net_pnl: 0, gross_pnl: 0, gross_loss: 0, avg_win: 0, avg_loss: 0, total_fee: 0 };
+}
+
 async function getTradeStats(sessionId, userId = null) {
   // FIX IDOR: stats hanya untuk sesi milik userId (strict).
   const params = [sessionId];
@@ -872,6 +1022,88 @@ async function getOpenTradesByUser(userId) {
 }
 
 /**
+ * Hitung JUMLAH posisi TERBUKA (close_time IS NULL) milik satu user LINTAS SEMUA
+ * simbol/strategi. Sumber kebenaran tunggal untuk gate "per-tier account
+ * open-position cap" (fix meter Account Risk "8 / 4"): cap menghitung posisi
+ * terbuka NYATA dari tabel trades, BUKAN AccountCoordinator.reservations.size
+ * (yang = jumlah slot strategi ter-arm saat bot START, bisa ~100 utk 27 bot →
+ * akan memblokir semua entry). Mode dry-run & live tersimpan di kolom yang sama;
+ * `dryRun` opsional memfilter t.dry_run agar konsisten dengan MultiStrategy
+ * Coordinator.canEnter (yang juga memfilter per-mode).
+ * @param {string} userId
+ * @param {boolean|null} [dryRun=null]  null = semua mode, true/false = filter mode
+ * @returns {Promise<number>} jumlah posisi terbuka
+ */
+async function countOpenTradesByUser(userId, dryRun = null) {
+  if (userId == null) return 0;
+  const params = [userId];
+  let where = `t.close_time IS NULL AND s.user_id = $1`;
+  if (dryRun != null) { params.push(dryRun ? 1 : 0); where += ` AND t.dry_run = $${params.length}`; }
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS open_count
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE ${where}`,
+    params
+  );
+  return rows[0]?.open_count || 0;
+}
+
+/**
+ * Batch-fetch open position count + realised net PnL per (userId, symbol)
+ * for the admin bots table. Returns real data from the pg trade store, not
+ * the unused Prisma Trade model. One query over all provided userIds.
+ * @param {string[]} userIds
+ * @returns {Promise<Map<string, {openCount:number, openSide:string|null, netPnl:number}>>}
+ *   key = "userId:symbol"
+ */
+async function getBotsStats(userIds) {
+  if (!userIds || userIds.length === 0) return new Map();
+  const { rows } = await pool.query(
+    `SELECT s.user_id, s.symbol,
+     COUNT(*) FILTER (WHERE t.close_time IS NULL)::int                      AS open_count,
+     MAX(t.side) FILTER (WHERE t.close_time IS NULL)                        AS open_side,
+     COALESCE(SUM((COALESCE(t.pnl,0) - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL), 0)                   AS net_pnl
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE s.user_id = ANY($1)
+     GROUP BY s.user_id, s.symbol`,
+    [userIds]
+  );
+  const map = new Map();
+  for (const r of rows) {
+    map.set(`${r.user_id}:${r.symbol}`, {
+      openCount: r.open_count  || 0,
+      openSide:  r.open_side   || null,
+      netPnl:    parseFloat(r.net_pnl) || 0,
+    });
+  }
+  return map;
+}
+
+/**
+ * Batch-fetch net PnL per symbol for all closed trades of a user.
+ * Used by GET /bots to show accurate ROI on stopped bots without N queries.
+ * @returns {Promise<Map<string, number>>} symbol → net PnL (pnl - fee - funding)
+ */
+async function getClosedPnlByUser(userId) {
+  if (userId == null) return new Map();
+  const { rows } = await pool.query(
+    `SELECT s.symbol,
+     SUM(COALESCE(t.pnl,0) - COALESCE(t.fee,0) - COALESCE(t.funding,0)) AS net_pnl
+     FROM trades t
+     JOIN bot_sessions s ON s.id = t.session_id
+     WHERE s.user_id = $1 AND t.close_time IS NOT NULL
+     GROUP BY s.symbol`,
+    [userId]
+  );
+  const map = new Map();
+  for (const r of rows) map.set(r.symbol, parseFloat(r.net_pnl) || 0);
+  return map;
+}
+
+/**
  * Hitung posisi TERBUKA (close_time IS NULL) untuk satu user+symbol+mode.
  * Sumber kebenaran tunggal untuk gate cap-per-koin (canEnter) — agar cap
  * menghormati SEMUA posisi terbuka di DB, bukan hanya yang ada di memori engine
@@ -952,25 +1184,31 @@ async function getAllEquity(mode = "live", userId = null) {
 
 // ── Candle cache ──────────────────────────────
 
-/** Fire-and-forget best-effort — upsert dalam transaksi. */
+const DB_BACKTEST_KLINES_TTL = Number(process.env.BACKTEST_KLINES_DB_TTL_SEC) || 86_400;
+
+/** Fire-and-forget best-effort — upsert dalam transaksi (batch untuk dataset besar). */
 async function cacheCandles(exchange, symbol, interval, candles) {
   if (!candles || candles.length === 0) return;
+  const BATCH = 200;
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    for (const c of candles) {
-      await client.query(
-        `INSERT INTO candle_cache
-           (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
-         ON CONFLICT (exchange, symbol, "interval", timestamp)
-         DO UPDATE SET
-           open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
-           close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
-        [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
-      );
+    for (let i = 0; i < candles.length; i += BATCH) {
+      const slice = candles.slice(i, i + BATCH);
+      await client.query("BEGIN");
+      for (const c of slice) {
+        await client.query(
+          `INSERT INTO candle_cache
+             (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
+           ON CONFLICT (exchange, symbol, "interval", timestamp)
+           DO UPDATE SET
+             open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+             close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
+          [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
+        );
+      }
+      await client.query("COMMIT");
     }
-    await client.query("COMMIT");
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch { /* noop */ }
     console.warn(`[DB] cacheCandles gagal: ${e.message}`);
@@ -986,6 +1224,29 @@ async function getCachedCandles(exchange, symbol, interval, maxAgeSeconds = 900)
        AND cached_at > extract(epoch from now())::bigint - $4
      ORDER BY timestamp ASC`,
     [exchange, symbol, interval, maxAgeSeconds]
+  );
+  if (rows.length === 0) return null;
+  return rows.map((r) => ({
+    timestamp: r.timestamp,
+    date:      new Date(r.timestamp).toISOString(),
+    open:      r.open,
+    high:      r.high,
+    low:       r.low,
+    close:     r.close,
+    volume:    r.volume,
+  }));
+}
+
+/** Candle historis dalam rentang timestamp (Phase 2 backtest). */
+async function getCachedCandlesInRange(exchange, symbol, interval, startTs, endTs, maxAgeSeconds = DB_BACKTEST_KLINES_TTL) {
+  const ttl = maxAgeSeconds ?? 86_400;
+  const { rows } = await pool.query(
+    `SELECT * FROM candle_cache
+     WHERE exchange = $1 AND symbol = $2 AND "interval" = $3
+       AND timestamp >= $4 AND timestamp <= $5
+       AND cached_at > extract(epoch from now())::bigint - $6
+     ORDER BY timestamp ASC`,
+    [exchange, symbol, interval, startTs, endTs, ttl]
   );
   if (rows.length === 0) return null;
   return rows.map((r) => ({
@@ -1057,10 +1318,17 @@ async function setSetting(key, value) {
 
 // ── Backtest History ──────────────────────────
 
-async function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData, config, notes }) {
+async function insertBacktestHistory({
+  symbol, metrics, equityCurve, tradesData, config, notes,
+  userId = null, strategyKey = null, timeframe = null, periodLabel = null,
+  canonicalKey = null, dataStart = null, dataEnd = null, engineVersion = null,
+  createdByUserId = null,
+}) {
   const { rows } = await pool.query(
-    `INSERT INTO backtest_history (symbol, metrics, equity_curve, trades_data, config, notes)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    `INSERT INTO backtest_history
+       (symbol, metrics, equity_curve, trades_data, config, notes, user_id, strategy_key, timeframe, period_label,
+        canonical_key, data_start, data_end, engine_version, created_by_user_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now()) RETURNING id`,
     [
       symbol.toUpperCase(),
       JSON.stringify(metrics),
@@ -1068,6 +1336,106 @@ async function insertBacktestHistory({ symbol, metrics, equityCurve, tradesData,
       tradesData ? JSON.stringify(tradesData) : null,
       config ? JSON.stringify(config) : null,
       notes ?? null,
+      createdByUserId ?? userId,
+      strategyKey,
+      timeframe,
+      periodLabel,
+      canonicalKey,
+      dataStart ? new Date(dataStart) : null,
+      dataEnd ? new Date(dataEnd) : null,
+      engineVersion,
+      createdByUserId ?? userId,
+    ]
+  );
+  return rows[0].id;
+}
+
+async function updateBacktestHistory(id, {
+  metrics, equityCurve, tradesData, config, dataStart, dataEnd, engineVersion,
+}) {
+  const { rows } = await pool.query(
+    `UPDATE backtest_history SET
+       metrics = COALESCE($2, metrics),
+       equity_curve = COALESCE($3, equity_curve),
+       trades_data = COALESCE($4, trades_data),
+       config = COALESCE($5, config),
+       data_start = COALESCE($6, data_start),
+       data_end = COALESCE($7, data_end),
+       engine_version = COALESCE($8, engine_version),
+       updated_at = now(),
+       hit_count = COALESCE(hit_count, 0) + 1
+     WHERE id = $1 RETURNING id`,
+    [
+      id,
+      metrics ? JSON.stringify(metrics) : null,
+      equityCurve ? JSON.stringify(equityCurve) : null,
+      tradesData ? JSON.stringify(tradesData) : null,
+      config ? JSON.stringify(config) : null,
+      dataStart ? new Date(dataStart) : null,
+      dataEnd ? new Date(dataEnd) : null,
+      engineVersion ?? null,
+    ]
+  );
+  return rows[0]?.id ?? null;
+}
+
+async function incrementBacktestHitCount(id) {
+  await pool.query(
+    `UPDATE backtest_history SET hit_count = COALESCE(hit_count, 0) + 1, updated_at = now() WHERE id = $1`,
+    [id]
+  );
+}
+
+async function findBacktestByCanonicalKey(canonicalKey) {
+  if (!canonicalKey) return null;
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history WHERE canonical_key = $1 LIMIT 1`,
+    [canonicalKey]
+  );
+  return rows[0] ? mapBacktestRow(rows[0]) : null;
+}
+
+/** @deprecated alias — use findBacktestByCanonicalKey */
+const getBacktestByCanonicalKey = findBacktestByCanonicalKey;
+
+async function upsertBacktestHistory({
+  symbol, metrics, equityCurve, tradesData, config, notes,
+  userId = null, strategyKey = null, timeframe = null, periodLabel = null,
+  canonicalKey = null, dataStart = null, dataEnd = null, engineVersion = null,
+  createdByUserId = null,
+}) {
+  const { rows } = await pool.query(
+    `INSERT INTO backtest_history
+       (symbol, metrics, equity_curve, trades_data, config, notes, user_id, strategy_key, timeframe, period_label,
+        canonical_key, data_start, data_end, engine_version, created_by_user_id, updated_at, hit_count)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), 1)
+     ON CONFLICT (canonical_key) WHERE canonical_key IS NOT NULL DO UPDATE SET
+       metrics = EXCLUDED.metrics,
+       equity_curve = EXCLUDED.equity_curve,
+       trades_data = EXCLUDED.trades_data,
+       config = EXCLUDED.config,
+       notes = COALESCE(EXCLUDED.notes, backtest_history.notes),
+       data_start = EXCLUDED.data_start,
+       data_end = EXCLUDED.data_end,
+       engine_version = EXCLUDED.engine_version,
+       updated_at = now()
+     RETURNING id`,
+    [
+      symbol.toUpperCase(),
+      JSON.stringify(metrics),
+      equityCurve ? JSON.stringify(equityCurve) : null,
+      tradesData ? JSON.stringify(tradesData) : null,
+      config ? JSON.stringify(config) : null,
+      notes ?? null,
+      createdByUserId ?? userId,
+      strategyKey,
+      timeframe,
+      periodLabel,
+      canonicalKey,
+      dataStart ? new Date(dataStart) : null,
+      dataEnd ? new Date(dataEnd) : null,
+      engineVersion,
+      createdByUserId ?? userId,
     ]
   );
   return rows[0].id;
@@ -1089,9 +1457,103 @@ async function getAllBacktestHistory(limit = 50) {
   return rows.map(mapBacktestRow);
 }
 
-async function getBacktestHistoryById(id) {
-  const { rows } = await pool.query(`SELECT * FROM backtest_history WHERE id = $1`, [id]);
+async function getBacktestHistoryById(id, userId = null) {
+  const params = [id];
+  let sql = `SELECT * FROM backtest_history WHERE id = $1`;
+  if (userId) {
+    sql += ` AND (user_id = $2 OR user_id IS NULL)`;
+    params.push(userId);
+  }
+  const { rows } = await pool.query(sql, params);
   return rows[0] ? mapBacktestRow(rows[0]) : null;
+}
+
+async function getBacktestArchive({ strategy, pair, limit = 50, offset = 0 } = {}) {
+  const params = [];
+  const clauses = [];
+  if (strategy) {
+    params.push(strategy.toUpperCase());
+    clauses.push(`strategy_key = $${params.length}`);
+  }
+  if (pair) {
+    params.push(pair.toUpperCase());
+    clauses.push(`symbol = $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  params.push(Math.min(parseInt(limit, 10) || 50, 100));
+  params.push(parseInt(offset, 10) || 0);
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history ${where}
+     ORDER BY timestamp DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  return rows.map(mapBacktestRow);
+}
+
+async function getBacktestHistoryByIds(ids) {
+  if (!ids?.length) return [];
+  const { rows } = await pool.query(
+    `SELECT * FROM backtest_history WHERE id = ANY($1::int[]) ORDER BY timestamp DESC`,
+    [ids]
+  );
+  return rows.map(mapBacktestRow);
+}
+
+async function deleteBacktestHistoryById(id) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM backtest_history WHERE id = $1`,
+    [id]
+  );
+  return rowCount > 0;
+}
+
+async function deleteBacktestHistoryByIds(ids) {
+  if (!ids?.length) return 0;
+  const { rowCount } = await pool.query(
+    `DELETE FROM backtest_history WHERE id = ANY($1::int[])`,
+    [ids]
+  );
+  return rowCount;
+}
+
+async function insertStrategyPreset({ userId, name, strategyKey, parameters }) {
+  const { rows } = await pool.query(
+    `INSERT INTO strategy_presets (user_id, name, strategy_key, parameters)
+     VALUES ($1, $2, $3, $4) RETURNING id, name, strategy_key, parameters, created_at`,
+    [userId, name, strategyKey.toUpperCase(), JSON.stringify(parameters)]
+  );
+  const row = rows[0];
+  return {
+    id: row.id,
+    name: row.name,
+    strategyKey: row.strategy_key,
+    parameters: safeParseJSON(row.parameters),
+    createdAt: row.created_at,
+  };
+}
+
+async function getStrategyPresets(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, name, strategy_key, parameters, created_at
+     FROM strategy_presets WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId]
+  );
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    strategyKey: r.strategy_key,
+    parameters: safeParseJSON(r.parameters),
+    createdAt: r.created_at,
+  }));
+}
+
+async function deleteStrategyPreset({ userId, presetId }) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM strategy_presets WHERE id = $1 AND user_id = $2`,
+    [presetId, userId]
+  );
+  return rowCount > 0;
 }
 
 function mapBacktestRow(row) {
@@ -1101,6 +1563,85 @@ function mapBacktestRow(row) {
     equity_curve: safeParseJSON(row.equity_curve),
     trades_data:  safeParseJSON(row.trades_data),
     config:       safeParseJSON(row.config),
+    data_start:   row.data_start ?? null,
+    data_end:     row.data_end ?? null,
+    hit_count:    row.hit_count ?? 1,
+    canonical_key: row.canonical_key ?? null,
+    engine_version: row.engine_version ?? null,
+    created_by_user_id: row.created_by_user_id ?? null,
+    dataStart: row.data_start ?? null,
+    dataEnd: row.data_end ?? null,
+    hitCount: row.hit_count ?? 1,
+    canonicalKey: row.canonical_key ?? null,
+    engineVersion: row.engine_version ?? null,
+    createdByUserId: row.created_by_user_id ?? null,
+  };
+}
+
+// Aggregate trade stats across ALL users for the Admin Users list.
+// Returns Map<userId, { trades, netPnl, wins }> from the real trades store.
+async function getAllUsersTradeStats() {
+  const { rows } = await pool.query(
+    `SELECT s.user_id                                                                            AS user_id,
+            COUNT(*) FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed')::int      AS trades,
+            COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+              FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float         AS net_pnl,
+            COALESCE(SUM(COALESCE(t.fee,0) + COALESCE(t.funding,0))
+              FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float         AS total_fee,
+            COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL AND t.status = 'closed')::int AS wins
+       FROM bot_sessions s
+       LEFT JOIN trades t ON t.session_id = s.id
+      WHERE s.user_id IS NOT NULL
+      GROUP BY s.user_id`
+  );
+  return new Map(rows.map(r => [r.user_id, {
+    trades: r.trades || 0,
+    netPnl: Number((r.net_pnl || 0).toFixed(2)),
+    totalFee: Number((r.total_fee || 0).toFixed(2)),
+    wins:   r.wins || 0,
+  }]));
+}
+
+// Per-user trade stats for Admin User Detail page.
+// Reads from the REAL trades store (raw SQL) joined via bot_sessions.
+// Returns { trades, netPnl, wins, winRate, openPositions, botStats[] }
+async function getUserTradeStats(userId) {
+  if (!userId) return { trades: 0, netPnl: 0, wins: 0, winRate: 0, openPositions: 0, botStats: [] };
+  const [kpiRes, botRes] = await Promise.all([
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE t.status != 'cancelled')::int                                     AS trades,
+         COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+           FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float              AS net_pnl,
+         COUNT(*) FILTER (WHERE t.pnl > 0 AND t.close_time IS NOT NULL)::int                       AS wins,
+         COUNT(*) FILTER (WHERE t.close_time IS NULL AND t.status = 'open')::int                   AS open_positions
+       FROM trades t
+       JOIN bot_sessions s ON t.session_id = s.id
+       WHERE s.user_id = $1`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT s.symbol,
+              COUNT(*) FILTER (WHERE t.status != 'cancelled')::int AS total_trades,
+              COALESCE(SUM((t.pnl - COALESCE(t.fee,0) - COALESCE(t.funding,0)))
+                FILTER (WHERE t.close_time IS NOT NULL AND t.status = 'closed'), 0)::float AS net_pnl
+         FROM bot_sessions s
+         LEFT JOIN trades t ON t.session_id = s.id
+        WHERE s.user_id = $1
+        GROUP BY s.symbol`,
+      [userId]
+    ),
+  ]);
+  const k = kpiRes.rows[0] || {};
+  const trades = k.trades || 0;
+  const wins = k.wins || 0;
+  return {
+    trades,
+    netPnl:        Number((k.net_pnl || 0).toFixed(2)),
+    wins,
+    winRate:       trades > 0 ? Number(((wins / trades) * 100).toFixed(1)) : 0,
+    openPositions: k.open_positions || 0,
+    botStats:      botRes.rows || [],
   };
 }
 
@@ -1133,10 +1674,20 @@ module.exports = {
   closeTrade,
   getTrades,
   getTradeStats,
+  getAdminTrades,
+  getAdminTradeStats,
+  getAdminStrategyStats,
+  getAdminStrategyPnlHistory,
+  getAdminTradesExport,
+  getAllUsersTradeStats,
+  getUserTradeStats,
   getTodayRiskStats,
   getOpenTrades,
   getOpenTradesBySymbol,
   getOpenTradesByUser,
+  countOpenTradesByUser,
+  getBotsStats,
+  getClosedPnlByUser,
   getOpenPositionsForGate,
   getInsights,
   getTradesExport,
@@ -1150,6 +1701,7 @@ module.exports = {
   // candles
   cacheCandles,
   getCachedCandles,
+  getCachedCandlesInRange,
   clearOldCache,
   // logs
   insertLog,
@@ -1159,9 +1711,21 @@ module.exports = {
   setSetting,
   // backtest history
   insertBacktestHistory,
+  upsertBacktestHistory,
+  updateBacktestHistory,
+  incrementBacktestHitCount,
+  findBacktestByCanonicalKey,
+  getBacktestByCanonicalKey,
   getBacktestHistory,
   getAllBacktestHistory,
   getBacktestHistoryById,
+  getBacktestArchive,
+  getBacktestHistoryByIds,
+  deleteBacktestHistoryById,
+  deleteBacktestHistoryByIds,
+  insertStrategyPreset,
+  getStrategyPresets,
+  deleteStrategyPreset,
   // meta
   getDbPath,
   _pool: pool,

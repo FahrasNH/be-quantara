@@ -4,6 +4,14 @@
  */
 
 const db = require("../../infrastructure/db/database");
+const prisma = require("../../infrastructure/db/prismaClient");
+const { ADMIN_ROLES } = require("../../middleware/adminGuard");
+const {
+  ENGINE_VERSION,
+  buildCanonicalKey,
+  filterSubset,
+  resolveAction,
+} = require("./BacktestCanonicalService");
 
 class BacktestHistoryService {
   /**
@@ -16,7 +24,7 @@ class BacktestHistoryService {
    * @param {string} notes - Optional notes/description
    * @returns {number} - ID of inserted record
    */
-  static async saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null) {
+  static async saveBacktest(symbol, metrics, equityCurve = null, tradesData = null, config = null, notes = null, meta = {}) {
     try {
       const id = await db.insertBacktestHistory({
         symbol,
@@ -25,6 +33,10 @@ class BacktestHistoryService {
         tradesData,
         config,
         notes,
+        userId: meta.userId ?? null,
+        strategyKey: meta.strategyKey ?? config?.strategyKey ?? null,
+        timeframe: meta.timeframe ?? config?.timeframe ?? null,
+        periodLabel: meta.periodLabel ?? config?.periodLabel ?? null,
       });
 
       console.log(`[BacktestHistory] Saved backtest for ${symbol} with ID ${id}`);
@@ -123,12 +135,334 @@ class BacktestHistoryService {
     }
   }
 
+  static async getArchive(filters = {}) {
+    try {
+      return await db.getBacktestArchive(filters);
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching archive: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async getByIds(ids) {
+    try {
+      return await db.getBacktestHistoryByIds(ids);
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching by IDs: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async savePreset(userId, name, strategyKey, parameters) {
+    try {
+      return await db.insertStrategyPreset({ userId, name, strategyKey, parameters });
+    } catch (err) {
+      console.error(`[BacktestHistory] Error saving preset: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async getPresets(userId) {
+    try {
+      return await db.getStrategyPresets(userId);
+    } catch (err) {
+      console.error(`[BacktestHistory] Error fetching presets: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async deletePreset(userId, presetId) {
+    try {
+      return await db.deleteStrategyPreset({ userId, presetId });
+    } catch (err) {
+      console.error(`[BacktestHistory] Error deleting preset: ${err.message}`);
+      throw err;
+    }
+  }
+
   /**
    * Bandingkan dua backtest runs
    * @param {number} id1 - First backtest ID
    * @param {number} id2 - Second backtest ID
    * @returns {object} - Comparison object
    */
+  static async _getCallerRole(userId) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    return user?.role || "USER";
+  }
+
+  static _assertCanDelete(record, userId, role) {
+    if (!record) {
+      const err = new Error("Backtest tidak ditemukan");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (record.canonical_key || record.canonicalKey) {
+      if (ADMIN_ROLES.includes(role)) return;
+      const err = new Error("Forbidden — hanya admin bisa menghapus arsip shared");
+      err.statusCode = 403;
+      throw err;
+    }
+    if (ADMIN_ROLES.includes(role)) return;
+    if (record.user_id === userId || record.user_id == null) return;
+    const err = new Error("Forbidden — tidak bisa menghapus backtest pengguna lain");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  static _buildKeyFromMeta({
+    symbol, strategyKey, timeframe, parameters = {},
+    enableFees = true, enableSlippage = false,
+    exchange = "sim", dataSource = "sim", periodLabel = "500",
+  }) {
+    return buildCanonicalKey({
+      symbol,
+      strategyKey,
+      timeframe,
+      parameters,
+      enableFees,
+      enableSlippage,
+      exchange,
+      dataSource,
+      periodLabel,
+    });
+  }
+
+  /**
+   * Lookup shared canonical archive — miss|reused|subset|extend
+   */
+  static async lookupCanonical({
+    symbol,
+    strategyKey,
+    timeframe = "1d",
+    parameters = {},
+    enableFees = true,
+    enableSlippage = false,
+    exchange = "sim",
+    dataSource = "sim",
+    periodLabel = "500",
+    requestedStart,
+    requestedEnd,
+  }) {
+    const canonicalKey = this._buildKeyFromMeta({
+      symbol, strategyKey, timeframe, parameters,
+      enableFees, enableSlippage, exchange, dataSource, periodLabel,
+    });
+
+    const reqStartMs = requestedStart ? Date.parse(requestedStart) : NaN;
+    const reqEndMs = requestedEnd ? Date.parse(requestedEnd) : NaN;
+    const hasDates = Number.isFinite(reqStartMs) && Number.isFinite(reqEndMs);
+
+    const record = await db.findBacktestByCanonicalKey(canonicalKey);
+
+    if (!hasDates) {
+      if (!record?.canonical_key) {
+        return { action: "miss", canonicalKey, id: null };
+      }
+      if (record.engine_version && record.engine_version !== ENGINE_VERSION) {
+        return { action: "miss", canonicalKey, id: null };
+      }
+      return {
+        action: "reused",
+        canonicalKey,
+        id: record.id,
+        metrics: record.metrics,
+        trades: record.trades_data,
+        equity_curve: record.equity_curve,
+        dataStart: record.data_start,
+        dataEnd: record.data_end,
+        hitCount: record.hit_count ?? 1,
+      };
+    }
+
+    const action = resolveAction(record, reqStartMs, reqEndMs);
+
+    if (action === "miss") {
+      return { action, canonicalKey, id: null };
+    }
+
+    if (action === "extend") {
+      return {
+        action,
+        canonicalKey,
+        id: record.id,
+        dataStart: record.data_start,
+        dataEnd: record.data_end,
+      };
+    }
+
+    if (action === "subset") {
+      const filtered = filterSubset(record, reqStartMs, reqEndMs);
+      return {
+        action,
+        canonicalKey,
+        id: record.id,
+        metrics: filtered.metrics,
+        trades: filtered.trades,
+        equity_curve: filtered.equity,
+        dataStart: record.data_start,
+        dataEnd: record.data_end,
+        hitCount: record.hit_count ?? 1,
+      };
+    }
+
+    return {
+      action: "reused",
+      canonicalKey,
+      id: record.id,
+      metrics: record.metrics,
+      trades: record.trades_data,
+      equity_curve: record.equity_curve,
+      dataStart: record.data_start,
+      dataEnd: record.data_end,
+      hitCount: record.hit_count ?? 1,
+    };
+  }
+
+  /**
+   * Simpan atau perbarui row canonical shared (INSERT / UPDATE in-place)
+   */
+  static async saveOrUpdateCanonical({
+    symbol,
+    strategyKey,
+    timeframe = "1d",
+    periodLabel = "500",
+    parameters = {},
+    enableFees = true,
+    enableSlippage = false,
+    exchange = "sim",
+    dataSource = "sim",
+    metrics,
+    equityCurve = null,
+    tradesData = null,
+    config = null,
+    notes = null,
+    userId = null,
+    dataStart = null,
+    dataEnd = null,
+    action = null,
+  }) {
+    const canonicalKey = this._buildKeyFromMeta({
+      symbol, strategyKey, timeframe, parameters,
+      enableFees, enableSlippage, exchange, dataSource, periodLabel,
+    });
+
+    const existing = await db.findBacktestByCanonicalKey(canonicalKey);
+
+    if (action === "reused" && existing) {
+      return existing.id;
+    }
+
+    if (existing && action !== "extend" && dataStart && dataEnd) {
+      const resolved = resolveAction(existing, Date.parse(dataStart), Date.parse(dataEnd));
+      if (resolved === "reused") {
+        return existing.id;
+      }
+    }
+
+    if (existing && (action === "extend" || resolveAction(
+      existing,
+      Date.parse(dataStart),
+      Date.parse(dataEnd),
+    ) === "extend")) {
+      const id = await db.updateBacktestHistory(existing.id, {
+        metrics,
+        equityCurve,
+        tradesData,
+        config,
+        dataStart,
+        dataEnd,
+        engineVersion: ENGINE_VERSION,
+      });
+      return id ?? existing.id;
+    }
+
+    const runConfig = {
+      ...(config || {}),
+      strategyKey,
+      timeframe,
+      periodLabel,
+      parameters,
+      enableFees,
+      enableSlippage,
+      exchange,
+      dataSource,
+    };
+
+    const id = await db.upsertBacktestHistory({
+      symbol,
+      metrics,
+      equityCurve,
+      tradesData,
+      config: runConfig,
+      notes,
+      userId,
+      strategyKey,
+      timeframe,
+      periodLabel,
+      canonicalKey,
+      dataStart,
+      dataEnd,
+      engineVersion: ENGINE_VERSION,
+      createdByUserId: userId,
+    });
+
+    console.log(`[BacktestHistory] Canonical ${existing ? "updated" : "saved"} ${symbol}/${strategyKey} id=${id}`);
+    return id;
+  }
+
+  static async deleteRun(id, userId) {
+    try {
+      const record = await this.getById(id);
+      const role = await this._getCallerRole(userId);
+      this._assertCanDelete(record, userId, role);
+      const removed = await db.deleteBacktestHistoryById(id);
+      if (!removed) {
+        const err = new Error("Backtest tidak ditemukan");
+        err.statusCode = 404;
+        throw err;
+      }
+      return { deleted: true, id };
+    } catch (err) {
+      console.error(`[BacktestHistory] Error deleting run ${id}: ${err.message}`);
+      throw err;
+    }
+  }
+
+  static async deleteRuns(ids, userId) {
+    try {
+      const uniqueIds = [...new Set(ids.map(Number).filter(Number.isFinite))];
+      if (!uniqueIds.length) {
+        const err = new Error("ids diperlukan");
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const records = await db.getBacktestHistoryByIds(uniqueIds);
+      const foundIds = new Set(records.map(r => r.id));
+      const missing = uniqueIds.filter(id => !foundIds.has(id));
+      if (missing.length) {
+        const err = new Error(`Backtest tidak ditemukan: ${missing.join(", ")}`);
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const role = await this._getCallerRole(userId);
+      for (const record of records) {
+        this._assertCanDelete(record, userId, role);
+      }
+
+      const deleted = await db.deleteBacktestHistoryByIds(uniqueIds);
+      return { deleted, ids: uniqueIds };
+    } catch (err) {
+      console.error(`[BacktestHistory] Error bulk deleting runs: ${err.message}`);
+      throw err;
+    }
+  }
+
   static async compareBacktests(id1, id2) {
     try {
       const bt1 = await this.getById(id1);

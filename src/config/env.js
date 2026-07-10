@@ -42,6 +42,55 @@ const cfg = {
   // e.g. https://quantara.example.com or http://187.77.135.156
   APP_URL:    process.env.APP_URL    || "http://localhost:5173",
 
+  // ── xAI Grok (console.x.ai) — AI training & optimizer ─────────────────────
+  XAI_ENABLED:            process.env.XAI_ENABLED === "true",
+  XAI_API_KEY:            process.env.XAI_API_KEY || "",
+  XAI_MANAGEMENT_API_KEY: process.env.XAI_MANAGEMENT_API_KEY || "",
+  XAI_COLLECTION_ID:      process.env.XAI_COLLECTION_ID || "",
+  XAI_MODEL:              process.env.XAI_MODEL || "grok-4.3",
+  XAI_TIMEOUT_MS:         parseInt(process.env.XAI_TIMEOUT_MS, 10) || 60_000,
+  // Izinkan AI optimizer tanpa tier VAULT (dev/staging)
+  XAI_OPTIMIZER_OPEN:     process.env.XAI_OPTIMIZER_OPEN === "true",
+
+  // ── Grok AI Live Trading ────────────────────────────────────────────────────
+  GROK_TRADING_ENABLED:            process.env.GROK_TRADING_ENABLED === "true",
+  GROK_TRADING_MIN_CONFIDENCE_ENTRY: parseInt(process.env.GROK_TRADING_MIN_CONFIDENCE_ENTRY, 10) || 8,
+  GROK_TRADING_MIN_CONFIDENCE_TP_SL: parseInt(process.env.GROK_TRADING_MIN_CONFIDENCE_TP_SL, 10) || 7,
+  GROK_TRADING_MAX_TOKENS:         parseInt(process.env.GROK_TRADING_MAX_TOKENS, 10) || 2000,
+  GROK_TRADING_TEMPERATURE:        parseFloat(process.env.GROK_TRADING_TEMPERATURE) || 0.3,
+  GROK_TRADING_CYCLE_MS:           parseInt(process.env.GROK_TRADING_CYCLE_MS, 10) || 600_000,
+  GROK_TRADING_DRY_RUN:            process.env.GROK_TRADING_DRY_RUN !== "false",
+  GROK_TRADING_LOG_INTERACTIONS:   process.env.GROK_TRADING_LOG_INTERACTIONS !== "false",
+  // Izinkan Grok live trading tanpa tier VAULT (dev/staging)
+  GROK_TRADING_OPEN:               process.env.GROK_TRADING_OPEN === "true",
+
+  // ── Grok Confirm Gate + TP Adjust (Mode B — AF/TM/MR/BR) ─────────────────
+  GROK_CONFIRM_ENABLED:              process.env.GROK_CONFIRM_ENABLED === "true",
+  GROK_CONFIRM_MIN_CONFIDENCE_ENTRY: parseInt(process.env.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY, 10) || 8,
+  GROK_CONFIRM_MIN_TP_CONFIDENCE:    parseInt(process.env.GROK_CONFIRM_MIN_TP_CONFIDENCE, 10) || 7,
+  GROK_CONFIRM_MIN_TP_MODE_CONFIDENCE: parseInt(process.env.GROK_CONFIRM_MIN_TP_MODE_CONFIDENCE, 10) || 6,
+  GROK_CONFIRM_TP_ADJUST_BAND_PCT:   parseFloat(process.env.GROK_CONFIRM_TP_ADJUST_BAND_PCT) || 15,
+  GROK_CONFIRM_TP_MAX_ATR_MULT:      parseFloat(process.env.GROK_CONFIRM_TP_MAX_ATR_MULT) || 0.5,
+  GROK_CONFIRM_TP_REJECT_ACTION:     process.env.GROK_CONFIRM_TP_REJECT_ACTION || "skip",
+  GROK_CONFIRM_FAIL_MODE:            process.env.GROK_CONFIRM_FAIL_MODE || "closed",
+  GROK_CONFIRM_PROMPT_LITE:          process.env.GROK_CONFIRM_PROMPT_LITE !== "false",
+  GROK_CONFIRM_OPEN:                 process.env.GROK_CONFIRM_OPEN === "true",
+  /** Parallel xAI calls per chunk during backtest Grok Confirm (default 8). */
+  GROK_CONFIRM_CONCURRENCY:          Math.max(1, parseInt(process.env.GROK_CONFIRM_CONCURRENCY, 10) || 8),
+
+  // ── Midtrans payment gateway (Sprint 5 / PAY-01) ────────────────────────────
+  // Get Server Key & Client Key from the Midtrans dashboard
+  //   (Settings → Access Keys). Use the SANDBOX keys on staging.
+  //   MIDTRANS_IS_PRODUCTION=false → sandbox  |  true → production
+  // The Server Key is also the secret used to verify webhook SHA512 signatures —
+  // it must NEVER be exposed to the frontend. Only the Client Key is public.
+  MIDTRANS_SERVER_KEY:    process.env.MIDTRANS_SERVER_KEY    || "",
+  MIDTRANS_CLIENT_KEY:    process.env.MIDTRANS_CLIENT_KEY    || "",
+  MIDTRANS_IS_PRODUCTION: process.env.MIDTRANS_IS_PRODUCTION === "true",
+  // Public base URL of THIS backend — used to build the webhook/redirect URLs
+  // registered in the Midtrans dashboard. e.g. https://staging.quantara.software
+  API_PUBLIC_URL:         process.env.API_PUBLIC_URL || process.env.APP_URL || "http://localhost:3000",
+
   // ── Secrets (dipakai AuthService & crypto) ──────────────────────────────────
   JWT_SECRET:         process.env.JWT_SECRET         || "",
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || "",

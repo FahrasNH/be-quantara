@@ -1,7 +1,6 @@
 /**
  * strategyRateLimiter.js  (src/middleware/strategyRateLimiter.js)
  *
- * ROOT CAUSE FIX (FIX-5, Security):
  *   1. POST /bots/:symbol/strategy tidak punya rate limit spesifik →
  *      bisa di-spam untuk churn strategy terus-menerus.
  *   2. POST /bots/:symbol/stop dengan forceClose=true adalah operasi destruktif
@@ -39,8 +38,8 @@ const strategyChangeLimiter = rateLimit({
       code: 'STRATEGY_RATE_LIMITED',
     });
   },
-  // Skip di unit test dan saat eksplisit di-disable (E2E rate-limit test lain)
-  skip: () => process.env.NODE_ENV === 'test',
+  // Skip di non-production (staging/dev), hanya aktif di production
+  skip: () => process.env.NODE_ENV !== 'production',
 });
 
 /**
@@ -52,7 +51,6 @@ const strategyChangeLimiter = rateLimit({
  * confirmToken di-issue server via GET /bots/:symbol/confirm-token (HMAC, umur 5
  * menit). Stop biasa (tanpa forceClose) TIDAK memerlukan konfirmasi.
  *
- * ROOT CAUSE (FIX-5 / TASK 3.5): token lama predictable (STOP_<symbol>_<last4>)
  * → bisa dipalsukan. Diganti token HMAC server-issued (lihat confirmToken.js).
  */
 function emergencyStopConfirmGuard(req, res, next) {
