@@ -4,7 +4,7 @@
  * User, auth session, settings, candle cache, dan backtest history TIDAK disentuh.
  *
  * Usage (di VPS staging):
- *   cd /opt/quantara-staging/be-bot-trading
+ *   cd /opt/quantara-staging/be
  *   node scripts/clean-staging-trades-sessions.js
  *
  * Dry-run:

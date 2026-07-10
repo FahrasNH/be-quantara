@@ -9,7 +9,7 @@
 set -euo pipefail
 
 STAGING_ROOT="/opt/quantara-staging"
-BE_DIR="${STAGING_ROOT}/be-bot-trading"
+BE_DIR="${STAGING_ROOT}/be"
 REPO_URL="${QUANTARA_BE_REPO:-https://github.com/FahrasNH/be-quantara.git}"
 VPS_IP="${VPS_IP:-187.77.135.156}"
 DB_NAME="bot_trading_staging"

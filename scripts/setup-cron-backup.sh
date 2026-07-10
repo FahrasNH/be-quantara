@@ -3,7 +3,7 @@
 # setup-cron-backup.sh — Daftarkan backup otomatis via cron di VPS
 #
 # Jalankan SEKALI di VPS (sebagai root atau user yang menjalankan app):
-#   bash /opt/quantara-staging/be-bot-trading/scripts/setup-cron-backup.sh
+#   bash /opt/quantara-staging/be/scripts/setup-cron-backup.sh
 #
 # Jadwal default: setiap hari jam 02:00 WIB (UTC+7 = 19:00 UTC)
 # ─────────────────────────────────────────────────────────────────────────────
