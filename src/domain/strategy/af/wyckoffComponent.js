@@ -5,6 +5,13 @@
  * false-breakout patterns with volume confirmation (effort vs result).
  *
  * Return format: { vote: 'LONG'|'SHORT'|'NEUTRAL', confidence: 0-1, reason: string, meta? }
+ *
+ * Critical detection invariants (escalated 0-trade fix, Jul 2026):
+ * 1. Range high/low MUST be established BEFORE the spring/upthrust scan window.
+ *    Including penetration bars in range bounds makes penetrationDepth <= 0 forever.
+ * 2. BB compression MUST be evaluated on the established range (pre-penetration),
+ *    using mean-relative width — not percentile rank of current BB vs a mature
+ *    flat lookback (equal/tight widths → percentile ≈ 100 → gate never opens).
  */
 
 "use strict";
@@ -20,15 +27,19 @@ const DEFAULTS = {
   minBars: 100,
   bbPeriod: 20,
   bbStdDev: 2,
-  // 40 (was 30): 30th-percentile BB compression was too rare on 15m/4h → near-zero
-  // spring/upthrust detections in 12m backtests (Wyckoff 0-trade).
+  bbWidthLookback: 100,
+  // Mean-relative squeeze at rangeEnd: bbWidth <= mean(bbWidth) * mult.
+  // Replaces broken percentile gate (mature ranges → pct≈100 → permanent reject).
+  bbWidthMeanMult: 1.05,
+  // Kept for diagnostics / rollback experiments only (not the live gate).
   bbWidthPercentileMax: 40,
   rangeLookback: 20,
   minRangeWidthPct: 0.005, // 0.5%
   maxRangeWidthPct: 0.05,  // 5.0%
   minBarsInRange: 20,
   atrPeriod: 14,
-  penetrationAtrMult: 0.5,
+  // Upper end of AF-SUB-01 sensitivity band (0.3–0.8); 0.5 rejected many real springs.
+  penetrationAtrMult: 0.8,
   recoveryWindow: 5,       // was 3 — allow slightly slower recovery confirmation
   volumeConfirmMult: 1.0,  // was 1.2 — volume ≥ SMA is enough; 1.2× over-filtered
   volumeSmaPeriod: 20,
@@ -36,7 +47,28 @@ const DEFAULTS = {
 };
 
 /**
- * Detect a valid Wyckoff trading range ending at lastIdx.
+ * Mean of finite values in series[start..end] (inclusive).
+ * @returns {number|null}
+ */
+function _meanFinite(series, start, end) {
+  if (!series || end < start) return null;
+  let sum = 0;
+  let count = 0;
+  for (let i = start; i <= end; i++) {
+    const v = series[i];
+    if (v == null || !Number.isFinite(v)) continue;
+    sum += v;
+    count++;
+  }
+  if (count === 0) return null;
+  return sum / count;
+}
+
+/**
+ * Detect a valid Wyckoff trading range established BEFORE the recovery window.
+ *
+ * rangeEndIdx = lastIdx - recoveryWindow — support/resistance from prior bars only,
+ * so a spring/upthrust inside the scan window can actually pierce those levels.
  */
 function detectTradingRange(candles, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
@@ -47,21 +79,44 @@ function detectTradingRange(candles, config = {}) {
     return { isValid: false, reason: "insufficient_data" };
   }
 
-  const widths = bbWidthSeries(closes, lastIdx, cfg.bbPeriod, cfg.bbStdDev);
-  const bbWidth = widths[lastIdx];
+  const recoveryWindow = Math.max(1, cfg.recoveryWindow | 0);
+  const rangeEndIdx = lastIdx - recoveryWindow;
+  if (rangeEndIdx < cfg.minBars - 1) {
+    return { isValid: false, reason: "insufficient_data_pre_window" };
+  }
+
+  const widths = bbWidthSeries(closes, rangeEndIdx, cfg.bbPeriod, cfg.bbStdDev);
+  const bbWidth = widths[rangeEndIdx];
   if (bbWidth == null) return { isValid: false, reason: "no_bb_width" };
 
-  const bbWidthPct = percentileRank(widths, lastIdx, 100);
-  if (bbWidthPct == null || bbWidthPct >= cfg.bbWidthPercentileMax) {
-    return { isValid: false, reason: "bb_width_not_compressed", bbWidthPercentile: bbWidthPct };
+  const lookback = cfg.bbWidthLookback;
+  const meanStart = Math.max(0, rangeEndIdx - lookback + 1);
+  const bbWidthMean = _meanFinite(widths, meanStart, rangeEndIdx);
+  if (bbWidthMean == null || bbWidthMean <= 0) {
+    return { isValid: false, reason: "no_bb_width_mean" };
+  }
+  const bbWidthRatio = bbWidth / bbWidthMean;
+  // Diagnostic only — shows why the old percentile gate stayed closed on mature ranges.
+  const bbWidthPct = percentileRank(widths, rangeEndIdx, lookback);
+  if (bbWidthRatio > cfg.bbWidthMeanMult) {
+    return {
+      isValid: false,
+      reason: "bb_width_not_compressed",
+      bbWidth,
+      bbWidthMean,
+      bbWidthRatio,
+      bbWidthPercentile: bbWidthPct,
+      rangeEndIdx,
+    };
   }
 
   const look = cfg.rangeLookback;
-  if (lastIdx < look - 1) return { isValid: false, reason: "insufficient_range_lookback" };
+  if (rangeEndIdx < look - 1) return { isValid: false, reason: "insufficient_range_lookback" };
 
   let rangeHigh = -Infinity;
   let rangeLow = Infinity;
-  for (let i = lastIdx - look + 1; i <= lastIdx; i++) {
+  const rangeStart = rangeEndIdx - look + 1;
+  for (let i = rangeStart; i <= rangeEndIdx; i++) {
     if (highs[i] != null && highs[i] > rangeHigh) rangeHigh = highs[i];
     if (lows[i] != null && lows[i] < rangeLow) rangeLow = lows[i];
   }
@@ -72,22 +127,22 @@ function detectTradingRange(candles, config = {}) {
   const mid = (rangeHigh + rangeLow) / 2;
   const rangeWidthPct = (rangeHigh - rangeLow) / mid;
   if (rangeWidthPct < cfg.minRangeWidthPct) {
-    return { isValid: false, reason: "range_too_narrow", rangeWidthPct };
+    return { isValid: false, reason: "range_too_narrow", rangeWidthPct, rangeEndIdx };
   }
   if (rangeWidthPct > cfg.maxRangeWidthPct) {
-    return { isValid: false, reason: "range_too_wide", rangeWidthPct };
+    return { isValid: false, reason: "range_too_wide", rangeWidthPct, rangeEndIdx };
   }
 
-  // Count bars that stayed mostly inside the range over a longer window
+  // Count bars that stayed mostly inside the established range (pre-penetration).
   const rangeScan = Math.max(cfg.minBarsInRange, look);
   let barsInRange = 0;
-  for (let i = lastIdx - rangeScan + 1; i <= lastIdx; i++) {
+  for (let i = rangeEndIdx - rangeScan + 1; i <= rangeEndIdx; i++) {
     if (i < 0) continue;
     const c = closes[i];
     if (c != null && c >= rangeLow && c <= rangeHigh) barsInRange++;
   }
   if (barsInRange < cfg.minBarsInRange) {
-    return { isValid: false, reason: "range_not_mature", barsInRange };
+    return { isValid: false, reason: "range_not_mature", barsInRange, rangeEndIdx };
   }
 
   return {
@@ -96,8 +151,12 @@ function detectTradingRange(candles, config = {}) {
     rangeLow,
     rangeWidthPct,
     bbWidth,
+    bbWidthMean,
+    bbWidthRatio,
     bbWidthPercentile: bbWidthPct,
     barsInRange,
+    rangeEndIdx,
+    rangeStartIdx: rangeStart,
   };
 }
 
@@ -121,6 +180,16 @@ function _atrAt(candles, lastIdx, period) {
 }
 
 /**
+ * Volume SMA ending just before the penetration bar (avoids self-inflating the baseline).
+ */
+function _volumeBaseline(volumes, penIdx, period) {
+  if (!volumes || penIdx <= 0) return null;
+  const end = penIdx - 1;
+  if (end < period - 1) return smaAt(volumes, penIdx, period);
+  return smaAt(volumes, end, period);
+}
+
+/**
  * Spring: false breakdown below rangeLow with recovery + volume confirm.
  * Evaluates whether a spring completed at/near lastIdx (penetration within recovery window).
  */
@@ -131,10 +200,13 @@ function detectSpring(candles, range, config = {}) {
   const atr = _atrAt(candles, lastIdx, cfg.atrPeriod);
   if (!atr || atr <= 0) return { detected: false, reason: "no_atr" };
 
-  const volSma = smaAt(volumes, lastIdx, cfg.volumeSmaPeriod);
   // Scan for penetration bar in [lastIdx - recoveryWindow, lastIdx]
   const windowStart = Math.max(0, lastIdx - cfg.recoveryWindow);
-  for (let penIdx = windowStart; penIdx <= lastIdx; penIdx++) {
+  // Do not scan bars that defined the range itself
+  const minPenIdx =
+    range.rangeEndIdx != null ? Math.max(windowStart, range.rangeEndIdx + 1) : windowStart;
+
+  for (let penIdx = minPenIdx; penIdx <= lastIdx; penIdx++) {
     const lo = lows[penIdx];
     const vol = volumes?.[penIdx];
     if (lo == null) continue;
@@ -144,6 +216,7 @@ function detectSpring(candles, range, config = {}) {
     if (penetrationDepth > cfg.penetrationAtrMult * atr) continue; // too deep
 
     if (vol == null || vol === 0) continue;
+    const volSma = _volumeBaseline(volumes, penIdx, cfg.volumeSmaPeriod);
     if (!volSma || volSma <= 0) continue;
     if (vol < cfg.volumeConfirmMult * volSma) continue;
 
@@ -179,9 +252,11 @@ function detectUpthrust(candles, range, config = {}) {
   const atr = _atrAt(candles, lastIdx, cfg.atrPeriod);
   if (!atr || atr <= 0) return { detected: false, reason: "no_atr" };
 
-  const volSma = smaAt(volumes, lastIdx, cfg.volumeSmaPeriod);
   const windowStart = Math.max(0, lastIdx - cfg.recoveryWindow);
-  for (let penIdx = windowStart; penIdx <= lastIdx; penIdx++) {
+  const minPenIdx =
+    range.rangeEndIdx != null ? Math.max(windowStart, range.rangeEndIdx + 1) : windowStart;
+
+  for (let penIdx = minPenIdx; penIdx <= lastIdx; penIdx++) {
     const hi = highs[penIdx];
     const vol = volumes?.[penIdx];
     if (hi == null) continue;
@@ -191,6 +266,7 @@ function detectUpthrust(candles, range, config = {}) {
     if (penetrationDepth > cfg.penetrationAtrMult * atr) continue;
 
     if (vol == null || vol === 0) continue;
+    const volSma = _volumeBaseline(volumes, penIdx, cfg.volumeSmaPeriod);
     if (!volSma || volSma <= 0) continue;
     if (vol < cfg.volumeConfirmMult * volSma) continue;
 

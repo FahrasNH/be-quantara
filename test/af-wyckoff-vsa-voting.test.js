@@ -261,6 +261,124 @@ test("penetration too deep rejected", () => {
   assert.strictEqual(spring.detected, false);
 });
 
+/**
+ * Build a mature sideways range then a clear spring/upthrust in the recovery window.
+ * This is the chart-like case that the old logic could never match:
+ * - prolonged compression → old BB percentile ≈ 100 (gate closed)
+ * - spring low inside range lookback → old rangeLow = spring low (penetrationDepth = 0)
+ */
+function makeMatureRangeWithSpring({ n = 160, mid = 100, spring = true } = {}) {
+  const opens = [];
+  const highs = [];
+  const lows = [];
+  const closes = [];
+  const volumes = [];
+  const atr = [];
+
+  // Early wider swings so mean BB has history, then long tight range (mature Wyckoff box)
+  for (let i = 0; i < 40; i++) {
+    const c = mid + Math.sin(i / 2) * 2.5;
+    opens.push(c);
+    closes.push(c);
+    highs.push(c + 1.2);
+    lows.push(c - 1.2);
+    volumes.push(1000);
+    atr.push(1.0);
+  }
+  for (let i = 40; i < n - 2; i++) {
+    const c = mid + ((i % 2) * 0.08 - 0.04);
+    opens.push(c);
+    closes.push(c);
+    highs.push(mid + 0.35);
+    lows.push(mid - 0.35);
+    volumes.push(1000);
+    atr.push(0.35);
+  }
+
+  const penIdx = n - 2;
+  const recIdx = n - 1;
+  if (spring) {
+    // Shallow pierce below support (mid - 0.35) then bullish recovery
+    opens.push(mid - 0.2);
+    closes.push(mid - 0.25);
+    highs.push(mid - 0.05);
+    lows.push(mid - 0.55); // penetration ~0.20 vs ATR 0.35 → within 0.8×ATR
+    volumes.push(2200);
+    atr.push(0.35);
+
+    opens.push(mid - 0.2);
+    closes.push(mid + 0.05); // close back above rangeLow, bullish
+    highs.push(mid + 0.15);
+    lows.push(mid - 0.3);
+    volumes.push(1200);
+    atr.push(0.35);
+  } else {
+    // Upthrust: pierce above resistance then bearish recovery
+    opens.push(mid + 0.2);
+    closes.push(mid + 0.25);
+    highs.push(mid + 0.55);
+    lows.push(mid + 0.05);
+    volumes.push(2200);
+    atr.push(0.35);
+
+    opens.push(mid + 0.2);
+    closes.push(mid - 0.05);
+    highs.push(mid + 0.3);
+    lows.push(mid - 0.15);
+    volumes.push(1200);
+    atr.push(0.35);
+  }
+
+  return { opens, highs, lows, closes, volumes, atr, lastIdx: recIdx, penIdx, recIdx };
+}
+
+test("BUGFIX: mature-range spring → LONG via evaluateWyckoffComponent", () => {
+  const c = makeMatureRangeWithSpring({ spring: true });
+  const range = detectTradingRange(c);
+  assert.strictEqual(range.isValid, true, `expected valid range, got ${range.reason}`);
+  assert.ok(range.rangeEndIdx < c.penIdx, "range must end before penetration bar");
+  assert.ok(c.lows[c.penIdx] < range.rangeLow, "spring low must pierce established rangeLow");
+
+  const result = evaluateWyckoffComponent(c);
+  assert.strictEqual(result.vote, "LONG", `expected LONG, got ${result.vote}/${result.reason}`);
+  assert.strictEqual(result.reason, "wyckoff_spring");
+  assert.ok(result.confidence > 0);
+});
+
+test("BUGFIX: mature-range upthrust → SHORT via evaluateWyckoffComponent", () => {
+  const c = makeMatureRangeWithSpring({ spring: false });
+  const range = detectTradingRange(c);
+  assert.strictEqual(range.isValid, true, `expected valid range, got ${range.reason}`);
+  assert.ok(c.highs[c.penIdx] > range.rangeHigh, "upthrust high must pierce established rangeHigh");
+
+  const result = evaluateWyckoffComponent(c);
+  assert.strictEqual(result.vote, "SHORT", `expected SHORT, got ${result.vote}/${result.reason}`);
+  assert.strictEqual(result.reason, "wyckoff_upthrust");
+  assert.ok(result.confidence > 0);
+});
+
+test("BUGFIX: range bounds exclude recovery window (penetration possible)", () => {
+  const c = makeMatureRangeWithSpring({ spring: true });
+  const range = detectTradingRange(c);
+  assert.ok(range.isValid);
+  // Old bug: rangeLow === spring low → depth 0. Fixed: rangeLow from pre-window only.
+  assert.ok(range.rangeLow > c.lows[c.penIdx]);
+  assert.strictEqual(range.rangeEndIdx, c.lastIdx - 5);
+});
+
+test("BUGFIX: mean-relative BB gate passes prolonged compression", () => {
+  const c = makeMatureRangeWithSpring({ spring: true });
+  // Evaluate just before spring — mature flat box must not be rejected as "not compressed"
+  const pre = {
+    ...c,
+    lastIdx: c.penIdx - 1,
+  };
+  // Force recoveryWindow so rangeEnd is inside the tight box
+  const range = detectTradingRange(pre, { recoveryWindow: 5 });
+  assert.strictEqual(range.isValid, true, `mature compression rejected: ${range.reason}`);
+  assert.ok(range.bbWidthRatio != null && range.bbWidthRatio <= 1.05);
+});
+
 console.log("\n═══ VSA Patterns ═══");
 
 test("AC1 VSA relativeVolume", () => {
