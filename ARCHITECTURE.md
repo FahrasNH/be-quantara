@@ -9,6 +9,10 @@
 > `src/domain/tierConfig.js`; canonical Gen2 component/engine keys live in
 > `src/config/strategies.js` (+ FE mirror `fe-bot-trading/src/utils/tierStrategyMap.js`).
 > Docs must not invent a third mapping.
+>
+> **Changelog (BUG-CRITICAL 502, 11 Jul 2026):** Real-engine backtests
+> (`POST /api/v1/backtest/run-real`) run as **isolated child_process workers** with
+> candle/memory hard caps — see §9 below.
 
 ---
 
@@ -561,3 +565,36 @@ Binance keys reuse the existing `crypto.js` AES-256-GCM path (`encrypt`/`decrypt
 12-byte IV, auth tag, `iv:authTag:ciphertext` format) via `userExchange.upsertExchange`
 — identical to Bitget/OKX. No Binance-specific storage path exists, so there is no
 divergent encryption surface to verify beyond the shared mechanism.
+
+---
+
+## 9. Backtest job isolation (BUG-CRITICAL 502, 11 Jul 2026)
+
+**Problem:** Long real-engine backtests (>12 months, multi-type AF/TS) ran in the
+**same Node process** as live bots. Even with async `jobId` + `setImmediate` yields,
+CPU-heavy loops and large candle arrays could OOM or block the event loop → nginx
+**502 Bad Gateway**, PM2 restart, and live trading downtime.
+
+**Root cause (code evidence):**
+- `POST /backtest/run-real` already returned `jobId`, but `_runBacktestJobAsync`
+  executed `runTripleTypeBacktest` / `runRealBacktest` on the API event loop.
+- `HistoricalKlinesService` default `MAX_BARS` was 500k; multi-type runs stack
+  several series + indicator arrays in heap.
+- Yields every 500 bars were insufficient under AF Wyckoff+VSA load.
+
+**Pragmatic fix (no BullMQ/pg-boss this sprint):**
+| Piece | Location | Role |
+|-------|----------|------|
+| Job store + concurrency (max 1) | `BacktestJobService.js` | `POST` → `jobId`; queue extras |
+| Child worker | `workers/backtestJobWorker.js` | `fork` + `--max-old-space-size` (default 768MB) |
+| Runner + caps | `runBacktestJob.js` | Fetch/compute; `BACKTEST_MAX_TOTAL_ENTRY_BARS` (90k); heap guard |
+| Klines safety | `HistoricalKlinesService.js` | Default max bars 150k; mem-cache entry cap |
+| FE copy | `botApi.js` / `useBacktest.js` | Actionable 502 + poll retries |
+
+**Env knobs:** `BACKTEST_ISOLATE=0` (in-process fallback/tests),
+`BACKTEST_WORKER_HEAP_MB`, `BACKTEST_MAX_CONCURRENT`, `BACKTEST_MAX_TOTAL_ENTRY_BARS`,
+`BACKTEST_MAX_HEAP_USED_MB`, `BACKTEST_KLINES_MAX_BARS`.
+
+**Tradeoff:** In-process Map jobs are lost on API restart (same as before). Full
+BullMQ/pg-boss remains the longer-term durable queue if multi-tenant load grows.
+Worker OOM fails **that job only**; the parent API/live tick loop keeps running.

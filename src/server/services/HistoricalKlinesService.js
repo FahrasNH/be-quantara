@@ -31,8 +31,10 @@ const MIN_HISTORICAL_MS = Date.parse("2020-01-01T00:00:00.000Z");
 const PAGE_SIZE = 500;
 const PAUSE_MS = 120;
 const MEM_CACHE_TTL_MS = Number(process.env.BACKTEST_KLINES_CACHE_TTL_MS) || 3_600_000;
-/** Batas bar per request — cegah OOM + timeout gateway pada rentang besar (mis. max × 15m). */
-const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 500_000;
+/** Batas bar per request — cegah OOM + timeout gateway pada rentang besar (mis. max × 15m).
+ *  Default lowered from 500k → 150k (BUG-CRITICAL 502): multi-type AF already stacks
+ *  several series; 500k single-fetch was enough to OOM small API hosts. */
+const MAX_BARS = Number(process.env.BACKTEST_KLINES_MAX_BARS) || 150_000;
 /** Fetch deadline — 15 min covers ~1000 API pages for 500k 1m candles on first load (DB cache after). */
 const FETCH_DEADLINE_MS = Number(process.env.BACKTEST_KLINES_FETCH_DEADLINE_MS) || 900_000;
 const MIN_CACHE_COVERAGE = 0.85;
@@ -227,6 +229,13 @@ function getMemCached(key) {
 }
 
 function setMemCached(key, data) {
+  // Cap cache entries — large multi-TF backtests otherwise retain several
+  // 30k–60k candle arrays in the API process heap after the job finishes.
+  const MAX_MEM_ENTRIES = Number(process.env.BACKTEST_KLINES_MEM_CACHE_ENTRIES) || 4;
+  if (memCache.size >= MAX_MEM_ENTRIES) {
+    const oldest = memCache.keys().next().value;
+    if (oldest !== undefined) memCache.delete(oldest);
+  }
   memCache.set(key, { ts: Date.now(), data });
 }
 

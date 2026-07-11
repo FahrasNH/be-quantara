@@ -532,9 +532,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
-    // BT-FIX: yield every 500 bars (was 2000). AF with Wyckoff+VSA is ~3× heavier
-    // per bar; 2000-bar gaps let job-status polls hang past the FE 10s abort.
-    if (i % 500 === 0) {
+    // BT-FIX: yield every 250 bars on large runs (was 500). AF Wyckoff+VSA is ~3×
+    // heavier per bar; keep the main/worker event loop free for health + job polls.
+    // Child-process isolation (BacktestJobService) is the primary 502 guard; this
+    // yield still matters for BACKTEST_ISOLATE=0 and for IPC progress flush.
+    const yieldEvery = totalBars > 20_000 ? 250 : 500;
+    if (i % yieldEvery === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const c = entryCandles[i];
@@ -1790,7 +1793,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
-    if (i % 500 === 0) {
+    const yieldEvery = totalBars > 20_000 ? 250 : 500;
+    if (i % yieldEvery === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
 
