@@ -339,7 +339,8 @@ test("BUGFIX: mature-range spring → LONG via evaluateWyckoffComponent", () => 
   assert.ok(range.rangeEndIdx < c.penIdx, "range must end before penetration bar");
   assert.ok(c.lows[c.penIdx] < range.rangeLow, "spring low must pierce established rangeLow");
 
-  const result = evaluateWyckoffComponent(c);
+  // Aggressive model = AF race / spring-reclaim path (moderate needs prior trend + CHoCH)
+  const result = evaluateWyckoffComponent(c, { entryModel: "aggressive" });
   assert.strictEqual(result.vote, "LONG", `expected LONG, got ${result.vote}/${result.reason}`);
   assert.strictEqual(result.reason, "wyckoff_spring");
   assert.ok(result.confidence > 0);
@@ -351,7 +352,7 @@ test("BUGFIX: mature-range upthrust → SHORT via evaluateWyckoffComponent", () 
   assert.strictEqual(range.isValid, true, `expected valid range, got ${range.reason}`);
   assert.ok(c.highs[c.penIdx] > range.rangeHigh, "upthrust high must pierce established rangeHigh");
 
-  const result = evaluateWyckoffComponent(c);
+  const result = evaluateWyckoffComponent(c, { entryModel: "aggressive" });
   assert.strictEqual(result.vote, "SHORT", `expected SHORT, got ${result.vote}/${result.reason}`);
   assert.strictEqual(result.reason, "wyckoff_upthrust");
   assert.ok(result.confidence > 0);
