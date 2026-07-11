@@ -339,9 +339,14 @@ module.exports = function createAccountRouter(helpers = {}) {
     })
   );
 
+  // BE-DEBT-01: Account-level strategy preset — unused by FE (prefer per-bot
+  // PATCH /bots/:symbol/config). Kept for backwards compatibility; Deprecation
+  // headers advertise successor. Candidate for removal after traffic check.
   router.get(
     "/strategy",
     asyncHandler(async (req, res) => {
+      res.setHeader("Deprecation", "true");
+      res.setHeader("Link", '</api/v1/bots/:symbol/config>; rel="successor-version"');
       const userId = req.userId;
 
       const strategy = await prisma.userStrategy.findUnique({
@@ -356,13 +361,15 @@ module.exports = function createAccountRouter(helpers = {}) {
         });
       }
 
-      res.json({ ok: true, strategy });
+      res.json({ ok: true, strategy, deprecated: true });
     })
   );
 
   router.post(
     "/strategy",
     asyncHandler(async (req, res) => {
+      res.setHeader("Deprecation", "true");
+      res.setHeader("Link", '</api/v1/bots/:symbol/config>; rel="successor-version"');
       const userId = req.userId;
       const { strategyKey, riskPerTrade, maxOpenPositions, leverage } = req.body;
 

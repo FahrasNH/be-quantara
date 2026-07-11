@@ -1,23 +1,29 @@
 # Dokumentasi Strategi & Parameter — Quantara Bot Trading
 
-**Versi:** v2.6 (Selective & High Probability) + Pair Tier v2.1  
-**Update:** Juni 2026  
-**Sumber kebenaran kode:** `src/domain/legacyStrategies.js` (preset runtime) → `BotEngine.js` → `src/domain/strategy/implementations/*.js`
+**Versi:** v2.7 (Gen2 keys) + Pair Tier v2.1  
+**Update:** 11 Juli 2026 (DOC-SSOT)  
+**Sumber kebenaran kode:** `src/config/strategies.js` (Gen2 keys) → umbrellas →
+`src/domain/strategy/implementations/*.js` · Entitlement: `src/domain/tierConfig.js`
 
-> Parameter **efektif** di bot = preset `legacyStrategies` + fallback `BotEngine`, lalu di-override oleh **Pair Tier** (`PairClassifier.PARAM_OVERRIDES`) saat bot start. Lihat [PAIR_VOLATILITY.md](PAIR_VOLATILITY.md).
+> Parameter **efektif** di bot = preset + BotEngine, lalu di-override oleh **Pair Tier**
+> (`PairClassifier.PARAM_OVERRIDES`) saat bot start. Lihat [PAIR_VOLATILITY.md](PAIR_VOLATILITY.md).
+>
+> **Naming:** Dokumen ini memakai **Gen2** (`AF_SMC`, `TS_TF`, `MD_MR`, `BS_BR`).
+> Gen1→Gen2 map: [`../ARCHITECTURE.md`](../ARCHITECTURE.md) §1.
 
 ---
 
 ## 1. Ringkasan Perbandingan
 
-| Strategi | Tier min. | Entry TF | HTF | SL×ATR | TP×ATR | RR target | Risk/trade | Leverage | Max trade/hari |
-|----------|-----------|----------|-----|--------|--------|-----------|------------|----------|----------------|
-| **ADAPTIVE_FUSION** | FOUNDRY | 15m | 1h | 1.2–2.2* | 3.0–3.4* | **~1:2.0–3.0** | **0.5%** (1% strong) | 2× | **6** |
-| **TREND_MOMENTUM** | FORGE | 5m | 4h | **1.3** | **2.5** | ~1:1.92 | **1.2%** | 2× | **4** |
-| **MEAN_REVERSION** | MINT | 15m | — | **1.4** | **3.2** | ~1:2.3 | **0.8%** | 1× | **3** |
-| **BREAKOUT_RETEST** | VAULT | 15m | 4h | **1.4** | **5.5** | ~1:4.0 | **2.0%** | 1× | **5** |
+| Strategi (Gen2) | Tier min. | Entry TF | HTF | SL×ATR | TP×ATR | RR target | Risk/trade | Leverage | Max trade/hari |
+|-----------------|-----------|----------|-----|--------|--------|-----------|------------|----------|----------------|
+| **AF_SMC** (Adaptive Fusion pool) | FOUNDRY | 15m | 1h | 1.2–2.2* | 3.0–3.4* | **~1:2.0–3.0** | **0.5%** (1% strong) | 2× | **6** |
+| **TS_TF** (Trend Surge pool) | FORGE | 5m | 4h | **1.3** | **2.5** | ~1:1.92 | **1.2%** | 2× | **4** |
+| **MD_MR** (Mean Drift) | MINT | 15m | — | **1.4** | **3.2** | ~1:2.3 | **0.8%** | 1× | **3** |
+| **BS_BR** (Breakout Storm) | VAULT | 15m | 4h | **1.4** | **5.5** | ~1:4.0 | **2.0%** | 1× | **5** |
 
-\* AF: SL/TP per komponen A/B/C (lihat §4.3).
+\* AF: SL/TP per trade-type leg (lihat §4). Legacy aliases: `ADAPTIVE_FUSION`→`AF_SMC`,
+`TREND_FOLLOWING`/`TREND_MOMENTUM`→`TS_TF`, `MEAN_REVERSION`→`MD_MR`, `BREAKOUT_RETEST`→`BS_BR`.
 
 ---
 
@@ -60,28 +66,27 @@ Berlaku semua strategi kecuali di-override eksplisit di preset strategi.
 
 ---
 
-## 4. ADAPTIVE_FUSION (AF) - v3.0 Three-Component Voting (Sprint 8)
+## 4. AF_SMC — Adaptive Fusion (race-to-confirm, Sprint 12)
 
-**Versi implementasi:** 3.0.0  
+**Versi implementasi:** umbrella race + SMC/Wyckoff/VSA racers  
 **Tier:** FOUNDRY+  
-**Komponen voting:** SMC (A) + Wyckoff (B) + VSA (C) — majority 2/3 (altcoin 3/3)
+**Mode default:** race-to-confirm (`afCombinationMode: "race"`). Rollback voting:
+`afCombinationMode: "vote"` / `afUseThreeComponentVoting`.
 
 **Sumber kode:**
 - Umbrella: `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
-- Voting: `src/domain/strategy/af/afVoting.js`
-- Wyckoff: `src/domain/strategy/af/wyckoffComponent.js`
-- VSA: `src/domain/strategy/af/vsaComponent.js`
+- Racers: `SmartMoneyConceptsStrategy`, `af/wyckoffComponent.js`, `af/vsaComponent.js`
 - Config: `src/config/strategies.js` (`TIER_COMPONENT_MAP.FOUNDRY`)
 
 | Parameter | Default | Keterangan |
 |-----------|---------|------------|
-| `afUseThreeComponentVoting` | `true` | Aktifkan voting SMC+Wyckoff+VSA |
-| `afMinVotes` | `2` | Kuorum absolut (2/3); altcoin override → 3 |
-| `afRejectOnDissent` | `true` | Tolak bila komponen saling berlawanan |
+| `afCombinationMode` | `race` | Race-to-confirm (Sprint 12) |
+| `afUseThreeComponentVoting` | (rollback) | Sprint 8 2/3 voting when mode=`vote` |
+| `afMinVotes` | `2` | Kuorum absolut (voting rollback only) |
 
-Trade types Scalping/Intraday/Swing tetap dari SMC multi-position; arah di-gate oleh majority vote.
+Trade types Scalping/Swing dari SMC; attribution = winning racer label only.
 
-### 4.1 Parameter Runtime (legacyStrategies → BotEngine) - v2.6
+### 4.1 Parameter Runtime - v2.6
 
 | Parameter | Nilai Baru | Keterangan |
 |-----------|------------|------------|
@@ -145,11 +150,12 @@ Trade types Scalping/Intraday/Swing tetap dari SMC multi-position; arah di-gate 
 
 ---
 
-## 5. TREND_MOMENTUM (TM)
+## 5. TS_TF — Trend Surge / Trend Following (race pool)
 
-**Versi implementasi:** 1.2.0  
+**Versi implementasi:** TrendSurgeUmbrella race-to-confirm (Sprint 12)  
 **Tier:** FORGE+  
-**Filosofi:** Multi-TF — HTF trend (4h) → MTF momentum (15m) → entry retracement (5m).
+**Racers:** `TS_TF` (Trend Following), `TS_MS` (Dow Theory), `TS_VP` (Auction Market Theory)  
+**Filosofi (TF racer):** Multi-TF — HTF trend (4h) → MTF momentum (15m) → entry retracement (5m).
 
 ### 5.1 Timeframe
 
@@ -202,11 +208,11 @@ Trade types Scalping/Intraday/Swing tetap dari SMC multi-position; arah di-gate 
 
 ---
 
-## 6. MEAN_REVERSION (MR)
+## 6. MD_MR — Mean Drift / Mean Reversion
 
-**Versi implementasi:** 1.0.0  
+**Versi implementasi:** layered pipeline (MD-SUB-01/02/03)  
 **Tier:** MINT+  
-**Filosofi:** Extremes Bollinger Bands + konfirmasi RSI; target mean reversion.
+**Filosofi:** Extremes Bollinger Bands + konfirmasi RSI; ADX regime gate; OB/FVG precision.
 
 ### 6.1 Indikator
 
@@ -241,9 +247,9 @@ Trade types Scalping/Intraday/Swing tetap dari SMC multi-position; arah di-gate 
 
 ---
 
-## 7. BREAKOUT_RETEST (BR)
+## 7. BS_BR — Breakout Storm / Breakout Retest
 
-**Versi implementasi:** 1.0.0  
+**Versi implementasi:** BreakoutTradingStrategy (v2.4+)  
 **Tier:** VAULT  
 **Filosofi:** Breakout level S&R 20-bar + konfirmasi retest; RR tinggi.
 
@@ -276,8 +282,8 @@ Trade types Scalping/Intraday/Swing tetap dari SMC multi-position; arah di-gate 
 
 ## 8. Strategi per Pair Tier (izin runtime)
 
-| Tier pair | AF | TM | MR | BR |
-|-----------|:--:|:--:|:--:|:--:|
+| Tier pair | AF_SMC | TS_TF | MD_MR | BS_BR |
+|-----------|:------:|:-----:|:-----:|:-----:|
 | LIQUID | ✅ | ✅ | ✅ | ✅ |
 | STABLE | ✅ | ✅ | ✅ | ✅ |
 | SEMI_VOLATILE | ❌ | ✅ | ✅ | ❌ |
@@ -287,26 +293,27 @@ Ditegakkan di `bots-afs.js` saat user memilih strategi + saat bot start.
 
 ---
 
-## 9. Subscription Tier (akses strategi)
+## 9. Subscription Tier (akses strategi) — SSOT `tierConfig.js`
 
-| Tier user | Strategi tersedia | Max posisi/simbol | Max posisi akun |
-|-----------|-------------------|-------------------|-----------------|
-| FOUNDRY | AF | 1 | 4 |
-| FORGE | AF, TM | 2 | 8 |
-| MINT | AF, TM, MR | 3 | 12 |
-| VAULT | AF, TM, MR, BR | 4 | 16 |
+| Tier user | Entitlement keys (code) | Gen2 engines | Max posisi/simbol | Max posisi akun | Max active bots |
+|-----------|-------------------------|--------------|-------------------|-----------------|-----------------|
+| FOUNDRY | `ADAPTIVE_FUSION` | `AF_SMC` | 1 | 4 | 10 |
+| FORGE | + `TREND_FOLLOWING` | `AF_SMC`, `TS_TF` | 2 | 8 | 25 |
+| MINT | + `MEAN_REVERSION` | `AF_SMC`, `TS_TF`, `MD_MR` | 3 | 12 | 40 |
+| VAULT | + `BREAKOUT_RETEST` | `AF_SMC`, `TS_TF`, `MD_MR`, `BS_BR` | 4 | 16 | 50 |
 
-Sumber: `src/domain/tierConfig.js`
+Sumber: `src/domain/tierConfig.js` (entitlement) · Gen2 normalize: `src/config/strategies.js`.
 
 ---
 
 ## 10. Catatan Implementasi
 
-1. **Preset vs class config:** Bot runtime memuat preset dari `legacyStrategies.js`. Class strategy (`TrendMomentumStrategy.js`, dll.) mendefinisikan default internal; beberapa field `getRiskConfig()` class **tidak** dipakai langsung oleh BotEngine — yang dipakai adalah `strat.*` dari preset.
-2. **Partial TP (TM):** Aktif bila `tpMode: "partial"`. Partial close di 1.5R, sisanya trailing 0.8×ATR.
+1. **Preset vs class config:** Bot runtime memuat preset dari `legacyStrategies.js`. Class strategy mendefinisikan default internal; beberapa field `getRiskConfig()` class **tidak** dipakai langsung oleh BotEngine — yang dipakai adalah `strat.*` dari preset.
+2. **Partial TP (TS_TF):** Aktif bila `tpMode: "partial"`. Partial close di 1.5R, sisanya trailing 0.8×ATR.
 3. **Fee guards:** `minEdgeFeeMultiple` dan `maxEntryExtensionATR` mencegah entry dengan edge tipis yang ditelan fee.
 4. **Pair override:** `slMultiplier` tier **mengalikan** lebar SL strategi; `positionSizeAdjustment` memperkecil ukuran posisi.
+5. **AF/TS combination:** Default race-to-confirm (Sprint 12); voting/gate modes retained as rollback flags.
 
 ---
 
-**Terakhir diperbarui:** 27 Juni 2026 — Parameter lengkap v2.6 + Pair Tier v2.1
+**Terakhir diperbarui:** 11 Juli 2026 — Gen2 naming + tier table SSOT (`tierConfig.js`)

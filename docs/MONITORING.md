@@ -8,8 +8,8 @@ Apa yang dipantau saat bot LIVE, ambang batas, dan sinyal bahaya.
 
 Bot **berhenti entry** otomatis bila salah satu terpenuhi:
 
-| Gate | TREND_MOMENTUM | MEAN_REVERSION | BREAKOUT_RETEST |
-|------|---------------|----------------|-----------------|
+| Gate | TS_TF | MD_MR | BS_BR |
+|------|-------|-------|-------|
 | Max risk/trade | 3% | 2% | 4% |
 | **Daily loss limit** | 6% | 5% | 8% |
 | Max trade/hari | 6 | 3 | 7 |

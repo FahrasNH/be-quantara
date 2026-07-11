@@ -1,8 +1,54 @@
 # Quantara Backend — Architecture Notes
 
 > Living doc. Sections are added as subsystems are formalized. This file currently
-> documents the **market / exchange** layer (Tasks A & C, Binance integration) and
-> the **Adaptive Fusion / Trend Surge strategy config** (Sprint 8–9).
+> documents **tier/strategy SSOT**, **Gen2 naming**, strategy umbrellas (AF / TS / MD),
+> the **market / exchange** layer (Tasks A & C, Binance integration), and admin APIs.
+>
+> **Changelog (DOC-SSOT, 11 Jul 2026):** Tier→strategy tables and strategy keys in this
+> file follow **code as source of truth**. Entitlement keys live in
+> `src/domain/tierConfig.js`; canonical Gen2 component/engine keys live in
+> `src/config/strategies.js` (+ FE mirror `fe-bot-trading/src/utils/tierStrategyMap.js`).
+> Docs must not invent a third mapping.
+
+---
+
+## 1. Gen1 → Gen2 Strategy Naming (historical map)
+
+**Home for the Gen1→Gen2 mapping.** Product docs and new code use **Gen2 exclusively**.
+Legacy Gen1 / descriptor keys remain as migrate-only aliases in `STRATEGY_MIGRATION_MAP`.
+
+| Gen1 / umbrella label (docs & history) | Gen2 primary engine key | Live race / pipeline components | Display name |
+|----------------------------------------|-------------------------|---------------------------------|--------------|
+| `ADAPTIVE_FUSION` (umbrella) | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | Adaptive Fusion |
+| `TREND_SURGE` / `TREND_MOMENTUM` / `TREND_FOLLOWING` | `TS_TF` | `TS_TF`, `TS_MS`, `TS_VP` | Trend Surge |
+| `MEAN_DRIFT` / `MEAN_REVERSION` | `MD_MR` | `MD_MR` (internal A→B→C layers) | Mean Drift |
+| `BREAKOUT_STORM` / `BREAKOUT_RETEST` | `BS_BR` | `BS_BR` | Breakout Storm |
+
+Also still accepted as aliases → Gen2: `SMART_MONEY_CONCEPTS` / `SAC` → `AF_SMC`;
+`TF` → `TS_TF`; `MR` → `MD_MR`; `BR` → `BS_BR`.
+
+`A` / `B` / `C` in `legacyStrategies.js` are **PDF trade-type presets**, not AF racers.
+
+---
+
+## 2. Tier → Strategy Entitlement (SSOT)
+
+**Source of truth:** `src/domain/tierConfig.js` (`TIER_CONFIG[tier].strategies`).
+
+Entitlement still stores **legacy descriptor keys**; runtime normalizes them to Gen2 via
+`normalizeStrategyKey` / `STRATEGY_MIGRATION_MAP`. FE package engines use Gen2 keys
+(`TIER_PACKAGE_STRATEGIES` in `tierStrategyMap.js`).
+
+| Tier | Entitlement keys (`tierConfig.js`) | Gen2 engines (normalized / FE package) | Live components (race pool / pipeline) | maxPositions / symbol | maxConcurrentPositions | maxActiveBots |
+|------|------------------------------------|----------------------------------------|----------------------------------------|----------------------|------------------------|---------------|
+| **FOUNDRY** | `ADAPTIVE_FUSION` | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | 1 | 4 | 10 |
+| **FORGE** | `ADAPTIVE_FUSION`, `TREND_FOLLOWING` | `AF_SMC`, `TS_TF` | AF pool + `TS_TF`, `TS_MS`, `TS_VP` | 2 | 8 | 25 |
+| **MINT** | + `MEAN_REVERSION` | + `MD_MR` | + `MD_MR` | 3 | 12 | 40 |
+| **VAULT** | + `BREAKOUT_RETEST` | + `BS_BR` | + `BS_BR` | 4 | 16 | 50 |
+
+`GROK_AI_TRADING` is a VAULT experimental bonus — **not** in `tierConfig.strategies` race pools.
+Component lists: `TIER_COMPONENT_MAP` in `src/config/strategies.js` and
+`TIER_PACKAGE_COMPONENTS` in FE `tierStrategyMap.js`.
 
 ---
 
@@ -147,9 +193,53 @@ Go/No-Go validation (WR ≥55%, PF ≥1.3, 12m multi-coin) remains a research ga
 
 ---
 
-## 3. API Surface
+## 7. Known Gaps & Consistency Notes (DOC-SSOT-03 audit — 11 Jul 2026)
 
-### 3.4 Market Endpoints
+Former “§5 gap list” items, re-verified against code. Update this table whenever an
+endpoint is added/removed (Definition of Done for API work).
+
+| # | Topic | Prior note (stale) | Current status (code) | Decision / debt |
+|---|--------|--------------------|------------------------|-----------------|
+| 1 | **Dry Run** | “Dry Run bukan env var” | **Still valid (informational).** Mode is per-bot `dryRun` in DB + global FE `tradingMode` in Settings (not `process.env.DRY_RUN`). Paper wallet via `GET /account/paper-balance`; live via `GET /account/exchange-balance`. `DRY_RUN_VIRTUAL_BALANCE` only seeds paper equity. | Keep as note — not a gap. |
+| 2 | **`getStrategyAnalysisV1` / strategy-analysis** | “FE calls endpoint that does not exist on BE” | **Resolved on BE.** `GET /api/v1/bots/:symbol/strategy-analysis` exists in `routes/bots-afs.js` (`analyzeStrategyFit`). FE client: `botApi.getStrategyAnalysisV1(symbol)`. | **No UI caller** in FE (method only). Keep client; wire UI later or treat as unused API surface. |
+| 3 | **Account `/strategy`** | “Account /strategy belum dipakai FE” | **Still unused by FE.** `GET`/`POST /api/v1/account/strategy` in `routes/account.js` (Prisma `UserStrategy`). FE uses per-bot `POST /bots/:symbol/strategy` (`setStrategyV1`) and `PATCH /bots/:symbol/config` — and **no call sites** currently invoke `setStrategyV1` either (config goes through `updateBotConfigV1`). | **Decision (BE-DEBT-01):** deprecate in place (`Deprecation` + `Link` headers). Prefer bot config endpoints. Remove after 30d zero traffic. |
+| 4 | **`botApi.js` aliases** | Duplicate method names | **Addressed (FE-DEBT-01).** Canonical: `botsV1`, `healthV1`, `stopBotV1`, `trades`. Deprecated wrappers warn once: `bots`, `health`, `emergencyStopV1`, `tradeHistoryV1`. | Remove wrappers next sprint after confirming no external callers. |
+| 5 | **`routes/legacy.js`** | Deprecated in docs but still mounted | Mounted at `/api/v1/legacy` with `Deprecation`/`Sunset` headers (BE-DEBT-01). | Ops: confirm zero traffic 30d → delete router + mount. |
+
+### Position limits (per symbol vs per strategy) — AUDIT 11 Jul 2026
+
+**Two deployment modes:**
+
+1. **Multi-strategy per coin (default, `MULTI_STRATEGY_ENABLED=true`)**
+   - One `MultiStrategyCoordinator` runs N strategy engines on the same symbol.
+   - They share `groupKey = userId:symbol` and **may hold multiple concurrent positions** on that symbol, subject to:
+     - **Hedge guard:** no LONG + SHORT at the same time (`canEnter` + `AccountCoordinator.hasGroupDirection`).
+     - **Concentration cap:** `maxPositionsPerCoin` (env, default 2).
+     - **Per-strategy cap:** each engine at most 1 position (`maxPositions=1`).
+   - This is **not** literal “max 1 position per symbol”; it is “max N same-direction positions per symbol, no hedging.”
+
+2. **Legacy single-strategy bot (`BotEngine` only)**
+   - **Max 1 position per symbol** via `AccountCoordinator.hasSymbol()` (no `groupKey`) and `maxPositions=1`.
+   - Exception: legacy `ADAPTIVE_FUSION` multi-component path may open A/B/C — now gated by coordinator + cross-component direction lock.
+
+**Order of gates:** signal generation first; then `canEnter` / `canOpen`; **optimistic `reserve()` before `openPosition`** (TOCTOU fix); release on order failure. `AdaptiveStrategyEngine` implements `getPendingSignal` / `applyConflictDecision` for batch `evaluate()`.
+
+**Tier field `maxPositionsPerSymbol`:** equals allowed strategy count for UI; runtime uses `maxPositionsPerCoin` unless aligned in config.
+
+### Related bot strategy endpoints (current)
+
+| Method | Path | BE | FE client | FE UI usage |
+|--------|------|----|-----------|-------------|
+| GET | `/api/v1/bots/:symbol/strategy-analysis` | ✅ `bots-afs.js` | `getStrategyAnalysisV1` | ❌ none |
+| POST | `/api/v1/bots/:symbol/strategy` | ✅ `bots-afs.js` | `setStrategyV1` | ❌ none (prefer `updateBotConfigV1`) |
+| GET/POST | `/api/v1/account/strategy` | ✅ `account.js` (deprecated) | ❌ none | ❌ none |
+| GET | `/api/v1/bots/strategies/available` | ✅ | `getStrategiesV1` | ✅ |
+
+---
+
+## 8. API Surface
+
+### 8.4 Market Endpoints
 
 All routes are mounted under `/api/v1/market` behind `authMiddleware` (Bearer JWT
 → `req.userId`). Source: `src/server/routes/market.js`.
@@ -198,7 +288,7 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 | 429 | `SYMBOLS_RATE_LIMITED` | >10 req/min |
 | 503 | `EXCHANGE_UNAVAILABLE` | exchange down + no cache |
 
-### 3.5 Supported Exchanges
+### 8.5 Supported Exchanges
 
 | Exchange | Trading | Symbols listing | Key onboarding validation |
 |----------|---------|-----------------|---------------------------|
@@ -211,7 +301,7 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 > structurally valid value. Gating is enforced at the application layer via
 > `cfg.allowedExchanges` and `POST /account/keys`.
 
-### 3.6 Admin Endpoints — `routes/admin.js`
+### 8.6 Admin Endpoints — `routes/admin.js`
 
 The Admin Dashboard backend (Tasks ADMIN-BE-01..08, incl. the Admin v2 pages
 ADMIN-FE-05..13). All routes are mounted under `/api/v1/admin`. Source:
@@ -408,7 +498,7 @@ uses client-side sample data in the meantime.
 #### Admin management — superAdminGuard (ADMIN-BE-07)
 
 `GET /admin/admins` (list), `POST /admin/admins` (create — bcrypt-hashes the
-password, seeds a default `ADAPTIVE_FUSION` strategy), `PATCH /admin/admins/:id`
+password, seeds a default `AF_SMC` strategy — legacy alias `ADAPTIVE_FUSION` still accepted), `PATCH /admin/admins/:id`
 (edit username/email), `PATCH /admin/admins/:id/role` (change role),
 `POST /admin/admins/:id/reset-password` (set new password + kill sessions), and
 `DELETE /admin/admins/:id`. Delete guards against removing **yourself** and the
@@ -432,7 +522,7 @@ breaks the action). Actor = `req.adminUser.id`; actions include
 
 ## Appendix A — IDOR Audit: Market & Symbol Endpoints (Task C)
 
-Audited 2026-06-16. Scope: the 5 endpoints in §3.4. Goal: confirm every endpoint
+Audited 2026-06-16. Scope: the endpoints in §8.4. Goal: confirm every endpoint
 that returns user-specific data scopes its query to `req.userId` (from the verified
 JWT), never to a spoofable param/body.
 
