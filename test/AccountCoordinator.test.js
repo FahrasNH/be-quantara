@@ -205,6 +205,43 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
   t("legacy (tanpa groupKey) → tetap maks 1 posisi/simbol", !dup.ok);
 }
 
+// ── AUDIT: optimistic reserve closes canOpen→order TOCTOU ───────────────────
+{
+  const c = new AC({ userId: "toctou", maxAccountUtilization: 0.8 });
+  c.setAccountEquity(1000);
+  const groupKey = "toctou:BTCUSDT";
+
+  const a = c.canOpen({
+    botKey: "toctou:BTCUSDT#AF", symbol: "BTCUSDT", requiredMargin: 20,
+    groupKey, direction: "LONG",
+  });
+  t("TOCTOU: engine A canOpen LONG → ok", a.ok);
+  // BotEngine now reserves immediately after canOpen (before await openPosition)
+  c.reserve("toctou:BTCUSDT#AF", {
+    symbol: "BTCUSDT", margin: 20, groupKey, strategyKey: "AF", direction: "LONG",
+  });
+
+  const bHedge = c.canOpen({
+    botKey: "toctou:BTCUSDT#TS", symbol: "BTCUSDT", requiredMargin: 20,
+    groupKey, direction: "SHORT",
+  });
+  t("TOCTOU: engine B SHORT blocked after A reserved LONG", !bHedge.ok);
+
+  const bSame = c.canOpen({
+    botKey: "toctou:BTCUSDT#TS", symbol: "BTCUSDT", requiredMargin: 20,
+    groupKey, direction: "LONG",
+  });
+  t("TOCTOU: engine B same-direction still allowed in group", bSame.ok);
+
+  // Order failure → release frees the slot
+  c.release("toctou:BTCUSDT#AF");
+  const afterFail = c.canOpen({
+    botKey: "toctou:BTCUSDT#TS", symbol: "BTCUSDT", requiredMargin: 20,
+    groupKey, direction: "SHORT",
+  });
+  t("TOCTOU: after release on order failure → SHORT allowed again", afterFail.ok);
+}
+
 console.log(`\n  TESTS: ${pass} passed, ${fail} failed (${pass + fail} total)`);
 console.log(fail === 0 ? "  ✅ ALL TESTS PASSED\n" : "  ❌ SOME TESTS FAILED\n");
 process.exit(fail === 0 ? 0 : 1);

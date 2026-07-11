@@ -1444,6 +1444,11 @@ class BotEngine extends EventEmitter {
               }
 
               // Check each component independently for entry
+              // Direction lock across A/B/C: first open component locks direction for the tick.
+              let lockedDirection = null;
+              for (const [, openPos] of this.state.positions) {
+                if (openPos?.side) { lockedDirection = openPos.side; break; }
+              }
               for (const componentId of ["A", "B", "C"]) {
                 const componentSignal = multiSignal[componentId];
                 if (!componentSignal) continue;
@@ -1451,6 +1456,14 @@ class BotEngine extends EventEmitter {
                 // Check if this component already has an open position
                 if (this.state.positions.has(componentId)) {
                   continue; // Component already trading
+                }
+
+                // Cross-component hedge guard (legacy AF multi-position path)
+                if (lockedDirection && componentSignal !== lockedDirection) {
+                  this._log("info",
+                    `[Multi-AF:${componentId}] ${componentSignal} ditolak — komponen lain sudah ${lockedDirection}`
+                  );
+                  continue;
                 }
 
                 // Check component-level risk gates
@@ -1466,6 +1479,9 @@ class BotEngine extends EventEmitter {
 
                 // Multi-position entry (pass the real regime so strong-trend TP can fire)
                 await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot, multiSignal.meta?.marketCond, multiSignal.meta?.confidence?.[componentId]);
+                if (this.state.positions.has(componentId)) {
+                  lockedDirection = componentSignal;
+                }
               }
               // Skip single-position logic below for AF in multi-position mode
               return;
@@ -2383,12 +2399,14 @@ class BotEngine extends EventEmitter {
     const lev            = this.config.leverage || 1;
     const requiredMargin = (price * finalSize) / lev;
     const botKey         = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
-    // Group guard berlaku di LIVE (anggaran margin + 1/simbol + direction lock) dan
-    // juga di DRY RUN bila engine ini bagian dari grup multi-strategi — agar AC-05
-    // (tidak ada LONG+SHORT serentak pada satu koin) tetap ditegakkan saat staging
-    // dry-run. Di dry-run, gate anggaran otomatis di-skip (equity akun = 0).
-    const useGroupGuard = this.config.coordinator &&
-      (this.config.groupKey || !this.config.dryRun);
+    // Group guard: ALWAYS when a coordinator is wired (live + dry-run).
+    // Previously dry-run without groupKey skipped the coordinator → AC-05 / 1-per-symbol
+    // could be bypassed in paper mode. Dry-run still skips the equity budget gate inside
+    // canOpen when accountEquity is 0.
+    const useGroupGuard = !!this.config.coordinator;
+    // AUDIT fix: reserve BEFORE the await openPosition to close the canOpen→reserve
+    // TOCTOU window (two engines could both pass canOpen before either reserved).
+    let marginReservedEarly = false;
     if (useGroupGuard) {
       let marginToCheck = requiredMargin;
       const verdict = this.config.coordinator.canOpen({
@@ -2438,6 +2456,16 @@ class BotEngine extends EventEmitter {
           return;
         }
       }
+
+      // Optimistic reserve immediately after canOpen — released on order failure.
+      const earlyMargin = (price * finalSize) / lev;
+      this.config.coordinator.reserve(botKey, {
+        symbol: this.config.symbol, margin: earlyMargin,
+        groupKey: this.config.groupKey ?? null,
+        strategyKey: this.config.strategyKey ?? null,
+        direction: signal,
+      });
+      marginReservedEarly = true;
     }
 
     // requiredMargin mungkin berubah jika size di-scale-down oleh koordinator
@@ -2509,7 +2537,7 @@ class BotEngine extends EventEmitter {
         }
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
-        // Reservasi margin di koordinator akun bersama (#5)
+        // Keep reservation in sync with final margin (idempotent overwrite).
         if (this.config.coordinator) {
           this.config.coordinator.reserve(botKey, {
             symbol: this.config.symbol, margin: finalMargin,
@@ -2649,6 +2677,10 @@ class BotEngine extends EventEmitter {
         });
       } catch (err) {
         this._log("error", `Gagal buka posisi: ${err.message}`);
+        // Roll back optimistic reserve so peer engines are not blocked forever.
+        if (marginReservedEarly && this.config.coordinator) {
+          this.config.coordinator.release(botKey);
+        }
       }
     } else {
       // (mode "DRY RUN" sudah tertera di entry banner — tak perlu log terpisah)
@@ -2672,14 +2704,14 @@ class BotEngine extends EventEmitter {
         m1: false, m2: false, m3: false,
       };
 
-      // Dry-run multi-strategi: reservasi di koordinator agar direction lock (AC-05)
-      // terlihat oleh engine strategi lain pada koin yang sama. Dilepas otomatis
-      // saat flat via _releaseMarginIfFlat(). Legacy dry-run (tanpa groupKey) tidak
-      // mereservasi apa pun — perilaku lama tidak berubah.
-      if (this.config.groupKey && this.config.coordinator) {
+      // Dry-run: keep/refresh coordinator reservation (early reserve already set when
+      // coordinator is present; overwrite with paper margin so AC-05 stays accurate).
+      if (this.config.coordinator) {
         this.config.coordinator.reserve(botKey, {
           symbol: this.config.symbol, margin: marginReserved,
-          groupKey: this.config.groupKey, strategyKey: this.config.strategyKey, direction: signal,
+          groupKey: this.config.groupKey ?? null,
+          strategyKey: this.config.strategyKey ?? null,
+          direction: signal,
         });
       }
 
@@ -2788,6 +2820,31 @@ class BotEngine extends EventEmitter {
       return;
     }
 
+    // AccountCoordinator gate (was missing on legacy AF multi-position path).
+    const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}:AF:${componentId}`;
+    const lev = this.config.leverage || 1;
+    const requiredMargin = (price * qty) / lev;
+    if (this.config.coordinator) {
+      const verdict = this.config.coordinator.canOpen({
+        botKey,
+        symbol: this.config.symbol,
+        requiredMargin,
+        groupKey: this.config.groupKey ?? null,
+        direction: signal,
+      });
+      if (!verdict.ok) {
+        this._log("warn", `[Multi-AF:${componentId}] Entry ditahan koordinator: ${verdict.reason}`);
+        return;
+      }
+      this.config.coordinator.reserve(botKey, {
+        symbol: this.config.symbol,
+        margin: requiredMargin,
+        groupKey: this.config.groupKey ?? null,
+        strategyKey: this.config.strategyKey ?? null,
+        direction: signal,
+      });
+    }
+
     // Create position object
     const positionId = `${componentId}-${Date.now()}`;
     const position = {
@@ -2804,6 +2861,8 @@ class BotEngine extends EventEmitter {
       openCandle: lastIdx,
       unrealizedPL: 0,
       confidence: confidence ?? null,
+      marginReserved: requiredMargin,
+      coordinatorBotKey: botKey,
     };
 
     // Store position
@@ -2832,6 +2891,9 @@ class BotEngine extends EventEmitter {
       } catch (err) {
         this._log("error", `[Multi-AF:${componentId}] Order failed: ${err.message}`);
         this.state.positions.delete(componentId);
+        if (this.config.coordinator) {
+          this.config.coordinator.release(botKey);
+        }
       }
     }
   }
