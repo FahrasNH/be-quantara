@@ -407,7 +407,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      }, position, strategyKey, strategyDisplayName));
+      }, position, position.winningComponent || strategyKey, position.strategyLabel || strategyDisplayName));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
@@ -518,7 +518,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey, strategyDisplayName));
+    }, position, position.winningComponent || strategyKey, position.strategyLabel || strategyDisplayName));
     positions.delete(componentId);
   }
 
@@ -759,6 +759,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       if (size <= 0) continue;
 
+      const lastMeta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+      const meta = multiSignal.meta || lastMeta;
+      const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
+      const winningComponent = meta?.winningComponent || null;
+
       // Open position
       positions.set(componentId, {
         side: signal,
@@ -777,6 +782,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
+        strategyLabel: tradeLabel,
+        winningComponent,
 
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.
