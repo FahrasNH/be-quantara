@@ -143,6 +143,72 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     }
   });
 
+  await test("running job survives purge when lastActivityAt is recent", async () => {
+    const origDispatch = BacktestJobService._dispatch;
+    BacktestJobService._dispatch = () => {};
+    try {
+      const jobId = BacktestJobService.createJob("u-ttl", {
+        sym: "BTCUSDT", strategyKey: "AF_WYCKOFF",
+        strategyCfg: { label: "Wyckoff", interval: "15m" },
+        periodId: "12m", capital: 1000, parameters: {},
+      });
+      const job = BacktestJobService.getJob(jobId);
+      job.status = "running";
+      job.createdAt = Date.now() - 40 * 60_000;
+      job.lastActivityAt = Date.now() - 2 * 60_000;
+      BacktestJobService._purgeExpired();
+      assert.ok(BacktestJobService.getJob(jobId), "running job with recent activity must not be purged");
+    } finally {
+      BacktestJobService._dispatch = origDispatch;
+    }
+  });
+
+  await test("stale running job is failed and purged after running TTL", async () => {
+    const origDispatch = BacktestJobService._dispatch;
+    BacktestJobService._dispatch = () => {};
+    try {
+      const jobId = BacktestJobService.createJob("u-ttl2", {
+        sym: "BTCUSDT", strategyKey: "AF_VSA",
+        strategyCfg: { label: "VSA", interval: "15m" },
+        periodId: "12m", capital: 1000, parameters: {},
+      });
+      const job = BacktestJobService.getJob(jobId);
+      job.status = "running";
+      job.createdAt = Date.now() - 120 * 60_000;
+      job.lastActivityAt = Date.now() - 95 * 60_000;
+      BacktestJobService._purgeExpired();
+      assert.strictEqual(BacktestJobService.getJob(jobId), null, "stale running job should be purged");
+      assert.strictEqual(job.status, "error");
+      assert.ok(/timed out/i.test(job.error), `expected timeout error, got: ${job.error}`);
+    } finally {
+      BacktestJobService._dispatch = origDispatch;
+    }
+  });
+
+  await test("ipc settled prevents exit-code-0 false failure", () => {
+    const { BacktestJob } = require("../src/server/services/BacktestJobService");
+    const job = new BacktestJob("ipc-test");
+    job.status = "running";
+    job._ipcSettled = true;
+    job.done({ ok: true, trades: [{ id: 1 }] });
+    // Simulate parent exit handler — must NOT overwrite done status
+    if (!job._ipcSettled && job.status === "running") {
+      job.fail("Backtest worker exited (code 0)");
+    }
+    assert.strictEqual(job.status, "done");
+    assert.ok(job.result?.trades?.length === 1);
+  });
+
+  await test("AF_WYCKOFF job opts get single-racer defaults in runBacktestJob", () => {
+    const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
+    const out = applyStrategyJobDefaults("AF_WYCKOFF", {});
+    assert.deepStrictEqual(out.afActiveRacers, ["AF_WYCKOFF"]);
+    assert.deepStrictEqual(out.selectedComponents, ["AF_WYCKOFF"]);
+    const preserved = applyStrategyJobDefaults("AF_WYCKOFF", { afActiveVoters: ["AF_VSA"] });
+    assert.deepStrictEqual(preserved.afActiveVoters, ["AF_VSA"]);
+    assert.ok(!preserved.afActiveRacers);
+  });
+
   await test("worker crash path marks job failed without throwing in parent", async () => {
     // Simulate worker exit failure via cancel+fail semantics on a fresh job object.
     const jobId = BacktestJobService.createJob("u2", {

@@ -1230,7 +1230,7 @@ module.exports = function createBacktestRouter(context) {
    */
   router.get("/stream/:jobId", (req, res) => {
     const job = BacktestJobService.getJob(req.params.jobId);
-    if (!job) return res.status(404).json({ error: "Job not found or expired (30-min TTL)" });
+    if (!job) return res.status(404).json({ error: "Job not found or expired (TTL)" });
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -1279,7 +1279,7 @@ module.exports = function createBacktestRouter(context) {
    */
   router.get("/job-status/:jobId", asyncHandler(async (req, res) => {
     const job = BacktestJobService.getJob(req.params.jobId);
-    if (!job) return res.status(404).json({ ok: false, error: "Job not found or expired (30-min TTL)" });
+    if (!job) return res.status(404).json({ ok: false, error: "Job not found or expired (TTL)" });
 
     return res.json(BacktestJobService.toPublicStatus(job));
   }));

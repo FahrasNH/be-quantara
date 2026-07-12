@@ -54,10 +54,10 @@ process.on("message", async (msg) => {
     } else {
       jobAdapter.fail(err.message || String(err));
     }
-  } finally {
-    // Allow IPC flush then exit cleanly
-    setTimeout(() => process.exit(0), 50);
   }
+  // Parent kills this process after done/error IPC is received. Do NOT call
+  // process.exit(0) here — a 50ms timer raced large Wyckoff/VSA result payloads
+  // and caused "worker exited (code 0)" false failures before IPC flushed.
 });
 
 process.on("disconnect", () => {

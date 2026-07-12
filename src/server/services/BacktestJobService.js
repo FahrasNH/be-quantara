@@ -17,7 +17,10 @@ const path = require("path");
 const crypto = require("crypto");
 const { runBacktestJob } = require("./runBacktestJob");
 
-const JOB_TTL_MS = 30 * 60_000;
+/** Terminal jobs (done/error/cancelled) — retained for FE poll grace period. */
+const JOB_TTL_MS = Number(process.env.BACKTEST_JOB_TTL_MS) || 30 * 60_000;
+/** Running/queued jobs — Wyckoff/VSA 12m All Types can exceed 30 min post-fix. */
+const JOB_TTL_RUNNING_MS = Number(process.env.BACKTEST_JOB_TTL_RUNNING_MS) || 90 * 60_000;
 const MAX_CONCURRENT = Number(process.env.BACKTEST_MAX_CONCURRENT) || 1;
 const WORKER_HEAP_MB = Number(process.env.BACKTEST_WORKER_HEAP_MB) || 768;
 const ISOLATE = process.env.BACKTEST_ISOLATE !== "0";
@@ -30,15 +33,19 @@ class BacktestJob extends EventEmitter {
     this.id = id;
     this.status = "pending"; // pending | queued | running | done | error | cancelled
     this.createdAt = Date.now();
+    this.lastActivityAt = Date.now();
     this.result = null;
     this.error = null;
     this.aborted = false;
     this.progressLog = [];
     this.abortController = new AbortController();
     this._worker = null;
+    /** Set when parent receives done/error IPC — prevents exit(0) race false-fail. */
+    this._ipcSettled = false;
   }
 
   progress(data) {
+    this.lastActivityAt = Date.now();
     const ev = { ...data, ts: Date.now() };
     this.progressLog.push(ev);
     if (this.progressLog.length > 300) this.progressLog.shift();
@@ -75,17 +82,35 @@ const jobStore = new Map();
 const waitQueue = [];
 let activeCount = 0;
 
-const cleanupTimer = setInterval(() => {
-  const cutoff = Date.now() - JOB_TTL_MS;
+function ttlForJob(job) {
+  return (job.status === "running" || job.status === "queued")
+    ? JOB_TTL_RUNNING_MS
+    : JOB_TTL_MS;
+}
+
+function purgeExpiredJobs(now = Date.now()) {
   for (const [id, job] of jobStore) {
-    if (job.createdAt < cutoff) {
+    const ttl = ttlForJob(job);
+    const anchor = job.lastActivityAt || job.createdAt;
+    if (anchor >= now - ttl) continue;
+
+    if (job.status === "running" || job.status === "queued") {
+      if (job.status !== "cancelled") {
+        const mins = Math.round(ttl / 60_000);
+        job.fail(
+          `Backtest timed out after ${mins} minutes without completing. ` +
+          "Retry 3–6 months or fewer trade types."
+        );
+      }
       if (job._worker && !job._worker.killed) {
         try { job._worker.kill("SIGTERM"); } catch { /* ignore */ }
       }
-      jobStore.delete(id);
     }
+    jobStore.delete(id);
   }
-}, 5 * 60_000);
+}
+
+const cleanupTimer = setInterval(() => purgeExpiredJobs(), 5 * 60_000);
 if (typeof cleanupTimer.unref === "function") cleanupTimer.unref();
 
 function toPublicStatus(job) {
@@ -198,10 +223,14 @@ class BacktestJobService {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "progress") job.progress(msg.data || {});
       else if (msg.type === "done") {
+        job._ipcSettled = true;
+        job.lastActivityAt = Date.now();
         job.done(msg.result);
         settleOnce();
         try { worker.kill("SIGTERM"); } catch { /* ignore */ }
       } else if (msg.type === "error") {
+        job._ipcSettled = true;
+        job.lastActivityAt = Date.now();
         if (job.status !== "cancelled") job.fail(msg.error || "Backtest failed");
         settleOnce();
         try { worker.kill("SIGTERM"); } catch { /* ignore */ }
@@ -221,10 +250,12 @@ class BacktestJobService {
     });
 
     worker.on("exit", (code, signal) => {
-      if (job.status === "running" || job.status === "pending" || job.status === "queued") {
+      // Worker calls process.exit(0) after IPC; if done/error already received, ignore.
+      if (!job._ipcSettled
+          && (job.status === "running" || job.status === "pending" || job.status === "queued")) {
         const reason = signal
           ? `Backtest worker killed (${signal}) — often out-of-memory. Retry with 3–6 months or fewer strategies.`
-          : `Backtest worker exited (code ${code}). Retry with a shorter period if this persists.`;
+          : `Backtest worker exited (code ${code}) before delivering a result. Retry with a shorter period if this persists.`;
         job.fail(reason);
       }
       settleOnce();
@@ -255,7 +286,14 @@ class BacktestJobService {
   static _stats() {
     return { activeCount, queued: waitQueue.length, jobs: jobStore.size, isolate: ISOLATE };
   }
+
+  /** @internal test helper */
+  static _purgeExpired(now) {
+    purgeExpiredJobs(now);
+  }
 }
 
 module.exports = BacktestJobService;
 module.exports.BacktestJob = BacktestJob;
+module.exports._purgeExpiredJobs = purgeExpiredJobs;
+module.exports._ttlForJob = ttlForJob;

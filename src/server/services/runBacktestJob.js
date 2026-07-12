@@ -130,6 +130,19 @@ function enforceTotalEntryBarCap(entryCandles, dataInfo, job) {
  * @param {string} userId
  * @param {object} opts
  */
+/** Apply per-strategy defaults before a backtest job runs (exported for tests). */
+function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
+  const parameters = { ...(parametersIn || {}) };
+  if ((strategyKey === "AF_WYCKOFF" || strategyKey === "AF_VSA")
+      && !parameters.afActiveRacers && !parameters.afActiveVoters) {
+    parameters.afActiveRacers = [strategyKey];
+    if (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length) {
+      parameters.selectedComponents = [strategyKey];
+    }
+  }
+  return parameters;
+}
+
 async function runBacktestJob(job, userId, opts) {
   const {
     sym, strategyKey, strategyCfg,
@@ -139,8 +152,7 @@ async function runBacktestJob(job, userId, opts) {
     entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
   } = opts;
 
-  // Clone so activeTypes strip does not mutate caller/parent IPC payload
-  const parameters = { ...(parametersIn || {}) };
+  const parameters = applyStrategyJobDefaults(strategyKey, parametersIn);
 
   job.status = "running";
   assertHeapHeadroom(job);
@@ -446,6 +458,7 @@ async function runBacktestJob(job, userId, opts) {
 
 module.exports = {
   runBacktestJob,
+  applyStrategyJobDefaults,
   getEffectivePeriod,
   enforceTotalEntryBarCap,
   assertHeapHeadroom,
