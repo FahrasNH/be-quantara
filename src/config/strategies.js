@@ -183,6 +183,57 @@ function isLegacyAlias(key) {
   return Boolean(STRATEGY_MIGRATION_MAP[k]);
 }
 
+/** Display metadata for live engines + race components (UI / filter catalog). */
+const STRATEGY_CATALOG = {
+  AF_SMC:     { label: "Smart Money Concepts",     umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "engine",    status: "production", tier: "FOUNDRY" },
+  AF_WYCKOFF: { label: "Wyckoff Method",           umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
+  AF_VSA:     { label: "Volume Spread Analysis",   umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
+  TS_TF:      { label: "Trend Following",          umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "engine",    status: "production", tier: "FORGE" },
+  TS_MS:      { label: "Dow Theory",               umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
+  TS_VP:      { label: "Auction Market Theory",    umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
+  MD_MR:      { label: "Mean Reversion",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
+  BS_BR:      { label: "Breakout Retest",          umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: "production", tier: "VAULT" },
+};
+
+const CANONICAL_ENGINE_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
+const LIVE_COMPONENT_KEYS = [
+  "AF_SMC", "AF_WYCKOFF", "AF_VSA",
+  "TS_TF", "TS_MS", "TS_VP",
+  "MD_MR", "BS_BR",
+];
+
+/**
+ * Single catalog for strategy pickers / filters.
+ * Legacy Gen1 aliases are intentionally omitted from `engines`/`components`
+ * (normalize via STRATEGY_MIGRATION_MAP). Overlay modifiers (ADX / OI+Funding)
+ * are never listed — they are not selectable strategies.
+ */
+function getStrategyCatalog() {
+  const engines = CANONICAL_ENGINE_KEYS.map((key) => ({
+    key,
+    ...STRATEGY_CATALOG[key],
+    abbrev: STRATEGY_ABBREV[key],
+  }));
+  const components = LIVE_COMPONENT_KEYS.map((key) => ({
+    key,
+    ...STRATEGY_CATALOG[key],
+    abbrev: STRATEGY_ABBREV[key],
+  }));
+  const umbrellas = Object.entries(TIER_COMPONENT_MAP).map(([tier, cfg]) => ({
+    tier,
+    key: CANONICAL_ENGINE_KEYS.find((k) => STRATEGY_CATALOG[k]?.tier === tier) || cfg.active[0],
+    label: STRATEGY_CATALOG[cfg.active[0]]?.umbrella || cfg.umbrella,
+    abbrev: cfg.abbrev,
+    components: cfg.active,
+  }));
+  return {
+    engines,
+    components,
+    umbrellas,
+    aliases: { ...STRATEGY_MIGRATION_MAP },
+  };
+}
+
 module.exports = {
   UMBRELLA_STRATEGIES,
   COMPONENT_STRATEGIES,
@@ -190,8 +241,12 @@ module.exports = {
   STRATEGY_MIGRATION_MAP,
   STRATEGY_ABBREV,
   TIER_COMPONENT_MAP,
+  STRATEGY_CATALOG,
+  CANONICAL_ENGINE_KEYS,
+  LIVE_COMPONENT_KEYS,
   normalizeStrategyKey,
   getActiveComponentsForTier,
   isActiveComponent,
   isLegacyAlias,
+  getStrategyCatalog,
 };

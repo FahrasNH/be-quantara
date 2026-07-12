@@ -20,19 +20,16 @@ const GrokBacktestJobService = require("../services/GrokBacktestJobService");
 const BacktestJobService = require("../services/BacktestJobService");
 const cfg = require("../../config/env");
 
-const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
-// GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SMC runs real engine w/ server-side gate)
-// + the v2.0 component keys (TS_TF/MD_MR/BS_BR). The FE sends v2.0 component keys for tier legs
-// (FORGE/MINT/VAULT), so omitting them here rejected every Grok-gated Trend Following / Mean Reversion /
-// Breakout leg with a 400 even though the tier was valid. legacyStrategies.STRATEGIES already resolves
-// these keys downstream, so accepting them is safe.
+// Gen2 canonical engines for picker/list APIs (legacy aliases accepted elsewhere via normalize).
+const USER_STRATEGY_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
+// GROK_CONFIRM accepts Gen2 engines + legacy Gen1 aliases + SMART_MONEY_CONCEPTS.
 const GROK_CONFIRM_STRATEGIES = new Set([
   ...USER_STRATEGY_KEYS,
-  "AF_SMC",
+  "ADAPTIVE_FUSION",
   "SMART_MONEY_CONCEPTS",
-  "TS_TF",
-  "MD_MR",
-  "BS_BR",
+  "TREND_FOLLOWING",
+  "MEAN_REVERSION",
+  "BREAKOUT_RETEST",
 ]);
 const GROK_CONFIRM_MAX_SIGNALS = 500;
 
@@ -91,10 +88,15 @@ function validateGrokConfirmPayload(body) {
   };
 }
 const STRATEGY_ABBREV = {
+  AF_SMC: "AF",
+  TS_TF: "TS",
+  MD_MR: "MD",
+  BS_BR: "BS",
+  // Legacy abbrev kept for historical archive rows
   ADAPTIVE_FUSION: "AF",
-  TREND_FOLLOWING: "TM",
-  MEAN_REVERSION: "MR",
-  BREAKOUT_RETEST: "BR",
+  TREND_FOLLOWING: "TS",
+  MEAN_REVERSION: "MD",
+  BREAKOUT_RETEST: "BS",
 };
 
 function buildStrategyList() {
