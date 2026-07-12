@@ -23,7 +23,12 @@ assert.ok(catalog.components.some((c) => c.key === "AF_WYCKOFF" && c.label === "
 assert.ok(catalog.components.some((c) => c.key === "TS_MS" && c.label === "Dow Theory"));
 
 assert.equal(normalizeStrategyKey("ADAPTIVE_FUSION"), "AF_SMC");
+assert.equal(normalizeStrategyKey("SAC"), "AF_SMC");
+assert.equal(normalizeStrategyKey("TM"), "TS_TF");
+assert.equal(normalizeStrategyKey("MR"), "MD_MR");
+assert.equal(normalizeStrategyKey("BR"), "BS_BR");
 assert.equal(isLegacyAlias("ADAPTIVE_FUSION"), true);
+assert.equal(isLegacyAlias("TM"), true);
 assert.equal(isLegacyAlias("AF_SMC"), false);
 
 console.log("  ✓ catalog engines/components exclude Gen1 aliases");

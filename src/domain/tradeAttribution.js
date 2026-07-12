@@ -16,16 +16,16 @@
 
 const round4 = (v) => (Number.isFinite(v) ? parseFloat(v.toFixed(4)) : null);
 
-/** Historical admin abbrevs + umbrella tags → Gen2 engine/component key. */
+/**
+ * Gen2 umbrella abbrevs (STRATEGY_ABBREV write path: AF/TS/MD/BS).
+ * Gen1 abbrevs SAC/TM/MR/BR are NOT listed here — they resolve via
+ * normalizeStrategyKey → STRATEGY_MIGRATION_MAP (SSOT for legacy aliases).
+ */
 const STRATEGY_ABBREV_TO_KEY = {
   AF: "AF_SMC",
   TS: "TS_TF",
   MD: "MD_MR",
   BS: "BS_BR",
-  SAC: "AF_SMC",
-  TM: "TS_TF",
-  MR: "MD_MR",
-  BR: "BS_BR",
 };
 
 /**

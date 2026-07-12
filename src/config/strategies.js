@@ -14,7 +14,7 @@
  *
  * ─── Legacy aliases (migrate → canonical; do NOT add new top-level presets) ──
  *   ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS / SAC → AF_SMC
- *   TREND_FOLLOWING / TF                         → TS_TF
+ *   TREND_FOLLOWING / TF / TM                     → TS_TF
  *   MEAN_REVERSION / MR                          → MD_MR
  *   BREAKOUT_RETEST / BR                         → BS_BR
  *   A / B / C                                    → PDF trade-type presets (NOT AF)
@@ -88,12 +88,13 @@ const STRATEGY_MIGRATION_MAP = {
   TREND_FOLLOWING:      "TS_TF",   // legacy: descriptor
   TREND_SURGE:          "TS_TF",   // umbrella bag name → primary engine
   TF:                   "TS_TF",   // legacy: abbreviation
+  TM:                   "TS_TF",   // legacy: Gen1 admin/conflict abbrev (pre-TS)
   MEAN_REVERSION:       "MD_MR",
   MEAN_DRIFT:           "MD_MR",   // umbrella bag name → primary engine
-  MR:                   "MD_MR",
+  MR:                   "MD_MR",   // legacy: Gen1 abbrev
   BREAKOUT_RETEST:      "BS_BR",
   BREAKOUT_STORM:       "BS_BR",   // umbrella bag name → primary engine
-  BR:                   "BS_BR",
+  BR:                   "BS_BR",   // legacy: Gen1 abbrev
 };
 
 // ─── Abbreviated labels (for UI display) ─────────────────────────────────────

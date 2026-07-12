@@ -83,6 +83,22 @@ console.log("\n🏷️  tradeAttribution Unit Tests\n");
     resolvePersistedStrategyKey({ strategyName: "AF" }) === "AF_SMC"
   );
   t(
+    "Gen1 abbrev SAC → AF_SMC via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "SAC" }) === "AF_SMC"
+  );
+  t(
+    "Gen1 abbrev TM → TS_TF via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "TM" }) === "TS_TF"
+  );
+  t(
+    "Gen1 abbrev MR → MD_MR via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "MR" }) === "MD_MR"
+  );
+  t(
+    "Gen1 abbrev BR → BS_BR via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "BR" }) === "BS_BR"
+  );
+  t(
     "null inputs → null",
     resolvePersistedStrategyKey({}) === null
   );
