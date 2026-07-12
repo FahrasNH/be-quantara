@@ -15,7 +15,8 @@ const STRATEGY_SUPPORTED_TYPES = {
   AF_VSA: ["Scalping", "Swing"],
   TS_TF: ["Intraday", "Swing"],            // Scalping removed to avoid 5m fetch failure
   TS_MS: ["Intraday", "Swing"],
-  TS_VP: ["Intraday", "Swing"],
+  // AMT session VWAP gate (minSessionBars=20) can never clear on Swing 4h (≤6 bars/UTC-day)
+  TS_VP: ["Intraday"],
   MD_MR: ["Scalping", "Intraday"],         // Swing not applicable (mean reversion short-term only)
   BS_BR: ["Scalping", "Intraday", "Swing"], // Breakout works on all timeframes
 };

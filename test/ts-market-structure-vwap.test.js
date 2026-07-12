@@ -302,6 +302,56 @@ test("race entry fires on VWAP reclaim", () => {
   assert.strictEqual(r.reason, "vwap_reclaim");
 });
 
+test("AMT race entry fails closed without timestamps (no whole-history session)", () => {
+  const n = 40;
+  const highs = Array(n).fill(100.1);
+  const lows = Array(n).fill(99.9);
+  const closes = Array(n).fill(100);
+  const volumes = Array(n).fill(1000);
+  closes[n - 2] = 99.5;
+  closes[n - 1] = 100.2;
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, volumes, atr: Array(n).fill(1) },
+    n - 1,
+    { minSessionBars: 20 }
+  );
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "session_timestamps_missing");
+});
+
+test("AMT race entry blocked on 4h Swing session (≤6 bars/UTC-day < minSessionBars 20)", () => {
+  const day0 = Date.UTC(2026, 0, 5);
+  const highs = [];
+  const lows = [];
+  const closes = [];
+  const opens = [];
+  const volumes = [];
+  const timestamps = [];
+  for (let d = 0; d < 5; d++) {
+    for (let b = 0; b < 6; b++) {
+      const t = day0 + d * 86_400_000 + b * 4 * 3_600_000;
+      timestamps.push(t);
+      const px = 100 + d + b * 0.1;
+      opens.push(px - 0.2);
+      highs.push(px + 0.5);
+      lows.push(px - 0.5);
+      closes.push(px);
+      volumes.push(1000);
+    }
+  }
+  const i = closes.length - 1;
+  closes[i - 1] = 104.0;
+  closes[i] = 106.0;
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, timestamps, atr: closes.map(() => 1) },
+    i,
+    { minSessionBars: 20 }
+  );
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "session_warmup");
+  assert.ok((r.meta?.bars ?? 0) < 20);
+});
+
 console.log("\n═══ TrendSurge Race (Sprint 12) ═══");
 
 test("FORGE active components include TS_MS + TS_VP", () => {

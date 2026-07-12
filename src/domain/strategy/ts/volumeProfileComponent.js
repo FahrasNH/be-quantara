@@ -326,6 +326,12 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
  *
  * @returns {{ vote, confidence, reason, meta, signal }}
  */
+function hasUsableSessionTimestamps(timestamps, lastIdx) {
+  if (!Array.isArray(timestamps) || lastIdx < 0) return false;
+  const ts = timestamps[lastIdx];
+  return ts != null && Number.isFinite(ts) && ts > 0;
+}
+
 function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const highs = indicators.highs || [];
@@ -342,6 +348,19 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
       confidence: 0,
       reason: "session_warmup",
       meta: {},
+    };
+  }
+
+  // Fail closed: without bar timestamps, sessionStartIdx falls back to 0 and treats
+  // the entire history as one "session". That wrongly clears minSessionBars on Swing
+  // (4h ≤6 bars/UTC-day) and was the structural root of AMT type-routing anomalies.
+  if (!hasUsableSessionTimestamps(timestamps, lastIdx)) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "session_timestamps_missing",
+      meta: { bars: 0, vwap: null, startIdx: 0 },
     };
   }
 
@@ -465,4 +484,5 @@ module.exports = {
   evaluateVolumeProfileComponent,
   evaluateVolumeProfileEntry,
   resolveVwapTolerance,
+  hasUsableSessionTimestamps,
 };

@@ -610,7 +610,11 @@ class TrendFollowingStrategy extends StrategyBase {
 
   getLastSignalMeta() {
     return {
-      component: "Swing",  // Trend Following = trend-continuation swing trades (Type Trade label)
+      // Racer identity — trade-type (Intraday/Swing) is stamped by the multi-TF harness.
+      // Hardcoding "Swing" painted every TF fill as Swing and broke AMT/TF type stats.
+      component: "TS_TF",
+      winningComponent: "TS_TF",
+      strategyLabel: "Trend Following",
       marketCond: this._trendState.htfTrendConfirmed ? "STRONG_TREND" : "NORMAL",
       direction: this._trendState.htfTrendDirection,
       htfTrendConfirmed: this._trendState.htfTrendConfirmed,
