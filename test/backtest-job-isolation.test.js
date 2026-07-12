@@ -218,6 +218,35 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(feWyckoffOnly.entryModel, "aggressive");
   });
 
+  await test("FE Advanced AF_SMC + Wyckoff-only voters still get aggressive entryModel", () => {
+    const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
+    // useBacktest collapses AF_WYCKOFF → engine AF_SMC with afActiveVoters/selectedComponents
+    const feCollapse = applyStrategyJobDefaults("AF_SMC", {
+      afActiveVoters: ["AF_WYCKOFF"],
+      selectedComponents: ["AF_WYCKOFF"],
+      afUseThreeComponentVoting: true,
+      afMinVotes: 2,
+    });
+    assert.strictEqual(feCollapse.entryModel, "aggressive");
+    assert.strictEqual(feCollapse.wyckoff.entryModel, "aggressive");
+    assert.deepStrictEqual(feCollapse.afActiveVoters, ["AF_WYCKOFF"]);
+
+    // Full FOUNDRY package must NOT force Wyckoff aggressive (SMC+Wyckoff+VSA race)
+    const fullAf = applyStrategyJobDefaults("AF_SMC", {
+      afActiveVoters: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+      selectedComponents: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+    });
+    assert.strictEqual(fullAf.entryModel, undefined);
+    assert.ok(!fullAf.wyckoff);
+
+    // VSA-only collapse must not get Wyckoff aggressive defaults
+    const vsaOnly = applyStrategyJobDefaults("AF_SMC", {
+      afActiveVoters: ["AF_VSA"],
+      selectedComponents: ["AF_VSA"],
+    });
+    assert.strictEqual(vsaOnly.entryModel, undefined);
+  });
+
   await test("worker crash path marks job failed without throwing in parent", async () => {
     // Simulate worker exit failure via cancel+fail semantics on a fresh job object.
     const jobId = BacktestJobService.createJob("u2", {

@@ -130,6 +130,36 @@ function enforceTotalEntryBarCap(entryCandles, dataInfo, job) {
  * @param {string} userId
  * @param {object} opts
  */
+/** Normalize FE/BE AF component aliases to canonical racer keys. */
+function _normalizeAfRacerKeys(raw) {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const out = new Set();
+  for (const c of raw) {
+    const k = String(c || "").toUpperCase();
+    if (k === "AF_SMC" || k === "SMART_MONEY_CONCEPTS" || k === "ADAPTIVE_FUSION" || k === "SMC") {
+      out.add("AF_SMC");
+    } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
+      out.add("AF_WYCKOFF");
+    } else if (k === "AF_VSA" || k === "VSA") {
+      out.add("AF_VSA");
+    }
+  }
+  return [...out];
+}
+
+/**
+ * True when the job is a Wyckoff-only AF run — either strategyKey is AF_WYCKOFF, or
+ * FE collapsed AF_WYCKOFF → AF_SMC engine with only the Wyckoff racer selected.
+ */
+function _isWyckoffOnlyJob(strategyKey, parameters) {
+  if (strategyKey === "AF_WYCKOFF") return true;
+  if (!AF_SMC_KEYS.has(strategyKey)) return false;
+  const active = _normalizeAfRacerKeys(
+    parameters.afActiveRacers || parameters.afActiveVoters || parameters.selectedComponents,
+  );
+  return active.length === 1 && active[0] === "AF_WYCKOFF";
+}
+
 /** Apply per-strategy defaults before a backtest job runs (exported for tests). */
 function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
   const parameters = { ...(parametersIn || {}) };
@@ -140,16 +170,14 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
         parameters.selectedComponents = [strategyKey];
       }
     }
-    // WyckoffStrategy layer defaults to entryModel "moderate" (full Syarat checklist).
-    // Standalone AF_WYCKOFF backtests only count Wyckoff signals after single-racer
-    // isolation (c5646a3); moderate on 15m Scalping yields 0 trades. Use component
-    // "aggressive" (spring/UTAD + reclaim + volume) unless the caller overrides.
-    if (strategyKey === "AF_WYCKOFF"
-        && parameters.entryModel == null
-        && !(parameters.wyckoff && "entryModel" in parameters.wyckoff)) {
-      parameters.entryModel = "aggressive";
-      parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "aggressive" };
-    }
+  }
+  // Standalone Wyckoff (incl. FE Advanced collapse AF_WYCKOFF → AF_SMC + afActiveVoters)
+  // must use aggressive entryModel. Moderate Syarat checklist remains via explicit override.
+  if (_isWyckoffOnlyJob(strategyKey, parameters)
+      && parameters.entryModel == null
+      && !(parameters.wyckoff && "entryModel" in parameters.wyckoff)) {
+    parameters.entryModel = "aggressive";
+    parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "aggressive" };
   }
   return parameters;
 }

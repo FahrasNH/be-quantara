@@ -508,14 +508,17 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const dir = signal;
     const winnerKey = race.winningComponent;
 
-    // Non-SMC racers: promote direction into type legs (independent strategy entry)
+    // Non-SMC racers: promote into AF-supported type legs only (Scalping + Swing).
+    // Do NOT paint Intraday — AF_WYCKOFF/AF_VSA are not Intraday strategies, and
+    // painting all three legs caused false Intraday type attribution when the
+    // multi-position engine ran without per-type activeComponents filtering.
     if (winnerKey === "AF_WYCKOFF" || winnerKey === "AF_VSA") {
       return {
         Scalping: dir,
-        Intraday: dir,
+        Intraday: null,
         Swing:    dir,
         A: dir,
-        B: dir,
+        B: null,
         C: dir,
         meta: attachMeta({
           ...(multi?.meta || {}),

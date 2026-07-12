@@ -7,10 +7,10 @@
  * Entry logic follows Syarat_Entry_Strategi_Wyckoff.txt.
  * Event detection aligned with wyckoff_indicator.txt via wyckoffComponent.
  *
- * Default entryModel: "moderate"
- *   Spring/UTAD + reclaim + prior trend + rejection + CHoCH + RR ≥ 1:2
+ * Default entryModel: "aggressive" (aligned with wyckoffComponent DEFAULTS / AF race).
+ *   Spring/UTAD + reclaim + volume — viable for Scalping/Swing standalone backtests.
  * Set config.entryModel / config.wyckoff.entryModel to:
- *   "aggressive"   — pattern + reclaim + volume only
+ *   "moderate"     — + prior trend + rejection wick + local CHoCH + RR ≥ 1:2 (Syarat)
  *   "conservative" — safest chain including SOS/SOW + LPS/LPSY
  */
 
@@ -25,7 +25,7 @@ const {
 
 /** Strategy-level defaults layered on component DEFAULTS. */
 const STRATEGY_DEFAULTS = {
-  entryModel: "moderate",
+  entryModel: "aggressive",
   minRr: 2.0,
   volMultiplier: 1.5,
   lookback: 100,
@@ -158,6 +158,15 @@ class WyckoffStrategy extends StrategyBase {
     if (meta?.meta?.entry && !meta.meta.entry.passed) {
       return { valid: false, reason: meta.meta.entry.reason || "entry_checklist_failed" };
     }
+
+    // RR + proximity are moderate/conservative Syarat gates — do not re-apply on aggressive.
+    const model = meta?.meta?.entry?.model
+      || this._mergedConfig().entryModel
+      || STRATEGY_DEFAULTS.entryModel;
+    if (model === "aggressive") {
+      return { valid: true, reason: "ok" };
+    }
+
     if (meta?.meta?.rr != null && meta.meta.rr < STRATEGY_DEFAULTS.minRr) {
       return { valid: false, reason: "rr_below_minimum" };
     }

@@ -51,8 +51,8 @@ const DEFAULTS = {
   volumeSmaPeriod: 20,
   cooldownBars: 5,
   // ── Entry gates (Syarat_Entry_Strategi_Wyckoff.txt) ───────────────────────
-  // Component default stays aggressive for AF race compat; WyckoffStrategy
-  // overrides to "moderate" so Syarat checklist is enforced at strategy layer.
+  // Aggressive = AF race / standalone Scalping-viable path. Moderate/conservative
+  // Syarat checklist is opt-in via config.entryModel (not the strategy default).
   entryModel: "aggressive", // aggressive | moderate | conservative
   priorTrendBars: 40,
   priorTrendMinSlopePct: 0.01, // 1% net move before range

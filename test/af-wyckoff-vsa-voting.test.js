@@ -756,6 +756,46 @@ test("GROK_AI_TRADING is experimental identity, not migrated to AF/TS", () => {
   assert.strictEqual(normalizeStrategyKey("AF_WYCKOFF"), "AF_WYCKOFF");
 });
 
+test("REGRESSION: WyckoffStrategy default entryModel fires on mature spring (not moderate)", () => {
+  const WyckoffStrategy = require("../src/domain/strategy/implementations/WyckoffStrategy");
+  const c = makeMatureRangeWithSpring({ spring: true });
+  const indicators = {
+    opens: c.opens, highs: c.highs, lows: c.lows,
+    closes: c.closes, volumes: c.volumes, atr: c.atr,
+  };
+  const s = new WyckoffStrategy();
+  const result = s.evaluate(indicators, c.lastIdx, {});
+  assert.strictEqual(result.vote, "LONG", `default strategy must LONG, got ${result.vote}/${result.reason}`);
+  assert.strictEqual(result.meta?.entry?.model, "aggressive");
+
+  // Fresh instance — prior evaluate sets _lastSignalIdx cooldown
+  const s2 = new WyckoffStrategy();
+  const gated = s2.evaluate(indicators, c.lastIdx, { entryModel: "moderate" });
+  assert.strictEqual(gated.vote, "NEUTRAL", "explicit moderate must still apply Syarat checklist");
+  assert.ok(String(gated.reason).startsWith("entry_checklist_failed"));
+});
+
+test("REGRESSION: Wyckoff-only race promotes Scalping+Swing, not Intraday", () => {
+  const um = new AdaptiveFusionUmbrella();
+  const c = makeMatureRangeWithSpring({ spring: true });
+  const indicators = {
+    opens: c.opens, highs: c.highs, lows: c.lows,
+    closes: c.closes, volumes: c.volumes, atr: c.atr,
+    volSMA: c.volumes.map(() => 900),
+    rsi: c.closes.map(() => 50),
+  };
+  const multi = um.detectSignalMulti(indicators, c.lastIdx, {
+    afActiveRacers: ["AF_WYCKOFF"],
+    entryModel: "aggressive",
+  });
+  assert.strictEqual(multi.meta?.winningComponent, "AF_WYCKOFF");
+  assert.strictEqual(multi.Scalping, "LONG");
+  assert.strictEqual(multi.Swing, "LONG");
+  assert.strictEqual(multi.Intraday, null, "AF racers must not attribute Intraday");
+  assert.strictEqual(multi.B, null);
+  assert.strictEqual(multi.meta?.standaloneRacerEntry, true);
+});
+
 console.log("\n══════════════════════════════════════");
 console.log(`Results: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
