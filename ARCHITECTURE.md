@@ -611,9 +611,11 @@ symbol+timeframe+period; each job re-fetched OHLCV from exchange/DB.
 **Fix (two layers):**
 | Layer | Location | Key | Role |
 |-------|----------|-----|------|
-| Session pool (L1) | `BacktestCandleCache.js` | `{exchange}:{symbol}:{timeframe}` | Full immutable series in-process; slice by date range; gap-only exchange fetch |
-| DB pool (L2) | `candle_cache` via `getCachedCandlesInRangeForBacktest` | same + timestamp | Cross-worker; closed bars skip `cached_at` TTL |
-| Warm worker | `BacktestJobService.js` | — | Reuse forked worker up to 12 jobs / 30 min so L1 survives compare runs |
+| Worker-local pool (L1) | `BacktestCandleCache.js` | `{exchange}:{symbol}:{timeframe}` | Full immutable series within one isolated worker/job; slice by date range; gap-only exchange fetch |
+| DB pool (L2) | `candle_cache` via `getCachedCandlesInRangeForBacktest` | same + timestamp | Cross-job and cross-worker reuse; immutable reads for closed bars skip `cached_at` TTL |
 
-**Env knobs:** `BACKTEST_CANDLE_POOL_ENTRIES`, `BACKTEST_CANDLE_POOL_TTL_MS`,
-`BACKTEST_WORKER_WARM_MAX_JOBS`, `BACKTEST_WORKER_WARM_TTL_MS`.
+Each backtest uses a dedicated child worker that is terminated after completion.
+Consequently, L1 is scoped to that worker/job; durable reuse between compare/tier
+jobs comes from the shared DB L2.
+
+**Env knobs:** `BACKTEST_CANDLE_POOL_ENTRIES`, `BACKTEST_CANDLE_POOL_TTL_MS`.

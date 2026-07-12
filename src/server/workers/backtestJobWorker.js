@@ -3,50 +3,43 @@
  * Parent: BacktestJobService (fork with --max-old-space-size).
  * IPC: { type: 'start', userId, opts } | { type: 'cancel' }
  * Out:  { type: 'progress', data } | { type: 'done', result } | { type: 'error', error }
- *
- * Warm-worker reuse: parent may send multiple start messages on the same process
- * so BacktestCandleCache stays hot across compare/tier strategy runs.
  */
 
 "use strict";
 
 const { runBacktestJob } = require("../services/runBacktestJob");
 
-let running = false;
 let aborted = false;
-let abortController = new AbortController();
+const abortController = new AbortController();
 
-function makeJobAdapter() {
-  return {
-    status: "pending",
-    aborted: false,
-    abortController,
-    progress(data) {
-      if (process.connected) process.send({ type: "progress", data });
-    },
-    done(result) {
-      this.status = "done";
-      if (process.connected) process.send({ type: "done", result });
-    },
-    fail(errMsg) {
-      this.status = "error";
-      if (process.connected) process.send({ type: "error", error: errMsg });
-    },
-  };
-}
+const jobAdapter = {
+  status: "pending",
+  aborted: false,
+  abortController,
+  progress(data) {
+    if (process.connected) process.send({ type: "progress", data });
+  },
+  done(result) {
+    this.status = "done";
+    if (process.connected) process.send({ type: "done", result });
+  },
+  fail(errMsg) {
+    this.status = "error";
+    if (process.connected) process.send({ type: "error", error: errMsg });
+  },
+};
 
-async function handleStart(msg) {
-  if (running) {
-    if (process.connected) {
-      process.send({ type: "error", error: "Worker busy — cannot start overlapping backtest" });
-    }
+process.on("message", async (msg) => {
+  if (!msg || typeof msg !== "object") return;
+
+  if (msg.type === "cancel") {
+    aborted = true;
+    jobAdapter.aborted = true;
+    abortController.abort();
     return;
   }
 
-  running = true;
-  aborted = false;
-  abortController = new AbortController();
-  const jobAdapter = makeJobAdapter();
+  if (msg.type !== "start") return;
 
   try {
     await runBacktestJob(jobAdapter, msg.userId, msg.opts || {});
@@ -59,23 +52,9 @@ async function handleStart(msg) {
     } else {
       jobAdapter.fail(err.message || String(err));
     }
-  } finally {
-    running = false;
   }
-}
-
-process.on("message", (msg) => {
-  if (!msg || typeof msg !== "object") return;
-
-  if (msg.type === "cancel") {
-    aborted = true;
-    abortController.abort();
-    return;
-  }
-
-  if (msg.type === "start") {
-    void handleStart(msg);
-  }
+  // Parent terminates this one-job worker after done/error IPC is received.
+  // Do not call process.exit() here: large result payloads must fully flush.
 });
 
 process.on("disconnect", () => {

@@ -131,7 +131,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
       // Either queued, or both running if first already failed fast — accept queued OR running.
       assert.ok(j2, "second job exists");
       if (j2.status === "queued") {
-        assert.ok(BacktestJobService._stats().queued >= 1 || true);
+        assert.ok(BacktestJobService._stats().queued >= 1, "queued job should be counted");
         released = true;
       }
       BacktestJobService.cancelJob(id1);
