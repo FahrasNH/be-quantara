@@ -133,11 +133,22 @@ function enforceTotalEntryBarCap(entryCandles, dataInfo, job) {
 /** Apply per-strategy defaults before a backtest job runs (exported for tests). */
 function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
   const parameters = { ...(parametersIn || {}) };
-  if ((strategyKey === "AF_WYCKOFF" || strategyKey === "AF_VSA")
-      && !parameters.afActiveRacers && !parameters.afActiveVoters) {
-    parameters.afActiveRacers = [strategyKey];
-    if (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length) {
-      parameters.selectedComponents = [strategyKey];
+  if (strategyKey === "AF_WYCKOFF" || strategyKey === "AF_VSA") {
+    if (!parameters.afActiveRacers && !parameters.afActiveVoters) {
+      parameters.afActiveRacers = [strategyKey];
+      if (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length) {
+        parameters.selectedComponents = [strategyKey];
+      }
+    }
+    // WyckoffStrategy layer defaults to entryModel "moderate" (full Syarat checklist).
+    // Standalone AF_WYCKOFF backtests only count Wyckoff signals after single-racer
+    // isolation (c5646a3); moderate on 15m Scalping yields 0 trades. Use component
+    // "aggressive" (spring/UTAD + reclaim + volume) unless the caller overrides.
+    if (strategyKey === "AF_WYCKOFF"
+        && parameters.entryModel == null
+        && !(parameters.wyckoff && "entryModel" in parameters.wyckoff)) {
+      parameters.entryModel = "aggressive";
+      parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "aggressive" };
     }
   }
   return parameters;

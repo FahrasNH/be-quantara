@@ -204,9 +204,18 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     const out = applyStrategyJobDefaults("AF_WYCKOFF", {});
     assert.deepStrictEqual(out.afActiveRacers, ["AF_WYCKOFF"]);
     assert.deepStrictEqual(out.selectedComponents, ["AF_WYCKOFF"]);
+    assert.strictEqual(out.entryModel, "aggressive");
+    assert.strictEqual(out.wyckoff.entryModel, "aggressive");
     const preserved = applyStrategyJobDefaults("AF_WYCKOFF", { afActiveVoters: ["AF_VSA"] });
     assert.deepStrictEqual(preserved.afActiveVoters, ["AF_VSA"]);
     assert.ok(!preserved.afActiveRacers);
+    const moderate = applyStrategyJobDefaults("AF_WYCKOFF", { entryModel: "moderate" });
+    assert.strictEqual(moderate.entryModel, "moderate");
+    const feWyckoffOnly = applyStrategyJobDefaults("AF_WYCKOFF", {
+      afActiveVoters: ["AF_WYCKOFF"],
+      selectedComponents: ["AF_WYCKOFF"],
+    });
+    assert.strictEqual(feWyckoffOnly.entryModel, "aggressive");
   });
 
   await test("worker crash path marks job failed without throwing in parent", async () => {
