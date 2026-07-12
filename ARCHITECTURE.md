@@ -102,6 +102,10 @@ default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throt
 - Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
 - Same-bar winner = highest confidence; ties break `AF_SMC` → `AF_WYCKOFF` → `AF_VSA`.
 - Trade attribution label = **winning component only** (never joined "SMC + Wyckoff + VSA").
+- `trades.strategy_name` persists the **winning component canonical key** (`AF_WYCKOFF`, …),
+  not the umbrella engine alone. Startup backfill prefers `indicators.winningComponent` /
+  `firedByStrategy`; rows without that metadata only normalize Gen1/abbrev → engine key
+  (`ADAPTIVE_FUSION`/`AF` → `AF_SMC`) — per-racer identity for those rows is accepted lost.
 - Max 1 position/symbol still enforced by BotEngine / backtest engines.
 - Rollback: `afCombinationMode: "vote"` restores Sprint 8 2/3 (altcoin 3/3) voting;
   `afUseThreeComponentVoting: false` → SMC-only passthrough.

@@ -259,6 +259,13 @@ async function init() {
   } catch (e) {
     console.warn(`[DB repair] Gagal: ${e.message}`);
   }
+
+  // Best-effort: normalize legacy/abbrev strategy_name + prefer winningComponent.
+  try {
+    await backfillTradeStrategyNames({ limit: 10000 });
+  } catch (e) {
+    console.warn(`[DB] backfillTradeStrategyNames: ${e.message}`);
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -477,11 +484,12 @@ function parseSession(row) {
 // ── Trades ────────────────────────────────────
 
 async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators, strategyName, isPartial }) {
-  // BUG-001: denormalisasi strategyName di kolom eksplisit AT OPEN time. Fallback
-  // ke field di dalam snapshot indikator (strategy / firedByStrategy) agar caller
-  // lama yang hanya mengirim indicators tetap tercatat.
-  const resolvedStrategy =
-    strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null;
+  // Prefer winning-racer / firedByStrategy over umbrella engine keys.
+  const { resolvePersistedStrategyKey } = require("../../domain/tradeAttribution");
+  const resolvedStrategy = resolvePersistedStrategyKey({
+    strategyName,
+    indicators,
+  });
 
   if (!resolvedStrategy) {
     console.warn('[DB] insertTrade: strategyName null — trade akan masuk sebagai Untracked', { sessionId, symbol, side });
@@ -511,6 +519,53 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
     ]
   );
   return rows[0].id;
+}
+
+/**
+ * Backfill `trades.strategy_name` from indicators.winningComponent / firedByStrategy
+ * and normalize legacy Gen1 / abbrev values → Gen2 canonical keys.
+ * Best-effort; rows without attribution metadata can only normalize to the
+ * umbrella engine (AF_SMC / TS_TF / …) — per-racer identity is accepted as lost.
+ * @returns {{ scanned: number, updated: number }}
+ */
+async function backfillTradeStrategyNames({ limit = 5000 } = {}) {
+  const { resolvePersistedStrategyKey } = require("../../domain/tradeAttribution");
+  const { rows } = await pool.query(
+    `SELECT id, strategy_name, indicators
+       FROM trades
+      ORDER BY id DESC
+      LIMIT $1`,
+    [limit]
+  );
+
+  let updated = 0;
+  for (const row of rows) {
+    let ind = null;
+    if (row.indicators) {
+      try {
+        ind = typeof row.indicators === "string" ? JSON.parse(row.indicators) : row.indicators;
+      } catch { ind = null; }
+    }
+    const next = resolvePersistedStrategyKey({
+      strategyName: row.strategy_name,
+      indicators: ind,
+    });
+    if (!next || next === row.strategy_name) continue;
+    await pool.query(`UPDATE trades SET strategy_name = $1 WHERE id = $2`, [next, row.id]);
+    updated += 1;
+  }
+  if (updated > 0) {
+    console.log(`[DB] backfillTradeStrategyNames: updated ${updated}/${rows.length} trades`);
+  }
+  return { scanned: rows.length, updated };
+}
+
+/** Distinct symbols present in the trades store (admin / backtest validation). */
+async function getAdminTradeSymbols() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT symbol FROM trades WHERE symbol IS NOT NULL ORDER BY symbol ASC`
+  );
+  return rows.map((r) => r.symbol);
 }
 
 async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime }) {
@@ -836,9 +891,13 @@ function mapExportRow(row) {
   const pnlNet = pnl - fee - funding;
 
   // BUG-001: strategi dari kolom denormalisasi; fallback ke blob lama untuk
-  // baris pra-migrasi. "Untracked" hanya bila benar-benar tak ada data.
+  // baris pra-migrasi. Prefer winning racer over umbrella engine key.
   const strategy =
-    row.strategy_name ?? ind?.strategy ?? ind?.firedByStrategy ?? "Untracked";
+    row.strategy_name
+    ?? ind?.winningComponent
+    ?? ind?.firedByStrategy
+    ?? ind?.strategy
+    ?? "Untracked";
 
   // FEAT-001: Planned R:R = |tp-entry| / |entry-sl|; Actual R:R (R-multiple)
   // = pnlNet / plannedRisk, plannedRisk = |entry-sl| * size.
@@ -1680,6 +1739,8 @@ module.exports = {
   getTradeStats,
   getAdminTrades,
   getAdminTradeStats,
+  getAdminTradeSymbols,
+  backfillTradeStrategyNames,
   getAdminStrategyStats,
   getAdminStrategyPnlHistory,
   getAdminTradesExport,

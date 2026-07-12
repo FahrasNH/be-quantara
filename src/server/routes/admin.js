@@ -52,13 +52,27 @@ module.exports = function createAdminRouter(helpers = {}) {
   }
 
   // ── Display helpers ─────────────────────────────────────────────────────────
-  const STRATEGY_ABBREV = {
-    ADAPTIVE_FUSION: "AF",
-    TREND_FOLLOWING:  "TM",
-    MEAN_REVERSION:  "MR",
-    BREAKOUT_RETEST: "BR",
+  const {
+    STRATEGY_ABBREV,
+    STRATEGY_CATALOG,
+    STRATEGY_MIGRATION_MAP,
+    normalizeStrategyKey,
+  } = require("../../config/strategies");
+
+  const abbrevStrategy = (key) => {
+    if (!key) return "—";
+    const canon = normalizeStrategyKey(key) || key;
+    return STRATEGY_ABBREV[canon] || STRATEGY_ABBREV[key] || String(canon).slice(0, 2).toUpperCase();
   };
-  const abbrevStrategy = key => STRATEGY_ABBREV[key] || (key ? key.slice(0, 2).toUpperCase() : "—");
+
+  /** Human label for trade/history UI — no internal-key suffix. */
+  const strategyDisplayLabel = (key) => {
+    if (!key) return "—";
+    const canon = normalizeStrategyKey(key) || String(key).toUpperCase();
+    return STRATEGY_CATALOG[canon]?.label
+      || STRATEGY_CATALOG[STRATEGY_MIGRATION_MAP[canon]]?.label
+      || canon;
+  };
 
   const EXCHANGE_LABEL = { bitget: "Bitget", okx: "OKX", binance: "Binance" };
   const exchangeLabel = ex => EXCHANGE_LABEL[ex] || (ex ? ex.charAt(0).toUpperCase() + ex.slice(1) : "—");
@@ -378,7 +392,8 @@ module.exports = function createAdminRouter(helpers = {}) {
           user:      t.username || "—",
           symbol:    t.symbol,
           side:      t.side,
-          strategy:  abbrevStrategy(t.strategy_name),
+          strategyKey: normalizeStrategyKey(t.strategy_name) || t.strategy_name || null,
+          strategy:  strategyDisplayLabel(t.strategy_name),
           entry:     fmtPrice(t.entry_price),
           exit:      t.exit_price === null || t.exit_price === undefined ? "—" : fmtPrice(t.exit_price),
           netPnl:    grossPnl,    // field lama dipertahankan → dipakai computeKpis FE (gross)
@@ -443,6 +458,19 @@ module.exports = function createAdminRouter(helpers = {}) {
           { label: "Closed Trades",      value: closed.toLocaleString("en-US") },
         ],
       });
+    })
+  );
+
+  /**
+   * GET /api/v1/admin/trade-symbols — distinct symbols from the live trades store.
+   * Used by Backtest Validation + Trade History dynamic symbol pickers.
+   */
+  router.get(
+    "/trade-symbols",
+    requireAdmin,
+    asyncHandler(async (_req, res) => {
+      const symbols = await db.getAdminTradeSymbols();
+      res.json({ ok: true, symbols });
     })
   );
 

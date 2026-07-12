@@ -2554,7 +2554,8 @@ class BotEngine extends EventEmitter {
           // BUG-004: simpan snapshot indikator entry agar partial-close bisa
           // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
           entrySnapshot: enrichedSnapshot,
-          strategyName:  this.config.strategyKey ?? null,
+          // Persist winning-racer / attribution key (not umbrella engine alone).
+          strategyName:  attributionKey ?? this.config.strategyKey ?? null,
           // SL+ tracking
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
@@ -2649,11 +2650,11 @@ class BotEngine extends EventEmitter {
             dryRun:     false,
             orderId:    order?.orderId,
             indicators: enrichedSnapshot,
-            // BUG-001: denormalisasi nama strategi di kolom eksplisit saat OPEN.
-            strategyName: this.config.strategyKey ?? null,
+            // Persist winning-racer canonical key (AF_WYCKOFF / TS_MS / …), not umbrella.
+            strategyName: attributionKey ?? this.config.strategyKey ?? null,
           });
           onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
-            strategyKey: this.config.strategyKey,
+            strategyKey: attributionKey ?? this.config.strategyKey,
             symbol:      this.config.symbol,
             side:        signal,
             entryPrice:  price,
@@ -2696,7 +2697,7 @@ class BotEngine extends EventEmitter {
         tpMode: options.tpMode ?? this.config.tpMode ?? "full",
         // BUG-004: snapshot entry untuk diwariskan ke partial-close.
         entrySnapshot: enrichedSnapshot,
-        strategyName:  this.config.strategyKey ?? null,
+        strategyName:  attributionKey ?? this.config.strategyKey ?? null,
         // SL+ tracking
         remainingSize: finalSize,
         R:             slDist,
@@ -2726,14 +2727,12 @@ class BotEngine extends EventEmitter {
           sl, tp, size: finalSize, openTime, atr,
           dryRun:     true,
           orderId:    pos.id,
-          // BUG-001: gunakan snapshot yang sudah diperkaya atribusi (firedByStrategy)
-          // + persist strategyName eksplisit. Sebelumnya dry-run pakai indicatorSnapshot
-          // mentah → 33/49 trade dry-run tampil "(belum tercatat)".
+          // Persist winning-racer canonical key + attribution snapshot.
           indicators: enrichedSnapshot,
-          strategyName: this.config.strategyKey ?? null,
+          strategyName: attributionKey ?? this.config.strategyKey ?? null,
         });
         onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
-          strategyKey: this.config.strategyKey,
+          strategyKey: attributionKey ?? this.config.strategyKey,
           symbol:      this.config.symbol,
           side:        signal,
           entryPrice:  price,

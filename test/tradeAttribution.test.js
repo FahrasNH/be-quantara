@@ -49,6 +49,45 @@ console.log("\n🏷️  tradeAttribution Unit Tests\n");
   t("strategyKey undefined → firedByStrategy null", a.firedByStrategy === null);
 }
 
+// ── resolvePersistedStrategyKey: prefer winning component over umbrella ──────
+{
+  const { resolvePersistedStrategyKey } = require("../src/domain/tradeAttribution");
+  t(
+    "winningComponent beats config umbrella",
+    resolvePersistedStrategyKey({
+      strategyName: "AF_WYCKOFF",
+      configKey: "AF_SMC",
+      indicators: { winningComponent: "AF_WYCKOFF", firedByStrategy: "AF_WYCKOFF" },
+    }) === "AF_WYCKOFF"
+  );
+  t(
+    "winningComponent beats stale umbrella strategyName",
+    resolvePersistedStrategyKey({
+      strategyName: "AF_SMC",
+      indicators: { winningComponent: "AF_VSA" },
+    }) === "AF_VSA"
+  );
+  t(
+    "firedByStrategy used when strategyName omitted",
+    resolvePersistedStrategyKey({
+      indicators: { firedByStrategy: "TS_MS" },
+      configKey: "TS_TF",
+    }) === "TS_MS"
+  );
+  t(
+    "legacy ADAPTIVE_FUSION normalizes to AF_SMC",
+    resolvePersistedStrategyKey({ strategyName: "ADAPTIVE_FUSION" }) === "AF_SMC"
+  );
+  t(
+    "abbrev AF → AF_SMC",
+    resolvePersistedStrategyKey({ strategyName: "AF" }) === "AF_SMC"
+  );
+  t(
+    "null inputs → null",
+    resolvePersistedStrategyKey({}) === null
+  );
+}
+
 console.log(`\n  TESTS: ${pass} passed, ${fail} failed (${pass + fail} total)`);
 console.log(fail === 0 ? "  ✅ ALL TESTS PASSED\n" : "  ❌ SOME TESTS FAILED\n");
 process.exit(fail === 0 ? 0 : 1);

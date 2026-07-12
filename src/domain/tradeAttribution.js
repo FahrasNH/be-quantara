@@ -16,6 +16,60 @@
 
 const round4 = (v) => (Number.isFinite(v) ? parseFloat(v.toFixed(4)) : null);
 
+/** Historical admin abbrevs + umbrella tags → Gen2 engine/component key. */
+const STRATEGY_ABBREV_TO_KEY = {
+  AF: "AF_SMC",
+  TS: "TS_TF",
+  MD: "MD_MR",
+  BS: "BS_BR",
+  SAC: "AF_SMC",
+  TM: "TS_TF",
+  MR: "MD_MR",
+  BR: "BS_BR",
+};
+
+/**
+ * Resolve the canonical key that must be persisted on `trades.strategy_name`.
+ * Prefer race winning component / firedByStrategy over umbrella engine keys.
+ *
+ * Historical gap: rows without indicators.winningComponent|firedByStrategy can
+ * only be normalized to the umbrella engine (e.g. ADAPTIVE_FUSION → AF_SMC) —
+ * per-racer identity is lost for those rows.
+ *
+ * @param {Object} [p]
+ * @param {string} [p.strategyName] — explicit attribution key (preferred)
+ * @param {string} [p.configKey]    — bot/engine strategyKey fallback
+ * @param {object} [p.indicators]   — entry snapshot (winningComponent / firedByStrategy)
+ * @returns {string|null}
+ */
+function resolvePersistedStrategyKey({ strategyName, configKey, indicators } = {}) {
+  const ind = indicators && typeof indicators === "object" ? indicators : {};
+  const candidates = [
+    ind.winningComponent,
+    ind.firedByStrategy,
+    strategyName,
+    configKey,
+    ind.strategy,
+  ];
+
+  let { normalizeStrategyKey } = {};
+  try {
+    ({ normalizeStrategyKey } = require("../config/strategies"));
+  } catch {
+    normalizeStrategyKey = (k) => k;
+  }
+
+  for (const c of candidates) {
+    if (c == null || c === "") continue;
+    const raw = String(c).trim();
+    const fromAbbrev = STRATEGY_ABBREV_TO_KEY[raw.toUpperCase()];
+    const mapped = fromAbbrev || raw;
+    const normalized = normalizeStrategyKey(mapped);
+    if (normalized) return String(normalized).toUpperCase();
+  }
+  return null;
+}
+
 /**
  * @param {Object} p
  * @param {string} p.strategyKey  — strategi yang memfire trade ini
@@ -38,4 +92,4 @@ function buildTradeAttribution({ strategyKey, strategyLabel, sl, tp, slDist, tpD
   };
 }
 
-module.exports = { buildTradeAttribution };
+module.exports = { buildTradeAttribution, resolvePersistedStrategyKey, STRATEGY_ABBREV_TO_KEY };
