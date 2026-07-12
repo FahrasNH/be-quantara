@@ -25,6 +25,44 @@ const MAX_CONCURRENT = Number(process.env.BACKTEST_MAX_CONCURRENT) || 1;
 const WORKER_HEAP_MB = Number(process.env.BACKTEST_WORKER_HEAP_MB) || 768;
 const ISOLATE = process.env.BACKTEST_ISOLATE !== "0";
 const WORKER_PATH = path.join(__dirname, "../workers/backtestJobWorker.js");
+/** Reuse forked worker across sequential compare/tier jobs so in-process candle pool stays warm. */
+const WORKER_WARM_MAX_JOBS = Number(process.env.BACKTEST_WORKER_WARM_MAX_JOBS) || 12;
+const WORKER_WARM_TTL_MS = Number(process.env.BACKTEST_WORKER_WARM_TTL_MS) || 30 * 60_000;
+
+/** @type {{ worker: import('child_process').ChildProcess, jobs: number, lastUsed: number, busy: boolean, currentJob: BacktestJob | null, currentSettle: (() => void) | null, handlersBound: boolean } | null} */
+let warmWorkerState = null;
+let warmWorkerRetireTimer = null;
+
+function scheduleWarmWorkerRetire() {
+  if (warmWorkerRetireTimer) clearTimeout(warmWorkerRetireTimer);
+  warmWorkerRetireTimer = setTimeout(() => {
+    warmWorkerRetireTimer = null;
+    if (!warmWorkerState || warmWorkerState.busy) return;
+    try { warmWorkerState.worker.kill("SIGTERM"); } catch { /* ignore */ }
+    warmWorkerState = null;
+  }, WORKER_WARM_TTL_MS);
+  if (typeof warmWorkerRetireTimer.unref === "function") warmWorkerRetireTimer.unref();
+}
+
+function canReuseWarmWorker() {
+  return warmWorkerState
+    && !warmWorkerState.busy
+    && !warmWorkerState.worker.killed
+    && warmWorkerState.worker.connected
+    && warmWorkerState.jobs < WORKER_WARM_MAX_JOBS
+    && Date.now() - warmWorkerState.lastUsed < WORKER_WARM_TTL_MS;
+}
+
+function retireWarmWorker() {
+  if (warmWorkerRetireTimer) {
+    clearTimeout(warmWorkerRetireTimer);
+    warmWorkerRetireTimer = null;
+  }
+  if (warmWorkerState?.worker && !warmWorkerState.worker.killed) {
+    try { warmWorkerState.worker.kill("SIGTERM"); } catch { /* ignore */ }
+  }
+  warmWorkerState = null;
+}
 
 class BacktestJob extends EventEmitter {
   constructor(id) {
@@ -71,7 +109,7 @@ class BacktestJob extends EventEmitter {
     this.abortController.abort();
     if (this._worker && !this._worker.killed) {
       try { this._worker.send({ type: "cancel" }); } catch { /* ignore */ }
-      try { this._worker.kill("SIGTERM"); } catch { /* ignore */ }
+      retireWarmWorker();
     }
     this.emit("cancelled");
   }
@@ -123,6 +161,73 @@ function toPublicStatus(job) {
   };
 }
 
+function bindWorkerHandlersOnce(worker) {
+  if (warmWorkerState?.handlersBound && warmWorkerState.worker === worker) return;
+
+  worker.on("message", (msg) => {
+    const state = warmWorkerState;
+    const job = state?.currentJob;
+    const settleOnce = state?.currentSettle;
+    if (!job || !msg || typeof msg !== "object") return;
+
+    if (msg.type === "progress") job.progress(msg.data || {});
+    else if (msg.type === "done") {
+      job._ipcSettled = true;
+      job.lastActivityAt = Date.now();
+      job.done(msg.result);
+      if (state && state.worker === worker) {
+        state.busy = false;
+        state.jobs += 1;
+        state.lastUsed = Date.now();
+        state.currentJob = null;
+        state.currentSettle = null;
+        scheduleWarmWorkerRetire();
+      }
+      settleOnce?.();
+    } else if (msg.type === "error") {
+      job._ipcSettled = true;
+      job.lastActivityAt = Date.now();
+      if (job.status !== "cancelled") job.fail(msg.error || "Backtest failed");
+      retireWarmWorker();
+      settleOnce?.();
+    }
+  });
+
+  worker.stderr?.on("data", (buf) => {
+    const line = String(buf).trim();
+    const jobId = warmWorkerState?.currentJob?.id || "worker";
+    if (line) console.error(`[backtest-worker ${String(jobId).slice(0, 8)}] ${line}`);
+  });
+
+  worker.on("error", (err) => {
+    const job = warmWorkerState?.currentJob;
+    if (job && job.status !== "cancelled" && job.status !== "done") {
+      job.fail(`Backtest worker error: ${err.message}`);
+    }
+    const settleOnce = warmWorkerState?.currentSettle;
+    retireWarmWorker();
+    settleOnce?.();
+  });
+
+  worker.on("exit", (code, signal) => {
+    const job = warmWorkerState?.currentJob;
+    const settleOnce = warmWorkerState?.currentSettle;
+    if (warmWorkerState && warmWorkerState.worker === worker) {
+      warmWorkerState = null;
+    }
+    if (job && !job._ipcSettled
+        && (job.status === "running" || job.status === "pending" || job.status === "queued")) {
+      const reason = signal
+        ? `Backtest worker killed (${signal}) — often out-of-memory. Retry with 3–6 months or fewer strategies.`
+        : `Backtest worker exited (code ${code}) before delivering a result. Retry with a shorter period if this persists.`;
+      job.fail(reason);
+    }
+    settleOnce?.();
+  });
+
+  if (warmWorkerState) warmWorkerState.handlersBound = true;
+}
+
 class BacktestJobService {
   static createJob(userId, opts) {
     const jobId = crypto.randomUUID();
@@ -157,6 +262,28 @@ class BacktestJobService {
 
   static toPublicStatus(job) {
     return toPublicStatus(job);
+  }
+
+  static _startWorkerJob(job, worker, jobId, settleOnce, { reuse = false } = {}) {
+    job._worker = worker;
+    job._ipcSettled = false;
+    job.status = "running";
+    if (warmWorkerState) {
+      warmWorkerState.currentJob = job;
+      warmWorkerState.currentSettle = settleOnce;
+      warmWorkerState.busy = true;
+      if (warmWorkerRetireTimer) {
+        clearTimeout(warmWorkerRetireTimer);
+        warmWorkerRetireTimer = null;
+      }
+    }
+
+    job.progress({
+      phase: "info",
+      message: reuse
+        ? "Reusing warm backtest worker — candle cache stays hot for compare/tier runs"
+        : `Running in isolated worker (heap cap ${WORKER_HEAP_MB}MB) — live API stays responsive`,
+    });
   }
 
   static _dispatch(jobId) {
@@ -199,6 +326,19 @@ class BacktestJobService {
       onSettle();
     };
 
+    if (canReuseWarmWorker()) {
+      const worker = warmWorkerState.worker;
+      this._startWorkerJob(job, worker, jobId, settleOnce, { reuse: true });
+      try {
+        worker.send({ type: "start", userId: job.userId, opts: job.opts });
+      } catch (err) {
+        retireWarmWorker();
+        job.fail(`Failed to send job to warm worker: ${err.message}`);
+        settleOnce();
+      }
+      return;
+    }
+
     let worker;
     try {
       worker = fork(WORKER_PATH, [], {
@@ -212,66 +352,30 @@ class BacktestJobService {
       return;
     }
 
-    job._worker = worker;
-    job.status = "running";
-    job.progress({
-      phase: "info",
-      message: `Running in isolated worker (heap cap ${WORKER_HEAP_MB}MB) — live API stays responsive`,
-    });
-
-    worker.on("message", (msg) => {
-      if (!msg || typeof msg !== "object") return;
-      if (msg.type === "progress") job.progress(msg.data || {});
-      else if (msg.type === "done") {
-        job._ipcSettled = true;
-        job.lastActivityAt = Date.now();
-        job.done(msg.result);
-        settleOnce();
-        try { worker.kill("SIGTERM"); } catch { /* ignore */ }
-      } else if (msg.type === "error") {
-        job._ipcSettled = true;
-        job.lastActivityAt = Date.now();
-        if (job.status !== "cancelled") job.fail(msg.error || "Backtest failed");
-        settleOnce();
-        try { worker.kill("SIGTERM"); } catch { /* ignore */ }
-      }
-    });
-
-    worker.stderr?.on("data", (buf) => {
-      const line = String(buf).trim();
-      if (line) console.error(`[backtest-worker ${jobId.slice(0, 8)}] ${line}`);
-    });
-
-    worker.on("error", (err) => {
-      if (job.status !== "cancelled" && job.status !== "done") {
-        job.fail(`Backtest worker error: ${err.message}`);
-      }
-      settleOnce();
-    });
-
-    worker.on("exit", (code, signal) => {
-      // Worker calls process.exit(0) after IPC; if done/error already received, ignore.
-      if (!job._ipcSettled
-          && (job.status === "running" || job.status === "pending" || job.status === "queued")) {
-        const reason = signal
-          ? `Backtest worker killed (${signal}) — often out-of-memory. Retry with 3–6 months or fewer strategies.`
-          : `Backtest worker exited (code ${code}) before delivering a result. Retry with a shorter period if this persists.`;
-        job.fail(reason);
-      }
-      settleOnce();
-    });
+    warmWorkerState = {
+      worker,
+      jobs: 0,
+      lastUsed: Date.now(),
+      busy: true,
+      currentJob: null,
+      currentSettle: null,
+      handlersBound: false,
+    };
+    bindWorkerHandlersOnce(worker);
+    this._startWorkerJob(job, worker, jobId, settleOnce);
 
     try {
       worker.send({ type: "start", userId: job.userId, opts: job.opts });
     } catch (err) {
+      retireWarmWorker();
       job.fail(`Failed to send job to worker: ${err.message}`);
       settleOnce();
-      try { worker.kill("SIGTERM"); } catch { /* ignore */ }
     }
   }
 
   /** @internal test helper */
   static _clearAll() {
+    retireWarmWorker();
     for (const job of jobStore.values()) {
       if (job._worker && !job._worker.killed) {
         try { job._worker.kill("SIGKILL"); } catch { /* ignore */ }
@@ -284,7 +388,15 @@ class BacktestJobService {
 
   /** @internal */
   static _stats() {
-    return { activeCount, queued: waitQueue.length, jobs: jobStore.size, isolate: ISOLATE };
+    return {
+      activeCount,
+      queued: waitQueue.length,
+      jobs: jobStore.size,
+      isolate: ISOLATE,
+      warmWorker: warmWorkerState
+        ? { jobs: warmWorkerState.jobs, busy: warmWorkerState.busy, connected: warmWorkerState.worker?.connected }
+        : null,
+    };
   }
 
   /** @internal test helper */

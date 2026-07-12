@@ -1323,6 +1323,33 @@ async function getCachedCandlesInRange(exchange, symbol, interval, startTs, endT
   }));
 }
 
+/**
+ * Backtest candle_cache read — closed historical bars skip TTL (immutable pool).
+ * Recent frontier bars still respect cached_at so open candles can refresh.
+ */
+async function getCachedCandlesInRangeForBacktest(exchange, symbol, interval, startTs, endTs, frontierTs, maxAgeSeconds = DB_BACKTEST_KLINES_TTL) {
+  const ttl = maxAgeSeconds ?? 86_400;
+  const frontier = Number.isFinite(frontierTs) ? frontierTs : endTs;
+  const { rows } = await pool.query(
+    `SELECT * FROM candle_cache
+     WHERE exchange = $1 AND symbol = $2 AND "interval" = $3
+       AND timestamp >= $4 AND timestamp <= $5
+       AND (timestamp < $6 OR cached_at > extract(epoch from now())::bigint - $7)
+     ORDER BY timestamp ASC`,
+    [exchange, symbol, interval, startTs, endTs, frontier, ttl]
+  );
+  if (rows.length === 0) return null;
+  return rows.map((r) => ({
+    timestamp: r.timestamp,
+    date:      new Date(r.timestamp).toISOString(),
+    open:      r.open,
+    high:      r.high,
+    low:       r.low,
+    close:     r.close,
+    volume:    r.volume,
+  }));
+}
+
 async function clearOldCache() {
   await pool.query(
     `DELETE FROM candle_cache WHERE cached_at < extract(epoch from now())::bigint - 86400`
@@ -1767,6 +1794,7 @@ module.exports = {
   cacheCandles,
   getCachedCandles,
   getCachedCandlesInRange,
+  getCachedCandlesInRangeForBacktest,
   clearOldCache,
   // logs
   insertLog,

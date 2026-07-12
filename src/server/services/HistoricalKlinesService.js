@@ -12,6 +12,7 @@ const db = require("../../infrastructure/db/database");
 const { withExchangeGate } = require("../../infrastructure/exchange/exchangeRateGate");
 const { getConnectedExchange } = require("../../services/ExchangeService");
 const { EXCHANGE_META } = require("../../infrastructure/exchange/index");
+const BacktestCandleCache = require("./BacktestCandleCache");
 
 const SUPPORTED = new Set(["bitget", "okx", "binance"]);
 
@@ -41,6 +42,7 @@ const MIN_CACHE_COVERAGE = 0.85;
 
 const clientCache = new Map();
 const memCache = new Map();
+const listingCache = new Map();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -239,14 +241,25 @@ function setMemCached(key, data) {
   memCache.set(key, { ts: Date.now(), data });
 }
 
-async function detectListingTimestamp(exchange, client, marketSymbol, timeframe) {
+async function detectListingTimestamp(exchange, client, marketSymbol, timeframe, sym) {
+  const key = `${exchange}:${sym}:${timeframe}`;
+  if (listingCache.has(key)) return listingCache.get(key);
+  const pooled = BacktestCandleCache.getListingMs(exchange, sym, timeframe);
+  if (Number.isFinite(pooled)) {
+    listingCache.set(key, pooled);
+    return pooled;
+  }
   try {
     const batch = await withExchangeGate(exchange, () =>
       client.fetchOHLCV(marketSymbol, timeframe, MIN_HISTORICAL_MS, 1)
     );
     const rows = normalizeBatch(batch);
-    if (rows.length) return rows[0].timestamp;
+    if (rows.length) {
+      listingCache.set(key, rows[0].timestamp);
+      return rows[0].timestamp;
+    }
   } catch { /* fallback ke MIN_HISTORICAL */ }
+  listingCache.set(key, MIN_HISTORICAL_MS);
   return MIN_HISTORICAL_MS;
 }
 
@@ -353,6 +366,13 @@ async function fetchPaginatedRanges(exchange, client, marketSymbol, timeframe, r
 
 async function loadFromDbCache(exchange, symbol, timeframe, startMs, endMs) {
   try {
+    const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()] || 3_600_000;
+    const frontierTs = Date.now() - tfMs * 3;
+    if (typeof db.getCachedCandlesInRangeForBacktest === "function") {
+      return await db.getCachedCandlesInRangeForBacktest(
+        exchange, symbol, timeframe, startMs, endMs, frontierTs
+      );
+    }
     if (typeof db.getCachedCandlesInRange === "function") {
       return await db.getCachedCandlesInRange(exchange, symbol, timeframe, startMs, endMs);
     }
@@ -432,9 +452,61 @@ async function fetchHistoricalKlines(userId, opts = {}) {
 
   const client = getPublicClient(exchange);
   const marketSymbol = toMarketSymbol(sym);
+
+  const preListingMs = BacktestCandleCache.getListingMs(exchange, sym, timeframe) ?? MIN_HISTORICAL_MS;
+  const preClamped = clampDateRange({ startMs, endMs, listingMs: preListingMs, autoListing });
+  const preBarLimit = enforceBarLimit(preClamped.startMs, preClamped.endMs, timeframe, periodId, allowClamp);
+  if (maxBarsOverride && preBarLimit.bars > maxBarsOverride) {
+    const tfMs2 = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
+    preBarLimit.startMs = Math.max(preBarLimit.startMs, preBarLimit.endMs - maxBarsOverride * tfMs2);
+    preBarLimit.clamped = true;
+  }
+
+  const preSessionHit = BacktestCandleCache.tryGet(
+    exchange, sym, timeframe, preBarLimit.startMs, preBarLimit.endMs
+  );
+  if (preSessionHit?.hit) {
+    const listingMs = BacktestCandleCache.getListingMs(exchange, sym, timeframe) ?? preListingMs;
+    const validated = dedupeAndValidate(preSessionHit.candles);
+    const realBars = validated.length;
+    const expectedBars = estimateBarCount(preBarLimit.startMs, preBarLimit.endMs, timeframe);
+    const dataCoverage = expectedBars > 0 ? realBars / expectedBars : 1;
+    const gapsBefore = validated.length;
+    const candles = fillGaps(validated, timeframe);
+    const gapsFilled = candles.length - gapsBefore;
+    const meta = EXCHANGE_META[exchange] || EXCHANGE_META.bitget;
+    const cacheKey = memCacheKey(exchange, sym, timeframe, preBarLimit.startMs, preBarLimit.endMs);
+    const payload = {
+      ok: true,
+      exchange,
+      exchangeLabel: meta.label || meta.name || exchange,
+      symbol: sym,
+      timeframe,
+      startMs: preBarLimit.startMs,
+      endMs: preBarLimit.endMs,
+      startDate: new Date(preBarLimit.startMs).toISOString(),
+      endDate: new Date(preBarLimit.endMs).toISOString(),
+      listingMs,
+      listingDate: new Date(listingMs).toISOString(),
+      bars: candles.length,
+      realBars,
+      expectedBars,
+      coverage: Number(dataCoverage.toFixed(4)),
+      estimatedBars: preBarLimit.bars,
+      maxBars: MAX_BARS,
+      rangeClamped: preBarLimit.clamped,
+      candles,
+      gapsFilled: Math.max(0, gapsFilled),
+      cached: true,
+      source: preSessionHit.source,
+    };
+    setMemCached(cacheKey, payload);
+    return payload;
+  }
+
   await client.loadMarkets();
 
-  const listingMs = await detectListingTimestamp(exchange, client, marketSymbol, timeframe);
+  const listingMs = await detectListingTimestamp(exchange, client, marketSymbol, timeframe, sym);
   const clamped = clampDateRange({ startMs, endMs, listingMs, autoListing });
   const barLimit = enforceBarLimit(clamped.startMs, clamped.endMs, timeframe, periodId, allowClamp);
 
@@ -454,23 +526,69 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     return { ...memHit, cached: true, source: "memory" };
   }
 
+  const sessionHit = BacktestCandleCache.tryGet(exchange, sym, timeframe, effectiveStart, effectiveEnd);
+  if (sessionHit?.hit) {
+    const validated = dedupeAndValidate(sessionHit.candles);
+    const realBars = validated.length;
+    const expectedBars = estimateBarCount(effectiveStart, effectiveEnd, timeframe);
+    const dataCoverage = expectedBars > 0 ? realBars / expectedBars : 1;
+    const gapsBefore = validated.length;
+    const candles = fillGaps(validated, timeframe);
+    const gapsFilled = candles.length - gapsBefore;
+    const meta = EXCHANGE_META[exchange] || EXCHANGE_META.bitget;
+    const payload = {
+      ok: true,
+      exchange,
+      exchangeLabel: meta.label || meta.name || exchange,
+      symbol: sym,
+      timeframe,
+      startMs: effectiveStart,
+      endMs: effectiveEnd,
+      startDate: new Date(effectiveStart).toISOString(),
+      endDate: new Date(effectiveEnd).toISOString(),
+      listingMs,
+      listingDate: new Date(listingMs).toISOString(),
+      bars: candles.length,
+      realBars,
+      expectedBars,
+      coverage: Number(dataCoverage.toFixed(4)),
+      estimatedBars: barLimit.bars,
+      maxBars: MAX_BARS,
+      rangeClamped: barLimit.clamped,
+      candles,
+      gapsFilled: Math.max(0, gapsFilled),
+      cached: true,
+      source: sessionHit.source,
+    };
+    setMemCached(cacheKey, payload);
+    return payload;
+  }
+
   const deadlineMs = Date.now() + FETCH_DEADLINE_MS;
-  let candles = await loadFromDbCache(exchange, sym, timeframe, effectiveStart, effectiveEnd);
-  let source = "db";
+  let candles = sessionHit?.partial ? sessionHit.candles : null;
+  let source = sessionHit?.partial ? "session-pool+exchange" : null;
+
+  if (!candles?.length) {
+    candles = await loadFromDbCache(exchange, sym, timeframe, effectiveStart, effectiveEnd);
+    source = "db";
+  }
   const coverage = coverageRatio(candles, effectiveStart, effectiveEnd, timeframe);
 
   if (!candles?.length || coverage < MIN_CACHE_COVERAGE) {
     const fetchOpts = { deadlineMs, onProgress, abortSignal };
     if (candles?.length && coverage >= 0.3) {
-      const missing = findMissingRanges(candles, effectiveStart, effectiveEnd, timeframe);
+      const missing = sessionHit?.missingRanges?.length
+        ? sessionHit.missingRanges
+        : findMissingRanges(candles, effectiveStart, effectiveEnd, timeframe);
       if (missing.length) {
         const fetched = await fetchPaginatedRanges(
           exchange, client, marketSymbol, timeframe, missing, fetchOpts
         );
-        const byTs = new Map(candles.map(c => [c.timestamp, c]));
+        const byTs = new Map((candles || []).map(c => [c.timestamp, c]));
         for (const c of fetched) byTs.set(c.timestamp, c);
         candles = Array.from(byTs.values()).sort((a, b) => a.timestamp - b.timestamp);
-        source = "exchange+db";
+        source = source?.includes("session") ? source : "exchange+db";
+        if (!source?.includes("exchange")) source = candles.length && source === "db" ? "exchange+db" : "exchange";
       }
     } else {
       candles = await fetchPaginated(
@@ -482,7 +600,11 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     if (candles.length) {
       db.cacheCandles(exchange, sym, timeframe, candles).catch(() => {});
     }
+  } else if (!source) {
+    source = "db";
   }
+
+  BacktestCandleCache.merge(exchange, sym, timeframe, candles, { listingMs });
 
   if (!candles?.length) {
     const e = new Error(`No klines data found for ${sym} (${timeframe}) in the requested range.`);
@@ -565,6 +687,8 @@ async function getDataSourceStatus(userId) {
 function _clearCaches() {
   clientCache.clear();
   memCache.clear();
+  listingCache.clear();
+  BacktestCandleCache.clear();
 }
 
 module.exports = {

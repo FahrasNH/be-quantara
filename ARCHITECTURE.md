@@ -602,3 +602,18 @@ CPU-heavy loops and large candle arrays could OOM or block the event loop → ng
 **Tradeoff:** In-process Map jobs are lost on API restart (same as before). Full
 BullMQ/pg-boss remains the longer-term durable queue if multi-tenant load grows.
 Worker OOM fails **that job only**; the parent API/live tick loop keeps running.
+
+### Shared candle cache (Sprint 12, 12 Jul 2026)
+
+**Problem:** Compare mode / tier packages run multiple strategies on the same
+symbol+timeframe+period; each job re-fetched OHLCV from exchange/DB.
+
+**Fix (two layers):**
+| Layer | Location | Key | Role |
+|-------|----------|-----|------|
+| Session pool (L1) | `BacktestCandleCache.js` | `{exchange}:{symbol}:{timeframe}` | Full immutable series in-process; slice by date range; gap-only exchange fetch |
+| DB pool (L2) | `candle_cache` via `getCachedCandlesInRangeForBacktest` | same + timestamp | Cross-worker; closed bars skip `cached_at` TTL |
+| Warm worker | `BacktestJobService.js` | — | Reuse forked worker up to 12 jobs / 30 min so L1 survives compare runs |
+
+**Env knobs:** `BACKTEST_CANDLE_POOL_ENTRIES`, `BACKTEST_CANDLE_POOL_TTL_MS`,
+`BACKTEST_WORKER_WARM_MAX_JOBS`, `BACKTEST_WORKER_WARM_TTL_MS`.
