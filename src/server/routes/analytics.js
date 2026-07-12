@@ -18,6 +18,7 @@ const prisma  = require("../../infrastructure/db/prismaClient");
 const db      = require("../../infrastructure/db/database");
 const { isRagBacktestAllowed } = require("../../config/ragBacktestEnv");
 const { adminGuard } = require("../../middleware/adminGuard");
+const { normalizeStrategyKey: normalizeStrategyKeyCanonical } = require("../../config/strategies");
 
 // Sprint 5 / RL-5 — lazy-loaded to avoid startup failures if pgvector is unavailable
 let _similarTradeAdvisor = null;
@@ -589,31 +590,10 @@ function buildDateFilter(period) {
   return { enteredAt: { gte: since } };
 }
 
-const STRATEGY_ALIASES = {
-  ADAPTIVE_FUSION: "AF_SMC",
-  SMART_MONEY_CONCEPTS: "AF_SMC",
-  AF_SMC: "AF_SMC",
-  AF_WYCKOFF: "AF_WYCKOFF",
-  AF_VSA: "AF_VSA",
-  TREND_FOLLOWING: "TS_TF",
-  TREND_SURGE: "TS_TF",
-  TS_TF: "TS_TF",
-  TS_MS: "TS_MS",
-  TS_VP: "TS_VP",
-  MEAN_REVERSION: "MD_MR",
-  MEAN_DRIFT: "MD_MR",
-  MD_MR: "MD_MR",
-  BREAKOUT_RETEST: "BS_BR",
-  BREAKOUT_STORM: "BS_BR",
-  BS_BR: "BS_BR",
-  // Experimental — identity (not a tier umbrella)
-  GROK_AI_TRADING: "GROK_AI_TRADING",
-};
-
+/** Normalize strategy keys for analytics filters (SSOT: config/strategies.js). */
 function normalizeStrategyKey(raw) {
   if (!raw) return null;
-  const upper = String(raw).toUpperCase();
-  return STRATEGY_ALIASES[upper] ?? upper;
+  return normalizeStrategyKeyCanonical(String(raw).toUpperCase());
 }
 
 /**

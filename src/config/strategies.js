@@ -78,30 +78,22 @@ const EXPERIMENTAL_STRATEGIES = {
 
 // ─── Migration map: old key → new key ────────────────────────────────────────
 // Used by StrategyRegistry and Prisma migration script.
-// Primary keys: AF_SMC, TS_TF, MD_MR, BS_BR
-// Legacy aliases redirect to primary keys.
-// Component keys AF_WYCKOFF / AF_VSA / TS_MS / TS_VP stay as-is (identity).
+// Primary Gen2 keys (AF_SMC, AF_WYCKOFF, …) are NOT listed — identity is implicit.
+// Legacy aliases redirect to primary keys. Components stay as-is via fallback.
 
 const STRATEGY_MIGRATION_MAP = {
-  AF_SMC:               "AF_SMC",  // primary: Adaptive Fusion - Smart Money Concepts
-  AF_WYCKOFF:           "AF_WYCKOFF",
-  AF_VSA:               "AF_VSA",
   ADAPTIVE_FUSION:      "AF_SMC",  // legacy: old umbrella preset name
   SAC:                  "AF_SMC",  // legacy: old abbreviation
   SMART_MONEY_CONCEPTS: "AF_SMC",  // legacy: descriptor preset
-  TS_TF:                "TS_TF",   // primary: Trend Surge - Trend Following
-  TS_MS:                "TS_MS",
-  TS_VP:                "TS_VP",
   TREND_FOLLOWING:      "TS_TF",   // legacy: descriptor
+  TREND_SURGE:          "TS_TF",   // umbrella bag name → primary engine
   TF:                   "TS_TF",   // legacy: abbreviation
-  MD_MR:                "MD_MR",
   MEAN_REVERSION:       "MD_MR",
+  MEAN_DRIFT:           "MD_MR",   // umbrella bag name → primary engine
   MR:                   "MD_MR",
-  BS_BR:                "BS_BR",
   BREAKOUT_RETEST:      "BS_BR",
+  BREAKOUT_STORM:       "BS_BR",   // umbrella bag name → primary engine
   BR:                   "BS_BR",
-  // GROK stays identity — experimental, not migrated into a tier umbrella
-  GROK_AI_TRADING:      "GROK_AI_TRADING",
 };
 
 // ─── Abbreviated labels (for UI display) ─────────────────────────────────────
@@ -153,11 +145,13 @@ const TIER_COMPONENT_MAP = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Normalize a strategy key (resolve legacy → new).
- * Returns the canonical key or the original if already current.
+ * Normalize a strategy key (resolve legacy → Gen2 canonical).
+ * Components (AF_WYCKOFF, TS_MS, …) and already-canonical keys pass through.
  */
 function normalizeStrategyKey(key) {
-  return STRATEGY_MIGRATION_MAP[key] || key;
+  if (key == null || key === "") return key;
+  const raw = String(key);
+  return STRATEGY_MIGRATION_MAP[raw] || STRATEGY_MIGRATION_MAP[raw.toUpperCase()] || raw;
 }
 
 /**
@@ -186,8 +180,7 @@ function isActiveComponent(key) {
  */
 function isLegacyAlias(key) {
   const k = String(key || "").toUpperCase();
-  if (!STRATEGY_MIGRATION_MAP[k]) return false;
-  return STRATEGY_MIGRATION_MAP[k] !== k;
+  return Boolean(STRATEGY_MIGRATION_MAP[k]);
 }
 
 module.exports = {
