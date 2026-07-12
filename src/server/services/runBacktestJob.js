@@ -28,12 +28,10 @@ const MULTI_TYPE_STRATEGY_MAP = {
   TS_TF: ["Intraday", "Swing"],
   TREND_FOLLOWING: ["Intraday", "Swing"],
   TS_MS: ["Intraday", "Swing"],
-  TS_VP: ["Intraday"], // minSessionBars=20 structurally blocks Swing (4h)
+  TS_VP: ["Intraday", "Swing"],
   MD_MR: ["Scalping", "Intraday"],
   MEAN_REVERSION: ["Scalping", "Intraday"],
 };
-
-const TS_ENGINE_KEYS = new Set(["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"]);
 
 const TYPE_MAX_PERIOD = {
   "1m":  "30d",
@@ -164,34 +162,6 @@ function _isWyckoffOnlyJob(strategyKey, parameters) {
   return active.length === 1 && active[0] === "AF_WYCKOFF";
 }
 
-/** Normalize FE/BE TS component aliases to canonical racer keys. */
-function _normalizeTsRacerKeys(raw) {
-  if (!Array.isArray(raw) || !raw.length) return [];
-  const out = new Set();
-  for (const c of raw) {
-    const k = String(c || "").toUpperCase();
-    if (k === "TS_TF" || k === "TREND_FOLLOWING" || k === "TF") out.add("TS_TF");
-    else if (k === "TS_MS" || k === "DOW_THEORY" || k === "MARKET_STRUCTURE") out.add("TS_MS");
-    else if (k === "TS_VP" || k === "AMT" || k === "AUCTION_MARKET_THEORY" || k === "VOLUME_PROFILE") {
-      out.add("TS_VP");
-    }
-  }
-  return [...out];
-}
-
-/**
- * True when the job is Auction Market Theory only — strategyKey TS_VP, or FE collapsed
- * TS_VP → TS_TF engine with only the AMT racer selected.
- */
-function _isAmtOnlyJob(strategyKey, parameters) {
-  if (strategyKey === "TS_VP") return true;
-  if (!TS_ENGINE_KEYS.has(strategyKey)) return false;
-  const active = _normalizeTsRacerKeys(
-    parameters.tsActiveRacers || parameters.selectedComponents || parameters.activeStrategyComponents,
-  );
-  return active.length === 1 && active[0] === "TS_VP";
-}
-
 /** Apply per-strategy defaults before a backtest job runs (exported for tests). */
 function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
   const parameters = { ...(parametersIn || {}) };
@@ -218,18 +188,6 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
         && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
       parameters.selectedComponents = [strategyKey];
       parameters.tsActiveRacers = [strategyKey];
-    }
-  }
-
-  // AMT-only: Swing (4h) can never clear minSessionBars=20 — force Intraday-only type legs.
-  // Mirrors AF Wyckoff not painting unsupported Intraday after FE engine collapse.
-  if (_isAmtOnlyJob(strategyKey, parameters)) {
-    const rawTypes = Array.isArray(parameters.activeTypes) ? parameters.activeTypes : null;
-    if (!rawTypes?.length) {
-      parameters.activeTypes = ["Intraday"];
-    } else {
-      const filtered = rawTypes.filter((t) => t === "Intraday");
-      parameters.activeTypes = filtered.length ? filtered : ["Intraday"];
     }
   }
   return parameters;

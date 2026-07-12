@@ -2273,6 +2273,12 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
       higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
+      // AMT / TS_VP: Swing → utc_week session; Intraday → utc_day (volumeProfileComponent)
+      tradeType,
+      entryTf: tradeType === "Swing" ? "4h"
+        : tradeType === "Intraday" ? "15m"
+          : tradeType === "Scalping" ? "15m"
+            : cfg.entryTf,
     });
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];

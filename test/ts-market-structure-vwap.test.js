@@ -319,7 +319,43 @@ test("AMT race entry fails closed without timestamps (no whole-history session)"
   assert.strictEqual(r.reason, "session_timestamps_missing");
 });
 
-test("AMT race entry blocked on 4h Swing session (≤6 bars/UTC-day < minSessionBars 20)", () => {
+test("AMT Swing 4h uses UTC-week session and can fire (not stuck at 0 trades)", () => {
+  // Monday 00:00 UTC → fill a week of 4h bars (42), reclaim on last bar.
+  const weekStart = Date.UTC(2026, 0, 5); // Monday
+  const highs = [];
+  const lows = [];
+  const closes = [];
+  const opens = [];
+  const volumes = [];
+  const timestamps = [];
+  for (let b = 0; b < 42; b++) {
+    const t = weekStart + b * 4 * 3_600_000;
+    timestamps.push(t);
+    const px = 100 + b * 0.05;
+    opens.push(px - 0.1);
+    highs.push(px + 0.3);
+    lows.push(px - 0.3);
+    closes.push(px);
+    volumes.push(1000);
+  }
+  const i = closes.length - 1;
+  // Force reclaim across session VWAP
+  closes[i - 1] = 99.0;
+  closes[i] = 103.0;
+  highs[i] = 103.2;
+  lows[i] = 102.8;
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, timestamps, atr: closes.map(() => 1) },
+    i,
+    { tradeType: "Swing" } // auto utc_week + minSessionBarsSwing=6
+  );
+  assert.ok(r.meta?.bars >= 6, `expected week session bars≥6, got ${r.meta?.bars}`);
+  assert.strictEqual(r.meta?.sessionMode, "utc_week");
+  assert.strictEqual(r.signal, "LONG");
+  assert.strictEqual(r.reason, "vwap_reclaim");
+});
+
+test("AMT Intraday still uses UTC-day + minSessionBars 20 (4h day-session remains blocked)", () => {
   const day0 = Date.UTC(2026, 0, 5);
   const highs = [];
   const lows = [];
@@ -327,25 +363,20 @@ test("AMT race entry blocked on 4h Swing session (≤6 bars/UTC-day < minSession
   const opens = [];
   const volumes = [];
   const timestamps = [];
-  for (let d = 0; d < 5; d++) {
-    for (let b = 0; b < 6; b++) {
-      const t = day0 + d * 86_400_000 + b * 4 * 3_600_000;
-      timestamps.push(t);
-      const px = 100 + d + b * 0.1;
-      opens.push(px - 0.2);
-      highs.push(px + 0.5);
-      lows.push(px - 0.5);
-      closes.push(px);
-      volumes.push(1000);
-    }
+  for (let b = 0; b < 6; b++) {
+    timestamps.push(day0 + b * 4 * 3_600_000);
+    const px = 100 + b * 0.1;
+    opens.push(px); highs.push(px + 0.2); lows.push(px - 0.2); closes.push(px); volumes.push(1000);
   }
   const i = closes.length - 1;
-  closes[i - 1] = 104.0;
-  closes[i] = 106.0;
+  closes[i - 1] = 99.5;
+  closes[i] = 100.5;
+  // Without tradeType/Swing hint, 4h bars auto-detect as Swing (barMs≥4h).
+  // Force Intraday day-session to prove the old structural block still applies there.
   const r = evaluateVolumeProfileEntry(
     { highs, lows, closes, opens, volumes, timestamps, atr: closes.map(() => 1) },
     i,
-    { minSessionBars: 20 }
+    { tradeType: "Intraday", minSessionBars: 20 }
   );
   assert.strictEqual(r.signal, null);
   assert.strictEqual(r.reason, "session_warmup");

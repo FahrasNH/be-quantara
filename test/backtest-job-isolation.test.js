@@ -247,39 +247,27 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(vsaOnly.entryModel, undefined);
   });
 
-  await test("AMT-only / TS_VP job defaults force Intraday (no Swing type leg)", () => {
+  await test("AMT / TS_VP keeps Intraday+Swing; pins single-racer isolation", () => {
     const {
       applyStrategyJobDefaults,
       MULTI_TYPE_STRATEGY_MAP,
     } = require("../src/server/services/runBacktestJob");
     const { STRATEGY_SUPPORTED_TYPES } = require("../src/constants/strategySupportedTypes");
 
-    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.TS_VP, ["Intraday"]);
-    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_VP, ["Intraday"]);
+    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.TS_VP, ["Intraday", "Swing"]);
+    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_VP, ["Intraday", "Swing"]);
     assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_MS, ["Intraday", "Swing"]);
 
     const standalone = applyStrategyJobDefaults("TS_VP", {});
     assert.deepStrictEqual(standalone.selectedComponents, ["TS_VP"]);
-    assert.deepStrictEqual(standalone.activeTypes, ["Intraday"]);
+    assert.deepStrictEqual(standalone.tsActiveRacers, ["TS_VP"]);
+    assert.strictEqual(standalone.activeTypes, undefined);
 
-    // FE Advanced collapse TS_VP → TS_TF engine with only AMT selected
+    // FE Advanced collapse TS_VP → TS_TF must NOT strip Swing
     const feCollapse = applyStrategyJobDefaults("TS_TF", {
       selectedComponents: ["TS_VP"],
     });
-    assert.deepStrictEqual(feCollapse.activeTypes, ["Intraday"]);
-
-    // Explicit Swing-only request still coerced to Intraday for AMT-only
-    const swingForced = applyStrategyJobDefaults("TS_TF", {
-      selectedComponents: ["TS_VP"],
-      activeTypes: ["Swing"],
-    });
-    assert.deepStrictEqual(swingForced.activeTypes, ["Intraday"]);
-
-    // Full Trend Surge race must NOT strip Swing (TF + Dow need it)
-    const fullTs = applyStrategyJobDefaults("TS_TF", {
-      selectedComponents: ["TS_TF", "TS_MS", "TS_VP"],
-    });
-    assert.strictEqual(fullTs.activeTypes, undefined);
+    assert.strictEqual(feCollapse.activeTypes, undefined);
   });
 
   await test("worker crash path marks job failed without throwing in parent", async () => {

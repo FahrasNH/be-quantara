@@ -1,7 +1,8 @@
 /**
  * Auction Market Theory (VWAP + Value Area) for Trend Surge (TS-SUB-02).
  *
- * - Session VWAP resets daily at UTC midnight (aligned with Quantara daily loss counter).
+ * - Session VWAP: UTC-day for Intraday/≤1h bars; UTC-week for Swing/≥4h bars
+ *   (4h has ≤6 bars per UTC-day — a day session + minSessionBars=20 is unreachable).
  * - Volume Profile: 20-bin histogram → POC + Value Area (70% volume).
  *
  * Sprint 12 architecture decision: race participant (independent signal
@@ -11,6 +12,10 @@
 
 "use strict";
 
+const MS_DAY = 86_400_000;
+const MS_WEEK = 7 * MS_DAY;
+const MS_4H = 4 * 3_600_000;
+
 const DEFAULTS = {
   bins: 20,
   valueAreaPct: 0.7,
@@ -18,22 +23,71 @@ const DEFAULTS = {
   // 0.5×ATR (was wrongly implemented as 0.25% of price) — 0.3 was too tight on 5m crypto.
   vwapAtrMult: 0.5,
   vwapTolerancePct: 0.005, // fallback when ATR unavailable (~0.5%)
-  minSessionBars: 20, // AC5: skip refinement until session has enough bars
+  minSessionBars: 20, // Intraday UTC-day floor
+  minSessionBarsSwing: 6, // Swing UTC-week floor (~1 day of 4h bars)
 };
 
+function inferBarMs(timestamps, lastIdx) {
+  if (!Array.isArray(timestamps) || lastIdx < 1) return null;
+  for (let i = lastIdx; i >= 1; i--) {
+    const a = timestamps[i];
+    const b = timestamps[i - 1];
+    if (a != null && b != null && Number.isFinite(a) && Number.isFinite(b) && a > b) {
+      return a - b;
+    }
+  }
+  return null;
+}
+
+function utcWeekStartMs(ts) {
+  const d = new Date(ts);
+  const day = d.getUTCDay(); // 0=Sun … 6=Sat
+  const daysFromMonday = (day + 6) % 7;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday);
+}
+
 /**
- * Find start index of the UTC day containing lastIdx.
- * Prefer candle timestamps when available; otherwise treat the whole window as one session.
+ * Resolve session period + min bars for AMT.
+ * Swing / ≥4h → UTC week + lower bar floor; otherwise UTC day + 20.
  */
-function sessionStartIdx(timestamps, lastIdx) {
+function resolveSessionParams(config = {}, timestamps = null, lastIdx = -1) {
+  const tip = String(
+    config.tradeType || config.entryTf || config.interval || config.sessionMode || ""
+  ).toLowerCase();
+  const barMs = inferBarMs(timestamps, lastIdx);
+  const isSwing = tip === "swing" || tip === "4h" || tip === "1d" || tip === "utc_week"
+    || tip === "week"
+    || (barMs != null && barMs >= MS_4H);
+
+  const periodMs = isSwing ? MS_WEEK : MS_DAY;
+  const defaultMin = isSwing
+    ? (config.minSessionBarsSwing ?? DEFAULTS.minSessionBarsSwing)
+    : DEFAULTS.minSessionBars;
+  // Explicit minSessionBars always wins (tests / FE overrides).
+  const minSessionBars = config.minSessionBars != null ? config.minSessionBars : defaultMin;
+  return {
+    periodMs,
+    minSessionBars,
+    sessionMode: isSwing ? "utc_week" : "utc_day",
+    isSwing,
+  };
+}
+
+/**
+ * Find start index of the session containing lastIdx (UTC day or UTC week).
+ */
+function sessionStartIdx(timestamps, lastIdx, periodMs = MS_DAY) {
   if (!Array.isArray(timestamps) || lastIdx < 0) return 0;
   const ts = timestamps[lastIdx];
   if (ts == null || !Number.isFinite(ts)) return 0;
 
-  const dayStart = Math.floor(ts / 86_400_000) * 86_400_000;
+  const periodStart = periodMs >= MS_WEEK
+    ? utcWeekStartMs(ts)
+    : Math.floor(ts / periodMs) * periodMs;
+
   for (let i = lastIdx; i >= 0; i--) {
     const t = timestamps[i];
-    if (t == null || !Number.isFinite(t) || t < dayStart) {
+    if (t == null || !Number.isFinite(t) || t < periodStart) {
       return Math.min(lastIdx, i + 1);
     }
   }
@@ -45,8 +99,8 @@ function sessionStartIdx(timestamps, lastIdx) {
  * Typical price = (H+L+C)/3.
  * @returns {{ vwap: number|null, bars: number, startIdx: number }}
  */
-function calculateSessionVwap(highs, lows, closes, volumes, timestamps, lastIdx) {
-  const start = sessionStartIdx(timestamps, lastIdx);
+function calculateSessionVwap(highs, lows, closes, volumes, timestamps, lastIdx, periodMs = MS_DAY) {
+  const start = sessionStartIdx(timestamps, lastIdx, periodMs);
   let pv = 0;
   let vol = 0;
   for (let i = start; i <= lastIdx; i++) {
@@ -183,19 +237,20 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
   const closes = indicators.closes || [];
   const volumes = indicators.volumes || [];
   const timestamps = indicators.timestamps || indicators.times || indicators.openTimes || null;
+  const session = resolveSessionParams(cfg, timestamps, lastIdx);
 
   const { vwap, bars, startIdx } = calculateSessionVwap(
-    highs, lows, closes, volumes, timestamps, lastIdx
+    highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
 
-  if (bars < cfg.minSessionBars || vwap == null) {
+  if (bars < session.minSessionBars || vwap == null) {
     // Early session: do not block entries (insufficient VWAP/profile data).
     return {
       allowed: true,
       vote: "NEUTRAL",
       confidence: 0,
       reason: "session_warmup_passthrough",
-      meta: { bars, vwap, startIdx },
+      meta: { bars, vwap, startIdx, sessionMode: session.sessionMode },
     };
   }
 
@@ -276,11 +331,17 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
   const closes = indicators.closes || [];
   const volumes = indicators.volumes || [];
   const timestamps = indicators.timestamps || indicators.times || indicators.openTimes || null;
+  const session = resolveSessionParams(cfg, timestamps, lastIdx);
   const { vwap, bars, startIdx } = calculateSessionVwap(
-    highs, lows, closes, volumes, timestamps, lastIdx
+    highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
-  if (vwap == null || bars < cfg.minSessionBars) {
-    return { vote: "NEUTRAL", confidence: 0, reason: "session_warmup", meta: { bars, vwap } };
+  if (vwap == null || bars < session.minSessionBars) {
+    return {
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "session_warmup",
+      meta: { bars, vwap, sessionMode: session.sessionMode },
+    };
   }
   const profile = buildVolumeProfile(
     highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
@@ -352,8 +413,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   }
 
   // Fail closed: without bar timestamps, sessionStartIdx falls back to 0 and treats
-  // the entire history as one "session". That wrongly clears minSessionBars on Swing
-  // (4h ≤6 bars/UTC-day) and was the structural root of AMT type-routing anomalies.
+  // the entire history as one "session" — not a real AMT auction window.
   if (!hasUsableSessionTimestamps(timestamps, lastIdx)) {
     return {
       vote: "NEUTRAL",
@@ -364,16 +424,23 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     };
   }
 
+  const session = resolveSessionParams(cfg, timestamps, lastIdx);
   const { vwap, bars, startIdx } = calculateSessionVwap(
-    highs, lows, closes, volumes, timestamps, lastIdx
+    highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
-  if (bars < cfg.minSessionBars || vwap == null) {
+  if (bars < session.minSessionBars || vwap == null) {
     return {
       vote: "NEUTRAL",
       signal: null,
       confidence: 0,
       reason: "session_warmup",
-      meta: { bars, vwap, startIdx },
+      meta: {
+        bars,
+        vwap,
+        startIdx,
+        sessionMode: session.sessionMode,
+        minSessionBars: session.minSessionBars,
+      },
     };
   }
 
@@ -409,6 +476,8 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     tolAbs,
     atr,
     vwapAtrMult: mult,
+    sessionMode: session.sessionMode,
+    minSessionBars: session.minSessionBars,
   };
 
   // VWAP reclaim / lose (primary AMT entry)
@@ -477,6 +546,8 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
 
 module.exports = {
   DEFAULTS,
+  MS_DAY,
+  MS_WEEK,
   sessionStartIdx,
   calculateSessionVwap,
   buildVolumeProfile,
@@ -484,5 +555,7 @@ module.exports = {
   evaluateVolumeProfileComponent,
   evaluateVolumeProfileEntry,
   resolveVwapTolerance,
+  resolveSessionParams,
   hasUsableSessionTimestamps,
+  utcWeekStartMs,
 };
