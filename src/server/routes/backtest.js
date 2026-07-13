@@ -440,6 +440,15 @@ module.exports = function createBacktestRouter(context) {
       return res.status(400).json({ ok: false, error: "pair/symbol dan metrics diperlukan" });
     }
 
+    // Extend must send equity_curve atomically with metrics (COALESCE partial-write bug).
+    if (clientAction === "extend" && !Array.isArray(equityCurve)) {
+      return res.status(400).json({
+        ok: false,
+        error: "equity_curve array diperlukan saat action=extend (cegah desync metrics/equity)",
+        code: "EQUITY_CURVE_REQUIRED",
+      });
+    }
+
     if (clientAction === "reused") {
       const canonicalKey = BacktestHistoryService._buildKeyFromMeta({
         symbol: sym,
@@ -484,8 +493,10 @@ module.exports = function createBacktestRouter(context) {
       exchange: config?.exchange || "sim",
       dataSource: config?.dataSource || "sim",
       metrics: normalized,
-      equityCurve: equityCurve || null,
-      tradesData: trades || tradesData || null,
+      equityCurve: Array.isArray(equityCurve) ? equityCurve : null,
+      tradesData: Array.isArray(trades)
+        ? trades
+        : (Array.isArray(tradesData) ? tradesData : null),
       config: runConfig,
       notes: notes || null,
       userId: req.userId,

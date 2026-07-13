@@ -156,6 +156,30 @@ function resolveAction(record, requestedStartMs, requestedEndMs) {
   return "extend";
 }
 
+/**
+ * Guard for canonical extend/update writes.
+ * equity_curve must be present (array, may be empty) whenever we overwrite metrics
+ * so we never leave a stale curve beside fresh stats (COALESCE partial-write bug).
+ */
+function assertAtomicCanonicalExtendPayload({ equityCurve, tradesData } = {}) {
+  if (!Array.isArray(equityCurve)) {
+    const err = new Error(
+      "equity_curve array required for canonical archive extend/update (prevents metrics/equity desync)",
+    );
+    err.statusCode = 400;
+    err.code = "EQUITY_CURVE_REQUIRED";
+    throw err;
+  }
+  if (tradesData != null && !Array.isArray(tradesData)) {
+    const err = new Error(
+      "trades_data must be an array when provided for canonical archive extend/update",
+    );
+    err.statusCode = 400;
+    err.code = "TRADES_DATA_INVALID";
+    throw err;
+  }
+}
+
 module.exports = {
   ENGINE_VERSION,
   buildCanonicalKey,
@@ -163,4 +187,5 @@ module.exports = {
   resolveAction,
   recalcMetrics,
   filterTradesByRange,
+  assertAtomicCanonicalExtendPayload,
 };

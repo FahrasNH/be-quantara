@@ -10,6 +10,7 @@ const {
   resolveAction,
   filterSubset,
   ENGINE_VERSION,
+  assertAtomicCanonicalExtendPayload,
 } = require("../src/server/services/BacktestCanonicalService");
 
 let passed = 0;
@@ -135,6 +136,41 @@ t("filterSubset recalculates metrics for trade window", () => {
   assert.strictEqual(metrics.totalTrades, 1);
   assert.strictEqual(metrics.wins, 0);
   assert.strictEqual(metrics.losses, 1);
+});
+
+// Regression: COALESCE partial-write desync (0 trades + stale declining equity)
+t("assertAtomicCanonicalExtendPayload rejects missing equity_curve", () => {
+  assert.throws(
+    () => assertAtomicCanonicalExtendPayload({ equityCurve: null, tradesData: [] }),
+    (err) => err && err.code === "EQUITY_CURVE_REQUIRED" && err.statusCode === 400,
+  );
+  assert.throws(
+    () => assertAtomicCanonicalExtendPayload({ equityCurve: undefined }),
+    (err) => err && err.code === "EQUITY_CURVE_REQUIRED",
+  );
+  assert.throws(
+    () => assertAtomicCanonicalExtendPayload({}),
+    (err) => err && err.code === "EQUITY_CURVE_REQUIRED",
+  );
+});
+
+t("assertAtomicCanonicalExtendPayload accepts empty equity + trades arrays", () => {
+  assert.doesNotThrow(() =>
+    assertAtomicCanonicalExtendPayload({ equityCurve: [], tradesData: [] }),
+  );
+  assert.doesNotThrow(() =>
+    assertAtomicCanonicalExtendPayload({
+      equityCurve: [{ date: "2024-01-01", value: 1000 }],
+      tradesData: null,
+    }),
+  );
+});
+
+t("assertAtomicCanonicalExtendPayload rejects non-array trades_data when provided", () => {
+  assert.throws(
+    () => assertAtomicCanonicalExtendPayload({ equityCurve: [], tradesData: { bad: true } }),
+    (err) => err && err.code === "TRADES_DATA_INVALID" && err.statusCode === 400,
+  );
 });
 
 console.log(`\n${failed === 0 ? "✅" : "❌"} BACKTEST CANONICAL: ${passed} passed, ${failed} failed\n`);

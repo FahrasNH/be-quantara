@@ -1443,24 +1443,28 @@ async function insertBacktestHistory({
 async function updateBacktestHistory(id, {
   metrics, equityCurve, tradesData, config, dataStart, dataEnd, engineVersion,
 }) {
+  // Atomic write (no per-column COALESCE): COALESCE($n, col) caused metrics/equity
+  // desync when extend updates sent fresh metrics but omitted equity_curve —
+  // stale curve stayed while stats reset (e.g. 0 trades + -70% equity chart).
+  // Match upsertBacktestHistory: always overwrite result payload together.
   const { rows } = await pool.query(
     `UPDATE backtest_history SET
-       metrics = COALESCE($2, metrics),
-       equity_curve = COALESCE($3, equity_curve),
-       trades_data = COALESCE($4, trades_data),
-       config = COALESCE($5, config),
-       data_start = COALESCE($6, data_start),
-       data_end = COALESCE($7, data_end),
-       engine_version = COALESCE($8, engine_version),
+       metrics = $2,
+       equity_curve = $3,
+       trades_data = $4,
+       config = $5,
+       data_start = $6,
+       data_end = $7,
+       engine_version = $8,
        updated_at = now(),
        hit_count = COALESCE(hit_count, 0) + 1
      WHERE id = $1 RETURNING id`,
     [
       id,
-      metrics ? JSON.stringify(metrics) : null,
-      equityCurve ? JSON.stringify(equityCurve) : null,
-      tradesData ? JSON.stringify(tradesData) : null,
-      config ? JSON.stringify(config) : null,
+      metrics != null ? JSON.stringify(metrics) : null,
+      equityCurve != null ? JSON.stringify(equityCurve) : null,
+      tradesData != null ? JSON.stringify(tradesData) : null,
+      config != null ? JSON.stringify(config) : null,
       dataStart ? new Date(dataStart) : null,
       dataEnd ? new Date(dataEnd) : null,
       engineVersion ?? null,

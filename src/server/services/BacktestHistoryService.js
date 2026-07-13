@@ -11,6 +11,7 @@ const {
   buildCanonicalKey,
   filterSubset,
   resolveAction,
+  assertAtomicCanonicalExtendPayload,
 } = require("./BacktestCanonicalService");
 
 class BacktestHistoryService {
@@ -368,10 +369,12 @@ class BacktestHistoryService {
       Date.parse(dataStart),
       Date.parse(dataEnd),
     ) === "extend")) {
+      // Reject partial payloads so metrics cannot drift from equity_curve/trades_data.
+      assertAtomicCanonicalExtendPayload({ equityCurve, tradesData });
       const id = await db.updateBacktestHistory(existing.id, {
         metrics,
         equityCurve,
-        tradesData,
+        tradesData: Array.isArray(tradesData) ? tradesData : [],
         config,
         dataStart,
         dataEnd,
