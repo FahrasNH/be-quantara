@@ -45,8 +45,8 @@ class AdaptiveStrategyEngine extends BotEngine {
     this.strategy = validation.strategy;
     this.strategyKey = strategyKey;
 
-    // Position manager for conflict detection
-    this.positionManager = new PositionManager(2); // Max 2 positions
+    // Position manager for conflict detection — race-to-confirm: max 1/symbol
+    this.positionManager = new PositionManager(1);
 
     // MultiStrategyCoordinator conflict hooks (evaluate → applyConflictDecision)
     this._conflictAllowed = true;

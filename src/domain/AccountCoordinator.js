@@ -121,7 +121,8 @@ class AccountCoordinator {
   /**
    * Kunci grup multi-strategi = userId:symbol. Semua strategi yang berjalan
    * serentak pada satu koin berbagi groupKey ini sehingga koordinator bisa
-   * (a) mengizinkan >1 posisi pada simbol yang sama selama masih satu grup, dan
+   * (a) race-to-confirm: max 1 posisi terbuka per simbol (slot pre-arm tanpa
+   *     direction tidak dihitung sebagai posisi terbuka), dan
    * (b) membatasi TOTAL margin grup terhadap anggaran akun.
    */
   groupKeyFor(userId, symbol) {
@@ -147,8 +148,8 @@ class AccountCoordinator {
    * Apakah simbol ini sudah dipegang reservasi lain (selain botKey).
    * @param {string} symbol
    * @param {string|null} exceptBotKey   — abaikan reservasi milik botKey ini
-   * @param {string|null} exceptGroupKey — abaikan reservasi yang segrup (multi-strategi
-   *   pada satu koin boleh punya >1 posisi). null = perilaku legacy (1 posisi/simbol).
+   * @param {string|null} exceptGroupKey — abaikan reservasi segrup (slot pre-arm
+   *   reserveGroup tanpa direction). null = perilaku legacy (1 posisi/simbol).
    */
   hasSymbol(symbol, exceptBotKey = null, exceptGroupKey = null) {
     for (const [key, r] of this.reservations) {
@@ -160,15 +161,30 @@ class AccountCoordinator {
   }
 
   /**
+   * Apakah grup multi-strategi sudah punya posisi terbuka NYATA pada simbol
+   * (reservasi dengan `direction` terisi). Slot pre-arm dari reserveGroup
+   * (tanpa direction) tidak dihitung — itu hanya footprint margin.
+   */
+  hasGroupOpenPosition(groupKey, symbol, exceptBotKey = null) {
+    if (!groupKey) return false;
+    for (const [key, r] of this.reservations) {
+      if (key === exceptBotKey) continue;
+      if (r.groupKey === groupKey && r.symbol === symbol && r.direction) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Boleh buka posisi baru?
    * @param {Object} p
    * @param {string} p.botKey         — identitas bot (mis. "userId:SYMBOL")
    * @param {string} p.symbol
    * @param {number} p.requiredMargin — margin awal = notional / leverage (USDT)
-   * @param {string} [p.groupKey]     — grup multi-strategi (userId:symbol). Bila diisi,
-   *   batas 1-posisi-per-simbol diabaikan untuk strategi yang segrup (mereka memang
-   *   sengaja membuka beberapa posisi pada koin yang sama). Anggaran margin TOTAL tetap
-   *   ditegakkan karena committedMargin menjumlahkan semua reservasi (termasuk segrup).
+   * @param {string} [p.groupKey]     — grup multi-strategi (userId:symbol). Slot
+   *   pre-arm segrup (tanpa direction) diabaikan untuk cek simbol; posisi terbuka
+   *   nyata (ada direction) tetap memblokir — race-to-confirm, max 1/simbol.
    * @returns {{ ok: boolean, reason?: string, budget?: number, committed?: number }}
    */
   canOpen({ botKey, symbol, requiredMargin, groupKey = null, direction = null }) {
@@ -178,14 +194,24 @@ class AccountCoordinator {
       return { ok: false, reason: `Batas ${this.maxConcurrentPositions} posisi serentak (akun bersama) tercapai` };
     }
 
-    // 2) Maks 1 posisi per simbol — kecuali strategi yang segrup (multi-strategi/koin)
-    if (this.hasSymbol(symbol, botKey, groupKey)) {
+    // 2) Maks 1 posisi terbuka per simbol (PRD §9.2 / race-to-confirm).
+    //    Dalam grup multi-strategi: slot pre-arm (tanpa direction) boleh banyak,
+    //    tapi hanya SATU reservasi ber-direction yang boleh hidup.
+    if (groupKey) {
+      if (this.hasGroupOpenPosition(groupKey, symbol, botKey)) {
+        return {
+          ok: false,
+          reason: `Sudah ada posisi terbuka ${symbol} — race-to-confirm: max 1 per simbol`,
+        };
+      }
+      if (this.hasSymbol(symbol, botKey, groupKey)) {
+        return { ok: false, reason: `Sudah ada posisi ${symbol} di akun ini` };
+      }
+    } else if (this.hasSymbol(symbol, botKey, null)) {
       return { ok: false, reason: `Sudah ada posisi ${symbol} di akun ini` };
     }
 
-    // 2b) Direction lock (AC-05): dalam SATU grup multi-strategi pada simbol yang
-    //     sama, dilarang membuka arah berlawanan (LONG + SHORT serentak). Strategi
-    //     pertama yang fire mengunci arah; arah berlawanan ditolak sampai flat.
+    // 2b) Direction lock (AC-05): defense-in-depth — tolak arah berlawanan.
     if (groupKey && direction) {
       const opposite = direction === "LONG" ? "SHORT" : "LONG";
       if (this.hasGroupDirection(groupKey, symbol, opposite, botKey)) {

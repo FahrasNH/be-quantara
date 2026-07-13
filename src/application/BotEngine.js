@@ -2189,9 +2189,10 @@ class BotEngine extends EventEmitter {
       this._log("warn", `Dedup: open ${signal} ${this.config.symbol} diabaikan (duplikat <${DEDUP_WINDOW_MS}ms)`);
       return;
     }
-    // Juga skip jika sudah ada posisi terbuka arah sama untuk simbol ini.
-    if (this.state.openPositions.some(p => p.side === signal)) {
-      this._log("warn", `Dedup: sudah ada posisi ${signal} ${this.config.symbol} terbuka — skip open duplikat`);
+    // Juga skip jika sudah ada posisi terbuka apa pun untuk simbol ini
+    // (single-position-per-symbol — jangan hanya dedup same-side).
+    if (this.state.openPositions.length > 0) {
+      this._log("warn", `Dedup: sudah ada posisi ${this.config.symbol} terbuka — skip open duplikat`);
       return;
     }
 

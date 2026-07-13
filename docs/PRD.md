@@ -436,7 +436,7 @@ Legacy aliases tetap untuk migrasi DB/bots lama — lihat `ARCHITECTURE.md` §1.
 
 - Max utilization: 80% equity
 - Max daily loss akun: 6% (realized + floating)
-- Max 1 posisi per simbol per strategi per akun
+- Max 1 posisi per simbol per akun (race-to-confirm lintas strategi)
 - Signal conflict resolver (SignalConflictResolver) antar strategi
 - **Cap account-wide** (per tier): 4/8/12/16 concurrent positions
 - Max active bots per tier: 10/25/40/50

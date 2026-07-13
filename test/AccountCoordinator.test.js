@@ -118,14 +118,15 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
   t("getGroupUtilization count = 4", util.count === 4);
   t("getGroupUtilization util% = 100% (80/80 budget)", Math.abs(util.utilizationPct - 1) < 1e-9);
 
-  // Strategi segrup boleh berbagi simbol yang sama (bukan 1-posisi/simbol).
+  // Slot pre-arm (reserveGroup, tanpa direction) mengizinkan entry pertama.
+  // Max-1 ditegakkan setelah ada reservasi ber-direction (lihat AC-05 di bawah).
   const sameGroup = c.canOpen({
     botKey: "g1:ETHUSDT#TREND_FOLLOWING",
     symbol: "ETHUSDT",
     requiredMargin: 1,
     groupKey: "g1:ETHUSDT",
   });
-  t("strategi segrup → boleh berbagi simbol (bypass 1/simbol)", sameGroup.ok === true);
+  t("strategi segrup + belum ada open → entry pertama diizinkan", sameGroup.ok === true);
 
   // Tapi strategi dari grup LAIN tetap diblok pada simbol yang sama.
   const otherGroup = c.canOpen({
@@ -180,12 +181,12 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
   });
   t("AC-05: SHORT ditolak saat grup sudah LONG (direction lock)", !conflict.ok);
 
-  // Strategi TM mau LONG juga (searah) → BOLEH (entry terdiversifikasi).
+  // Strategi TM mau LONG juga (searah) → DITOLAK (race-to-confirm: max 1/simbol).
   const sameDir = c.canOpen({
     botKey: "gd:ETHUSDT#TM", symbol: "ETHUSDT", requiredMargin: 10,
     groupKey, direction: "LONG",
   });
-  t("AC-05: LONG searah tetap diizinkan (diversified)", sameDir.ok);
+  t("AC-05: LONG searah DITOLAK (max 1 posisi/simbol)", !sameDir.ok);
 
   // Setelah grup flat (release), arah berlawanan boleh lagi.
   c.releaseGroup("gd", "ETHUSDT");
@@ -231,7 +232,7 @@ console.log("\n🔗 AccountCoordinator Unit Tests\n");
     botKey: "toctou:BTCUSDT#TS", symbol: "BTCUSDT", requiredMargin: 20,
     groupKey, direction: "LONG",
   });
-  t("TOCTOU: engine B same-direction still allowed in group", bSame.ok);
+  t("TOCTOU: engine B same-direction blocked after A reserved (max 1/simbol)", !bSame.ok);
 
   // Order failure → release frees the slot
   c.release("toctou:BTCUSDT#AF");

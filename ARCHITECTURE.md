@@ -214,25 +214,33 @@ endpoint is added/removed (Definition of Done for API work).
 | 4 | **`botApi.js` aliases** | Duplicate method names | **Addressed (FE-DEBT-01).** Canonical: `botsV1`, `healthV1`, `stopBotV1`, `trades`. Deprecated wrappers warn once: `bots`, `health`, `emergencyStopV1`, `tradeHistoryV1`. | Remove wrappers next sprint after confirming no external callers. |
 | 5 | **`routes/legacy.js`** | Deprecated in docs but still mounted | Mounted at `/api/v1/legacy` with `Deprecation`/`Sunset` headers (BE-DEBT-01). | Ops: confirm zero traffic 30d → delete router + mount. |
 
-### Position limits (per symbol vs per strategy) — AUDIT 11 Jul 2026
+### Position limits (per symbol vs per strategy) — FIXED 13 Jul 2026 (GRASS bug)
+
+**Official semantics (Fahras 10 Jul 2026 + CRITICAL GRASS/USDT incident):**
+Multi-strategy per coin = **race-to-confirm**. All assigned strategies evaluate
+signals in parallel; the first to confirm takes the trade; others must wait until
+that position is flat. **Max 1 open position per symbol per account.**
 
 **Two deployment modes:**
 
 1. **Multi-strategy per coin (default, `MULTI_STRATEGY_ENABLED=true`)**
    - One `MultiStrategyCoordinator` runs N strategy engines on the same symbol.
-   - They share `groupKey = userId:symbol` and **may hold multiple concurrent positions** on that symbol, subject to:
-     - **Hedge guard:** no LONG + SHORT at the same time (`canEnter` + `AccountCoordinator.hasGroupDirection`).
-     - **Concentration cap:** `maxPositionsPerCoin` (env, default 2).
+   - They share `groupKey = userId:symbol` and **may NOT hold concurrent positions**:
+     - **`maxPositionsPerCoin` default 1** (`MULTI_STRATEGY_MAX_POSITIONS_PER_COIN`).
+     - **`AccountCoordinator.hasGroupOpenPosition`:** any reservation with
+       `direction` set blocks further entries in the group (pre-arm slots without
+       direction still allowed for margin footprint).
+     - **Hedge guard:** no LONG + SHORT (`canEnter` + `hasGroupDirection`).
      - **Per-strategy cap:** each engine at most 1 position (`maxPositions=1`).
-   - This is **not** literal “max 1 position per symbol”; it is “max N same-direction positions per symbol, no hedging.”
 
 2. **Legacy single-strategy bot (`BotEngine` only)**
    - **Max 1 position per symbol** via `AccountCoordinator.hasSymbol()` (no `groupKey`) and `maxPositions=1`.
-   - Exception: legacy `ADAPTIVE_FUSION` multi-component path may open A/B/C — now gated by coordinator + cross-component direction lock.
+   - Exception: legacy `ADAPTIVE_FUSION` multi-component path (A/B/C Map) is gated by
+     coordinator; live multi-strategy uses `AdaptiveStrategyEngine` single-signal path.
 
 **Order of gates:** signal generation first; then `canEnter` / `canOpen`; **optimistic `reserve()` before `openPosition`** (TOCTOU fix); release on order failure. `AdaptiveStrategyEngine` implements `getPendingSignal` / `applyConflictDecision` for batch `evaluate()`.
 
-**Tier field `maxPositionsPerSymbol`:** equals allowed strategy count for UI; runtime uses `maxPositionsPerCoin` unless aligned in config.
+**Tier field `maxPositionsPerSymbol`:** always `1` (runtime invariant). Strategy count is `strategies.length`, not a concurrent-position allowance.
 
 ### Related bot strategy endpoints (current)
 
