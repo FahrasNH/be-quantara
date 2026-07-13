@@ -1,13 +1,261 @@
 # Quantara Backend — Architecture Notes
 
 > Living doc. Sections are added as subsystems are formalized. This file currently
-> documents the **market / exchange** layer (Tasks A & C, Binance integration).
+> documents **tier/strategy SSOT**, **Gen2 naming**, strategy umbrellas (AF / TS / MD),
+> the **market / exchange** layer (Tasks A & C, Binance integration), and admin APIs.
+>
+> **Changelog (DOC-SSOT, 11 Jul 2026):** Tier→strategy tables and strategy keys in this
+> file follow **code as source of truth**. Entitlement keys live in
+> `src/domain/tierConfig.js`; canonical Gen2 component/engine keys live in
+> `src/config/strategies.js` (+ FE mirror `fe-bot-trading/src/utils/tierStrategyMap.js`).
+> Docs must not invent a third mapping.
+>
+> **Changelog (BUG-CRITICAL 502, 11 Jul 2026):** Real-engine backtests
+> (`POST /api/v1/backtest/run-real`) run as **isolated child_process workers** with
+> candle/memory hard caps — see §9 below.
 
 ---
 
-## 3. API Surface
+## 1. Gen1 → Gen2 Strategy Naming (historical map)
 
-### 3.4 Market Endpoints
+**Home for the Gen1→Gen2 mapping.** Product docs and new code use **Gen2 exclusively**.
+Legacy Gen1 / descriptor keys remain as migrate-only aliases in `STRATEGY_MIGRATION_MAP`.
+
+| Gen1 / umbrella label (docs & history) | Gen2 primary engine key | Live race / pipeline components | Display name |
+|----------------------------------------|-------------------------|---------------------------------|--------------|
+| `ADAPTIVE_FUSION` (umbrella) | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | Adaptive Fusion |
+| `TREND_SURGE` / `TREND_MOMENTUM` / `TREND_FOLLOWING` | `TS_TF` | `TS_TF`, `TS_MS`, `TS_VP` | Trend Surge |
+| `MEAN_DRIFT` / `MEAN_REVERSION` | `MD_MR` | `MD_MR` (internal A→B→C layers) | Mean Drift |
+| `BREAKOUT_STORM` / `BREAKOUT_RETEST` | `BS_BR` | `BS_BR` | Breakout Storm |
+
+Also still accepted as aliases → Gen2: `SMART_MONEY_CONCEPTS` / `SAC` → `AF_SMC`;
+`TF` → `TS_TF`; `MR` → `MD_MR`; `BR` → `BS_BR`.
+
+`A` / `B` / `C` in `legacyStrategies.js` are **PDF trade-type presets**, not AF racers.
+
+---
+
+## 2. Tier → Strategy Entitlement (SSOT)
+
+**Source of truth:** `src/domain/tierConfig.js` (`TIER_CONFIG[tier].strategies`).
+
+Entitlement still stores **legacy descriptor keys**; runtime normalizes them to Gen2 via
+`normalizeStrategyKey` / `STRATEGY_MIGRATION_MAP`. FE package engines use Gen2 keys
+(`TIER_PACKAGE_STRATEGIES` in `tierStrategyMap.js`).
+
+| Tier | Entitlement keys (`tierConfig.js`) | Gen2 engines (normalized / FE package) | Live components (race pool / pipeline) | maxPositions / symbol | maxConcurrentPositions | maxActiveBots |
+|------|------------------------------------|----------------------------------------|----------------------------------------|----------------------|------------------------|---------------|
+| **FOUNDRY** | `ADAPTIVE_FUSION` | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | 1 | 4 | 10 |
+| **FORGE** | `ADAPTIVE_FUSION`, `TREND_FOLLOWING` | `AF_SMC`, `TS_TF` | AF pool + `TS_TF`, `TS_MS`, `TS_VP` | 2 | 8 | 25 |
+| **MINT** | + `MEAN_REVERSION` | + `MD_MR` | + `MD_MR` | 3 | 12 | 40 |
+| **VAULT** | + `BREAKOUT_RETEST` | + `BS_BR` | + `BS_BR` | 4 | 16 | 50 |
+
+`GROK_AI_TRADING` is a VAULT experimental bonus — **not** in `tierConfig.strategies` race pools.
+Component lists: `TIER_COMPONENT_MAP` in `src/config/strategies.js` and
+`TIER_PACKAGE_COMPONENTS` in FE `tierStrategyMap.js`.
+
+---
+
+## 3. Backtest ↔ Live Parity (FULL PARITY philosophy)
+
+**Philosophy:** Backtest mode **(A) FULL PARITY** is the default for go-live validation.
+Raw-signal research (mode B) is available by disabling fees/slippage/`simulateFunding`
+and/or setting `afUseThreeComponentVoting: false` — never confuse the two.
+
+| Constraint | Live (`BotEngine`) | Backtest (`RealStrategyBacktestService`) |
+|---|---|---|
+| Consecutive-loss brake | `_checkRiskGates` (`maxConsecLoss`, default 3) | Same defaults; AF triple no longer raises cap to 5 |
+| Daily loss limit | Realized + **floating** (default 3%) | Realized + floating; pair-tier `dailyLossLimit` via FE |
+| Cooldown after loss | Candle/wall-clock minutes | Candle-time cooldown (same config minutes) |
+| Max trades/day | Yes | Yes (+ pair-tier override) |
+| Single-position / per-component | Yes | Yes (account-wide cap still excluded) |
+| Fees | Taker 0.06% / maker 0.02% | Same; `enableFees` |
+| Slippage | Exchange fills | Fixed 0.05% when `enableSlippage` (FE default ON) |
+| Funding | Schema only (not accrued live yet) | `~0.01%/8h` hold-time cost when fees on |
+| HTF / daily regime | HTF directional + MR filter | Same + `dailyRegimeGate` (backtest-only protective gate) |
+| AF voter threshold | `afMinVotes` capped to active voter count | Same (`AdaptiveFusionUmbrella._aggregate`) |
+
+Intentionally excluded from backtest (live-execution concerns): account coordinator
+aggregate gates, signal idempotency cache, exchange min-lot / margin feasibility.
+
+**Pool sizing (live multi-coin):** `PG_POOL_MAX` default 35, `PRISMA_CONNECTION_LIMIT`
+default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throttled
++ retried on pool connect timeout.
+
+---
+
+## 4. Strategy Config — Adaptive Fusion (AF_SMC)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
+
+### 4.1 Component model (Sprint 12 — Race-to-Confirm; AF-SUB-03 rescope)
+
+| Slot | Key | Role | Implementation |
+|------|-----|------|----------------|
+| A | `AF_SMC` | Smart Money Concepts (independent racer) | `SmartMoneyConceptsStrategy` |
+| B | `AF_WYCKOFF` | Wyckoff spring/upthrust (independent racer) | `WyckoffStrategy` → `af/wyckoffComponent.js` |
+| C | `AF_VSA` | Volume Spread Analysis (independent racer) | `VsaStrategy` → `af/vsaComponent.js` |
+
+**ARCHITECTURE DECISION (Fahras, 10 Jul 2026):** Race-to-Confirm replaces Sprint 8 2/3 voting.
+
+- Umbrella `AF_SMC` is a **tier access bag** (FOUNDRY unlocks the pool), not a fusion mechanism.
+- Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
+- Same-bar winner = highest confidence; ties break `AF_SMC` → `AF_WYCKOFF` → `AF_VSA`.
+- Trade attribution label = **winning component only** (never joined "SMC + Wyckoff + VSA").
+- `trades.strategy_name` persists the **winning component canonical key** (`AF_WYCKOFF`, …),
+  not the umbrella engine alone. Startup backfill prefers `indicators.winningComponent` /
+  `firedByStrategy`; rows without that metadata only normalize Gen1/abbrev → engine key
+  (`ADAPTIVE_FUSION`/`AF` → `AF_SMC`) — per-racer identity for those rows is accepted lost.
+- Max 1 position/symbol still enforced by BotEngine / backtest engines.
+- Rollback: `afCombinationMode: "vote"` restores Sprint 8 2/3 (altcoin 3/3) voting;
+  `afUseThreeComponentVoting: false` → SMC-only passthrough.
+
+Trade types for AF: **Scalping / Swing** only (Intraday removed AF-SCALP-19). When a
+non-SMC racer wins, direction is promoted to type legs (standalone racer entry).
+
+### 4.2 Key audit (AF-CONFIG-AUDIT)
+
+Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`, `MD_MR`, `BS_BR`.
+
+Legacy aliases (migrate, do not delete abruptly): `ADAPTIVE_FUSION` / `SMART_MONEY_CONCEPTS` → `AF_SMC`,
+`TREND_FOLLOWING` → `TS_TF`, `MEAN_REVERSION` → `MD_MR`, `BREAKOUT_RETEST` → `BS_BR`.
+
+`A` / `B` / `C` in `legacyStrategies.js` are **PDF trade-type presets** (Scalping/Day/Swing),
+not Adaptive Fusion components — do not confuse with AF racers.
+
+**`GROK_AI_TRADING`:** experimental VAULT bonus that *does* generate LLM entry signals.
+Not a tier umbrella / race-pool member. Prefer `GrokConfirm` overlay on canonical strategies
+for production. Gated by entitlement (VAULT / open mode).
+
+### 4.3 Research monitoring (not a live gate)
+
+Pairwise signal correlation &lt; 0.5 among SMC/Wyckoff/VSA remains a **monitoring metric**
+(coverage diversification insight), not a requirement to fuse votes. Per-strategy go/no-go
+(WR ≥35%, PF ≥1.2, Sharpe ≥0.05, ≥30 trades/coin) is evaluated independently per racer.
+
+---
+
+## 5. Strategy Config — Trend Surge (TS_TF)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/TrendSurgeUmbrella.js`
+
+### 5.1 Component model (Sprint 12 — Race-to-Confirm)
+
+| Slot | Key | Role | Implementation |
+|------|-----|------|----------------|
+| A | `TS_TF` | Trend Following (independent racer) | `TrendFollowingStrategy` |
+| B | `TS_MS` | Dow Theory HH/HL pullback entries | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
+| C | `TS_VP` | Auction Market Theory (VWAP reclaim / VA edge) | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
+
+**ARCHITECTURE DECISION (Fahras, 10 Jul 2026):** Race-to-Confirm replaces Sprint 9 gate/layering.
+
+- Umbrella `TS_TF` is a **tier access bag** (FORGE unlocks the pool), not a fusion mechanism.
+- Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
+- Same-bar winner = highest confidence; ties break `TS_TF` → `TS_MS` → `TS_VP`.
+- Trade attribution label = **winning component only** (never joined "A + B + C").
+- Max 1 position/symbol still enforced by BotEngine / backtest engines.
+- Rollback: `tsCombinationMode: "gate"` restores A→B→C layering; `"hybrid"` keeps A required with B/C as confidence boosters only.
+
+### 5.2 Backtest UI visibility
+
+FE Advance multi-select lists all live components under each umbrella
+(`TIER_PACKAGE_COMPONENTS`). Selecting any component under an umbrella maps to a
+single engine run via `COMPONENT_TO_ENGINE` (no N× capital split). Selected TS
+keys become the race pool; per-trade `strategyLabel` comes from the winning racer.
+
+---
+
+## 6. Strategy Config — Mean Drift (MD_MR)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/implementations/MeanReversionStrategy.js`
++ `src/domain/strategy/md/{adxRegimeGate,orderBlockFvg}.js`
+
+### 6.1 Layered pipeline (MD-SUB-01 / MD-SUB-02 / MD-SUB-03)
+
+Unlike AF/TS race-to-confirm pools, Mean Drift currently has **one live key** (`MD_MR`)
+with an internal A→B→C pipeline:
+
+| Layer | Role | Implementation |
+|-------|------|----------------|
+| A | BB+RSI+VWAP mean-reversion signal (Scalping / Intraday) | `MeanReversionStrategy.detectSignal` |
+| B | ADX Trend Strength Filter (ADX(14) regime gate) | `md/adxRegimeGate.js` |
+| C | Order Block + FVG entry confluence & TP target | `md/orderBlockFvg.js` |
+
+**ADX gate (Component B):**
+- `balance` (ADX &lt; 20) → MR allowed at full confidence
+- `transition` (20–25) → MR allowed at reduced confidence (`mdAdxTransitionConfidenceMult`, default 0.75)
+- `imbalance` (ADX ≥ 25) → MR blocked
+- Missing ADX → fail-open (warmup)
+
+**OB/FVG precision (Component C):**
+- Entry keeps the A signal even without confluence, but confidence drops (`mdNoConfluenceConfidenceMult`, default 0.7)
+- Confluence within `0.5×ATR` of an OB or unfilled FVG boosts confidence
+- TP prefers nearest unfilled FVG midpoint in trade direction; else BB middle; else RR-based TP
+
+**Also retained:** HTF EMA regime filter (`htfRegimeFilter.meanReversionRegimeFilter`) in BotEngine / backtest — complementary to entry-TF ADX.
+
+Config knobs: `mdAdxGateEnabled`, `mdObFvgEnabled`, `mdAdxBalanceMax`, `mdAdxImbalanceMin`,
+`mdConfluenceAtrMult`, `mdFvgScanBars`, `mdObLookback`.
+
+Go/No-Go validation (WR ≥55%, PF ≥1.3, 12m multi-coin) remains a research gate after code lands.
+
+---
+
+## 7. Known Gaps & Consistency Notes (DOC-SSOT-03 audit — 11 Jul 2026)
+
+Former “§5 gap list” items, re-verified against code. Update this table whenever an
+endpoint is added/removed (Definition of Done for API work).
+
+| # | Topic | Prior note (stale) | Current status (code) | Decision / debt |
+|---|--------|--------------------|------------------------|-----------------|
+| 1 | **Dry Run** | “Dry Run bukan env var” | **Still valid (informational).** Mode is per-bot `dryRun` in DB + global FE `tradingMode` in Settings (not `process.env.DRY_RUN`). Paper wallet via `GET /account/paper-balance`; live via `GET /account/exchange-balance`. `DRY_RUN_VIRTUAL_BALANCE` only seeds paper equity. | Keep as note — not a gap. |
+| 2 | **`getStrategyAnalysisV1` / strategy-analysis** | “FE calls endpoint that does not exist on BE” | **Resolved on BE.** `GET /api/v1/bots/:symbol/strategy-analysis` exists in `routes/bots-afs.js` (`analyzeStrategyFit`). FE client: `botApi.getStrategyAnalysisV1(symbol)`. | **No UI caller** in FE (method only). Keep client; wire UI later or treat as unused API surface. |
+| 3 | **Account `/strategy`** | “Account /strategy belum dipakai FE” | **Still unused by FE.** `GET`/`POST /api/v1/account/strategy` in `routes/account.js` (Prisma `UserStrategy`). FE uses per-bot `POST /bots/:symbol/strategy` (`setStrategyV1`) and `PATCH /bots/:symbol/config` — and **no call sites** currently invoke `setStrategyV1` either (config goes through `updateBotConfigV1`). | **Decision (BE-DEBT-01):** deprecate in place (`Deprecation` + `Link` headers). Prefer bot config endpoints. Remove after 30d zero traffic. |
+| 4 | **`botApi.js` aliases** | Duplicate method names | **Addressed (FE-DEBT-01).** Canonical: `botsV1`, `healthV1`, `stopBotV1`, `trades`. Deprecated wrappers warn once: `bots`, `health`, `emergencyStopV1`, `tradeHistoryV1`. | Remove wrappers next sprint after confirming no external callers. |
+| 5 | **`routes/legacy.js`** | Deprecated in docs but still mounted | Mounted at `/api/v1/legacy` with `Deprecation`/`Sunset` headers (BE-DEBT-01). | Ops: confirm zero traffic 30d → delete router + mount. |
+
+### Position limits (per symbol vs per strategy) — FIXED 13 Jul 2026 (GRASS bug)
+
+**Official semantics (Fahras 10 Jul 2026 + CRITICAL GRASS/USDT incident):**
+Multi-strategy per coin = **race-to-confirm**. All assigned strategies evaluate
+signals in parallel; the first to confirm takes the trade; others must wait until
+that position is flat. **Max 1 open position per symbol per account.**
+
+**Two deployment modes:**
+
+1. **Multi-strategy per coin (default, `MULTI_STRATEGY_ENABLED=true`)**
+   - One `MultiStrategyCoordinator` runs N strategy engines on the same symbol.
+   - They share `groupKey = userId:symbol` and **may NOT hold concurrent positions**:
+     - **`maxPositionsPerCoin` default 1** (`MULTI_STRATEGY_MAX_POSITIONS_PER_COIN`).
+     - **`AccountCoordinator.hasGroupOpenPosition`:** any reservation with
+       `direction` set blocks further entries in the group (pre-arm slots without
+       direction still allowed for margin footprint).
+     - **Hedge guard:** no LONG + SHORT (`canEnter` + `hasGroupDirection`).
+     - **Per-strategy cap:** each engine at most 1 position (`maxPositions=1`).
+
+2. **Legacy single-strategy bot (`BotEngine` only)**
+   - **Max 1 position per symbol** via `AccountCoordinator.hasSymbol()` (no `groupKey`) and `maxPositions=1`.
+   - Exception: legacy `ADAPTIVE_FUSION` multi-component path (A/B/C Map) is gated by
+     coordinator; live multi-strategy uses `AdaptiveStrategyEngine` single-signal path.
+
+**Order of gates:** signal generation first; then `canEnter` / `canOpen`; **optimistic `reserve()` before `openPosition`** (TOCTOU fix); release on order failure. `AdaptiveStrategyEngine` implements `getPendingSignal` / `applyConflictDecision` for batch `evaluate()`.
+
+**Tier field `maxPositionsPerSymbol`:** always `1` (runtime invariant). Strategy count is `strategies.length`, not a concurrent-position allowance.
+
+### Related bot strategy endpoints (current)
+
+| Method | Path | BE | FE client | FE UI usage |
+|--------|------|----|-----------|-------------|
+| GET | `/api/v1/bots/:symbol/strategy-analysis` | ✅ `bots-afs.js` | `getStrategyAnalysisV1` | ❌ none |
+| POST | `/api/v1/bots/:symbol/strategy` | ✅ `bots-afs.js` | `setStrategyV1` | ❌ none (prefer `updateBotConfigV1`) |
+| GET/POST | `/api/v1/account/strategy` | ✅ `account.js` (deprecated) | ❌ none | ❌ none |
+| GET | `/api/v1/bots/strategies/available` | ✅ | `getStrategiesV1` | ✅ |
+
+---
+
+## 8. API Surface
+
+### 8.4 Market Endpoints
 
 All routes are mounted under `/api/v1/market` behind `authMiddleware` (Bearer JWT
 → `req.userId`). Source: `src/server/routes/market.js`.
@@ -56,7 +304,7 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 | 429 | `SYMBOLS_RATE_LIMITED` | >10 req/min |
 | 503 | `EXCHANGE_UNAVAILABLE` | exchange down + no cache |
 
-### 3.5 Supported Exchanges
+### 8.5 Supported Exchanges
 
 | Exchange | Trading | Symbols listing | Key onboarding validation |
 |----------|---------|-----------------|---------------------------|
@@ -69,7 +317,7 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 > structurally valid value. Gating is enforced at the application layer via
 > `cfg.allowedExchanges` and `POST /account/keys`.
 
-### 3.6 Admin Endpoints — `routes/admin.js`
+### 8.6 Admin Endpoints — `routes/admin.js`
 
 The Admin Dashboard backend (Tasks ADMIN-BE-01..08, incl. the Admin v2 pages
 ADMIN-FE-05..13). All routes are mounted under `/api/v1/admin`. Source:
@@ -266,7 +514,7 @@ uses client-side sample data in the meantime.
 #### Admin management — superAdminGuard (ADMIN-BE-07)
 
 `GET /admin/admins` (list), `POST /admin/admins` (create — bcrypt-hashes the
-password, seeds a default `ADAPTIVE_FUSION` strategy), `PATCH /admin/admins/:id`
+password, seeds a default `AF_SMC` strategy — legacy alias `ADAPTIVE_FUSION` still accepted), `PATCH /admin/admins/:id`
 (edit username/email), `PATCH /admin/admins/:id/role` (change role),
 `POST /admin/admins/:id/reset-password` (set new password + kill sessions), and
 `DELETE /admin/admins/:id`. Delete guards against removing **yourself** and the
@@ -290,7 +538,7 @@ breaks the action). Actor = `req.adminUser.id`; actions include
 
 ## Appendix A — IDOR Audit: Market & Symbol Endpoints (Task C)
 
-Audited 2026-06-16. Scope: the 5 endpoints in §3.4. Goal: confirm every endpoint
+Audited 2026-06-16. Scope: the endpoints in §8.4. Goal: confirm every endpoint
 that returns user-specific data scopes its query to `req.userId` (from the verified
 JWT), never to a spoofable param/body.
 
@@ -329,3 +577,53 @@ Binance keys reuse the existing `crypto.js` AES-256-GCM path (`encrypt`/`decrypt
 12-byte IV, auth tag, `iv:authTag:ciphertext` format) via `userExchange.upsertExchange`
 — identical to Bitget/OKX. No Binance-specific storage path exists, so there is no
 divergent encryption surface to verify beyond the shared mechanism.
+
+---
+
+## 9. Backtest job isolation (BUG-CRITICAL 502, 11 Jul 2026)
+
+**Problem:** Long real-engine backtests (>12 months, multi-type AF/TS) ran in the
+**same Node process** as live bots. Even with async `jobId` + `setImmediate` yields,
+CPU-heavy loops and large candle arrays could OOM or block the event loop → nginx
+**502 Bad Gateway**, PM2 restart, and live trading downtime.
+
+**Root cause (code evidence):**
+- `POST /backtest/run-real` already returned `jobId`, but `_runBacktestJobAsync`
+  executed `runTripleTypeBacktest` / `runRealBacktest` on the API event loop.
+- `HistoricalKlinesService` default `MAX_BARS` was 500k; multi-type runs stack
+  several series + indicator arrays in heap.
+- Yields every 500 bars were insufficient under AF Wyckoff+VSA load.
+
+**Pragmatic fix (no BullMQ/pg-boss this sprint):**
+| Piece | Location | Role |
+|-------|----------|------|
+| Job store + concurrency (max 1) | `BacktestJobService.js` | `POST` → `jobId`; queue extras |
+| Child worker | `workers/backtestJobWorker.js` | `fork` + `--max-old-space-size` (default 768MB) |
+| Runner + caps | `runBacktestJob.js` | Fetch/compute; `BACKTEST_MAX_TOTAL_ENTRY_BARS` (90k); heap guard |
+| Klines safety | `HistoricalKlinesService.js` | Default max bars 150k; mem-cache entry cap |
+| FE copy | `botApi.js` / `useBacktest.js` | Actionable 502 + poll retries |
+
+**Env knobs:** `BACKTEST_ISOLATE=0` (in-process fallback/tests),
+`BACKTEST_WORKER_HEAP_MB`, `BACKTEST_MAX_CONCURRENT`, `BACKTEST_MAX_TOTAL_ENTRY_BARS`,
+`BACKTEST_MAX_HEAP_USED_MB`, `BACKTEST_KLINES_MAX_BARS`.
+
+**Tradeoff:** In-process Map jobs are lost on API restart (same as before). Full
+BullMQ/pg-boss remains the longer-term durable queue if multi-tenant load grows.
+Worker OOM fails **that job only**; the parent API/live tick loop keeps running.
+
+### Shared candle cache (Sprint 12, 12 Jul 2026)
+
+**Problem:** Compare mode / tier packages run multiple strategies on the same
+symbol+timeframe+period; each job re-fetched OHLCV from exchange/DB.
+
+**Fix (two layers):**
+| Layer | Location | Key | Role |
+|-------|----------|-----|------|
+| Worker-local pool (L1) | `BacktestCandleCache.js` | `{exchange}:{symbol}:{timeframe}` | Full immutable series within one isolated worker/job; slice by date range; gap-only exchange fetch |
+| DB pool (L2) | `candle_cache` via `getCachedCandlesInRangeForBacktest` | same + timestamp | Cross-job and cross-worker reuse; immutable reads for closed bars skip `cached_at` TTL |
+
+Each backtest uses a dedicated child worker that is terminated after completion.
+Consequently, L1 is scoped to that worker/job; durable reuse between compare/tier
+jobs comes from the shared DB L2.
+
+**Env knobs:** `BACKTEST_CANDLE_POOL_ENTRIES`, `BACKTEST_CANDLE_POOL_TTL_MS`.

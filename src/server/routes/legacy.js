@@ -1,12 +1,26 @@
 // ─── src/server/routes/legacy.js ─────────────────────────────────────────────
 // Legacy single-bot endpoints (backwards compatibility with older FE versions).
 // Semua route ini meneruskan ke bot pertama atau bot berdasarkan ?symbol=
+//
+// BE-DEBT-01 (11 Jul 2026): DEPRECATED — do not use for new features.
+// Canonical surface: /api/v1/bots/:symbol/*. Removal scheduled after confirming
+// zero production traffic for 30 days (ops: check access logs for /api/v1/legacy).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { Router } = require("express");
 
 module.exports = function createLegacyRouter({ getBot, SYMBOLS_LIST = [] }) {
   const router = Router();
+
+  router.use((req, res, next) => {
+    res.setHeader("Deprecation", "true");
+    res.setHeader("Sunset", "Sat, 01 Nov 2026 00:00:00 GMT");
+    res.setHeader(
+      "Link",
+      '</api/v1/bots>; rel="successor-version"'
+    );
+    next();
+  });
 
   // Legacy start/stop (pakai query ?symbol= atau symbol pertama)
   router.post("/bot/start", async (req, res) => {

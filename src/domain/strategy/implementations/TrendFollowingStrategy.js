@@ -17,7 +17,9 @@
 
 const StrategyBase = require("../base/StrategyBase");
 const { calcEMA, calcSMA, calcDonchian, calcADX, calcATR } = require("../../indicators");
-const { checkHTFRegime } = require("../../htfRegimeFilter");
+// NOTE: Do NOT import checkHTFRegime here. That helper is Mean-Reversion logic
+// (blocks WITH-trend entries). Applying it to Trend Following inverted the
+// directional gate → 100% SHORT bias in uptrends (Sprint 12 bug analysis).
 
 class TrendFollowingStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -89,6 +91,7 @@ class TrendFollowingStrategy extends StrategyBase {
 
     this._openTrades = [];
     this._trendState = this._freshTrendState();
+    this._lastEntryChecklist = null;
     // WeakMap keyed by the `indicators.highs` array reference — avoids recomputing
     // the fallback Donchian channel on every single bar (see detectSignal below).
     // WeakMap (not a plain field) so different bots/symbols sharing this singleton
@@ -108,6 +111,7 @@ class TrendFollowingStrategy extends StrategyBase {
 
   resetTrendState() {
     this._trendState = this._freshTrendState();
+    this._lastEntryChecklist = null;
   }
 
   /**
@@ -403,26 +407,28 @@ class TrendFollowingStrategy extends StrategyBase {
     this._trendState.barsInTrend += 1;
 
     // Layer 3: Entry checks
+    const adxMinStrength = config.adxMinStrength ?? this.config.adxMinStrength ?? 25;
+    const donchianPeriod = config.donchianPeriod ?? this.config.donchianPeriod ?? 20;
     const longCheck = this.checkLongEntry(
       closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
       volumeCurrentEntry, volumeSMAEntry,
       htfTrend, donchianBroken, donchianUpperMTF, htfAdx,
-      config.adxMinStrength, config.minVolRatio
+      adxMinStrength, config.minVolRatio
     );
 
+    // TF already enforces HTF direction via detectHTFTrend + entry checks.
+    // Never apply MR's checkHTFRegime here (it blocks with-trend entries).
     if (longCheck.valid) {
-      if (config.tierOverrides?.regimeFilterRequired) {
-        const regimeCheck = checkHTFRegime({
-          direction: 'LONG',
-          htfData: {
-            ema9: htfEmaFast,
-            ema50: htfEmaSlow,
-            ema200: indicators.ema200HTF?.[idxHTF] ?? null,
-          },
-          required: true,
-        });
-        if (!regimeCheck.allowed) return null;
-      }
+      // Hard-gate caveat: all checklist flags are true on every fill — low variance.
+      this._lastEntryChecklist = {
+        htfTrendAligned: true,
+        adxPassed: true,
+        donchianBroken: true,
+        ema9Retest: true,
+        volumeConfirmed: true,
+        adxMinStrength,
+        donchianPeriod,
+      };
       return "LONG";
     }
 
@@ -430,22 +436,19 @@ class TrendFollowingStrategy extends StrategyBase {
       closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
       volumeCurrentEntry, volumeSMAEntry,
       htfTrend, donchianBroken, donchianLowerMTF, htfAdx,
-      config.adxMinStrength, config.minVolRatio
+      adxMinStrength, config.minVolRatio
     );
 
     if (shortCheck.valid) {
-      if (config.tierOverrides?.regimeFilterRequired) {
-        const regimeCheck = checkHTFRegime({
-          direction: 'SHORT',
-          htfData: {
-            ema9: htfEmaFast,
-            ema50: htfEmaSlow,
-            ema200: indicators.ema200HTF?.[idxHTF] ?? null,
-          },
-          required: true,
-        });
-        if (!regimeCheck.allowed) return null;
-      }
+      this._lastEntryChecklist = {
+        htfTrendAligned: true,
+        adxPassed: true,
+        donchianBroken: true,
+        ema9Retest: true,
+        volumeConfirmed: true,
+        adxMinStrength,
+        donchianPeriod,
+      };
       return "SHORT";
     }
 
@@ -633,14 +636,33 @@ class TrendFollowingStrategy extends StrategyBase {
   }
 
   getLastSignalMeta() {
+    const checklist = this._lastEntryChecklist || {};
+    const adxMinStrength = checklist.adxMinStrength ?? this.config.adxMinStrength ?? 25;
+    const donchianPeriod = checklist.donchianPeriod ?? this.config.donchianPeriod ?? 20;
     return {
-      component: "Swing",  // Trend Following = trend-continuation swing trades (Type Trade label)
+      // Racer identity — trade-type (Intraday/Swing) is stamped by the multi-TF harness.
+      // Hardcoding "Swing" painted every TF fill as Swing and broke AMT/TF type stats.
+      component: "TS_TF",
+      winningComponent: "TS_TF",
+      strategyLabel: "Trend Following",
       marketCond: this._trendState.htfTrendConfirmed ? "STRONG_TREND" : "NORMAL",
       direction: this._trendState.htfTrendDirection,
       htfTrendConfirmed: this._trendState.htfTrendConfirmed,
       adxStrength: this._trendState.htfAdxStrength,
       donchianBroken: this._trendState.donchianBroken,
       barsInTrend: this._trendState.barsInTrend,
+      // Entry reason sources for CSV (hard-gate — nearly identical across trades).
+      entryChecklist: {
+        htfTrendAligned: checklist.htfTrendAligned ?? this._trendState.htfTrendConfirmed,
+        adxPassed: checklist.adxPassed ?? (this._trendState.htfAdxStrength >= adxMinStrength),
+        donchianBroken: checklist.donchianBroken ?? this._trendState.donchianBroken,
+        ema9Retest: checklist.ema9Retest ?? false,
+        volumeConfirmed: checklist.volumeConfirmed ?? false,
+        adxMinStrength,
+        donchianPeriod,
+      },
+      adxMinStrength,
+      donchianPeriod,
     };
   }
 

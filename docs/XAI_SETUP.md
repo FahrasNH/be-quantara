@@ -83,7 +83,7 @@ curl -X POST http://localhost:3000/api/v1/ai/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTCUSDT",
-    "strategyKey": "ADAPTIVE_FUSION",
+    "strategyKey": "AF_SMC",
     "metrics": {
       "winRate": 48,
       "profitFactor": 1.65,

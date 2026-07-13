@@ -1434,6 +1434,16 @@ module.exports = function createBotsRouter(helpers) {
   );
 
   /**
+   * GET /api/v1/bots/strategies/catalog
+   * Canonical strategy registry for FE pickers/filters (engines + race components).
+   * Legacy Gen1 aliases are listed under `aliases` only — never as selectable options.
+   */
+  router.get("/strategies/catalog", asyncHandler(async (_req, res) => {
+    const { getStrategyCatalog } = require("../../config/strategies");
+    res.json({ ok: true, ...getStrategyCatalog() });
+  }));
+
+  /**
    * GET /api/v1/bots/strategies/available
    * List strategies filtered by user's tier.
    * Returns allowed strategies + locked list with required tier.
@@ -1517,13 +1527,16 @@ module.exports = function createBotsRouter(helpers) {
       riskConfig,
     };
 
-    // Add component info for ADAPTIVE_FUSION
-    if (key === "ADAPTIVE_FUSION") {
-      response.components = [
-        { key: "A", name: "Aggressive Scalping", minBalance: 500 },
-        { key: "B", name: "Day Trading", minBalance: 50 },
-        { key: "C", name: "Swing Trading", minBalance: 0 },
-      ];
+    // Race-pool components for AF (Gen2). Legacy A/B/C PDF presets are unrelated.
+    const { normalizeStrategyKey, TIER_COMPONENT_MAP } = require("../../config/strategies");
+    const canonical = normalizeStrategyKey(key);
+    if (canonical === "AF_SMC" || key === "ADAPTIVE_FUSION") {
+      response.components = (TIER_COMPONENT_MAP.FOUNDRY?.active || []).map((ck) => ({
+        key: ck,
+        name: STRATEGIES[ck]?.label || ck,
+      }));
+      response.canonicalKey = "AF_SMC";
+      if (key !== "AF_SMC") response.deprecatedAliasOf = "AF_SMC";
     }
 
     res.json({

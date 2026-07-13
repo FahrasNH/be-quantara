@@ -98,6 +98,30 @@ test("no HTF candles → fail-open (HTF filter skipped, still trades)", async ()
   assert.ok(typeof r.meta.higherTf === "string"); // canonical config still reports intended HTF
 });
 
+test("AF race mode — per-trade strategyLabel is winning racer, not race header", async () => {
+  const r = await runRealBacktest({
+    entryCandles: entry,
+    htfCandles: htf,
+    strategyKey: "ADAPTIVE_FUSION",
+    capital: 1000,
+    config: {
+      afCombinationMode: "race",
+      selectedComponents: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+      volSmaMultiplier: 1.0,
+    },
+  });
+  assert.ok(r.trades.length > 0, "race-mode AF backtest should produce trades");
+  const racerLabels = new Set(["Smart Money Concepts", "Wyckoff Method", "Volume Spread Analysis"]);
+  const racerKeys = new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+  for (const t of r.trades) {
+    assert.ok(t.strategyLabel, "trade should have strategyLabel");
+    assert.ok(!t.strategyLabel.startsWith("Adaptive Fusion race"),
+      `strategyLabel must not be race header, got: ${t.strategyLabel}`);
+    assert.ok(racerLabels.has(t.strategyLabel), `unexpected strategyLabel: ${t.strategyLabel}`);
+    assert.ok(racerKeys.has(t.strategyKey), `strategyKey should be winning racer, got: ${t.strategyKey}`);
+  }
+});
+
 // ── runMultiTypeBacktest (TS_TF/MD_MR sharing AF_SMC's own TF definitions) ──
 test("runMultiTypeBacktest (TS_TF: Intraday+Swing) never touches Scalping/5m", async () => {
   const r = await runMultiTypeBacktest({

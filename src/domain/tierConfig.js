@@ -13,8 +13,8 @@ const TIER_CONFIG = {
     price: 9,
     strategies: ["ADAPTIVE_FUSION"],
     maxPositions: 1,
-    // Multi-Strategy per Coin: alokasi modal equal-weight antar strategi pada
-    // satu koin, dan maks satu posisi per strategi per simbol.
+    // Multi-Strategy per Coin: equal-weight capital + race-to-confirm
+    // (max 1 open position per symbol; strategies compete for the slot).
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
     // Cap JUMLAH posisi terbuka serentak LINTAS-AKUN (semua koin/strategi digabung).
@@ -34,9 +34,9 @@ const TIER_CONFIG = {
     label: "Forge",
     price: 24,
     strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
-    maxPositions: 2,
+    maxPositions: 1,
     capitalAllocation: { equal: true },
-    maxPositionsPerSymbol: 2,
+    maxPositionsPerSymbol: 1,
     // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
     maxConcurrentPositions: 8,
     maxActiveBots: 25,
@@ -51,9 +51,9 @@ const TIER_CONFIG = {
     label: "Mint",
     price: 54,
     strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
-    maxPositions: 3,
+    maxPositions: 1,
     capitalAllocation: { equal: true },
-    maxPositionsPerSymbol: 3,
+    maxPositionsPerSymbol: 1,
     // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
     maxConcurrentPositions: 12,
     maxActiveBots: 40,
@@ -67,10 +67,11 @@ const TIER_CONFIG = {
     label: "Vault",
     price: 99,
     strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
-    maxPositions: 4,
+    maxPositions: 1,
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
+    // Race-to-confirm: max 1 open position per symbol regardless of strategy count.
     capitalAllocation: { equal: true /* dynamic: false */ },
-    maxPositionsPerSymbol: 4,   // bukan maxPositions global
+    maxPositionsPerSymbol: 1,
     // Cap account-wide posisi terbuka serentak (per-tier account open-position cap).
     maxConcurrentPositions: 16,
     maxActiveBots: 50,

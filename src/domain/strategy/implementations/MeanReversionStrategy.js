@@ -1,23 +1,22 @@
 /**
- * MeanReversionStrategy.js — Mean Drift (MD_MR): Dual-Component Mean Reversion
+ * MeanReversionStrategy.js — Mean Drift (MD_MR): Layered Mean Reversion
  *
- * Philosophy: "Trade price extremes — fast for scalping, sustained for intraday"
+ * Pipeline (MD-SUB-01 / MD-SUB-02 / MD-SUB-03):
+ *   Component A — Mean Reversion (BB + RSI + VWAP) generates LONG/SHORT
+ *   Component B — Auction Market Theory ADX regime gate approve/block
+ *   Component C — Order Block + FVG refine entry confidence & TP target
  *
- * Komponenten (tiered by market microstructure):
- *   A (Scalping):  5m entry, RSI<28/RSI>72, BB(20, 1.5σ), hold 5-15min, TP 1.2-1.8% (1:2.5 RR)
- *   B (Intraday): 15m entry, RSI<32/RSI>68, BB(20, 2.0σ), hold 30-90min, TP 2.5-4.0% (1:2 RR)
+ * Trade types (Component A dual legs):
+ *   Scalping: 5m, RSI<28/>72, BB(20, 1.5σ), hold 5-15min, RR 1:2.5
+ *   Intraday: 15m, RSI<32/>68, BB(20, 2.0σ), hold 30-90min, RR 1:2
  *
- * Both components use:
- *   - Dual-gate logic: BB touch + RSI agreement + VWAP confirmation
- *   - No HTF regime (single TF entry for faster reaction)
- *   - Vol SMA gate (reject dead markets)
- *   - RR-optimized stops: tight for scalps, wider for intraday swings
+ * Shared gates: Vol SMA, ADX balance/transition, optional OB/FVG confluence.
  */
 
 const StrategyBase = require("../base/StrategyBase");
-// Indicators (RSI/ATR/BB/VWAP) are precomputed once by calcIndicators and read
-// per-bar from the `indicators` arg; this strategy uses its own BB helper for
-// the dual-σ bands, so no direct indicators import is needed here.
+const { evaluateAdxRegimeGate } = require("../md/adxRegimeGate");
+const { refineMdEntry, resolveMdTakeProfit } = require("../md/orderBlockFvg");
+const { calcADX } = require("../../indicators");
 
 class MeanReversionStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -25,11 +24,10 @@ class MeanReversionStrategy extends StrategyBase {
       name: "MEAN_REVERSION",
       label: "Mean Reversion (Mean Drift - MD_MR)",
       description:
-        "Dual-component mean reversion strategy. " +
-        "Component A (Scalping): 5m entry, RSI<28, BB(1.5σ), hold 5-15min. " +
-        "Component B (Intraday): 15m entry, RSI<32, BB(2.0σ), hold 30-90min. " +
-        "Optimal for MINT tier (Rp10-15M+). RR 1:2.5 (A), 1:2 (B).",
-      version: "2.0.0",
+        "Layered mean reversion: BB+RSI entry → ADX regime gate → OB/FVG precision. " +
+        "Scalping (5m): RSI<28, BB(1.5σ). Intraday (15m): RSI<32, BB(2.0σ). " +
+        "Optimal for MINT tier. RR 1:2.5 (Scalping), 1:2 (Intraday).",
+      version: "3.0.0",
       enabled: true,
       ...config,
     });
@@ -46,28 +44,45 @@ class MeanReversionStrategy extends StrategyBase {
       riskPerTrade: 0.008,    // 0.8% per trade (split 0.4% A + 0.4% B)
 
       // ═══ COMPONENT A: SCALPING (5m) ════════════════════════════════════
-      bbStdDevA: 1.5,         // Tight bands for fast mean reversion touch
-      rsiOversoldA: 28,       // LONG entry threshold
-      rsiOverboughtA: 72,     // SHORT entry threshold
-      tpMultiplierA: 2.5,     // TP = 2.5× SL → 1:2.5 RR
-      holdMinutesA: 15,       // Exit after 15 min if not profitable
+      bbStdDevA: 1.5,
+      rsiOversoldA: 28,
+      rsiOverboughtA: 72,
+      tpMultiplierA: 2.5,
+      holdMinutesA: 15,
       trailingStopAtrMultA: 0.3,
 
-      // ═══ COMPONENT B: INTRADAY (15m) ════════════════════════════════════
-      bbStdDevB: 2.0,         // Looser bands for 30-90min swing
-      rsiOversoldB: 32,       // LONG entry threshold
-      rsiOverboughtB: 68,     // SHORT entry threshold
-      tpMultiplierB: 2.0,     // TP = 2.0× SL → 1:2 RR
-      holdMinutesB: 90,       // Hold up to 90 min for full swing
-      trailingStopAtrMultB: 0,// No trailing for intraday (let profit run)
+      // ═══ COMPONENT A: INTRADAY (15m) ════════════════════════════════════
+      bbStdDevB: 2.0,
+      rsiOversoldB: 32,
+      rsiOverboughtB: 68,
+      tpMultiplierB: 2.0,
+      holdMinutesB: 90,
+      trailingStopAtrMultB: 0,
+
+      // ═══ COMPONENT B: ADX REGIME GATE (MD-SUB-01) ═══════════════════════
+      mdAdxBalanceMax: 20,
+      mdAdxImbalanceMin: 25,
+      mdAdxTransitionConfidenceMult: 0.75,
+      mdAdxGateEnabled: true,
+
+      // ═══ COMPONENT C: OB/FVG PRECISION (MD-SUB-02) ══════════════════════
+      mdObFvgEnabled: true,
+      mdConfluenceAtrMult: 0.5,
+      mdNoConfluenceConfidenceMult: 0.7,
+      mdWithConfluenceConfidenceBoost: 1.1,
+      mdFvgScanBars: 30,
+      mdFvgMinGapPct: 0.002,
+      mdObLookback: 20,
+      mdObDispMult: 1.5,
 
       // Position management
-      maxTradesPerDay: 5,     // More for dual component
-      minVotes: 1,            // Single component can enter
-      maxConcurrentTrades: 3, // Up to 3 positions (1 per entry + 1 carry)
+      maxTradesPerDay: 5,
+      minVotes: 1,
+      maxConcurrentTrades: 3,
     };
 
     this._lastBBLevels = null;
+    this._adxCache = null; // { closesRef, adx[] } — avoid O(n²) recalc in backtests
   }
 
   /**
@@ -97,22 +112,41 @@ class MeanReversionStrategy extends StrategyBase {
   }
 
   /**
-   * Main signal detection — dual-component mean reversion (Scalping A / Intraday B).
+   * Resolve ADX at lastIdx — prefer precomputed indicators.adx, else compute once.
+   */
+  _resolveAdx(indicators, lastIdx, config = {}) {
+    if (Array.isArray(indicators.adx) && indicators.adx[lastIdx] != null) {
+      return indicators.adx[lastIdx];
+    }
+    const highs = indicators.highs;
+    const lows = indicators.lows;
+    const closes = indicators.closes;
+    if (!highs || !lows || !closes || lastIdx < 28) return null;
+
+    // Cache per closes array reference (backtest reuses same arrays)
+    if (!this._adxCache || this._adxCache.closesRef !== closes) {
+      this._adxCache = {
+        closesRef: closes,
+        adx: calcADX(highs, lows, closes, config.mdAdxPeriod ?? 14).adx,
+      };
+    }
+    return this._adxCache.adx[lastIdx] ?? null;
+  }
+
+  /**
+   * Main signal detection — A → B → C layered pipeline.
    */
   detectSignal(indicators, lastIdx, config = {}) {
     // Need ≥50 bars for stable indicators (20-period BB + 14-period RSI)
     if (lastIdx < 50) return null;
 
-    // FIX 2026-07-03: O(1) access instead of O(n²) copy.
-    // Backtest 12m MD_MR (51.8k bars) called per-bar was copying entire array
-    // per call → 51.8k² / 2 copy ops → 1.3B+ ops per TF type → event loop block
-    // → "Request timed out". Now: read array references, not copies.
-    // calculateBollingerBands will slice(-period) internally as needed.
     const closes = indicators.closes || [];
     const rsiValues = indicators.rsi || [];
     const volumes = indicators.volumes || [];
+    const highs = indicators.highs || [];
+    const lows = indicators.lows || [];
+    const opens = indicators.opens || [];
 
-    // Fail closed if indicators incomplete
     const atr = indicators.atr?.[lastIdx];
     const volSMA = indicators.volSMA?.[lastIdx];
     if (!atr || !rsiValues[lastIdx] || !volSMA || volSMA <= 0) return null;
@@ -124,20 +158,14 @@ class MeanReversionStrategy extends StrategyBase {
     // Volume gate — reject dead markets
     if (volRatio < this.config.minVolRatio) return null;
 
-    // Calculate BB for both components
     const bbA = this.calculateBollingerBands(closes, this.config.bbPeriod, this.config.bbStdDevA);
     const bbB = this.calculateBollingerBands(closes, this.config.bbPeriod, this.config.bbStdDevB);
-
     if (!bbA || !bbB) return null;
 
-    // VWAP for confirmation — read the precomputed O(n) array from calcIndicators.
-    // (Recomputing calcVWAP(slice) per bar was O(n²) AND, when indicators.candles
-    //  was absent, fell back to `close` → gate `close < close` blocked ALL signals.)
     const vwap = indicators.vwap?.[lastIdx] ?? close;
-
     this._lastBBLevels = { bbA, bbB, vwap };
 
-    // ═══ COMPONENT A: SCALPING (5m) ═══════════════════════════════════════
+    // ═══ COMPONENT A: BB + RSI + VWAP ═════════════════════════════════════
     const isCompALong =
       rsiNow < this.config.rsiOversoldA &&
       close < bbA.lower &&
@@ -148,7 +176,6 @@ class MeanReversionStrategy extends StrategyBase {
       close > bbA.upper &&
       close > vwap;
 
-    // ═══ COMPONENT B: INTRADAY (15m) ═══════════════════════════════════════
     const isCompBLong =
       rsiNow < this.config.rsiOversoldB &&
       close < bbB.lower &&
@@ -159,19 +186,88 @@ class MeanReversionStrategy extends StrategyBase {
       close > bbB.upper &&
       close > vwap;
 
-    // ═══ RESOLVE SIGNAL + STORE META ══════════════════════════════════════
-    // Contract parity with BotEngine + RealStrategyBacktestService: detectSignal
-    // returns a STRING ("LONG"/"SHORT"/null); component/context is exposed via
-    // getLastSignalMeta() and consumed by calculateRiskConfig(...,component,...).
     let signal = null, component = null, confidence = 0, reason = null;
-    if (isCompALong)       { signal = "LONG";  component = "Scalping"; confidence = 65; reason = `Scalping: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldA}, BB(1.5σ) touch, below VWAP`; }
-    else if (isCompAShort) { signal = "SHORT"; component = "Scalping"; confidence = 65; reason = `Scalping: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtA}, BB(1.5σ) touch, above VWAP`; }
-    else if (isCompBLong)  { signal = "LONG";  component = "Intraday"; confidence = 60; reason = `Intraday: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldB}, BB(2.0σ) touch, below VWAP`; }
-    else if (isCompBShort) { signal = "SHORT"; component = "Intraday"; confidence = 60; reason = `Intraday: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtB}, BB(2.0σ) touch, above VWAP`; }
+    let bbForTp = null;
+    if (isCompALong) {
+      signal = "LONG"; component = "Scalping"; confidence = 65; bbForTp = bbA;
+      reason = `Scalping: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldA}, BB(1.5σ) touch, below VWAP`;
+    } else if (isCompAShort) {
+      signal = "SHORT"; component = "Scalping"; confidence = 65; bbForTp = bbA;
+      reason = `Scalping: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtA}, BB(1.5σ) touch, above VWAP`;
+    } else if (isCompBLong) {
+      signal = "LONG"; component = "Intraday"; confidence = 60; bbForTp = bbB;
+      reason = `Intraday: RSI ${rsiNow.toFixed(1)} < ${this.config.rsiOversoldB}, BB(2.0σ) touch, below VWAP`;
+    } else if (isCompBShort) {
+      signal = "SHORT"; component = "Intraday"; confidence = 60; bbForTp = bbB;
+      reason = `Intraday: RSI ${rsiNow.toFixed(1)} > ${this.config.rsiOverboughtB}, BB(2.0σ) touch, above VWAP`;
+    }
 
     if (!signal) { this._lastSignalMeta = null; return null; }
 
-    this._lastSignalMeta = { component, componentConfidence: confidence, marketCond: "MEAN_REVERT", reason };
+    const merged = { ...this.config, ...config };
+
+    // ═══ COMPONENT B: ADX REGIME GATE ═════════════════════════════════════
+    let adxGate = { allowed: true, regime: "unknown", confidenceMult: 1, reason: "ADX gate disabled", adx: null };
+    if (merged.mdAdxGateEnabled !== false) {
+      const adxVal = this._resolveAdx(indicators, lastIdx, merged);
+      adxGate = evaluateAdxRegimeGate({ adx: adxVal, config: merged });
+      if (!adxGate.allowed) {
+        this._lastSignalMeta = null;
+        return null;
+      }
+      confidence = Math.round(confidence * adxGate.confidenceMult);
+      reason = `${reason} | ADX:${adxGate.regime}`;
+    }
+
+    // ═══ COMPONENT C: OB/FVG ENTRY + TP PRECISION ═════════════════════════
+    let obFvg = {
+      hasConfluence: false,
+      confidenceMult: 1,
+      reason: "OB/FVG disabled",
+      nearestOb: null,
+      nearestFvg: null,
+      fvgs: { bullish: [], bearish: [] },
+    };
+    let tpTarget = { takeProfit: null, source: null, fvg: null };
+
+    if (merged.mdObFvgEnabled !== false) {
+      obFvg = refineMdEntry({
+        signal,
+        price: close,
+        atr,
+        opens,
+        highs,
+        lows,
+        closes,
+        volumes,
+        volSMA: indicators.volSMA,
+        lastIdx,
+        config: merged,
+      });
+      confidence = Math.round(Math.min(100, confidence * obFvg.confidenceMult));
+      reason = `${reason} | ${obFvg.hasConfluence ? "OB/FVG✓" : "OB/FVG~"}`;
+
+      tpTarget = resolveMdTakeProfit({
+        signal,
+        entryPrice: close,
+        fvgs: obFvg.fvgs,
+        bbMiddle: bbForTp?.middle ?? null,
+      });
+    }
+
+    this._lastSignalMeta = {
+      component,
+      componentConfidence: confidence,
+      marketCond: "MEAN_REVERT",
+      reason,
+      adxRegime: adxGate.regime,
+      adx: adxGate.adx,
+      hasObFvgConfluence: obFvg.hasConfluence,
+      tpSource: tpTarget.source,
+      tpOverride: tpTarget.takeProfit,
+      nearestFvg: tpTarget.fvg || obFvg.nearestFvg,
+      nearestOb: obFvg.nearestOb,
+    };
     return signal;
   }
 
@@ -181,30 +277,46 @@ class MeanReversionStrategy extends StrategyBase {
   }
 
   /**
-   * Calculate SL/TP based on component and ATR
-   * Component A (Scalping): SL 1.4×ATR, TP 3.5×ATR (1:2.5 RR)
-   * Component B (Intraday): SL 1.4×ATR, TP 2.8×ATR (1:2.0 RR)
+   * Calculate SL/TP based on component and ATR.
+   * When Component C set a FVG/BB-middle TP override, use it if it still
+   * clears a minimum RR floor (0.8× default RR); otherwise keep RR TP.
    */
   calculateRiskConfig(entryPrice, atr, signal, component = null, _opts = {}) {
-    // `component` is the string tag from getLastSignalMeta() ("Scalping"/"Intraday").
-    // Accepts legacy object-signal for backward compat.
     const comp = component || (typeof signal === "object" ? signal.component : null) || "Intraday";
     const isComponentA = comp === "Scalping" || comp === "A";
     const side = typeof signal === "object" ? signal.signal : signal;
 
-    const slDist = atr * this.config.atrMult;  // 1.4×ATR for both components
-    // tpMultiplier IS the reward:risk ratio → TP distance = SL distance × RR.
-    // (A=2.5 → 1:2.5, B=2.0 → 1:2.0). Computing off slDist keeps RR exact.
+    const slDist = atr * this.config.atrMult;
     const tpMultiplier = isComponentA ? this.config.tpMultiplierA : this.config.tpMultiplierB;
-    const tpDist = slDist * tpMultiplier;
+    let tpDist = slDist * tpMultiplier;
+    let tpSource = "rr";
+
+    const meta = this._lastSignalMeta;
+    if (meta?.tpOverride != null && Number.isFinite(meta.tpOverride)) {
+      const overrideDist = Math.abs(meta.tpOverride - entryPrice);
+      // Accept override when it is at least 50% of the RR target (realistic liquidity)
+      // and still beyond SL distance (positive expectancy vs fees).
+      if (overrideDist >= slDist * 0.5 && overrideDist >= tpDist * 0.5) {
+        tpDist = overrideDist;
+        tpSource = meta.tpSource || "override";
+      }
+    }
 
     let stopLoss, takeProfit;
     if (side === "LONG") {
       stopLoss = entryPrice - slDist;
       takeProfit = entryPrice + tpDist;
-    } else {  // SHORT
+    } else {
       stopLoss = entryPrice + slDist;
       takeProfit = entryPrice - tpDist;
+    }
+
+    // If override was accepted and points the right way, snap TP exactly
+    if (tpSource !== "rr" && meta?.tpOverride != null) {
+      const ok =
+        (side === "LONG" && meta.tpOverride > entryPrice) ||
+        (side === "SHORT" && meta.tpOverride < entryPrice);
+      if (ok) takeProfit = meta.tpOverride;
     }
 
     return {
@@ -216,6 +328,7 @@ class MeanReversionStrategy extends StrategyBase {
       component: isComponentA ? "Scalping" : "Intraday",
       holdMinutes: isComponentA ? this.config.holdMinutesA : this.config.holdMinutesB,
       trailingStopMult: isComponentA ? this.config.trailingStopAtrMultA : this.config.trailingStopAtrMultB,
+      tpSource,
     };
   }
 
@@ -253,12 +366,10 @@ class MeanReversionStrategy extends StrategyBase {
 
     let score = 50;
 
-    // Mean reversion LOVES choppy/weak trend markets
     if (trendStrength < 0.3) score += 30;
     else if (trendStrength < 0.5) score += 15;
     else if (trendStrength > 0.7) score -= 30;
 
-    // Moderate volatility good (not too tight, not too wild)
     if (volatility >= 1.0 && volatility <= 4.0) score += 20;
     else if (volatility > 5) score -= 15;
     else if (volatility < 0.5) score -= 15;
@@ -266,9 +377,6 @@ class MeanReversionStrategy extends StrategyBase {
     return this.clamp(score, 0, 100);
   }
 
-  /**
-   * Risk configuration
-   */
   getRiskConfig() {
     return {
       riskPerTrade: this.config.riskPerTrade,
@@ -281,15 +389,11 @@ class MeanReversionStrategy extends StrategyBase {
     };
   }
 
-  /**
-   * Timeframe configuration — Single TF, no HTF regime
-   * Component A runs on 5m, Component B runs on 15m
-   */
   getTimeframeConfig() {
     return {
-      interval: "5m",  // Run on 5m for faster A component response
-      higherTf: null,  // NO HTF regime — both components operate on single TF
-      checkInterval: 300000,  // Check every 5 minutes for both components
+      interval: "5m",
+      higherTf: null,
+      checkInterval: 300000,
       components: [
         { id: "A", interval: "5m", holdMinutes: 15 },
         { id: "B", interval: "15m", holdMinutes: 90 },
@@ -297,12 +401,6 @@ class MeanReversionStrategy extends StrategyBase {
     };
   }
 
-  /**
-   * Validasi kondisi entry terakhir sebelum eksekusi (gate engine).
-   * Mean reversion beroperasi di pasar ranging/volatilitas sedang — ambang ATR
-   * lebih longgar di sisi bawah, volume tidak harus tinggi. Konfirmasi arah utama
-   * sudah ditangani detectSignal (Bollinger + RSI + confirmation bars).
-   */
   validateEntry(price, atr, volume, volSMA) {
     if (!price || !atr) return { valid: true, reason: "Data tidak lengkap — lewati gate" };
     const atrPct   = (atr / price) * 100;

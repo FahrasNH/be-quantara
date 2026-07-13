@@ -221,7 +221,7 @@ const STRATEGIES = {
   ADAPTIVE_FUSION: {
     name:          "ADAPTIVE_FUSION",
     label:         "Adaptive Fusion",
-    description:   "3-component voting system (Scalp+Day+Swing). Adapts SL/TP to winning component.",
+    description:   "FOUNDRY pool: SMC + Wyckoff + VSA race independently (legacy preset key → AF_SMC).",
 
     emaFast:       9,
     emaSlow:       21,
@@ -271,9 +271,13 @@ const STRATEGIES = {
     maxEntryExtensionATR: 1.2,
     minEdgeFeeMultiple:   7,
     strongTrendTPMult:    1.8,
-    // afMinVotes retained for legacy single-position path; multi-position ignores it
-    afMinVotes:           3,
-    afRejectOnDissent:    true,
+    // Sprint 12 (AF-SUB-03 rescope): SMC / Wyckoff / VSA race independently.
+    // Default afCombinationMode:"race". Rollback: "vote" (Sprint 8 2/3 majority)
+    // or afUseThreeComponentVoting:false (SMC-only multi-position).
+    afCombinationMode: "race",
+    afUseThreeComponentVoting: true, // ignored when afCombinationMode is set; false → smc_only
+    afMinVotes:           2,   // vote-mode only: absolute floor (2/3); altcoin override → 3
+    afRejectOnDissent:    true, // vote-mode only
     // ── Sprint 7 (AF-FIX, 2026-06-29): confidence-gated multi-component ──────────
     // v3.2 disabled A/B (C-only) because, UNGATED, their EMA-crossover designs
 
@@ -391,7 +395,9 @@ const STRATEGIES = {
     // best single-window result found). SL/time-stop exits remain taker+slippage.
     typeOverrides: {
       Intraday: { makerEntry: true, makerFeeRate: 0.0002 },
-      Swing:    { makerEntry: true, makerFeeRate: 0.0002 },
+      // Weekly HTF ADX rarely reaches 30 — Swing leg was structurally dead
+      // (0 Swing trades across Dow/AMT/TF). Soften to 20 for the 4h/1w path only.
+      Swing:    { makerEntry: true, makerFeeRate: 0.0002, adxMinStrength: 20 },
     },
 
 
@@ -404,6 +410,15 @@ const STRATEGIES = {
     // (tfRequireStrongTrend tetap OFF). tfHtfLayerEnabled: false = kontrol A/B.
     adxMinStrength:    30,
     tfHtfLayerEnabled: true,
+
+    // Sprint 12: TS sub-components race independently (default).
+    // Set tsCombinationMode:"gate" to restore Sprint 9 A→B→C layering for A/B.
+    tsCombinationMode: "race",
+    // Gate flags only apply when tsCombinationMode is "gate" or "hybrid".
+    tsUseStructureGate: true,
+    tsUseVwapPrecision: true,
+    // Spec: abs(price-VWAP) <= vwapAtrMult × ATR. 0.5 after 0.3 proved too tight on 5m.
+    vwapAtrMult: 0.5,
 
     trades:        "8-15 trade/hari",
     winrate:       "~54-58%",
@@ -530,12 +545,19 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // GROK_AI_TRADING — Grok (xAI) Live Trading
+  // GROK_AI_TRADING — Experimental / VAULT bonus (NOT a tier umbrella)
+  //
+  // AF-CONFIG-AUDIT clarification (2026-07-11):
+  //   • This IS a real strategy key that generates entry/exit via Grok (xAI).
+  //   • It is NOT one of the 4 canonical umbrellas (AF/TS/MD/BS).
+  //   • Architecture preference: LLM complementary only (GrokConfirm overlay).
+  //   • Kept for VAULT bonus entitlement + admin experiments; do not add to
+  //     TIER_COMPONENT_MAP race pools. Prefer GrokConfirm on AF/TS/MD/BS bots.
   // ─────────────────────────────────────────────
   GROK_AI_TRADING: {
     name:          "GROK_AI_TRADING",
-    label:         "Grok AI Trading",
-    description:   "Entry, confidence, TP/SL ditentukan Grok (xAI) dari data multi-TF.",
+    label:         "Grok AI Trading (experimental)",
+    description:   "EXPERIMENTAL VAULT bonus: entry/TP/SL via Grok (xAI). Prefer GrokConfirm overlay on canonical strategies for production.",
 
     emaFast:       20,
     emaSlow:       50,
@@ -695,23 +717,50 @@ const STRATEGIES = {
 
   // ─────────────────────────────────────────────
   // v2.0 UMBRELLA/COMPONENT KEYS
-  // These mirror the primary presets above with updated name + signalType.
-  // BotEngine resolves these via StrategyRegistry.get(signalType).
+  // Canonical keys are assigned below from parent presets (single source of
+  // truth — avoids copy-paste drift). signalType points at the umbrella engine
+  // key so StrategyRegistry resolves one instance; per-trade attribution uses
+  // the winning racer label (AF_SMC / AF_WYCKOFF / AF_VSA, etc.).
+  //
+  // NOTE: A / B / C above are PDF trade-type presets (Scalping/Day/Swing), NOT
+  // Adaptive Fusion components. Do not confuse with AF_SMC / AF_WYCKOFF / AF_VSA.
   // ─────────────────────────────────────────────
-
-  AF_SMC: null, // populated below — avoids copy-paste drift
-  TS_TF:  null,
-  MD_MR:  null,
-  BS_BR:  null,
 };
 
-// Populate component-key aliases from their parent presets
-STRATEGIES.AF_SMC = { ...STRATEGIES.SMART_MONEY_CONCEPTS, name: "AF_SMC", label: "Adaptive Fusion (AF_SMC)", signalType: "AF_SMC" };
-STRATEGIES.TS_TF  = { ...STRATEGIES.TREND_FOLLOWING,       name: "TS_TF",  label: "Trend Surge (TS_TF)",     signalType: "TS_TF"  };
-STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,       name: "MD_MR",  label: "Mean Drift (MD_MR)",      signalType: "MD_MR"  };
-STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST,      name: "BS_BR",  label: "Breakout Storm (BS_BR)",  signalType: "BS_BR"  };
-
-const _EMPTY = undefined; // remove null sentinels (already overwritten above)
+// Canonical component keys — derived from parent presets (no null sentinels).
+// AF_SMC uses SMART_MONEY_CONCEPTS as the SMC engine preset + AF race flags from
+// ADAPTIVE_FUSION (do not wholesale-spread ADAPTIVE_FUSION — different risk knobs).
+STRATEGIES.AF_SMC = {
+  ...STRATEGIES.SMART_MONEY_CONCEPTS,
+  name: "AF_SMC",
+  label: "Smart Money Concepts",
+  signalType: "AF_SMC",
+  afCombinationMode: STRATEGIES.ADAPTIVE_FUSION.afCombinationMode || "race",
+  afUseThreeComponentVoting: STRATEGIES.ADAPTIVE_FUSION.afUseThreeComponentVoting !== false,
+  afMinVotes: STRATEGIES.ADAPTIVE_FUSION.afMinVotes ?? 2,
+  afRejectOnDissent: STRATEGIES.ADAPTIVE_FUSION.afRejectOnDissent !== false,
+};
+STRATEGIES.AF_WYCKOFF = {
+  ...STRATEGIES.AF_SMC,
+  name: "AF_WYCKOFF",
+  label: "Wyckoff Method",
+  signalType: "AF_SMC",
+};
+STRATEGIES.AF_VSA = {
+  ...STRATEGIES.AF_SMC,
+  name: "AF_VSA",
+  label: "Volume Spread Analysis",
+  signalType: "AF_SMC",
+};
+STRATEGIES.TS_TF  = { ...STRATEGIES.TREND_FOLLOWING, name: "TS_TF",  label: "Trend Following",        signalType: "TS_TF" };
+STRATEGIES.TS_MS  = { ...STRATEGIES.TS_TF,           name: "TS_MS",  label: "Dow Theory",             signalType: "TS_TF" };
+STRATEGIES.TS_VP  = { ...STRATEGIES.TS_TF,           name: "TS_VP",  label: "Auction Market Theory",  signalType: "TS_TF" };
+STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_MR",  label: "Mean Reversion",              signalType: "MD_MR" };
+STRATEGIES.MD_SD  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_SD",  label: "Supply and Demand",           signalType: "MD_MR" };
+STRATEGIES.MD_SA  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_SA",  label: "Statistical Arbitrage",       signalType: "MD_MR" };
+STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_BR",  label: "Breakout Retest",             signalType: "BS_BR" };
+STRATEGIES.BS_ICT = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_ICT", label: "ICT-style trading",           signalType: "BS_BR" };
+STRATEGIES.BS_LS  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_LS",  label: "Liquidation/Squeeze Trading", signalType: "BS_BR" };
 
 function getStrategy(overrideKey = null) {
   const key = (overrideKey || "B").toUpperCase();

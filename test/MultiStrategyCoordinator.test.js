@@ -160,47 +160,55 @@ function runStateAggTest() {
 }
 
 function runCanEnterTests() {
-  // ── canEnter gate: cap per-koin + proteksi hedge (anti penumpukan) ──────────
+  // ── canEnter gate: race-to-confirm max 1/simbol + proteksi hedge ───────────
   {
     const engines = {};
     const factory = (key, cfg) => { const e = makeFakeEngine(key, cfg); engines[key] = e; return e; };
     const c = new MultiStrategyCoordinator({
       userId: "u5", symbol: "BNBUSDT",
       strategies: ["A", "B", "C", "D"], totalCapital: 1000, engineFactory: factory,
-      maxPositionsPerCoin: 2,
+      maxPositionsPerCoin: 1,
     });
 
     c.start().then(async () => {
-      t("maxPositionsPerCoin = 2 tersimpan", c.maxPositionsPerCoin === 2);
+      t("maxPositionsPerCoin = 1 tersimpan", c.maxPositionsPerCoin === 1);
 
       // Tanpa DB injected → fallback ke state engine live (async)
       // Belum ada posisi → boleh entry
       t("gate: kosong → SHORT diizinkan", (await c.canEnter("A", "SHORT")).allowed === true);
 
-      // 1 SHORT terbuka → SHORT ke-2 masih boleh (cap 2)
+      // 1 SHORT terbuka → SHORT ke-2 DITOLAK (race-to-confirm)
       engines.A.state.openPositions = [{ side: "SHORT" }];
-      t("gate: 1 SHORT → SHORT ke-2 diizinkan", (await c.canEnter("B", "SHORT")).allowed === true);
+      const second = await c.canEnter("B", "SHORT");
+      t("gate: 1 SHORT → SHORT ke-2 ditolak", second.allowed === false);
+      t("gate: alasan race-to-confirm", /race-to-confirm|max 1/i.test(second.reason));
 
       // Hedge: ada SHORT → LONG ditolak
       const hedge = await c.canEnter("B", "LONG");
       t("gate: hedge LONG ditolak saat ada SHORT", hedge.allowed === false);
       t("gate: alasan hedge benar", /Hedge/.test(hedge.reason));
 
-      // 2 SHORT terbuka → SHORT ke-3 ditolak (cap tercapai)
-      engines.B.state.openPositions = [{ side: "SHORT" }];
-      const capped = await c.canEnter("C", "SHORT");
-      t("gate: cap 2 tercapai → SHORT ke-3 ditolak", capped.allowed === false);
-      t("gate: alasan cap benar", /Cap per-koin/.test(capped.reason));
+      // 4 strategies concurrent confirm regression (GRASS bug): only first may enter
+      engines.B.state.openPositions = [];
+      engines.C.state.openPositions = [];
+      engines.D.state.openPositions = [];
+      // A still holds the open SHORT — B/C/D all blocked
+      const rB = await c.canEnter("B", "SHORT");
+      const rC = await c.canEnter("C", "SHORT");
+      const rD = await c.canEnter("D", "SHORT");
+      t("GRASS regression: B blocked while A open", rB.allowed === false);
+      t("GRASS regression: C blocked while A open", rC.allowed === false);
+      t("GRASS regression: D blocked while A open", rD.allowed === false);
 
-      // DB-authoritative: DB injected → cap hitung dari DB (orphan ikut terhitung)
-      const fakeDb = { getOpenPositionsForGate: async () => [{ side: "SHORT" }, { side: "SHORT" }] };
+      // DB-authoritative: DB injected → 1 orphan blocks entry
+      const fakeDb = { getOpenPositionsForGate: async () => [{ side: "SHORT" }] };
       const c2 = new MultiStrategyCoordinator({
         userId: "u6", symbol: "ETHUSDT", strategies: ["A"], totalCapital: 100,
-        engineFactory: (k, cfg) => makeFakeEngine(k, cfg), maxPositionsPerCoin: 2, db: fakeDb,
+        engineFactory: (k, cfg) => makeFakeEngine(k, cfg), maxPositionsPerCoin: 1, db: fakeDb,
       });
       await c2.start();
       const dbCap = await c2.canEnter("A", "SHORT");
-      t("gate DB: 2 orphan di DB → entry ke-3 ditolak (cap dari DB)", dbCap.allowed === false && dbCap.open === 2);
+      t("gate DB: 1 orphan di DB → entry ditolak", dbCap.allowed === false && dbCap.open === 1);
 
       runGuardTests();
     });

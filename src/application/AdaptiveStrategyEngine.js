@@ -45,8 +45,12 @@ class AdaptiveStrategyEngine extends BotEngine {
     this.strategy = validation.strategy;
     this.strategyKey = strategyKey;
 
-    // Position manager for conflict detection
-    this.positionManager = new PositionManager(2); // Max 2 positions
+    // Position manager for conflict detection — race-to-confirm: max 1/symbol
+    this.positionManager = new PositionManager(1);
+
+    // MultiStrategyCoordinator conflict hooks (evaluate → applyConflictDecision)
+    this._conflictAllowed = true;
+    this._pendingSignal = null;
 
     // Restore positions from state
     if (this.state && this.state.openPositions) {
@@ -64,6 +68,22 @@ class AdaptiveStrategyEngine extends BotEngine {
     console.log(
       `[AdaptiveStrategyEngine] Initialized with strategy: ${this.strategyKey}`
     );
+  }
+
+  /**
+   * MultiStrategyCoordinator contract: expose the signal about to enter so
+   * evaluate() can resolve LONG+SHORT conflicts across engines.
+   */
+  getPendingSignal() {
+    return this._pendingSignal;
+  }
+
+  /**
+   * MultiStrategyCoordinator contract: allow/block entry for this tick after
+   * batch conflict resolution.
+   */
+  applyConflictDecision(allowed) {
+    this._conflictAllowed = !!allowed;
   }
 
   /**
@@ -173,6 +193,10 @@ class AdaptiveStrategyEngine extends BotEngine {
       // 6. Jika posisi sudah penuh, skip deteksi sinyal baru
       if (this.state.openPositions.length >= this.config.maxPositions) return;
 
+      // Reset per-tick conflict state (MultiStrategyCoordinator.evaluate may set these)
+      this._conflictAllowed = true;
+      this._pendingSignal = null;
+
       // 6b. HTF trend filter — cerminkan logika BotEngine._tick() agar
       //     TrendMomentum (butuh htfTrend LONG/SHORT) dan MeanReversion
       //     (gate: htfTrend !== UNKNOWN) bekerja dengan benar.
@@ -229,15 +253,20 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       if (!signal) return;
 
+      // Expose for MultiStrategyCoordinator.evaluate() / getPendingSignal()
+      this._pendingSignal = { direction: signal };
+
       // 7a. FILTER HTF DIRECTIONAL — jangan lawan tren timeframe besar (mirror
       //     BotEngine._tick() STEP 3). Post-mortem 11–12 Jun: SHORT ETHUSDT saat
       //     HTF BULLISH → SL. Override _tick() ini sebelumnya tidak punya blok ini.
       if (signal === "LONG" && this.state.htfTrend === "BEARISH") {
         console.log(`[${this.config.symbol}] [HTF] LONG diblok — ${this.config.higherTf} BEARISH (${this.strategyKey})`);
+        this._pendingSignal = null;
         return;
       }
       if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
         console.log(`[${this.config.symbol}] [HTF] SHORT diblok — ${this.config.higherTf} BULLISH (${this.strategyKey})`);
+        this._pendingSignal = null;
         return;
       }
 
@@ -393,8 +422,16 @@ class AdaptiveStrategyEngine extends BotEngine {
         );
       }
 
+      // 11e. Batch conflict decision from MultiStrategyCoordinator.evaluate()
+      if (this._conflictAllowed === false) {
+        console.log(`[${this.config.symbol}] Entry ditolak conflict resolver (${this.strategyKey})`);
+        this._pendingSignal = null;
+        return;
+      }
+
       // 12. Eksekusi — signature BotEngine: (signal, price, atr, indicatorSnapshot, options)
       await this._handleSignal(signal, entryPrice, atr, indicatorSnapshot, signalOptions);
+      this._pendingSignal = null;
     } catch (err) {
       console.error(`[${this.config.symbol}] Tick error:`, err.message);
     }

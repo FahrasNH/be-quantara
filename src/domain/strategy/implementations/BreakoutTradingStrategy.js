@@ -78,6 +78,7 @@ class BreakoutTradingStrategy extends StrategyBase {
 
     // State per simbol agar singleton aman dipakai banyak bot
     this._breakoutStates = new Map();
+    this._lastSignalMeta = null;
   }
 
   _stateKey(config = {}) {
@@ -351,6 +352,22 @@ class BreakoutTradingStrategy extends StrategyBase {
 
       if (retestCheck.valid) {
         const signal = state.direction;
+        // Hard-gate 3-phase: BB Squeeze → Range Breakout → Retest Confirmation.
+        // Labels are nearly identical across fills by design.
+        this._lastSignalMeta = {
+          component: "BS_BR",
+          winningComponent: "BS_BR",
+          strategyLabel: "Breakout Trading",
+          bbSqueeze: true,
+          rangeBreakout: true,
+          retestConfirmation: true,
+          consolidationConfirmed: true,
+          breakoutConfirmed: true,
+          retestConfirmed: true,
+          direction: signal,
+          breakoutLevel: state.breakoutLevel,
+          squeezeWidthPct: state.squeezeWidthPct,
+        };
         this.resetBreakoutState(config);
         return signal;
       }
@@ -443,6 +460,14 @@ class BreakoutTradingStrategy extends StrategyBase {
     }
 
     return { allowed: true, reason: "Strategy ready" };
+  }
+
+  /**
+   * Entry-context meta for CSV entryReasons (BB Squeeze / Range Breakout / Retest).
+   * Set only when detectSignal returns a fill; otherwise null.
+   */
+  getLastSignalMeta() {
+    return this._lastSignalMeta;
   }
 
   /**

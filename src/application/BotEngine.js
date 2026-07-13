@@ -9,7 +9,7 @@ const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exc
 const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../infrastructure/exchange/candleFetch");
 const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, calcEMA, calcRSI, calcATR, calcSMA } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA, calcADX } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter");
@@ -26,8 +26,14 @@ const GROK_CONFIRM_STRATEGIES = new Set([
   "ADAPTIVE_FUSION",
   "TREND_FOLLOWING",
   "MEAN_REVERSION",
+  "MD_MR",
   "BREAKOUT_RETEST",
 ]);
+
+const MR_STRATEGY_KEYS = new Set(["MEAN_REVERSION", "MD_MR", "MR"]);
+function isMeanReversionKey(key) {
+  return MR_STRATEGY_KEYS.has(String(key || "").toUpperCase());
+}
 
 // ── Price formatter for logs ─────────────────────────────────────────────────
 // Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
@@ -417,8 +423,14 @@ class BotEngine extends EventEmitter {
       persistBotLog({ botId: this.config.botId, level, message: msg }).catch(() => {});
     }
 
-    // Legacy session logs (trade/error/warn) — backward compat
-    if (this.sessionId && (level === "trade" || level === "error" || level === "warn")) {
+    // Legacy session logs — trade/error only. Skip warn when Prisma already
+    // persisted (dual-write was a major pool-pressure source under tick storms:
+    // 27 coins × warn/tick × 2 pools → connect timeout on reconcile).
+    if (this.sessionId && (level === "trade" || level === "error")) {
+      try {
+        db.insertLog({ sessionId: this.sessionId, level, message: msg });
+      } catch { /* jangan crash bot karena log error */ }
+    } else if (this.sessionId && level === "warn" && !this.config.botId) {
       try {
         db.insertLog({ sessionId: this.sessionId, level, message: msg });
       } catch { /* jangan crash bot karena log error */ }
@@ -803,28 +815,28 @@ class BotEngine extends EventEmitter {
     const jitterMs = (this.config.tickStaggerMs || 0) + baseJitter;
     this._startTimer = setTimeout(() => {
       this._startTimer = null;
-      // Bot sudah di-stop selama warm-up → jangan pasang interval (cegah zombie ticker)
+      // Bot sudah di-stop selama warm-up → jangan pasang ticker (cegah zombie)
       if (!this.state.running || this._stopRequested) return;
-      // OVERLAP GUARD (anti death-spiral): setInterval TIDAK menunggu _tick() async
-      // selesai. Saat exchange timeout, satu tick bisa makan 30–60s+ (getCandles 10s +
-      // getTicker 10s + DB log-write yang ikut lambat). Tanpa guard ini, tick-tick baru
-      // menumpuk di atas yang belum selesai → getCandles + insertLog berlipat → pool
-      // Postgres & Prisma terkuras → login ikut timeout → proses crash → PM2 restart-loop.
-      // Selain itu, promise _tick() yang tak di-handle bisa jadi unhandledRejection →
-      // crash proses. Bungkus: skip bila masih ticking, dan telan rejection.
-      this._interval = setInterval(() => {
-        if (this._ticking) {
-          this._log("warn", "Tick sebelumnya belum selesai (exchange/DB lambat) — lewati tick ini");
-          return;
-        }
-        this._ticking = true;
+      // CHAINED setTimeout (anti death-spiral): setInterval TIDAK menunggu _tick()
+      // async selesai → tick overlap → pool Postgres & Prisma terkuras. Jadwalkan
+      // tick berikutnya HANYA setelah tick selesai; delay = max(0, interval - elapsed)
+      // agar rate tetap ~checkInterval saat tick cepat, dan tidak overlap saat lambat.
+      const scheduleNext = () => {
+        if (!this.state.running || this._stopRequested) return;
+        const started = Date.now();
         Promise.resolve()
           .then(() => this._tick())
           .catch((err) => {
             try { this._log("warn", `Tick error: ${err?.message || err}`); } catch { /* jangan crash */ }
           })
-          .finally(() => { this._ticking = false; });
-      }, this.config.checkInterval);
+          .finally(() => {
+            if (!this.state.running || this._stopRequested) return;
+            const elapsed = Date.now() - started;
+            const delay = Math.max(0, this.config.checkInterval - elapsed);
+            this._interval = setTimeout(scheduleNext, delay);
+          });
+      };
+      scheduleNext();
     }, jitterMs);
 
     // emitStatusReport:false → engine ini bagian dari grup multi-strategi; JANGAN
@@ -868,9 +880,8 @@ class BotEngine extends EventEmitter {
     // Batalkan timer warm-up jitter jika start() masih dalam jendela jitter — tanpa
     // ini setInterval akan terpasang SETELAH stop() → ticker zombie (lihat start()).
     if (this._startTimer)     { clearTimeout(this._startTimer); this._startTimer = null; }
-    if (this._interval)       clearInterval(this._interval);
+    if (this._interval)       { clearTimeout(this._interval); this._interval = null; }
     if (this._reportInterval) clearInterval(this._reportInterval);
-    this._interval       = null;
     this._reportInterval = null;
     this.state.running   = false;
 
@@ -1159,6 +1170,11 @@ class BotEngine extends EventEmitter {
         atrPeriod: this.config.atrPeriod,
       });
 
+      // MD_MR ADX regime gate (MD-SUB-01) reads indicators.adx on the entry TF.
+      if (isMeanReversionKey(this.config.strategyKey) || isMeanReversionKey(this.config.signalType)) {
+        indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
+      }
+
       // ── HTF Trend Filter ───────────────────────────────────────────────────
       let htfCandlesCache = null;  // disimpan untuk sideways breakout detection
       if (this.config.higherTf) {
@@ -1279,6 +1295,10 @@ class BotEngine extends EventEmitter {
               const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
               const hAtr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
               if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+              // TS structure gate reads highsHTF/lowsHTF + htfIdx (closed HTF bar).
+              indicators.highsHTF = hHighs;
+              indicators.lowsHTF = hLows;
+              indicators.closesHTF = hCloses;
             }
 
             const signal = detectSignal(indicators, lastIdx, {
@@ -1306,6 +1326,12 @@ class BotEngine extends EventEmitter {
               htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
               pairTier:             this.config.pairTier,
               tierOverrides:        this.config.tierOverrides,
+              htfIdx: htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 1 : undefined,
+              tsCombinationMode:    this.config.tsCombinationMode || "race",
+              tsUseStructureGate:   this.config.tsUseStructureGate,
+              tsUseVwapPrecision:   this.config.tsUseVwapPrecision,
+              vwapAtrMult:          this.config.vwapAtrMult,
+              selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
             });
 
 
@@ -1314,7 +1340,7 @@ class BotEngine extends EventEmitter {
             // LONG di strong bear, juga saat ATR HTF spike. Fail-open bila HTF
             // tidak bisa diambil (konsisten dgn HTF trend filter di bawah).
             let mrSignal = signal;
-            if (signal && (this.config.strategyKey === "MEAN_REVERSION" || this.config.signalType === "MEAN_REVERSION")) {
+            if (signal && (isMeanReversionKey(this.config.strategyKey) || isMeanReversionKey(this.config.signalType))) {
               try {
                 const htf = htfCandlesCache || await this._fetchHtfCandles();
                 if (htf && htf.length >= 30) {
@@ -1374,10 +1400,15 @@ class BotEngine extends EventEmitter {
             }
 
             // ── MULTI-POSITION MODE (v3.0): ADAPTIVE_FUSION independent components ──
+            // Sprint 8: use AdaptiveFusionUmbrella (SMC + Wyckoff + VSA voting).
             if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
-              const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
-              const afStrategy = new SmartMoneyConceptsStrategy();
-              const multiSignal = afStrategy.detectSignalMulti(indicators, lastIdx, {
+              const { strategyRegistry } = require("../domain/strategy");
+              let afInstance = strategyRegistry.get("AF_SMC");
+              if (!afInstance || typeof afInstance.detectSignalMulti !== "function") {
+                const AdaptiveFusionUmbrella = require("../domain/strategy/umbrellas/AdaptiveFusionUmbrella");
+                afInstance = new AdaptiveFusionUmbrella();
+              }
+              const multiSignal = afInstance.detectSignalMulti(indicators, lastIdx, {
                 volatility:           atrPctNow,
                 trend_strength:       trendStr,
                 balance:              this.state.capital,
@@ -1387,14 +1418,37 @@ class BotEngine extends EventEmitter {
                 htfTrendStrength,
                 htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
                 pairTier:             this.config.pairTier,
+                symbol:               this.config.symbol,
                 tierOverrides:        this.config.tierOverrides,
                 volSmaMultiplier:     this.config.volSmaMultiplier,
                 afEnabledComponents:  this.config.afEnabledComponents,
                 afMinComponentConfidence: this.config.afMinComponentConfidence,
                 afMinAggregateConfidence: this.config.afMinAggregateConfidence,
+                afUseThreeComponentVoting: this.config.afUseThreeComponentVoting,
+                afCombinationMode:    this.config.afCombinationMode,
+                afMinVotes:           this.config.afMinVotes,
+                selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
+                afActiveRacers:       this.config.afActiveRacers || this.config.afActiveVoters,
               });
+              // Persist vote breakdown onto indicator snapshot for entryContext
+              if (multiSignal?.meta?.afVotes || multiSignal?.meta?.signalComponents || multiSignal?.meta?.afRace) {
+                indicatorSnapshot.signalComponents = multiSignal.meta.signalComponents
+                  || multiSignal.meta.afVotes?.breakdown
+                  || {};
+                indicatorSnapshot.afVotes = multiSignal.meta.afVotes || null;
+                indicatorSnapshot.afRace = multiSignal.meta.afRace || null;
+                if (multiSignal.meta.winningComponent) {
+                  indicatorSnapshot.winningComponent = multiSignal.meta.winningComponent;
+                  indicatorSnapshot.strategyLabel = multiSignal.meta.strategyLabel || null;
+                }
+              }
 
               // Check each component independently for entry
+              // Direction lock across A/B/C: first open component locks direction for the tick.
+              let lockedDirection = null;
+              for (const [, openPos] of this.state.positions) {
+                if (openPos?.side) { lockedDirection = openPos.side; break; }
+              }
               for (const componentId of ["A", "B", "C"]) {
                 const componentSignal = multiSignal[componentId];
                 if (!componentSignal) continue;
@@ -1402,6 +1456,14 @@ class BotEngine extends EventEmitter {
                 // Check if this component already has an open position
                 if (this.state.positions.has(componentId)) {
                   continue; // Component already trading
+                }
+
+                // Cross-component hedge guard (legacy AF multi-position path)
+                if (lockedDirection && componentSignal !== lockedDirection) {
+                  this._log("info",
+                    `[Multi-AF:${componentId}] ${componentSignal} ditolak — komponen lain sudah ${lockedDirection}`
+                  );
+                  continue;
                 }
 
                 // Check component-level risk gates
@@ -1417,6 +1479,9 @@ class BotEngine extends EventEmitter {
 
                 // Multi-position entry (pass the real regime so strong-trend TP can fire)
                 await this._handleMultiPositionSignal(componentId, componentSignal, price, atr, indicators, lastIdx, indicatorSnapshot, multiSignal.meta?.marketCond, multiSignal.meta?.confidence?.[componentId]);
+                if (this.state.positions.has(componentId)) {
+                  lockedDirection = componentSignal;
+                }
               }
               // Skip single-position logic below for AF in multi-position mode
               return;
@@ -2124,9 +2189,10 @@ class BotEngine extends EventEmitter {
       this._log("warn", `Dedup: open ${signal} ${this.config.symbol} diabaikan (duplikat <${DEDUP_WINDOW_MS}ms)`);
       return;
     }
-    // Juga skip jika sudah ada posisi terbuka arah sama untuk simbol ini.
-    if (this.state.openPositions.some(p => p.side === signal)) {
-      this._log("warn", `Dedup: sudah ada posisi ${signal} ${this.config.symbol} terbuka — skip open duplikat`);
+    // Juga skip jika sudah ada posisi terbuka apa pun untuk simbol ini
+    // (single-position-per-symbol — jangan hanya dedup same-side).
+    if (this.state.openPositions.length > 0) {
+      this._log("warn", `Dedup: sudah ada posisi ${this.config.symbol} terbuka — skip open duplikat`);
       return;
     }
 
@@ -2208,10 +2274,53 @@ class BotEngine extends EventEmitter {
     // strategyKey. Simpan atribusi eksplisit + SL/TP + multiplier ke snapshot
     // indikator yang dipersist di kolom trades.indicators agar setiap trade bisa
     // ditelusuri ke strategi yang memfire-nya (AC-04).
+    // Sprint 12 AF/TS race: prefer winning racer label over umbrella key.
+    let attributionKey = this.config.strategyKey;
+    let attributionLabel = this.config.strategyLabel;
+    try {
+      const sk = String(this.config.strategyKey || this.config.signalType || "").toUpperCase();
+      if (sk === "TS_TF" || sk === "TREND_FOLLOWING") {
+        const tfMeta = getTrendFollowingInstance()?.getLastSignalMeta?.();
+        if (tfMeta?.winningComponent) {
+          attributionKey = tfMeta.winningComponent;
+          attributionLabel = tfMeta.strategyLabel || attributionLabel;
+          if (indicatorSnapshot) {
+            indicatorSnapshot.winningComponent = tfMeta.winningComponent;
+            indicatorSnapshot.strategyLabel = attributionLabel;
+            indicatorSnapshot.signalComponents = tfMeta.signalComponents || null;
+            indicatorSnapshot.tsRace = tfMeta.tsRace || null;
+          }
+        }
+      } else if (
+        sk === "AF_SMC" || sk === "ADAPTIVE_FUSION" || sk === "SMART_MONEY_CONCEPTS"
+        || sk === "AF_WYCKOFF" || sk === "AF_VSA"
+      ) {
+        const afMeta = (() => {
+          try {
+            const { strategyRegistry: reg } = require("../domain/strategy");
+            return reg.get("AF_SMC")?.getLastSignalMeta?.() || null;
+          } catch {
+            return null;
+          }
+        })();
+        if (afMeta?.winningComponent) {
+          attributionKey = afMeta.winningComponent;
+          attributionLabel = afMeta.strategyLabel || attributionLabel;
+          if (indicatorSnapshot) {
+            indicatorSnapshot.winningComponent = afMeta.winningComponent;
+            indicatorSnapshot.strategyLabel = attributionLabel;
+            indicatorSnapshot.signalComponents = afMeta.signalComponents || null;
+            indicatorSnapshot.afRace = afMeta.afRace || null;
+            if (afMeta.afVotes) indicatorSnapshot.afVotes = afMeta.afVotes;
+          }
+        }
+      }
+    } catch { /* degrade — umbrella attribution still recorded */ }
     const enrichedSnapshot = {
       ...(indicatorSnapshot || {}),
       ...buildTradeAttribution({
-        strategyKey: this.config.strategyKey,
+        strategyKey: attributionKey,
+        strategyLabel: attributionLabel,
         sl, tp, slDist, tpDist, atr,
       }),
     };
@@ -2291,12 +2400,14 @@ class BotEngine extends EventEmitter {
     const lev            = this.config.leverage || 1;
     const requiredMargin = (price * finalSize) / lev;
     const botKey         = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}`;
-    // Group guard berlaku di LIVE (anggaran margin + 1/simbol + direction lock) dan
-    // juga di DRY RUN bila engine ini bagian dari grup multi-strategi — agar AC-05
-    // (tidak ada LONG+SHORT serentak pada satu koin) tetap ditegakkan saat staging
-    // dry-run. Di dry-run, gate anggaran otomatis di-skip (equity akun = 0).
-    const useGroupGuard = this.config.coordinator &&
-      (this.config.groupKey || !this.config.dryRun);
+    // Group guard: ALWAYS when a coordinator is wired (live + dry-run).
+    // Previously dry-run without groupKey skipped the coordinator → AC-05 / 1-per-symbol
+    // could be bypassed in paper mode. Dry-run still skips the equity budget gate inside
+    // canOpen when accountEquity is 0.
+    const useGroupGuard = !!this.config.coordinator;
+    // AUDIT fix: reserve BEFORE the await openPosition to close the canOpen→reserve
+    // TOCTOU window (two engines could both pass canOpen before either reserved).
+    let marginReservedEarly = false;
     if (useGroupGuard) {
       let marginToCheck = requiredMargin;
       const verdict = this.config.coordinator.canOpen({
@@ -2346,6 +2457,16 @@ class BotEngine extends EventEmitter {
           return;
         }
       }
+
+      // Optimistic reserve immediately after canOpen — released on order failure.
+      const earlyMargin = (price * finalSize) / lev;
+      this.config.coordinator.reserve(botKey, {
+        symbol: this.config.symbol, margin: earlyMargin,
+        groupKey: this.config.groupKey ?? null,
+        strategyKey: this.config.strategyKey ?? null,
+        direction: signal,
+      });
+      marginReservedEarly = true;
     }
 
     // requiredMargin mungkin berubah jika size di-scale-down oleh koordinator
@@ -2417,7 +2538,7 @@ class BotEngine extends EventEmitter {
         }
         this._log("trade", `Order terkirim! ID: ${order?.orderId || "N/A"}`);
 
-        // Reservasi margin di koordinator akun bersama (#5)
+        // Keep reservation in sync with final margin (idempotent overwrite).
         if (this.config.coordinator) {
           this.config.coordinator.reserve(botKey, {
             symbol: this.config.symbol, margin: finalMargin,
@@ -2434,7 +2555,8 @@ class BotEngine extends EventEmitter {
           // BUG-004: simpan snapshot indikator entry agar partial-close bisa
           // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
           entrySnapshot: enrichedSnapshot,
-          strategyName:  this.config.strategyKey ?? null,
+          // Persist winning-racer / attribution key (not umbrella engine alone).
+          strategyName:  attributionKey ?? this.config.strategyKey ?? null,
           // SL+ tracking
           remainingSize: finalSize,
           R:             slDist,   // 1R = jarak SL asli dari entry
@@ -2529,8 +2651,17 @@ class BotEngine extends EventEmitter {
             dryRun:     false,
             orderId:    order?.orderId,
             indicators: enrichedSnapshot,
-            // BUG-001: denormalisasi nama strategi di kolom eksplisit saat OPEN.
-            strategyName: this.config.strategyKey ?? null,
+            // Persist winning-racer canonical key (AF_WYCKOFF / TS_MS / …), not umbrella.
+            strategyName: attributionKey ?? this.config.strategyKey ?? null,
+          });
+          onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
+            strategyKey: attributionKey ?? this.config.strategyKey,
+            symbol:      this.config.symbol,
+            side:        signal,
+            entryPrice:  price,
+            openTime,
+            leverage:    this.config.leverage,
+            capital:     this.state.capital,
           });
           onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
             strategyKey: this.config.strategyKey,
@@ -2557,6 +2688,10 @@ class BotEngine extends EventEmitter {
         });
       } catch (err) {
         this._log("error", `Gagal buka posisi: ${err.message}`);
+        // Roll back optimistic reserve so peer engines are not blocked forever.
+        if (marginReservedEarly && this.config.coordinator) {
+          this.config.coordinator.release(botKey);
+        }
       }
     } else {
       // (mode "DRY RUN" sudah tertera di entry banner — tak perlu log terpisah)
@@ -2572,7 +2707,7 @@ class BotEngine extends EventEmitter {
         tpMode: options.tpMode ?? this.config.tpMode ?? "full",
         // BUG-004: snapshot entry untuk diwariskan ke partial-close.
         entrySnapshot: enrichedSnapshot,
-        strategyName:  this.config.strategyKey ?? null,
+        strategyName:  attributionKey ?? this.config.strategyKey ?? null,
         // SL+ tracking
         remainingSize: finalSize,
         R:             slDist,
@@ -2580,14 +2715,14 @@ class BotEngine extends EventEmitter {
         m1: false, m2: false, m3: false,
       };
 
-      // Dry-run multi-strategi: reservasi di koordinator agar direction lock (AC-05)
-      // terlihat oleh engine strategi lain pada koin yang sama. Dilepas otomatis
-      // saat flat via _releaseMarginIfFlat(). Legacy dry-run (tanpa groupKey) tidak
-      // mereservasi apa pun — perilaku lama tidak berubah.
-      if (this.config.groupKey && this.config.coordinator) {
+      // Dry-run: keep/refresh coordinator reservation (early reserve already set when
+      // coordinator is present; overwrite with paper margin so AC-05 stays accurate).
+      if (this.config.coordinator) {
         this.config.coordinator.reserve(botKey, {
           symbol: this.config.symbol, margin: marginReserved,
-          groupKey: this.config.groupKey, strategyKey: this.config.strategyKey, direction: signal,
+          groupKey: this.config.groupKey ?? null,
+          strategyKey: this.config.strategyKey ?? null,
+          direction: signal,
         });
       }
 
@@ -2602,11 +2737,18 @@ class BotEngine extends EventEmitter {
           sl, tp, size: finalSize, openTime, atr,
           dryRun:     true,
           orderId:    pos.id,
-          // BUG-001: gunakan snapshot yang sudah diperkaya atribusi (firedByStrategy)
-          // + persist strategyName eksplisit. Sebelumnya dry-run pakai indicatorSnapshot
-          // mentah → 33/49 trade dry-run tampil "(belum tercatat)".
+          // Persist winning-racer canonical key + attribution snapshot.
           indicators: enrichedSnapshot,
-          strategyName: this.config.strategyKey ?? null,
+          strategyName: attributionKey ?? this.config.strategyKey ?? null,
+        });
+        onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
+          strategyKey: attributionKey ?? this.config.strategyKey,
+          symbol:      this.config.symbol,
+          side:        signal,
+          entryPrice:  price,
+          openTime,
+          leverage:    this.config.leverage,
+          capital:     this.state.capital,
         });
         onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
           strategyKey: this.config.strategyKey,
@@ -2696,6 +2838,31 @@ class BotEngine extends EventEmitter {
       return;
     }
 
+    // AccountCoordinator gate (was missing on legacy AF multi-position path).
+    const botKey = this.config.botKey || `${this.config.userId ?? "anon"}:${this.config.symbol}:AF:${componentId}`;
+    const lev = this.config.leverage || 1;
+    const requiredMargin = (price * qty) / lev;
+    if (this.config.coordinator) {
+      const verdict = this.config.coordinator.canOpen({
+        botKey,
+        symbol: this.config.symbol,
+        requiredMargin,
+        groupKey: this.config.groupKey ?? null,
+        direction: signal,
+      });
+      if (!verdict.ok) {
+        this._log("warn", `[Multi-AF:${componentId}] Entry ditahan koordinator: ${verdict.reason}`);
+        return;
+      }
+      this.config.coordinator.reserve(botKey, {
+        symbol: this.config.symbol,
+        margin: requiredMargin,
+        groupKey: this.config.groupKey ?? null,
+        strategyKey: this.config.strategyKey ?? null,
+        direction: signal,
+      });
+    }
+
     // Create position object
     const positionId = `${componentId}-${Date.now()}`;
     const position = {
@@ -2712,6 +2879,8 @@ class BotEngine extends EventEmitter {
       openCandle: lastIdx,
       unrealizedPL: 0,
       confidence: confidence ?? null,
+      marginReserved: requiredMargin,
+      coordinatorBotKey: botKey,
     };
 
     // Store position
@@ -2740,6 +2909,9 @@ class BotEngine extends EventEmitter {
       } catch (err) {
         this._log("error", `[Multi-AF:${componentId}] Order failed: ${err.message}`);
         this.state.positions.delete(componentId);
+        if (this.config.coordinator) {
+          this.config.coordinator.release(botKey);
+        }
       }
     }
   }
@@ -3227,49 +3399,65 @@ class BotEngine extends EventEmitter {
   /**
    * Pulihkan posisi DB yang belum ada di state runtime — UI bisa tampil dari DB
    * (mergeBotWithLiveState fallback) sementara engine tidak memonitor SL/TP.
+   * Throttled (30s) + retry on pool connect timeout so state does not go stale
+   * silently under multi-coin load.
    */
   async _reconcileOpenPositionsFromDb() {
     if (!this.state.running || this._stopRequested) return;
-    try {
-      let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
-      orphans = this._filterOrphanTradesForThisEngine(orphans);
-      if (!orphans.length) return;
+    const RECONCILE_MIN_MS = 30_000;
+    const now = Date.now();
+    if (this._lastReconcileAt && now - this._lastReconcileAt < RECONCILE_MIN_MS) return;
 
-      const knownDbIds = new Set(
-        this.state.openPositions.map(p => p.dbId).filter(Boolean)
-      );
-      let added = 0;
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        let orphans = await db.getOpenTradesBySymbol(this.config.symbol, this.config.userId ?? null);
+        orphans = this._filterOrphanTradesForThisEngine(orphans);
+        this._lastReconcileAt = Date.now();
+        if (!orphans.length) return;
 
-      if (!this.config.dryRun && this.client?.getPositions) {
-        let liveByKey = new Map();
-        try {
-          const livePosns = await this.client.getPositions(this.config.symbol);
-          liveByKey = new Map(livePosns.map(p => [p.side, p]));
-        } catch { /* fallback dry-style restore below */ }
+        const knownDbIds = new Set(
+          this.state.openPositions.map(p => p.dbId).filter(Boolean)
+        );
+        let added = 0;
 
-        for (const dbTrade of orphans) {
-          if (knownDbIds.has(dbTrade.id)) continue;
-          const lp = liveByKey.get(dbTrade.side);
-          if (lp) {
-            this.state.openPositions.push(this._positionFromDbTrade(dbTrade, lp));
+        if (!this.config.dryRun && this.client?.getPositions) {
+          let liveByKey = new Map();
+          try {
+            const livePosns = await this.client.getPositions(this.config.symbol);
+            liveByKey = new Map(livePosns.map(p => [p.side, p]));
+          } catch { /* fallback dry-style restore below */ }
+
+          for (const dbTrade of orphans) {
+            if (knownDbIds.has(dbTrade.id)) continue;
+            const lp = liveByKey.get(dbTrade.side);
+            if (lp) {
+              this.state.openPositions.push(this._positionFromDbTrade(dbTrade, lp));
+              added += 1;
+            }
+          }
+        } else {
+          for (const dbTrade of orphans) {
+            if (knownDbIds.has(dbTrade.id)) continue;
+            this.state.openPositions.push(this._positionFromDbTrade(dbTrade));
             added += 1;
           }
         }
-      } else {
-        for (const dbTrade of orphans) {
-          if (knownDbIds.has(dbTrade.id)) continue;
-          this.state.openPositions.push(this._positionFromDbTrade(dbTrade));
-          added += 1;
-        }
-      }
 
-      if (added > 0) {
-        this._log("warn",
-          `${added} posisi DB dipulihkan ke state runtime (reconcile) — monitor SL/TP aktif kembali`
-        );
+        if (added > 0) {
+          this._log("warn",
+            `${added} posisi DB dipulihkan ke state runtime (reconcile) — monitor SL/TP aktif kembali`
+          );
+        }
+        return;
+      } catch (err) {
+        const isPoolTimeout = /timeout exceeded when trying to connect/i.test(err?.message || "");
+        if (!isPoolTimeout || attempt === MAX_ATTEMPTS) {
+          this._log("warn", `Reconcile posisi DB gagal (attempt ${attempt}/${MAX_ATTEMPTS}): ${err.message}`);
+          return;
+        }
+        await new Promise(r => setTimeout(r, 400 * attempt));
       }
-    } catch (err) {
-      this._log("warn", `Reconcile posisi DB gagal: ${err.message}`);
     }
   }
 

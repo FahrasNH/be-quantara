@@ -21,7 +21,7 @@ const TIERS = {
     umbrella: "ADAPTIVE_FUSION",
     color:    "#9D84B7",
 
-    strategies: { active: ["AF_SMC"], future: ["AF_LS", "AF_OBR"] },
+    strategies: { active: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"], future: ["AF_LS", "AF_OBR"] },
 
     capabilities: {
       maxConcurrentBots:     1,
@@ -57,7 +57,7 @@ const TIERS = {
     umbrella: "TREND_SURGE",
     color:    "#FF6B35",
 
-    strategies: { active: ["TS_TF"], future: ["TS_EW", "TS_PA"] },
+    strategies: { active: ["TS_TF", "TS_MS", "TS_VP"], future: ["TS_EW", "TS_PA"] },
 
     capabilities: {
       maxConcurrentBots:     2,

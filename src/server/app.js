@@ -467,9 +467,9 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       grokConfirmTpBandPct:      opts.grokConfirmTpBandPct,
       grokConfirmTpRejectAction: opts.grokConfirmTpRejectAction,
     },
-    // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
-    // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
-    maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 2,
+    // Race-to-confirm: max 1 posisi terbuka per koin (PRD §9.2).
+    // Override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN hanya untuk debugging.
+    maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 1,
     // Inject DB → canEnter pakai DB sebagai sumber kebenaran tunggal (cap menghormati
     // SEMUA posisi terbuka termasuk orphan, bukan hanya state engine live).
     db,

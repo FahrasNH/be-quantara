@@ -7,8 +7,7 @@
  *   • platform store — flag/clear/list + settings (maintenance) round-trip
  *   • alert severity ordering (critical → warning → info)
  *   • strategy win-rate math
- * DB/JWT-dependent cases (TC-01..04, TC-06..15) are exercised against staging —
- * see ADMIN_QA_REPORT.md for the manual matrix.
+ * DB/JWT-dependent cases (TC-01..04, TC-06..15) are exercised against staging.
  */
 "use strict";
 
