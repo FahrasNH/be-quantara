@@ -1,5 +1,25 @@
 /**
  * BacktestCsvService — export backtest runs ke CSV (format Trade History admin).
+ *
+ * Strategy Reason Formatters — Per-Strategy Entry Reason Assembly
+ *
+ * Each strategy has distinct entry-trigger vocabulary (not generic across all).
+ * mapBacktestTrade routes trade.entryMeta via resolveEntryReasons().
+ *
+ * Supported strategies & their reason variability:
+ * - AF_SMC: Hard-gate (sweep+CHoCH+FVG=prerequisites) → low variance
+ * - AF_WYCKOFF: Multi-item checklist → very low variance
+ * - AF_VSA: 4 patterns × 3 locations → medium variance
+ * - TS_TF: 3-layer checklist → very low variance
+ * - TS_MS: 4-layer checklist → very low variance
+ * - TS_VP: 1-of-4 mutually-exclusive → low variance
+ * - MD_MR: Hybrid (hard entry + soft regime/confluence) → HIGHEST variance
+ * - BS_BR: 3-phase sequential → very low variance
+ *
+ * Umbrellas use race-to-confirm: exactly ONE component wins per bar.
+ * Trade attribution shows winning component key (AF_SMC, AF_WYCKOFF, etc).
+ *
+ * Umbrella_Component scheme: AF_* / TS_* / MD_MR / BS_BR (see strategyReasonFormatters.js).
  */
 
 const { formatDuration } = require("../../infrastructure/db/database");
@@ -9,6 +29,10 @@ const {
   toCsv,
   buildPerformanceSummaryCsv,
 } = require("../../domain/tradeExportCsv");
+const {
+  formatExitReason,
+  resolveEntryReasons,
+} = require("./csv/strategyReasonFormatters");
 
 const NA = "N/A";
 
@@ -92,6 +116,16 @@ function mapBacktestTrade(trade, ctx, index) {
 
   const reason = trade.reason ?? NA;
   const isPartial = /partial/i.test(String(reason));
+  const strategyKeyForReasons =
+    trade.winningComponent || trade.strategyKey || ctx.strategy;
+  const entryMeta = trade.entryMeta || null;
+  const conf = trade.confidence;
+  const confidenceOut =
+    conf == null
+      ? NA
+      : typeof conf === "object"
+        ? (conf.Scalping ?? conf.Intraday ?? conf.Swing ?? conf.A ?? conf.B ?? conf.C ?? NA)
+        : conf;
 
   return {
     user: ctx.userLabel ?? "Backtest",
@@ -115,6 +149,16 @@ function mapBacktestTrade(trade, ctx, index) {
     actualRR,
     duration,
     reason,
+    exitReason: formatExitReason(reason === NA ? null : reason) || NA,
+    entryReasons: resolveEntryReasons(strategyKeyForReasons, entryMeta) || NA,
+    confidence: confidenceOut,
+    marketCond: trade.marketCond ?? NA,
+    htfTrend: trade.htfTrend ?? NA,
+    dailyRegime: trade.dailyRegime ?? NA,
+    component: trade.component ?? trade.tradeType ?? NA,
+    tradeType: trade.tradeType ?? trade.component ?? NA,
+    atr: trade.atr ?? NA,
+    entryRsi: trade.entryRsi ?? NA,
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,

@@ -193,6 +193,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return this._lastSignalMeta;
   }
 
+  /**
+   * Sequence structural levels from the last detectSignalMulti (sweep/CHoCH/FVG/OB).
+   * Used by CSV entryReasons formatter — see strategyReasonFormatters.formatSmcReasons.
+   */
+  getLastSequenceMeta() {
+    return this._lastSequenceMeta || this._lastSignalMeta?.sequenceMeta || null;
+  }
+
   calculateRiskConfig(entryPrice, atr, signal, component = "B", opts = {}) {
     const sub      = this.SUB_STRATEGIES[component] ?? this.SUB_STRATEGIES.B;
     const mul      = opts.strongTrendTPMult ?? 1.0;
@@ -1819,6 +1827,10 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       aggregateConfidence: Math.round(aggConf),
       marketCond,
       swingV3: sigSwing ? swingV3 : undefined,
+      // Surface sequence structural meta for CSV entryReasons (was dead field).
+      // Hard-gate caveat: sweep+CHoCH+FVG are prerequisites — labels nearly identical
+      // across AF_SMC trades; only FVG direction + obConfluence typically vary.
+      sequenceMeta: this._lastSequenceMeta || null,
     };
     this._lastSignalMeta = result.meta;
     return result;
