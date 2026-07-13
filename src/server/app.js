@@ -553,15 +553,6 @@ const _metaSelectorWssRef = { current: null };
 app.use("/api/v1/internal/meta-selector", authMiddleware, createMetaSelectorRouter(_metaSelectorWssRef));
 app.use("/api/v1/internal/parameters",   authMiddleware, createParametersRouter());
 
-// Sprint 2 / PA-3 — Internal Analytics API
-app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
-
-// Sprint 3 / MS-3 — MetaSelector API (wss injected lazily after server creation)
-// Route uses a lazy wss reference so advisory WS events work correctly.
-const _metaSelectorWssRef = { current: null };
-app.use("/api/v1/internal/meta-selector", authMiddleware, createMetaSelectorRouter(_metaSelectorWssRef));
-app.use("/api/v1/internal/parameters",   authMiddleware, createParametersRouter());
-
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
