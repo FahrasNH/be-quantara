@@ -4,15 +4,19 @@
 > documents **tier/strategy SSOT**, **Gen2 naming**, strategy umbrellas (AF / TS / MD),
 > the **market / exchange** layer (Tasks A & C, Binance integration), and admin APIs.
 >
-> **Changelog (DOC-SSOT, 11 Jul 2026):** Tier→strategy tables and strategy keys in this
-> file follow **code as source of truth**. Entitlement keys live in
-> `src/domain/tierConfig.js`; canonical Gen2 component/engine keys live in
-> `src/config/strategies.js` (+ FE mirror `fe-bot-trading/src/utils/tierStrategyMap.js`).
-> Docs must not invent a third mapping.
+> **Changelog (DOC-SSOT-03, 13 Jul 2026):** All four umbrellas use **race-to-confirm**
+> (Sprint 12 AF/TS; Sprint 10 MD; Sprint 11 BS). Live keys:
+> `AF_SMC/WYCKOFF/VSA`, `TS_TF/MS/VP`, `MD_MR/SD/SA`, `BS_BR/ICT/LS`.
+> `maxPositionsPerSymbol = 1` for every tier. ADX is a **risk overlay inside MD_MR**,
+> not a catalog racer. SSOT: `src/config/strategies.js`, `src/domain/tierConfig.js`,
+> FE `tierStrategyMap.js`.
 >
 > **Changelog (BUG-CRITICAL 502, 11 Jul 2026):** Real-engine backtests
 > (`POST /api/v1/backtest/run-real`) run as **isolated child_process workers** with
-> candle/memory hard caps — see §9 below.
+> candle/memory hard caps — see §10 below.
+>
+> **Deployment:** staging branch → `be-quantara-staging` (port 3001); production
+> (`main`) → `be-quantara-prod` (port 3000). VPS + PM2 + Nginx.
 
 ---
 
@@ -21,12 +25,12 @@
 **Home for the Gen1→Gen2 mapping.** Product docs and new code use **Gen2 exclusively**.
 Legacy Gen1 / descriptor keys remain as migrate-only aliases in `STRATEGY_MIGRATION_MAP`.
 
-| Gen1 / umbrella label (docs & history) | Gen2 primary engine key | Live race / pipeline components | Display name |
-|----------------------------------------|-------------------------|---------------------------------|--------------|
+| Gen1 / umbrella label (docs & history) | Gen2 primary engine key | Live race components | Display name |
+|----------------------------------------|-------------------------|----------------------|--------------|
 | `ADAPTIVE_FUSION` (umbrella) | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | Adaptive Fusion |
-| `TREND_SURGE` / `TREND_MOMENTUM` / `TREND_FOLLOWING` | `TS_TF` | `TS_TF`, `TS_MS`, `TS_VP` | Trend Surge |
-| `MEAN_DRIFT` / `MEAN_REVERSION` | `MD_MR` | `MD_MR` (internal A→B→C layers) | Mean Drift |
-| `BREAKOUT_STORM` / `BREAKOUT_RETEST` | `BS_BR` | `BS_BR` | Breakout Storm |
+| `TREND_SURGE` / `TREND_MOMENTUM` / `TREND_FOLLOWING` / `TM` | `TS_TF` | `TS_TF`, `TS_MS`, `TS_VP` | Trend Surge |
+| `MEAN_DRIFT` / `MEAN_REVERSION` / `MR` | `MD_MR` | `MD_MR`, `MD_SD`, `MD_SA` | Mean Drift |
+| `BREAKOUT_STORM` / `BREAKOUT_RETEST` / `BR` | `BS_BR` | `BS_BR`, `BS_ICT`, `BS_LS` | Breakout Storm |
 
 Also still accepted as aliases → Gen2: `SMART_MONEY_CONCEPTS` / `SAC` → `AF_SMC`;
 `TF` → `TS_TF`; `MR` → `MD_MR`; `BR` → `BS_BR`.
@@ -43,12 +47,12 @@ Entitlement still stores **legacy descriptor keys**; runtime normalizes them to 
 `normalizeStrategyKey` / `STRATEGY_MIGRATION_MAP`. FE package engines use Gen2 keys
 (`TIER_PACKAGE_STRATEGIES` in `tierStrategyMap.js`).
 
-| Tier | Entitlement keys (`tierConfig.js`) | Gen2 engines (normalized / FE package) | Live components (race pool / pipeline) | maxPositions / symbol | maxConcurrentPositions | maxActiveBots |
-|------|------------------------------------|----------------------------------------|----------------------------------------|----------------------|------------------------|---------------|
-| **FOUNDRY** | `ADAPTIVE_FUSION` | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | 1 | 4 | 10 |
-| **FORGE** | `ADAPTIVE_FUSION`, `TREND_FOLLOWING` | `AF_SMC`, `TS_TF` | AF pool + `TS_TF`, `TS_MS`, `TS_VP` | 2 | 8 | 25 |
-| **MINT** | + `MEAN_REVERSION` | + `MD_MR` | + `MD_MR` | 3 | 12 | 40 |
-| **VAULT** | + `BREAKOUT_RETEST` | + `BS_BR` | + `BS_BR` | 4 | 16 | 50 |
+| Tier | Entitlement keys (`tierConfig.js`) | Package engines (FE `TIER_PACKAGE_STRATEGIES`) | Cumulative race components (`TIER_COMPONENT_MAP`) | maxPositions / symbol | maxConcurrentPositions | maxActiveBots |
+|------|------------------------------------|-----------------------------------------------|-------------------------------------------------|----------------------|------------------------|---------------|
+| **FOUNDRY** | `ADAPTIVE_FUSION` | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | **1** | 4 | 10 |
+| **FORGE** | + `TREND_FOLLOWING` | + `TS_TF` | AF pool + `TS_TF`, `TS_MS`, `TS_VP` | **1** | 8 | 25 |
+| **MINT** | + `MEAN_REVERSION` | + `MD_MR` | + `MD_MR`, `MD_SD`, `MD_SA` | **1** | 12 | 40 |
+| **VAULT** | + `BREAKOUT_RETEST` | + `BS_BR` | + `BS_BR`, `BS_ICT`, `BS_LS` | **1** | 16 | 50 |
 
 `GROK_AI_TRADING` is a VAULT experimental bonus — **not** in `tierConfig.strategies` race pools.
 Component lists: `TIER_COMPONENT_MAP` in `src/config/strategies.js` and
@@ -73,7 +77,8 @@ and/or setting `afUseThreeComponentVoting: false` — never confuse the two.
 | Slippage | Exchange fills | Fixed 0.05% when `enableSlippage` (FE default ON) |
 | Funding | Schema only (not accrued live yet) | `~0.01%/8h` hold-time cost when fees on |
 | HTF / daily regime | HTF directional + MR filter | Same + `dailyRegimeGate` (backtest-only protective gate) |
-| AF voter threshold | `afMinVotes` capped to active voter count | Same (`AdaptiveFusionUmbrella._aggregate`) |
+| Race winner | Highest confidence; tie-break per umbrella priority | Same (umbrella `detectSignal` race path) |
+| RAG gate (opt-in) | Live: `RAG_MODE=shadow` on main | Post-hoc `WinPredictor` + pgvector; fail-open |
 
 Intentionally excluded from backtest (live-execution concerns): account coordinator
 aggregate gates, signal idempotency cache, exchange min-lot / margin feasibility.
@@ -115,7 +120,8 @@ non-SMC racer wins, direction is promoted to type legs (standalone racer entry).
 
 ### 4.2 Key audit (AF-CONFIG-AUDIT)
 
-Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`, `MD_MR`, `BS_BR`.
+Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`,
+`MD_MR`, `MD_SD`, `MD_SA`, `BS_BR`, `BS_ICT`, `BS_LS`.
 
 Legacy aliases (migrate, do not delete abruptly): `ADAPTIVE_FUSION` / `SMART_MONEY_CONCEPTS` → `AF_SMC`,
 `TREND_FOLLOWING` → `TS_TF`, `MEAN_REVERSION` → `MD_MR`, `BREAKOUT_RETEST` → `BS_BR`.
@@ -167,41 +173,92 @@ keys become the race pool; per-trade `strategyLabel` comes from the winning race
 
 ## 6. Strategy Config — Mean Drift (MD_MR)
 
-**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/implementations/MeanReversionStrategy.js`
-+ `src/domain/strategy/md/{adxRegimeGate,orderBlockFvg}.js`
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/MeanDriftUmbrella.js`
++ racer implementations (`MeanReversionStrategy`, `SupplyDemandStrategy`, `StatisticalArbitrageStrategy`).
 
-### 6.1 Layered pipeline (MD-SUB-01 / MD-SUB-02 / MD-SUB-03)
+### 6.1 Component model (Sprint 10 — Race-to-Confirm)
 
-Unlike AF/TS race-to-confirm pools, Mean Drift currently has **one live key** (`MD_MR`)
-with an internal A→B→C pipeline:
+| Slot | Key | Catalog label | Role | Implementation |
+|------|-----|---------------|------|----------------|
+| A | `MD_MR` | Mean Reversion | Independent racer | `MeanReversionStrategy` |
+| B | `MD_SD` | Supply and Demand | Independent racer | `SupplyDemandStrategy` |
+| C | `MD_SA` | Statistical Arbitrage | Independent racer | `StatisticalArbitrageStrategy` |
 
-| Layer | Role | Implementation |
-|-------|------|----------------|
-| A | BB+RSI+VWAP mean-reversion signal (Scalping / Intraday) | `MeanReversionStrategy.detectSignal` |
-| B | ADX Trend Strength Filter (ADX(14) regime gate) | `md/adxRegimeGate.js` |
-| C | Order Block + FVG entry confluence & TP target | `md/orderBlockFvg.js` |
+**ARCHITECTURE DECISION (Sprint 10):** Race-to-Confirm replaces the earlier MD_MR-only
+layered pipeline as the default umbrella mode.
 
-**ADX gate (Component B):**
-- `balance` (ADX &lt; 20) → MR allowed at full confidence
-- `transition` (20–25) → MR allowed at reduced confidence (`mdAdxTransitionConfidenceMult`, default 0.75)
-- `imbalance` (ADX ≥ 25) → MR blocked
-- Missing ADX → fail-open (warmup)
+- Umbrella `MD_MR` is a **tier access bag** (MINT unlocks the pool), not a fusion mechanism.
+- Active racers (from Advance `selectedComponents` / `mdActiveRacers`, default all three)
+  evaluate in parallel on the same bar.
+- Same-bar winner = highest confidence; ties break `MD_MR` → `MD_SD` → `MD_SA`.
+- Trade attribution label = **winning component only** (`MD_SD`, `MD_SA`, …).
+- Max 1 position/symbol enforced by BotEngine / backtest engines.
+- Rollback: `mdCombinationMode: "pipeline"` restores MD_MR-only with internal layers.
 
-**OB/FVG precision (Component C):**
-- Entry keeps the A signal even without confluence, but confidence drops (`mdNoConfluenceConfidenceMult`, default 0.7)
-- Confluence within `0.5×ATR` of an OB or unfilled FVG boosts confidence
-- TP prefers nearest unfilled FVG midpoint in trade direction; else BB middle; else RR-based TP
+### 6.2 ADX overlay inside MD_MR (NOT a race participant)
 
-**Also retained:** HTF EMA regime filter (`htfRegimeFilter.meanReversionRegimeFilter`) in BotEngine / backtest — complementary to entry-TF ADX.
+The **ADX Trend Strength Filter** (`md/adxRegimeGate.js`) is a **universal risk overlay
+inside the MD_MR racer only** — it is **not** a selectable strategy, not in
+`STRATEGY_CATALOG`, and not a race-pool member:
+
+| Regime | ADX(14) | Effect |
+|--------|---------|--------|
+| `balance` | &lt; 20 | MR allowed at full confidence |
+| `transition` | 20–25 | MR at reduced confidence (`mdAdxTransitionConfidenceMult`, default 0.75) |
+| `imbalance` | ≥ 25 | MR blocked |
+| Missing ADX | — | Fail-open (warmup) |
+
+**OB/FVG precision** (also MD_MR-internal): entry keeps A signal without confluence but
+confidence drops; confluence within `0.5×ATR` boosts confidence; TP prefers unfilled FVG
+midpoint → BB middle → RR-based TP.
 
 Config knobs: `mdAdxGateEnabled`, `mdObFvgEnabled`, `mdAdxBalanceMax`, `mdAdxImbalanceMin`,
 `mdConfluenceAtrMult`, `mdFvgScanBars`, `mdObLookback`.
 
-Go/No-Go validation (WR ≥55%, PF ≥1.3, 12m multi-coin) remains a research gate after code lands.
+HTF EMA regime filter (`htfRegimeFilter.meanReversionRegimeFilter`) remains complementary
+in BotEngine / backtest — separate from entry-TF ADX overlay.
+
+### 6.3 MD_SD / MD_SA racers (Sprint 10)
+
+- **MD_SD (Supply and Demand):** zone-based demand/supply OB retest entries; attributed
+  independently when it wins the race.
+- **MD_SA (Statistical Arbitrage):** z-score / rolling-mean reversion; attributed as
+  `Statistical Arbitrage` when it wins.
+
+Backtest: FE `COMPONENT_TO_ENGINE` maps `MD_SD`/`MD_SA` → `MD_MR` engine run with
+`selectedComponents` narrowing the active race pool; CSV reasons via `formatSupplyDemandReasons`
+/ statistical formatter in `strategyReasonFormatters.js`.
 
 ---
 
-## 7. Known Gaps & Consistency Notes (DOC-SSOT-03 audit — 11 Jul 2026)
+## 7. Strategy Config — Breakout Storm (BS_BR)
+
+**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/BreakoutStormUmbrella.js`
++ racer implementations (`BreakoutTradingStrategy`, `IctStyleStrategy`, `LiquidationSqueezeStrategy`).
+
+### 7.1 Component model (Sprint 11 — Race-to-Confirm)
+
+| Slot | Key | Catalog label | Role | Implementation |
+|------|-----|---------------|------|----------------|
+| A | `BS_BR` | Breakout Retest | Independent racer | `BreakoutTradingStrategy` v2.4 |
+| B | `BS_ICT` | ICT-style trading | Independent racer | `IctStyleStrategy` (kill zones, raids) |
+| C | `BS_LS` | Liquidation/Squeeze Trading | Independent racer | `LiquidationSqueezeStrategy` |
+
+**ARCHITECTURE DECISION (Sprint 11):** Race-to-Confirm among three independent racers.
+
+- Umbrella `BS_BR` is a **tier access bag** (VAULT unlocks the pool).
+- Active racers (from Advance `selectedComponents` / `bsActiveRacers`, default all three).
+- Same-bar winner = highest confidence; ties break `BS_BR` → `BS_ICT` → `BS_LS`.
+- Trade attribution = winning component only.
+- Rollback: `bsCombinationMode: "single"` → BS_BR-only (legacy Breakout Retest path).
+
+**BS_BR (Breakout Retest):** BB-width squeeze → breakout + volume confirm → retest entry
+(Consolidation Gate v2.4). **BS_ICT:** ICT-style kill-zone / liquidity raid entries.
+**BS_LS:** liquidation wick + squeeze detection; optional OI/funding overlays (fail-open).
+
+---
+
+## 8. Known Gaps & Consistency Notes (DOC-SSOT-03 audit — 13 Jul 2026)
 
 Former “§5 gap list” items, re-verified against code. Update this table whenever an
 endpoint is added/removed (Definition of Done for API work).
@@ -253,9 +310,9 @@ that position is flat. **Max 1 open position per symbol per account.**
 
 ---
 
-## 8. API Surface
+## 9. API Surface
 
-### 8.4 Market Endpoints
+### 9.4 Market Endpoints
 
 All routes are mounted under `/api/v1/market` behind `authMiddleware` (Bearer JWT
 → `req.userId`). Source: `src/server/routes/market.js`.
@@ -304,7 +361,7 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 | 429 | `SYMBOLS_RATE_LIMITED` | >10 req/min |
 | 503 | `EXCHANGE_UNAVAILABLE` | exchange down + no cache |
 
-### 8.5 Supported Exchanges
+### 9.5 Supported Exchanges
 
 | Exchange | Trading | Symbols listing | Key onboarding validation |
 |----------|---------|-----------------|---------------------------|
@@ -317,7 +374,7 @@ TTL 5 min. On exchange API failure with a warm cache → returns last list with
 > structurally valid value. Gating is enforced at the application layer via
 > `cfg.allowedExchanges` and `POST /account/keys`.
 
-### 8.6 Admin Endpoints — `routes/admin.js`
+### 9.6 Admin Endpoints — `routes/admin.js`
 
 The Admin Dashboard backend (Tasks ADMIN-BE-01..08, incl. the Admin v2 pages
 ADMIN-FE-05..13). All routes are mounted under `/api/v1/admin`. Source:
@@ -527,18 +584,26 @@ breaks the action). Actor = `req.adminUser.id`; actions include
 `ADMIN_USER_STATUS`, `ADMIN_CHANGE_ROLE`, `ADMIN_CREATE_ADMIN`,
 `ADMIN_EDIT_ADMIN`, `ADMIN_RESET_PASSWORD`, and `ADMIN_DELETE_ADMIN`.
 
-#### Pending (engine integration not yet wired)
+#### Admin FE pages — Coming Soon (13 Jul 2026)
+
+| Route | Status | Notes |
+|-------|--------|-------|
+| `/admin/analytics` | **Coming Soon** | `AdminPageSoon` — Strategy Fit Matrix rebuild for Gen2 umbrellas |
+| `/admin/parameters` | **Coming Soon** | `AdminPageSoon` — walk-forward parameter review post Gen2 migration |
+| `/admin/rag-backtest` | ✅ Live (staging-oriented) | RAG backtest dashboard; BE `routes/analytics.js` |
+
+#### Pending (engine integration)
 
 | Endpoint | Status |
 |----------|--------|
-| `POST /admin/bots/:id/stop` (force-stop one user's bot) | **Not implemented** — needs the bot engine/coordinator wired into the admin router. |
-| Emergency stop-all (ADMIN-BE-05) | **Not implemented** — same dependency on the engine/coordinator. |
+| `POST /admin/bots/:id/stop` (force-stop one user's bot) | **Not implemented** — needs per-bot admin hook into coordinator. |
+| Emergency stop-all (ADMIN-BE-05) | **✅ Implemented** — `POST /admin/bots/stop-all` (superAdminGuard) + AuditLog + Telegram. |
 
 ---
 
 ## Appendix A — IDOR Audit: Market & Symbol Endpoints (Task C)
 
-Audited 2026-06-16. Scope: the endpoints in §8.4. Goal: confirm every endpoint
+Audited 2026-06-16. Scope: the endpoints in §9.4. Goal: confirm every endpoint
 that returns user-specific data scopes its query to `req.userId` (from the verified
 JWT), never to a spoofable param/body.
 
@@ -580,7 +645,7 @@ divergent encryption surface to verify beyond the shared mechanism.
 
 ---
 
-## 9. Backtest job isolation (BUG-CRITICAL 502, 11 Jul 2026)
+## 10. Backtest job isolation (BUG-CRITICAL 502, 11 Jul 2026)
 
 **Problem:** Long real-engine backtests (>12 months, multi-type AF/TS) ran in the
 **same Node process** as live bots. Even with async `jobId` + `setImmediate` yields,
@@ -627,3 +692,19 @@ Consequently, L1 is scoped to that worker/job; durable reuse between compare/tie
 jobs comes from the shared DB L2.
 
 **Env knobs:** `BACKTEST_CANDLE_POOL_ENTRIES`, `BACKTEST_CANDLE_POOL_TTL_MS`.
+
+### RAG gate on backtest (main branch, 13 Jul 2026)
+
+Optional post-hoc ML filter (`ragGate: true` on `POST /backtest/run-real`):
+
+| Piece | Location | Role |
+|-------|----------|------|
+| Availability probe | `GET /backtest/rag-gate-status` | WinPredictor model + TradeEmbedding row count |
+| Gate logic | `RealStrategyBacktestService._applyRagGate` | Adjust confidence; approve if ≥ 0.5 after conservative discount |
+| ML stack | `WinPredictor`, `FeatureEngineer`, pgvector `VectorStore` | Same pipeline as live shadow mode (`RAG_MODE`) |
+| FE toggle | Backtest Advanced Options | Disabled when backend offline or no model/embeddings |
+
+Fail-open when ML deps unavailable — results match baseline with warning in job logs.
+FE **Compare Multiple Tiers** and tier-package runs inherit RAG metadata per aggregated result.
+
+---

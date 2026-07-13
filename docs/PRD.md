@@ -1,9 +1,9 @@
 # Product Requirements Document (PRD)
 ## Quantara — Automated Crypto Trading Bot Platform
 
-**Versi dokumen:** 2.1  
-**Tanggal:** 11 Juli 2026  
-**Status produk:** Active Development (Backend v2.0.0, Frontend v1.0.0)  
+**Versi dokumen:** 2.2  
+**Tanggal:** 13 Juli 2026  
+**Status produk:** Active Development (Backend v2.1.0, Frontend v1.0.0 — Sprint 10/11/12 landed)  
 **Proyek:** `be-bot-trading` + `fe-bot-trading`
 
 > **SSOT (DOC-SSOT-01, 11 Jul 2026):** Tier→strategy entitlement follows
@@ -105,8 +105,8 @@ Menyediakan alat trading otomatis yang aman, transparan, dan dapat diandalkan ba
 
 - Registrasi & login (JWT + refresh token) + email verification + forgot password
 - Koneksi API key Bitget/OKX/Binance (encrypted, no withdraw permission)
-- 4 strategi premium + 1 strategi AI (Grok) + multi-strategy per coin
-- Start/stop/emergency-stop bot per simbol
+- 4 umbrella engines + **12 live race components** (race-to-confirm per umbrella)
+- Start/stop/emergency-stop bot per simbol; **max 1 posisi per simbol** (semua tier)
 - Dry-run dan live trading mode
 - Dashboard real-time via WebSocket
 - Backtest historis (synthetic + real OHLCV via HistoricalKlinesService)
@@ -192,13 +192,24 @@ Halaman pemasaran publik dengan:
 
 ### 6.6 Backtest (`/backtest`)
 
-- Jalankan simulasi strategi pada data historis
-- DataSourcePanel: pilih sumber data (synthetic / real OHLCV via `HistoricalKlinesService`)
-- Multi-timeframe badge display (`MultiTfBadge`)
-- Import backtest dari file (`ImportModal`)
-- Output: return, CAGR, max drawdown, win rate, profit factor
-- Archive dan history backtest tersimpan
-- Grok AI optimization: analisis backtest result dan sarankan parameter via `/api/v1/ai/analyze`
+- Jalankan simulasi strategi pada data historis via **server-side real engine**
+  (`RealStrategyBacktestService` — parity 1:1 dengan live umbrellas/racers)
+- **Async job model:** `POST /api/v1/backtest/run-real` → `jobId` → poll status;
+  eksekusi di **child_process worker** terisolasi (`workers/backtestJobWorker.js`) —
+  mencegah OOM/502 pada API live
+- **Shared candle cache:** L1 worker-local (`BacktestCandleCache.js`) + L2 DB `candle_cache`
+  untuk reuse OHLCV antar job (Compare mode / tier packages)
+- DataSourcePanel: synthetic / real OHLCV via `HistoricalKlinesService`
+- **Advance mode:** multi-select komponen race per umbrella (`TIER_PACKAGE_COMPONENTS`);
+  `COMPONENT_TO_ENGINE` collapse racers → satu run per umbrella engine
+- **Compare Multiple Tiers:** jalankan paket tier penuh side-by-side (FOUNDRY…VAULT);
+  union komponen entitlement; equal-weight capital split antar engine dalam paket
+- Optional gates: **Grok Gate** (AI filter) · **RAG Gate (ML)** (`WinPredictor` + pgvector;
+  `GET /backtest/rag-gate-status`; fail-open bila model/embeddings absent)
+- Output: return, CAGR, max drawdown, win rate, profit factor, per-component frequency,
+  CSV enrichment (`strategyReasonFormatters.js` — termasuk MD_SD/MD_SA/BS_ICT/BS_LS reasons)
+- Archive dan history backtest tersimpan di FE
+- Grok AI optimization: analisis backtest result via `/api/v1/ai/analyze`
 
 ### 6.7 Settings (`/settings`)
 
@@ -246,6 +257,9 @@ Akses: JWT + role ADMIN atau SUPER_ADMIN.
 | `/admin/bots` | Semua bot di platform |
 | `/admin/backtest` | Backtest history platform |
 | `/admin/strategy-stats` | Statistik per strategi |
+| `/admin/analytics` | Strategy Fit Matrix — **Coming Soon** (`AdminPageSoon`) |
+| `/admin/parameters` | Walk-forward parameter tuning — **Coming Soon** (`AdminPageSoon`) |
+| `/admin/rag-backtest` | RAG backtest dashboard (staging-oriented) |
 | `/admin/revenue` | Revenue dashboard (payments) |
 | `/admin/vouchers` | CRUD voucher (buat, edit, nonaktifkan) |
 | `/admin/alerts` | Alert threshold & flags |
@@ -258,19 +272,20 @@ Akses: JWT + role ADMIN atau SUPER_ADMIN.
 
 Hierarki: **FOUNDRY < FORGE < MINT < VAULT**
 
-> **SSOT:** `tierConfig.js`. Tabel di bawah = mirror kode (11 Jul 2026). Gen2 engine
+> **SSOT:** `tierConfig.js`. Tabel di bawah = mirror kode (13 Jul 2026). Gen2 engine
 > keys shown; entitlement DB/API may still send legacy aliases (`ADAPTIVE_FUSION` →
 > `AF_SMC`, `TREND_FOLLOWING` → `TS_TF`, `MEAN_REVERSION` → `MD_MR`,
-> `BREAKOUT_RETEST` → `BS_BR`).
+> `BREAKOUT_RETEST` → `BS_BR`). **`maxPositionsPerSymbol = 1` untuk semua tier**
+> (bukan 2/3/4 — itu dokumen lama yang salah).
 
 ### Harga & Kapasitas
 
-| Tier | Harga/Bulan (IDR) | Harga/Tahun (IDR) | USD equiv | Modal Target (`capitalRange`) | Strategi (Gen2 engines) | Max Posisi (per simbol) | Max Concurrent | Max Active Bots |
-|------|------------------|-------------------|-----------|-------------------------------|-------------------------|------------------------|---------------|----------------|
-| **FOUNDRY** | Rp 149.000 | Rp 1.490.000 | ~$9 | Rp 1–2M | `AF_SMC` | 1 | 4 | 10 |
-| **FORGE** | Rp 399.000 | Rp 3.990.000 | ~$24 | Rp 2–5M | `AF_SMC` + `TS_TF` | 2 | 8 | 25 |
-| **MINT** | Rp 899.000 | Rp 8.990.000 | ~$54 | Rp 10–15M | `AF_SMC` + `TS_TF` + `MD_MR` | 3 | 12 | 40 |
-| **VAULT** | Rp 1.599.000 | Rp 15.990.000 | ~$99 | Rp 30M+ | `AF_SMC` + `TS_TF` + `MD_MR` + `BS_BR` (+ Grok AI bonus) | 4 | 16 | 50 |
+| Tier | Harga/Bulan (IDR) | Harga/Tahun (IDR) | USD equiv | Modal Target (`capitalRange`) | Package engines | Race components (kumulatif) | Max Posisi (per simbol) | Max Concurrent | Max Active Bots |
+|------|------------------|-------------------|-----------|-------------------------------|-----------------|------------------------------|------------------------|---------------|----------------|
+| **FOUNDRY** | Rp 149.000 | Rp 1.490.000 | ~$9 | Rp 1–2M | `AF_SMC` | AF pool (3) | **1** | 4 | 10 |
+| **FORGE** | Rp 399.000 | Rp 3.990.000 | ~$24 | Rp 2–5M | + `TS_TF` | AF + TS pools (6) | **1** | 8 | 25 |
+| **MINT** | Rp 899.000 | Rp 8.990.000 | ~$54 | Rp 10–15M | + `MD_MR` | + MD pool (9 total) | **1** | 12 | 40 |
+| **VAULT** | Rp 1.599.000 | Rp 15.990.000 | ~$99 | Rp 30M+ | + `BS_BR` | All pools (12 total) | **1** | 16 | 50 |
 
 > Harga tahunan = harga bulanan × 10 (bayar 10 bulan, dapat 12 bulan).
 
@@ -296,17 +311,28 @@ Hierarki: **FOUNDRY < FORGE < MINT < VAULT**
 
 ### Arsitektur Umbrella (Gen2)
 
-Setiap tier membuka **pool komponen** di bawah umbrella. Key primer Gen2
-(`AF_SMC`, `TS_TF`, `MD_MR`, `BS_BR`) adalah nama resmi di registry/backtest.
+Setiap tier membuka **pool komponen kumulatif** di bawah umbrella. Key primer Gen2
+(`AF_SMC`, `TS_TF`, `MD_MR`, `BS_BR`) adalah runnable engine keys di registry/backtest.
 Legacy aliases tetap untuk migrasi DB/bots lama — lihat `ARCHITECTURE.md` §1.
 
-| Key Primer (Gen2) | Legacy alias | Tier min | Umbrella | Komponen live |
-|-------------------|--------------|----------|----------|---------------|
-| `AF_SMC` | `ADAPTIVE_FUSION`, `SMART_MONEY_CONCEPTS` | FOUNDRY+ | Adaptive Fusion | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` (race-to-confirm) |
-| `TS_TF` | `TREND_FOLLOWING` (docs lama: `TREND_MOMENTUM`) | FORGE+ | Trend Surge | `TS_TF`, `TS_MS`, `TS_VP` (race-to-confirm) |
-| `MD_MR` | `MEAN_REVERSION` | MINT+ | Mean Drift | `MD_MR` (pipeline A→B→C di dalam key) |
-| `BS_BR` | `BREAKOUT_RETEST` | VAULT | Breakout Storm | `BS_BR` |
+**Race-to-confirm (semua umbrella, Sprint 10–12):** racers aktif evaluasi paralel;
+pemenang = confidence tertinggi; atribusi trade = **winning component key** saja.
+
+| Key Primer (Gen2) | Legacy alias | Tier min | Umbrella | Live race pool |
+|-------------------|--------------|----------|----------|----------------|
+| `AF_SMC` | `ADAPTIVE_FUSION`, `SMC`, `SAC` | FOUNDRY+ | Adaptive Fusion | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` |
+| `TS_TF` | `TREND_FOLLOWING`, `TM`, `TF` | FORGE+ | Trend Surge | `TS_TF`, `TS_MS`, `TS_VP` |
+| `MD_MR` | `MEAN_REVERSION`, `MR` | MINT+ | Mean Drift | `MD_MR`, `MD_SD`, `MD_SA` |
+| `BS_BR` | `BREAKOUT_RETEST`, `BR` | VAULT | Breakout Storm | `BS_BR`, `BS_ICT`, `BS_LS` |
 | `GROK_AI_TRADING` | — | VAULT (bonus) | — | experimental LLM entry (bukan race-pool) |
+
+### Risk overlays (bukan race participants)
+
+| Overlay | Scope | Catatan |
+|---------|-------|---------|
+| ADX Trend Strength Filter | `MD_MR` racer only | Regime gate — **tidak** muncul di catalog / Advance picker |
+| Grok Confirm Gate | Semua engine canonical | Toggle per bot; prefer over `GROK_AI_TRADING` |
+| OI / Funding | `BS_LS` optional | Fail-open bila data exchange absent |
 
 ---
 
@@ -359,25 +385,39 @@ Legacy aliases tetap untuk migrasi DB/bots lama — lihat `ARCHITECTURE.md` §1.
 
 ---
 
-### 8.3 Mean Drift / Mean Reversion (MD_MR) — MINT+
+### 8.3 Mean Drift (MD_MR pool) — MINT+
 
-**Engine:** `MeanReversionStrategy` — satu live key dengan pipeline internal:
+**Umbrella:** `MeanDriftUmbrella` v4 — race-to-confirm among:
 
-| Layer | Role |
-|-------|------|
-| A | BB + RSI + VWAP mean-reversion |
-| B | ADX Trend Strength Filter (regime gate) |
-| C | Order Block + FVG confluence / TP |
+| Racer | Key | Catalog label | Role |
+|-------|-----|---------------|------|
+| Mean Reversion | `MD_MR` | Mean Reversion | BB + RSI + VWAP reversion; **ADX overlay internal** |
+| Supply and Demand | `MD_SD` | Supply and Demand | Zone OB retest entries |
+| Statistical Arbitrage | `MD_SA` | Statistical Arbitrage | Z-score / rolling-mean reversion |
 
-- Ultra-konservatif: risk ~0.8–1%, leverage 1×, max ~3 trade/hari
+- Tie-break: `MD_MR` → `MD_SD` → `MD_SA`
+- ADX regime gate lives **inside MD_MR only** — not a selectable racer (Sprint 10 naming lock)
+- Rollback: `mdCombinationMode: "pipeline"` → MD_MR-only layered mode
+- Ultra-konservatif pada MR path: risk ~0.8–1%, leverage 1×, max ~3 trade/hari
 
-**Status:** Production-ready
+**Status:** Production-ready (Sprint 10 race pool)
 
 ---
 
-### 8.4 Breakout Storm / Breakout Retest (BS_BR) — VAULT
+### 8.4 Breakout Storm (BS_BR pool) — VAULT
 
-**Engine:** `BreakoutTradingStrategy v2.4.0` (terakhir diupdate: 2026-07-07)
+**Umbrella:** `BreakoutStormUmbrella` v3 — race-to-confirm among:
+
+| Racer | Key | Catalog label | Role |
+|-------|-----|---------------|------|
+| Breakout Retest | `BS_BR` | Breakout Retest | BB squeeze → breakout → retest (`BreakoutTradingStrategy` v2.4) |
+| ICT-style | `BS_ICT` | ICT-style trading | Kill zones, liquidity raids |
+| Liquidation/Squeeze | `BS_LS` | Liquidation/Squeeze Trading | Liquidation wick + squeeze; optional OI/funding |
+
+- Tie-break: `BS_BR` → `BS_ICT` → `BS_LS`
+- Rollback: `bsCombinationMode: "single"` → BS_BR-only
+
+**BS_BR detail (when it wins the race):**
 
 **Filosofi:** "Find tight consolidations (high squeeze), wait for a breakout with volume, then enter on the RETEST of the broken level."
 
@@ -390,12 +430,12 @@ Legacy aliases tetap untuk migrasi DB/bots lama — lihat `ARCHITECTURE.md` §1.
 |-------|--------|
 | Holding | 4 jam – 3 hari (swing) |
 | Frekuensi | 0.5–2 trade/minggu (sangat selektif) |
-| Win Rate Target | 50–65% (tertinggi dari semua strategi) |
+| Win Rate Target | 50–65% |
 | RR | 1:1.9 |
 | Modal Minimum | Rp 30M+ (tier VAULT `capitalRange`) |
 | SL | 1.7×ATR (wide) |
 
-**Status:** Production-ready (Consolidation Gate v2.4 active)
+**Status:** Production-ready (Sprint 11 race pool + BS_BR v2.4)
 
 ---
 
@@ -582,19 +622,27 @@ flowchart TB
 
 ```
 StrategyRegistry
-├── AF_SMC        → AdaptiveFusionUmbrella → race: AF_SMC / AF_WYCKOFF / AF_VSA
+├── AF_SMC        → AdaptiveFusionUmbrella     → race: AF_SMC / AF_WYCKOFF / AF_VSA
 ├── AF_WYCKOFF    → WyckoffStrategy (racer)
 ├── AF_VSA        → VsaStrategy (racer)
-├── TS_TF         → TrendSurgeUmbrella     → race: TS_TF / TS_MS / TS_VP
+├── TS_TF         → TrendSurgeUmbrella         → race: TS_TF / TS_MS / TS_VP
 ├── TS_MS         → MarketStructureStrategy (racer)
 ├── TS_VP         → VolumeProfileStrategy (racer)
-├── MD_MR         → MeanDriftUmbrella / MeanReversionStrategy (pipeline)
-├── BS_BR         → BreakoutStormUmbrella  → BreakoutTradingStrategy
-├── GROK_AI_TRADING                        → GrokAiTradingStrategy (experimental)
+├── MD_MR         → MeanDriftUmbrella          → race: MD_MR / MD_SD / MD_SA
+├── MD_SD         → SupplyDemandStrategy (racer)
+├── MD_SA         → StatisticalArbitrageStrategy (racer)
+├── BS_BR         → BreakoutStormUmbrella      → race: BS_BR / BS_ICT / BS_LS
+├── BS_ICT        → IctStyleStrategy (racer)
+├── BS_LS         → LiquidationSqueezeStrategy (racer)
+├── GROK_AI_TRADING                          → GrokAiTradingStrategy (experimental)
+│
+│ Overlays (NOT in registry race pools):
+│   ADX regime gate → inside MD_MR only
+│   GrokConfirm     → per-bot overlay on any canonical engine
 │
 │ Legacy aliases (normalize → Gen2):
 ├── ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS / SAC → AF_SMC
-├── TREND_FOLLOWING / TF                         → TS_TF
+├── TREND_FOLLOWING / TF / TM                    → TS_TF
 ├── MEAN_REVERSION / MR                          → MD_MR
 └── BREAKOUT_RETEST / BR                         → BS_BR
 ```
@@ -608,6 +656,27 @@ StrategyRegistry
 | **Binance** | ⚠️ Market-data only | ✅ | Permission validation (futures-only, reject withdrawal) | CCXT `BinanceClient` |
 
 Exchange switch enabled (`EXCHANGE_SWITCH_ENABLED = true`).
+
+### 10.6 Deployment & environments
+
+| Environment | Git branch | BE PM2 app | Port | Deploy |
+|-------------|------------|------------|------|--------|
+| Staging | `staging` | `be-quantara-staging` | 3001 | `scripts/deploy-staging-vps.sh` |
+| Production | `main` | `be-quantara-prod` | 3000 | `scripts/deploy-production-vps.sh` |
+
+VPS + Nginx + PM2 (`ecosystem.config.js`). Doc updates land on `staging` first; production
+tracks `main` after validation.
+
+### 10.7 RAG / ML pipeline
+
+| Component | Status |
+|-----------|--------|
+| `WinPredictor` | Gradient boosting classifier; model at `data/models/win-predictor.json` |
+| Backtest RAG gate | ✅ User toggle; `GET /backtest/rag-gate-status`; fail-open |
+| Live shadow | `RAG_MODE=shadow` on `main` |
+| Admin Analytics | Coming Soon |
+| Admin Parameters | Coming Soon |
+| Admin RAG dashboard | `/admin/rag-backtest` |
 
 ---
 
@@ -826,26 +895,28 @@ Login (ADMIN/SUPER_ADMIN role) → /admin
 
 ### Fase 1 — ✅ Selesai
 
-- Core bot engine + 4 strategi (umbrella architecture v2.0)
+- Core bot engine + 4 umbrella engines + 12 race components
+- Race-to-confirm architecture (Sprint 12 AF/TS; Sprint 10 MD; Sprint 11 BS)
 - SMC Strategy v3.0 (event-driven, Scalping + Swing)
 - Dashboard web + auth + email verification + forgot password
-- Tier entitlement
+- Tier entitlement; **single-position-per-symbol** (all tiers)
 - Risk gates + emergency procedures + AccountCoordinator
-- Admin Dashboard (RBAC: USER/ADMIN/SUPER_ADMIN)
-- Staging & production deployment (VPS + PM2 + Nginx)
+- Admin Dashboard (RBAC); emergency stop-all implemented
+- Staging (`staging`) & production (`main`) deployment (VPS + PM2 + Nginx)
 - Midtrans payment integration (IDR, Monthly/Yearly)
-- Voucher system
-- Exchange switch (Bitget/OKX/Binance support)
+- Voucher system; Exchange switch (Bitget/OKX/Binance)
 - Pair classification (LIQUID/STABLE/VOLATILE)
 - Grok AI confirm gate (per-bot toggle)
 - Telegram Bot interactive (poller)
+- Backtest worker isolation + shared candle cache (BUG-CRITICAL 502)
+- RAG gate on backtest + WinPredictor on `main`
 
 ### Fase 2 — 🔄 In Progress
 
 - Validasi SMC Scalping backtest dengan OHLCV Bitget nyata (HistoricalKlinesService)
 - SMC Intraday leg revival pada TF berbeda (1h entry — currently failed validation)
-- Breakout Trading live trading validasi (sebelumnya dry-run only, kini v2.4 production)
 - `GROK_AI_TRADING` full rollout (feature flag, testing live)
+- Admin Analytics & Parameters pages (Coming Soon placeholders live)
 - Rate limiting global API
 - Mobile-responsive PWA improvements
 - Pricing page (`/pricing`) — saat ini stub
@@ -871,6 +942,7 @@ Login (ADMIN/SUPER_ADMIN role) → /admin
 | Midtrans | Subscription billing (IDR, Snap redirect) | ✅ Live |
 | Telegram Bot API | Trade notifications + interactive poller | ✅ Optional |
 | xAI Grok API | AI trading decisions + AI backtest optimization | ✅ Feature-flagged |
+| WinPredictor / pgvector RAG | Backtest RAG gate + live shadow mode | ✅ On `main`; admin analytics deferred |
 | Nodemailer | Email verification + password reset | ✅ Live |
 
 ---
@@ -883,7 +955,9 @@ Login (ADMIN/SUPER_ADMIN role) → /admin
 | **Non-custodial** | Dana pengguna tetap di exchange, platform tidak menyimpan aset |
 | **Entitlement** | Hak akses fitur/strategi berdasarkan tier langganan |
 | **Risk gate** | Pembatas otomatis yang menghentikan entry jika limit tercapai |
-| **Multi-strategy per coin** | Beberapa strategi berjalan paralel pada satu simbol dengan alokasi modal |
+| **Multi-strategy per coin** | Beberapa umbrella/engine dievaluasi paralel; **race-to-confirm** — max 1 posisi terbuka per simbol |
+| **Race-to-confirm** | Racers dalam umbrella bersaing; pemenang confidence tertinggi yang entry; label trade = winning component |
+| **Risk overlay** | Modifier risiko (ADX, Grok Confirm) — bukan strategi/racer yang bisa dipilih di catalog |
 | **Confirm token** | Token sekali pakai untuk aksi kritis (start live, emergency stop) |
 | **Umbrella strategy** | Wrapper yang membungkus satu atau lebih sub-strategi (UmbrellaStrategy pattern v2.0) |
 | **SMC** | Smart Money Concepts — metodologi trading institutional (BOS, CHoCH, OB, FVG) |
@@ -919,4 +993,4 @@ Dokumentasi teknis terkait di repo:
 
 ---
 
-*Dokumen ini diperbarui berdasarkan analisis codebase `be-bot-trading` + `fe-bot-trading` per 11 Juli 2026 (DOC-SSOT-01/02).*
+*Dokumen ini diperbarui berdasarkan analisis codebase `be-bot-trading` + `fe-bot-trading` per 13 Juli 2026 (DOC-SSOT-03 — Sprint 10/11/12).*
