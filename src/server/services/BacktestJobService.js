@@ -13,6 +13,7 @@
 
 const { EventEmitter } = require("events");
 const { fork } = require("child_process");
+const fs = require("fs").promises;
 const path = require("path");
 const crypto = require("crypto");
 const { runBacktestJob } = require("./runBacktestJob");
@@ -107,6 +108,9 @@ function purgeExpiredJobs(now = Date.now()) {
         try { job._worker.kill("SIGTERM"); } catch { /* ignore */ }
       }
     }
+    if (job.resultFile) {
+      fs.unlink(job.resultFile).catch(() => {});
+    }
     jobStore.delete(id);
   }
 }
@@ -114,14 +118,42 @@ function purgeExpiredJobs(now = Date.now()) {
 const cleanupTimer = setInterval(() => purgeExpiredJobs(), 5 * 60_000);
 if (typeof cleanupTimer.unref === "function") cleanupTimer.unref();
 
-function toPublicStatus(job) {
+function resultMetaFromPayload(result) {
+  if (!result || typeof result !== "object") return null;
   return {
+    ok: result.ok,
+    engine: result.engine,
+    strategyKey: result.strategyKey,
+    symbol: result.symbol,
+    tradeCount: Array.isArray(result.trades) ? result.trades.length : 0,
+    computeTimeMs: result.computeTimeMs,
+  };
+}
+
+function toPublicStatus(job, opts = {}) {
+  const progressSince = Math.max(0, Number(opts.progressSince) || 0);
+  const includeResult = opts.includeResult === true;
+  const payload = {
     ok: true,
     status: job.status,
-    progress: job.progressLog,
-    result: job.result || null,
+    progress: job.progressLog.slice(progressSince),
+    progressLen: job.progressLog.length,
     error: job.error || null,
+    resultLoading: !!job.resultLoading,
   };
+  if (includeResult && job.status === "done" && job.result) {
+    payload.result = job.result;
+  } else if (job.status === "done") {
+    payload.hasResult = !!(job.result || job.resultFile);
+    payload.resultMeta = job.resultMeta || resultMetaFromPayload(job.result);
+  }
+  return payload;
+}
+
+async function loadResultFromFile(filePath) {
+  const raw = await fs.readFile(filePath, "utf8");
+  await fs.unlink(filePath).catch(() => {});
+  return JSON.parse(raw);
 }
 
 class BacktestJobService {
@@ -156,8 +188,48 @@ class BacktestJobService {
     return true;
   }
 
-  static toPublicStatus(job) {
-    return toPublicStatus(job);
+  static toPublicStatus(job, opts) {
+    return toPublicStatus(job, opts);
+  }
+
+  /** Full payload — fetched once after job-status reports done (avoids huge poll bodies). */
+  static async getJobResult(jobId) {
+    const job = jobStore.get(jobId);
+    if (!job) return null;
+    if (job.status === "error") {
+      return { ok: false, status: "error", error: job.error || "Backtest failed" };
+    }
+    if (job.status === "cancelled") {
+      return { ok: false, status: "cancelled", error: "Backtest cancelled" };
+    }
+    if (job.status !== "done") {
+      return { ok: true, status: job.status, resultLoading: !!job.resultLoading };
+    }
+    if (job.result) {
+      return { ok: true, status: "done", ...job.result };
+    }
+    if (job.resultFile) {
+      job.resultLoading = true;
+      try {
+        const result = await loadResultFromFile(job.resultFile);
+        job.result = result;
+        job.resultFile = null;
+        job.resultMeta = resultMetaFromPayload(result);
+        job.emit("result", result);
+        return { ok: true, status: "done", ...result };
+      } catch (err) {
+        job.fail(`Failed to load backtest result: ${err.message}`);
+        return { ok: false, status: "error", error: job.error };
+      } finally {
+        job.resultLoading = false;
+      }
+    }
+    return { ok: false, status: "error", error: "Backtest finished without a result payload" };
+  }
+
+  /** @internal health / admin */
+  static queueStats() {
+    return { activeCount, queued: waitQueue.length, jobs: jobStore.size, isolate: ISOLATE };
   }
 
   static _dispatch(jobId) {
@@ -227,7 +299,30 @@ class BacktestJobService {
       else if (msg.type === "done") {
         job._ipcSettled = true;
         job.lastActivityAt = Date.now();
-        job.done(msg.result);
+        if (msg.resultFile) {
+          job.status = "done";
+          job.resultFile = msg.resultFile;
+          job.resultMeta = msg.resultMeta || null;
+          job.resultLoading = true;
+          setImmediate(() => {
+            loadResultFromFile(msg.resultFile)
+              .then((result) => {
+                job.result = result;
+                job.resultFile = null;
+                job.resultMeta = resultMetaFromPayload(result);
+                job.resultLoading = false;
+                job.emit("result", result);
+              })
+              .catch((err) => {
+                job.resultLoading = false;
+                if (job.status !== "cancelled") {
+                  job.fail(`Failed to load backtest result: ${err.message}`);
+                }
+              });
+          });
+        } else {
+          job.done(msg.result);
+        }
         settleOnce();
         try { worker.kill("SIGTERM"); } catch { /* ignore */ }
       } else if (msg.type === "error") {
@@ -266,7 +361,7 @@ class BacktestJobService {
     job.once("cancelled", settleOnce);
 
     try {
-      worker.send({ type: "start", userId: job.userId, opts: job.opts });
+      worker.send({ type: "start", jobId, userId: job.userId, opts: job.opts });
     } catch (err) {
       job.fail(`Failed to send job to worker: ${err.message}`);
       settleOnce();

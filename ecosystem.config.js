@@ -75,8 +75,10 @@ module.exports = {
         APP_ENV:  "staging",
         RAG_BACKTEST_ENABLED: "true",
         // Profiling heap/RSS tiap 30s di pm2 logs (index.js MEM_DEBUG=1). Matikan di prod.
+        BACKTEST_ISOLATE: "1",
+        BACKTEST_WORKER_HEAP_MB: "768",
+        BACKTEST_MAX_CONCURRENT: "1",
         MEM_DEBUG: "1",
-      },
     },
   ],
 };

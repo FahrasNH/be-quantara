@@ -667,6 +667,8 @@ CPU-heavy loops and large candle arrays could OOM or block the event loop → ng
 | Runner + caps | `runBacktestJob.js` | Fetch/compute; `BACKTEST_MAX_TOTAL_ENTRY_BARS` (90k); heap guard |
 | Klines safety | `HistoricalKlinesService.js` | Default max bars 150k; mem-cache entry cap |
 | FE copy | `botApi.js` / `useBacktest.js` | Actionable 502 + poll retries |
+| Result IPC | `backtestJobWorker.js` + `GET /job-result/:id` | Large results via temp file — parent event loop stays responsive |
+| nginx staging | `fe-bot-trading/nginx-staging.conf` | Extended timeouts for job-status/job-result/stream |
 
 **Env knobs:** `BACKTEST_ISOLATE=0` (in-process fallback/tests),
 `BACKTEST_WORKER_HEAP_MB`, `BACKTEST_MAX_CONCURRENT`, `BACKTEST_MAX_TOTAL_ENTRY_BARS`,

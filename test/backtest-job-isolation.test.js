@@ -285,6 +285,39 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     // Parent process still alive (this test running) = isolation contract for crash messaging.
   });
 
+  await test("toPublicStatus supports progress cursor and defers full result", async () => {
+    const origDispatch = BacktestJobService._dispatch;
+    BacktestJobService._dispatch = () => {};
+    try {
+      const jobId = BacktestJobService.createJob("cursor-user", {
+        sym: "BTCUSDT", strategyKey: "BS_BR",
+        strategyCfg: { label: "BR", interval: "15m" },
+        periodId: "3m", capital: 1000, parameters: {},
+      });
+      const job = BacktestJobService.getJob(jobId);
+      job.progress({ phase: "fetch", message: "a" });
+      job.progress({ phase: "fetch", message: "b" });
+      job.done({ ok: true, trades: [{ id: 1 }], stats: { totalTrades: 1 } });
+
+      const slice = BacktestJobService.toPublicStatus(job, { progressSince: 1 });
+      assert.strictEqual(slice.progress.length, 1);
+      assert.strictEqual(slice.progressLen, 2);
+      assert.strictEqual(slice.result, undefined);
+      assert.strictEqual(slice.hasResult, true);
+
+      const full = await BacktestJobService.getJobResult(jobId);
+      assert.strictEqual(full.ok, true);
+      assert.strictEqual(full.trades.length, 1);
+    } finally {
+      BacktestJobService._dispatch = origDispatch;
+    }
+  });
+
+  await test("getJobResult returns null for missing job", async () => {
+    const missing = await BacktestJobService.getJobResult("does-not-exist");
+    assert.strictEqual(missing, null);
+  });
+
   console.log(`\n=== Results: ${pass} passed, ${fail} failed ===\n`);
   process.exit(fail ? 1 : 0);
 })().catch((err) => {

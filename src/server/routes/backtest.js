@@ -1285,14 +1285,30 @@ module.exports = function createBacktestRouter(context) {
 
   /**
    * GET /api/v1/backtest/job-status/:jobId
-   * Polling-based alternative to SSE stream. Returns current job state + all progress logs.
-   * Client polls every ~1s until status is "done", "error", or "cancelled".
+   * Lightweight poll — progress cursor via ?since=N. Full result via GET /job-result/:jobId.
    */
   router.get("/job-status/:jobId", asyncHandler(async (req, res) => {
     const job = BacktestJobService.getJob(req.params.jobId);
     if (!job) return res.status(404).json({ ok: false, error: "Job not found or expired (TTL)" });
 
-    return res.json(BacktestJobService.toPublicStatus(job));
+    const progressSince = parseInt(req.query.since, 10) || 0;
+    const includeResult = req.query.full === "1" || req.query.full === "true";
+    return res.json(BacktestJobService.toPublicStatus(job, { progressSince, includeResult }));
+  }));
+
+  /**
+   * GET /api/v1/backtest/job-result/:jobId
+   * One-shot fetch of the full backtest payload after job-status reports done.
+   */
+  router.get("/job-result/:jobId", asyncHandler(async (req, res) => {
+    const payload = await BacktestJobService.getJobResult(req.params.jobId);
+    if (!payload) {
+      return res.status(404).json({ ok: false, error: "Job not found or expired (TTL)" });
+    }
+    if (payload.status && payload.status !== "done" && !payload.trades && !payload.stats) {
+      return res.status(409).json(payload);
+    }
+    return res.json(payload);
   }));
 
   /**

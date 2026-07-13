@@ -122,7 +122,10 @@ const limiter = rateLimit({
   skip: (req) => {
     if (process.env.NODE_ENV !== "production") return true;
     // Exempt backtest polling — called every few seconds during long-running jobs
-    if (req.method === "GET" && req.path.startsWith("/backtest/job-status/")) return true;
+    if (req.method === "GET" && (
+      req.path.startsWith("/backtest/job-status/")
+      || req.path.startsWith("/backtest/job-result/")
+    )) return true;
     return false;
   },
 });
@@ -482,12 +485,16 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
 // ── Routes ────────────────────────────────────────────────────────────────
 
 // Health check (public)
+const BacktestJobService = require("./services/BacktestJobService");
+
 const healthHandler = (req, res) => {
+  const backtest = BacktestJobService.queueStats();
   res.json({
     ok: true,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     allowedExchanges: cfg.allowedExchanges,
+    backtest,
   });
 };
 
