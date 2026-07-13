@@ -79,6 +79,7 @@ module.exports = {
         BACKTEST_WORKER_HEAP_MB: "768",
         BACKTEST_MAX_CONCURRENT: "1",
         MEM_DEBUG: "1",
+      },
     },
   ],
 };
