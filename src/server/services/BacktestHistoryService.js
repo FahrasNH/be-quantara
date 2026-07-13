@@ -12,6 +12,7 @@ const {
   filterSubset,
   resolveAction,
   assertAtomicCanonicalExtendPayload,
+  healArchivePayload,
 } = require("./BacktestCanonicalService");
 
 class BacktestHistoryService {
@@ -87,7 +88,16 @@ class BacktestHistoryService {
   static async getById(id) {
     try {
       const record = await db.getBacktestHistoryById(id);
-      return record;
+      if (!record) return null;
+      const healed = await this._healAndMaybePersist(record);
+      return {
+        ...record,
+        metrics: healed.metrics,
+        trades_data: healed.trades,
+        equity_curve: healed.equity_curve,
+        healed: healed.healed,
+        healReason: healed.healReason,
+      };
     } catch (err) {
       console.error(`[BacktestHistory] Error fetching history by ID ${id}: ${err.message}`);
       throw err;
@@ -233,6 +243,39 @@ class BacktestHistoryService {
   }
 
   /**
+   * Heal corrupted archive payloads (COALESCE leftover: 0 trades + declining equity)
+   * and optionally persist the repair so subsequent lookups stay clean.
+   */
+  static async _healAndMaybePersist(record, { metrics, trades, equity_curve } = {}) {
+    const capital = Number(record?.config?.parameters?.capital ?? record?.config?.capital ?? 1000) || 1000;
+    const healed = healArchivePayload({
+      metrics: metrics ?? record?.metrics,
+      trades: trades ?? record?.trades_data,
+      equity_curve: equity_curve ?? record?.equity_curve,
+      capital,
+    });
+    if (healed.healed && record?.id) {
+      try {
+        await db.updateBacktestHistory(record.id, {
+          metrics: healed.metrics,
+          equityCurve: healed.equity_curve,
+          tradesData: healed.trades,
+          config: record.config ?? null,
+          dataStart: record.data_start ?? record.dataStart ?? null,
+          dataEnd: record.data_end ?? record.dataEnd ?? null,
+          engineVersion: record.engine_version ?? record.engineVersion ?? ENGINE_VERSION,
+        });
+        console.warn(
+          `[BacktestHistory] Healed desynced archive id=${record.id} reason=${healed.healReason}`,
+        );
+      } catch (err) {
+        console.error(`[BacktestHistory] Failed to persist heal for id=${record.id}: ${err.message}`);
+      }
+    }
+    return healed;
+  }
+
+  /**
    * Lookup shared canonical archive — miss|reused|subset|extend
    */
   static async lookupCanonical({
@@ -266,16 +309,19 @@ class BacktestHistoryService {
       if (record.engine_version && record.engine_version !== ENGINE_VERSION) {
         return { action: "miss", canonicalKey, id: null };
       }
+      const healed = await this._healAndMaybePersist(record);
       return {
         action: "reused",
         canonicalKey,
         id: record.id,
-        metrics: record.metrics,
-        trades: record.trades_data,
-        equity_curve: record.equity_curve,
+        metrics: healed.metrics,
+        trades: healed.trades,
+        equity_curve: healed.equity_curve,
         dataStart: record.data_start,
         dataEnd: record.data_end,
         hitCount: record.hit_count ?? 1,
+        healed: healed.healed,
+        healReason: healed.healReason,
       };
     }
 
@@ -297,29 +343,40 @@ class BacktestHistoryService {
 
     if (action === "subset") {
       const filtered = filterSubset(record, reqStartMs, reqEndMs);
+      const healed = healArchivePayload({
+        metrics: filtered.metrics,
+        trades: filtered.trades,
+        equity_curve: filtered.equity,
+        capital: Number(record.config?.parameters?.capital ?? 1000) || 1000,
+      });
       return {
         action,
         canonicalKey,
         id: record.id,
-        metrics: filtered.metrics,
-        trades: filtered.trades,
-        equity_curve: filtered.equity,
+        metrics: healed.metrics,
+        trades: healed.trades,
+        equity_curve: healed.equity_curve,
         dataStart: record.data_start,
         dataEnd: record.data_end,
         hitCount: record.hit_count ?? 1,
+        healed: healed.healed,
+        healReason: healed.healReason,
       };
     }
 
+    const healed = await this._healAndMaybePersist(record);
     return {
       action: "reused",
       canonicalKey,
       id: record.id,
-      metrics: record.metrics,
-      trades: record.trades_data,
-      equity_curve: record.equity_curve,
+      metrics: healed.metrics,
+      trades: healed.trades,
+      equity_curve: healed.equity_curve,
       dataStart: record.data_start,
       dataEnd: record.data_end,
       hitCount: record.hit_count ?? 1,
+      healed: healed.healed,
+      healReason: healed.healReason,
     };
   }
 

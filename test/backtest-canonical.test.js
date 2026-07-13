@@ -11,6 +11,8 @@ const {
   filterSubset,
   ENGINE_VERSION,
   assertAtomicCanonicalExtendPayload,
+  healArchivePayload,
+  isEquityTradesDesync,
 } = require("../src/server/services/BacktestCanonicalService");
 
 let passed = 0;
@@ -171,6 +173,54 @@ t("assertAtomicCanonicalExtendPayload rejects non-array trades_data when provide
     () => assertAtomicCanonicalExtendPayload({ equityCurve: [], tradesData: { bad: true } }),
     (err) => err && err.code === "TRADES_DATA_INVALID" && err.statusCode === 400,
   );
+});
+
+// Heal-on-read: corrupted COALESCE rows (0 trades + declining equity)
+t("isEquityTradesDesync detects 0 trades with -70% equity curve", () => {
+  assert.strictEqual(
+    isEquityTradesDesync(
+      { totalTrades: 0, totalReturn: "0.0" },
+      [],
+      [
+        { date: "2025-07-13", value: 1000 },
+        { date: "2025-10-01", value: 700 },
+        { date: "2026-07-13", value: 300 },
+      ],
+    ),
+    true,
+  );
+});
+
+t("healArchivePayload clears declining equity when trades empty", () => {
+  const healed = healArchivePayload({
+    metrics: { totalTrades: 0, totalReturn: "0.0", maxDrawdown: "0.0" },
+    trades: [],
+    equity_curve: [
+      { date: "2025-07-13", value: 1000 },
+      { date: "2026-07-13", value: 300 },
+    ],
+    capital: 1000,
+  });
+  assert.strictEqual(healed.healed, true);
+  assert.strictEqual(healed.healReason, "clear_equity_empty_trades");
+  assert.deepStrictEqual(healed.equity_curve, []);
+  assert.strictEqual(healed.metrics.totalTrades, 0);
+});
+
+t("healArchivePayload rebuilds metrics from trades when metrics say 0", () => {
+  const healed = healArchivePayload({
+    metrics: { totalTrades: 0 },
+    trades: [
+      { date: "2025-08-01", pnl: 50 },
+      { date: "2025-09-01", pnl: -20 },
+    ],
+    equity_curve: [],
+    capital: 1000,
+  });
+  assert.strictEqual(healed.healed, true);
+  assert.strictEqual(healed.metrics.totalTrades, 2);
+  assert.ok(healed.equity_curve.length >= 2);
+  assert.strictEqual(healed.equity_curve[healed.equity_curve.length - 1].value, 1030);
 });
 
 console.log(`\n${failed === 0 ? "✅" : "❌"} BACKTEST CANONICAL: ${passed} passed, ${failed} failed\n`);
