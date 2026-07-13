@@ -191,6 +191,39 @@ describe("resolveEntryReasons dispatcher", () => {
   test("unknown → empty", () => {
     expect(resolveEntryReasons("UNKNOWN_X", {})).toBe("");
   });
+  test("AF umbrella meta from getLastSignalMeta (SMC nested sequenceMeta) is non-empty", () => {
+    const afMeta = {
+      confidence: { Scalping: 72, Intraday: 0, Swing: 0 },
+      aggregateConfidence: 72,
+      marketCond: "NORMAL",
+      sequenceMeta: {
+        sweepIdx: 10, chochIdx: 12, fvg: { type: "bearish" }, obConfluence: true,
+      },
+      component: "AF_SMC",
+      winningComponent: "AF_SMC",
+      strategyLabel: "Smart Money Concepts",
+    };
+    const out = resolveEntryReasons("AF_SMC", afMeta);
+    expect(out).toContain("Liquidity Sweep");
+    expect(out).toContain("CHoCH");
+    expect(out).toContain("Bearish FVG");
+    expect(out).toContain("Fresh Order Block");
+    expect(out.length > 0).toBe(true);
+  });
+  test("MD_MR + TS_VP + BS_BR synthetic meta never empty", () => {
+    expect(resolveEntryReasons("MD_MR", {
+      reason: "Scalping: RSI 24.1 < 28, BB(1.5σ) touch, below VWAP | ADX:balance | OB/FVG✓",
+      adxRegime: "balance",
+      hasObFvgConfluence: true,
+    }).length > 0).toBe(true);
+    expect(resolveEntryReasons("TS_VP", { reason: "vah_reject" })).toBe("VAH Rejection");
+    expect(resolveEntryReasons("BS_BR", {
+      winningComponent: "BS_BR",
+      bbSqueeze: true,
+      rangeBreakout: true,
+      retestConfirmation: true,
+    })).toContain("BB Squeeze");
+  });
 });
 
 run();

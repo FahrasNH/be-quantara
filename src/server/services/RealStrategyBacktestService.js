@@ -33,6 +33,23 @@ const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 const { riskShareForType } = require("../../domain/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../domain/dailyRegimeGate");
 const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter");
+const { resolveEntryReasons } = require("./csv/strategyReasonFormatters");
+
+/** Coerce indicator snapshots to a finite scalar (reject arrays / absurd values). */
+function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
+  if (v == null || v === "") return null;
+  if (Array.isArray(v)) {
+    for (let i = v.length - 1; i >= 0; i--) {
+      const n = Number(v[i]);
+      if (Number.isFinite(n) && n >= min && n <= max) return n;
+    }
+    return null;
+  }
+  if (typeof v === "object") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
 
 // Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
 // the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
@@ -85,10 +102,18 @@ function isoOf(c) {
 /** Attach full entryContext for RAG gate / WinPredictor (mirrors live ML pipeline). */
 function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) {
   const label = displayName || strategyKey;
+  const entry = tradeObj.entry ?? position?.entry;
+  // Guard against array/object bleed into CSV numeric columns (ATR/RSI showing 1e15+).
+  const atr = scalarIndicator(position?.atr ?? tradeObj.atr, { min: 0, max: 1e9 });
+  const entryRsi = scalarIndicator(position?.entryRsi ?? tradeObj.entryRsi, { min: 0, max: 100 });
+  if (atr != null) tradeObj.atr = atr;
+  if (entryRsi != null) tradeObj.entryRsi = entryRsi;
+  else if (tradeObj.entryRsi != null && entryRsi == null) tradeObj.entryRsi = null;
+
   const ctxSource = {
-    entry:      tradeObj.entry ?? position?.entry,
-    atr:        position?.atr ?? tradeObj.atr ?? null,
-    entryRsi:   position?.entryRsi ?? tradeObj.entryRsi ?? null,
+    entry,
+    atr:        atr ?? 0,
+    entryRsi:   entryRsi ?? 50,
     htfTrend:   position?.htfTrend ?? tradeObj.htfTrend ?? null,
     marketCond: position?.marketCond ?? tradeObj.marketCond ?? null,
     confidence: position?.confidence ?? tradeObj.confidence ?? null,
@@ -98,6 +123,25 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
   tradeObj.strategy = label;
   tradeObj.strategyKey = strategyKey;
   tradeObj.strategyLabel = label;
+  if (position?.winningComponent && tradeObj.winningComponent == null) {
+    tradeObj.winningComponent = position.winningComponent;
+  }
+
+  // Compute human-readable entryReasons at close so FE client CSV + archive
+  // export both see a string (FE previously only passthrough'd entryReasons).
+  const entryMeta = tradeObj.entryMeta ?? position?.entryMeta ?? null;
+  if (tradeObj.entryMeta == null && entryMeta != null) tradeObj.entryMeta = entryMeta;
+  const reasonKey =
+    tradeObj.winningComponent
+    || position?.winningComponent
+    || entryMeta?.winningComponent
+    || entryMeta?.component
+    || strategyKey;
+  if (tradeObj.entryReasons == null || tradeObj.entryReasons === "") {
+    const resolved = resolveEntryReasons(reasonKey, entryMeta);
+    tradeObj.entryReasons = resolved || null;
+  }
+
   tradeObj.entryContext = buildBacktestEntryContext(ctxSource, {
     strategyKey,
     openTime: tradeObj.openTime,

@@ -127,6 +127,25 @@ function mapBacktestTrade(trade, ctx, index) {
         ? (conf.Scalping ?? conf.Intraday ?? conf.Swing ?? conf.A ?? conf.B ?? conf.C ?? NA)
         : conf;
 
+  // Prefer trade-close enrichment; fall back to live resolve from entryMeta.
+  const precomputed =
+    trade.entryReasons != null && String(trade.entryReasons).trim() !== ""
+      ? String(trade.entryReasons).trim()
+      : "";
+  const entryReasons =
+    precomputed || resolveEntryReasons(strategyKeyForReasons, entryMeta) || NA;
+
+  const atrNum = Number(trade.atr);
+  const rsiNum = Number(trade.entryRsi);
+  const atrOut =
+    trade.atr == null || Array.isArray(trade.atr) || !Number.isFinite(atrNum) || atrNum < 0 || atrNum > 1e9
+      ? NA
+      : atrNum;
+  const rsiOut =
+    trade.entryRsi == null || Array.isArray(trade.entryRsi) || !Number.isFinite(rsiNum) || rsiNum < 0 || rsiNum > 100
+      ? NA
+      : rsiNum;
+
   return {
     user: ctx.userLabel ?? "Backtest",
     id: trade.id ?? `${ctx.backtestId}-${index + 1}`,
@@ -150,15 +169,15 @@ function mapBacktestTrade(trade, ctx, index) {
     duration,
     reason,
     exitReason: formatExitReason(reason === NA ? null : reason) || NA,
-    entryReasons: resolveEntryReasons(strategyKeyForReasons, entryMeta) || NA,
+    entryReasons,
     confidence: confidenceOut,
     marketCond: trade.marketCond ?? NA,
     htfTrend: trade.htfTrend ?? NA,
     dailyRegime: trade.dailyRegime ?? NA,
     component: trade.component ?? trade.tradeType ?? NA,
     tradeType: trade.tradeType ?? trade.component ?? NA,
-    atr: trade.atr ?? NA,
-    entryRsi: trade.entryRsi ?? NA,
+    atr: atrOut,
+    entryRsi: rsiOut,
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,
