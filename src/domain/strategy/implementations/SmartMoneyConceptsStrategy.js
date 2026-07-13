@@ -18,6 +18,10 @@
 
 const StrategyBase = require("../base/StrategyBase");
 const { calcEMA, calcATR } = require("../../indicators");
+const {
+  applySmcSessionFilter,
+  resolveScalpingGateFlags,
+} = require("../smc/smcScalpGates");
 
 const EPSILON = 1e-9;
 
@@ -82,9 +86,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     this._ablation = {
       seqCandidate: 0,   // bars with an FVG + mitigation (raw setup exists)
       rejByRejection: 0,
+      rejByObRetest: 0,  // Sprint 13: OB retest/mitigation required
       seqSignal: 0,      // sequence produced a signal (passed rejection)
       rejByRegime: 0,    // rawA killed by HTF regime hard-block
       rejByChoch: 0,     // rawA killed by 5m CHoCH validation
+      rejBySession: 0,   // Sprint 13: UTC session filter
       rejByConf: 0,      // rawA killed by confidence floor
       passed: 0,         // survived ALL gates → a tradeable Scalping signal
     };
@@ -977,21 +983,50 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       if (sweepIdx < 0) continue;
 
       // Order-block confluence: entering inside a live OB of our bias.
-      const obConfluence = usePivot && structState.orderBlocks.some(ob =>
+      let obZone = null;
+      let obDistanceAbs = null;
+      const liveObs = usePivot ? (structState.orderBlocks || []) : [];
+      const matchingOb = liveObs.find(ob =>
         ob.bias === expectedType &&
         cl >= Math.min(ob.low, ob.high) && cl <= Math.max(ob.low, ob.high));
+      const obConfluence = !!matchingOb;
+      if (matchingOb) {
+        obZone = { low: matchingOb.low, high: matchingOb.high, bias: matchingOb.bias };
+        obDistanceAbs = 0;
+      } else if (liveObs.length) {
+        // Nearest same-bias OB distance (for CSV even when not inside)
+        let best = Infinity;
+        for (const ob of liveObs) {
+          if (ob.bias !== expectedType) continue;
+          const mid = (ob.low + ob.high) / 2;
+          const d = Math.abs(cl - mid);
+          if (d < best) {
+            best = d;
+            obZone = { low: ob.low, high: ob.high, bias: ob.bias };
+            obDistanceAbs = d;
+          }
+        }
+      }
 
       // Causal order guaranteed by construction: sweepIdx ≤ chochIdx ≤ dispIdx ≤ now.
       // ── Confidence score from the quality of each leg ──────────────────────
-      const score = this._scoreSequence(indicators, lastIdx, {
+      const scored = this._scoreSequence(indicators, lastIdx, {
         isLong, fvg, dispIdx, chochIdx, sweepIdx, config, obConfluence,
       });
 
       return {
         signal: dir,
         meta: {
-          sweepIdx, chochIdx, dispIdx, fvg, sweepExtreme, score, obConfluence,
+          sweepIdx, chochIdx, dispIdx, fvg, sweepExtreme,
+          score: scored.score,
+          obConfluence,
+          obZone,
+          obDistanceAbs,
+          confidenceComponents: scored.components,
           premiumDiscount: structState?.premiumDiscount ?? null,
+          // Stash for Scalping-only OB retest gate in detectSignalMulti
+          _isBreakoutBar: lastIdx <= dispIdx,
+          _brokeThroughFvg: isLong ? cl > fvg.top * 1.001 : cl < fvg.bottom * 0.999,
         },
       };
     }
@@ -999,7 +1034,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return { signal: null, meta: null };
   }
 
-  /** 0-100 confidence for a completed SMC sequence. */
+  /**
+   * 0-100 confidence for a completed SMC sequence.
+   * Returns { score, components } so trade/entryMeta/CSV can log the parts
+   * (Sprint 13 — confidence 90–95 had WR ~25%; need component forensics).
+   */
   _scoreSequence(indicators, lastIdx, ctx) {
     const { closes, highs, lows, volumes, volSMA } = indicators;
     const { isLong, fvg, dispIdx, chochIdx, sweepIdx } = ctx;
@@ -1008,7 +1047,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // Sweep conviction: volume surge on the sweep bar
     const sVol = volumes[sweepIdx] ?? 0, sVSMA = volSMA[sweepIdx] ?? 1;
     const sweepVolRatio = sVSMA > 0 ? sVol / sVSMA : 1;
-    score += Math.min(15, (sweepVolRatio - 1) * 15);
+    const sweepPts = Math.min(15, (sweepVolRatio - 1) * 15);
+    score += sweepPts;
 
     // Displacement strength: range of the FVG-origin bar
     const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
@@ -1036,11 +1076,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       atrPct = n > 0 ? (trSum / n) / (closes[lastIdx] || 1) : 0;
     }
 
+    let dispPts = 0;
     if (atrPct > 0) {
-      score += Math.min(15, (dRange / atrPct) * 7.5);  // 2×ATR displacement → +15
+      dispPts = Math.min(15, (dRange / atrPct) * 7.5);  // 2×ATR displacement → +15
     } else {
-      score += Math.min(15, dRange * 600); // ~2.5% range → +15
+      dispPts = Math.min(15, dRange * 600); // ~2.5% range → +15
     }
+    score += dispPts;
 
 
     // If the FVG-origin bar had below-average volume, the "displacement" may be noise.
@@ -1049,18 +1091,21 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (dispVolRatio < 1.2) score -= 12; // penalise weak-volume displacement
 
     // FVG size (bigger imbalance = stronger)
+    let fvgPts = 0;
     if (atrPct > 0) {
-      score += Math.min(10, ((fvg.size || 0) / atrPct) * 10); // 1×ATR gap → +10
+      fvgPts = Math.min(10, ((fvg.size || 0) / atrPct) * 10); // 1×ATR gap → +10
     } else {
-      score += Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
+      fvgPts = Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
     }
+    score += fvgPts;
 
     // Mitigation depth: deeper into the zone = better entry
     const cl = closes[lastIdx];
     const depth = isLong
       ? (fvg.midpoint - cl) / Math.max(fvg.midpoint - fvg.bottom, 1e-9)
       : (cl - fvg.midpoint) / Math.max(fvg.top - fvg.midpoint, 1e-9);
-    score += Math.max(0, Math.min(15, depth * 15));
+    const depthPts = Math.max(0, Math.min(15, depth * 15));
+    score += depthPts;
 
 
     // Reward recent sweeps (≤20 bars = setup is still "alive"), penalise very old ones.
@@ -1071,9 +1116,31 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
 
     // bias = institutional footprint confluence (pivot structure engine only).
+    const obPts = ctx.obConfluence ? 8 : 0;
     if (ctx.obConfluence) score += 8;
 
-    return Math.round(this.clamp(score, 0, 100));
+    // HTF alignment is applied later as a soft −15 in detectSignalMulti; record
+    // the provisional contribution here (0 until the gate runs). Callers may
+    // overwrite confidenceComponents.htfAlignment after the HTF filter.
+    const components = {
+      sweepStrength: parseFloat(sweepVolRatio.toFixed(4)),
+      sweepPts: Math.round(sweepPts),
+      fvgSize: parseFloat((fvg.size || 0).toFixed(6)),
+      fvgPts: Math.round(fvgPts),
+      displacementPct: parseFloat((dRange * 100).toFixed(4)),
+      dispPts: Math.round(dispPts),
+      mitigationDepth: parseFloat(Math.max(0, depth).toFixed(4)),
+      depthPts: Math.round(depthPts),
+      obConfluence: !!ctx.obConfluence,
+      obPts,
+      htfAlignment: 0, // filled in detectSignalMulti after HTF gate
+      scoreBase: 45,
+    };
+
+    return {
+      score: Math.round(this.clamp(score, 0, 100)),
+      components,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1668,6 +1735,47 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       confC = rawC ? this._componentConfidence("C", rawC, ctx) : 0;
     }
 
+    const scalpGates = resolveScalpingGateFlags(config);
+
+    // Sprint 13: UTC session filter (default on for Scalping via typeOverrides).
+    // Blocks new Scalping entries during 21–23 UTC (hours 21,22). Fail-open when
+    // no candle timestamp is available.
+    if (rawA && scalpGates.smcSessionFilter) {
+      const ts = config.candleTimestamp
+        ?? indicators.timestamps?.[lastIdx]
+        ?? indicators.time?.[lastIdx]
+        ?? null;
+      const sess = applySmcSessionFilter(ts, {
+        enabled: true,
+        blockHoursUtc: scalpGates.smcSessionBlockHoursUtc,
+      });
+      if (sess.blocked) {
+        this._abl("rejBySession");
+        rawA = null;
+        confA = 0;
+      }
+    }
+
+    // Sprint 13: OB/FVG retest gate — Scalping only (does not starve Swing).
+    // Reject breakout / slice-through bars. If a same-bias OB is nearby
+    // (≤1.5×ATR via obDistanceAbs), require price inside it (true OB retest).
+    // Distant or absent OBs: FVG mitigation alone is enough.
+    if (rawA && scalpGates.smcRequireObRetest) {
+      const seq = this._lastSequenceMeta;
+      const atrNow = indicators.atr?.[lastIdx];
+      const nearOb = seq?.obZone
+        && atrNow > 0
+        && seq.obDistanceAbs != null
+        && seq.obDistanceAbs <= atrNow * 1.5;
+      const failBreakout = !seq || seq._isBreakoutBar || seq._brokeThroughFvg;
+      const failNearOb = nearOb && !seq.obConfluence;
+      if (failBreakout || failNearOb) {
+        this._abl("rejByObRetest");
+        rawA = null;
+        confA = 0;
+      }
+    }
+
 
     // Intraday now uses regimeMappingStrict to map direction to regime:
     // BULLISH regime → only LONG entries allowed
@@ -1728,14 +1836,20 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const strictAlign = config.sacHtfHardBlock === true;
     const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true
       || strictAlign;
+    let htfAlignPts = 0;
     if (hardRegimeBlock) {
-      if (rawA && this._htfDirectionBlocked(rawA, htfTrend, strictAlign)) { this._abl("rejByRegime"); rawA = null; confA = 0; }
+      if (rawA && this._htfDirectionBlocked(rawA, htfTrend, strictAlign)) { this._abl("rejByRegime"); rawA = null; confA = 0; htfAlignPts = -100; }
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend, strictAlign)) { rawB = null; confB = 0; }
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend, strictAlign)) { rawC = null; confC = 0; }
+      if (rawA) htfAlignPts = 10; // survived hard align
     } else {
-      if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
+      if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) { confA = Math.max(0, confA - 15); htfAlignPts = -15; }
+      else if (rawA) htfAlignPts = 5;
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
+    }
+    if (this._lastSequenceMeta?.confidenceComponents) {
+      this._lastSequenceMeta.confidenceComponents.htfAlignment = htfAlignPts;
     }
 
 
@@ -1825,12 +1939,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     result.meta = {
       confidence: { Scalping: confA, Intraday: confB, Swing: confC, A: confA, B: confB, C: confC },
       aggregateConfidence: Math.round(aggConf),
-      marketCond,
+      // Always set — Market Cond = entry-TF vol/trend bucket (≠ dailyRegime).
+      marketCond: marketCond || "NORMAL",
       swingV3: sigSwing ? swingV3 : undefined,
       // Surface sequence structural meta for CSV entryReasons (was dead field).
       // Hard-gate caveat: sweep+CHoCH+FVG are prerequisites — labels nearly identical
       // across AF_SMC trades; only FVG direction + obConfluence typically vary.
       sequenceMeta: this._lastSequenceMeta || null,
+      confidenceComponents: this._lastSequenceMeta?.confidenceComponents || null,
     };
     this._lastSignalMeta = result.meta;
     return result;

@@ -79,10 +79,12 @@ function getRegimeForDate(date, cache) {
  *   - strategyKey: "AF_SMC" | "TS_TF" | "MD_MR" | "BS_BR"
  *   - regime: "STRONG_TREND" | "CHOP" | "TRANSITION" | "UNKNOWN"
  *   - riskPerTrade: base risk %
+ *   - blockLongInChop: Sprint 13 — when true, block LONG in CHOP for structure strategies
+ *     (SHORT still allowed). Fail-open when false/undefined.
  * @returns {Object} { allow: boolean, riskPerTrade: adjusted%, reason: string }
  */
 function applyRegimeGate(params) {
-  const { signal, strategyKey, regime, riskPerTrade } = params;
+  const { signal, strategyKey, regime, riskPerTrade, blockLongInChop } = params;
 
   if (!signal || regime === "UNKNOWN") {
     return { allow: true, riskPerTrade, reason: "no_signal_or_unknown_regime" };
@@ -106,6 +108,11 @@ function applyRegimeGate(params) {
       return { allow: false, riskPerTrade: 0, reason: "chop_momentum_blocked" };
     }
     if (isStructure) {
+      // Sprint 13: optional Side×Regime gate — counter-trend LONGs in CHOP are
+      // historically weak; SHORT fades remain allowed.
+      if (blockLongInChop && signal === "LONG") {
+        return { allow: false, riskPerTrade: 0, reason: "chop_long_blocked" };
+      }
       // SMC (structure-based) runs at 50% size during chop (still profitable but safer)
       return { allow: true, riskPerTrade: riskPerTrade * 0.5, reason: "chop_structure_half_size" };
     }

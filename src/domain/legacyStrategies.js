@@ -713,6 +713,25 @@ const STRATEGIES = {
     trades:  "~3–8 trade/hari (1h eval)",
     winrate: "Target 52–60%",
     risk:    "Rendah-Sedang",
+
+    // Sprint 13 — Scalping typeOverrides (aligned with FE backtestStrategies).
+    // INTENTIONAL RR deviation from PRD 1:4.5 → live/backtest Planned RR = 2.0.
+    typeOverrides: {
+      Scalping: {
+        slAtrMult: 2.2,
+        tpAtrMult: 4.4,
+        maxHoldHours: 6,
+        smcSessionFilter: true,
+        smcSessionBlockHoursUtc: [21, 22],
+        smcBlockLongInChop: true,
+        smcRequireObRetest: true,
+        sacMinConfidenceALong: 80,
+        sacMinConfidenceAShort: 75,
+        scalpingChochValidate: true,
+        makerEntry: true,
+        makerFeeRate: 0.0002,
+      },
+    },
   },
 
   // ─────────────────────────────────────────────

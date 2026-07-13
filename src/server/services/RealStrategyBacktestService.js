@@ -32,6 +32,11 @@ const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 const { riskShareForType } = require("../../domain/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../domain/dailyRegimeGate");
+const {
+  resolveScalpingGateFlags,
+  buildSmcEntryFeatures,
+  applySmcSideRegimeGate,
+} = require("../../domain/strategy/smc/smcScalpGates");
 const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("./csv/strategyReasonFormatters");
 
@@ -610,7 +615,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       strategy: strategyKey,
       component: tradeTypeLabel,
       tradeType: tradeTypeLabel,
-      marketCond: position.marketCond,
+      marketCond: position.marketCond || "NORMAL",
       entry: position.entry,
       exit: px,
       sl: position.sl,
@@ -627,8 +632,21 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       atr: position.atr ?? null,
       entryRsi: position.entryRsi ?? null,
       htfTrend: position.htfTrend ?? null,
-      dailyRegime: position.dailyRegime ?? null,
+      dailyRegime: position.dailyRegime ?? "UNKNOWN",
       entryMeta: position.entryMeta ?? null,
+      // Sprint 13 ML / confidence component columns
+      sweepStrength: position.sweepStrength ?? null,
+      fvgSizeAtr: position.fvgSizeAtr ?? null,
+      obDistanceAtr: position.obDistanceAtr ?? null,
+      displacementPct: position.displacementPct ?? null,
+      htfAdx: position.htfAdx ?? null,
+      hourUtc: position.hourUtc ?? null,
+      volumeRatio: position.volumeRatio ?? null,
+      bbWidth: position.bbWidth ?? null,
+      confSweepStrength: position.confSweepStrength ?? null,
+      confFvgSize: position.confFvgSize ?? null,
+      confDisplacementPct: position.confDisplacementPct ?? null,
+      confHtfAlignment: position.confHtfAlignment ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
@@ -673,12 +691,28 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       componentConsecLoss.clear();
     }
 
-    // Monitor all open positions for SL/TP
+    // Monitor all open positions for SL/TP / TIME_STOP (maxHoldHours)
     for (const [componentId, pos] of positions.entries()) {
 
       // the SL/TP check below (mirrors runRealBacktest's single-position order).
       checkPartialMilestones(componentId, pos, c, i);
       if (!positions.has(componentId)) continue; // safety: milestone logic never fully closes, but guard anyway
+
+      // Sprint 13: enforce Scalping maxHoldHours in multi-position AF path
+      // (previously only wired in single-position backtest → 60h "Scalping" holds).
+      const holdOv = cfg.typeOverrides?.[pos.component || componentId] || {};
+      const maxHoldHours = holdOv.maxHoldHours
+        ?? (componentId === "Scalping" || pos.component === "Scalping"
+          ? holdOv.scalpingMaxHoldHours : undefined)
+        ?? (componentId === "Scalping" ? cfg.maxHoldHours : undefined);
+      if (maxHoldHours) {
+        const openTs = entryCandles[pos.openIdx]?.timestamp ?? 0;
+        const holdMs = (c.timestamp ?? 0) - openTs;
+        if (holdMs > maxHoldHours * 3600 * 1000) {
+          closePosition(componentId, pos, price, "TIME_STOP", i);
+          continue;
+        }
+      }
 
       const stopLevel = pos.slCurrent;
       const hitSL = pos.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
@@ -724,6 +758,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       regimeDetection: cfg.regimeDetection, // EMA gap thresholds, ADX strength
       typeOverrides: cfg.typeOverrides, // per-leg overrides (Scalping/Intraday/Swing)
+      candleTimestamp: c.timestamp, // Sprint 13 session filter
     });
 
 
@@ -783,13 +818,29 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
       const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
       const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
+      const scalpFlags = componentId === "Scalping"
+        ? resolveScalpingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Scalping || {}) })
+        : {};
       const regimeResult = applyRegimeGate({
         signal,
         strategyKey,
         regime: dailyRegime,
         riskPerTrade,
+        // Sprint 13: Side×Regime — block LONG in CHOP for Scalping (config flag)
+        blockLongInChop: componentId === "Scalping" && scalpFlags.smcBlockLongInChop === true,
       });
       if (!regimeResult.allow) continue;
+
+      // Redundant explicit check (same gate) so unit tests / future callers that
+      // bypass applyRegimeGate still see the Side×Regime contract.
+      if (componentId === "Scalping") {
+        const sideGate = applySmcSideRegimeGate({
+          signal,
+          dailyRegime,
+          enabled: scalpFlags.smcBlockLongInChop === true,
+        });
+        if (!sideGate.allow) continue;
+      }
 
       // AF-SWING-V3: confidence/RVOL/ATR-tiered position size (SWING_ENGINE_V3.md
       // improvement 9). No-op (multiplier 1) unless typeOverrides.Swing.sacSwingV3Gate
@@ -832,7 +883,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // strongTrendTPMult (let winners run in STRONG_TREND) can fire — it was
       // hardcoded "NORMAL", so the ×1.8 TP extension never applied and every
       // winner was capped at the base RR.
-      const regime = multiSignal.meta?.marketCond || "NORMAL";
+      // Sprint 13 field SSOT:
+      //   marketCond  = entry-TF vol/trend bucket (SMC meta)
+      //   dailyRegime = daily ADX-proxy (STRONG_TREND/CHOP/TRANSITION/UNKNOWN)
+      const marketCond = multiSignal.meta?.marketCond || "NORMAL";
 
 
       // Backtest uses full type names (Scalping/Intraday/Swing), not legacy A/B/C
@@ -841,7 +895,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const tpMult = typeOverride.tpAtrMult ?? cfg.tpAtrMult;
 
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
-        marketCond: regime,
+        marketCond,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
 
         // typeConfig → cfg). Merged from typeOverrides per componentId.
@@ -878,6 +932,18 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
       const winningComponent = meta?.winningComponent || null;
 
+      // Sprint 13: granular ML features + confidence components for CSV
+      const seqMeta = meta?.sequenceMeta || null;
+      if (seqMeta && atr > 0 && seqMeta.obDistanceAbs != null) {
+        seqMeta.obDistanceAtr = seqMeta.obDistanceAbs / atr;
+      }
+      const mlFeatures = buildSmcEntryFeatures(indicators, i, seqMeta, {
+        atr,
+        price,
+        timestamp: c.timestamp,
+        htfAdx: indicators.adx?.[i] ?? null,
+      });
+
       // Open position
       positions.set(componentId, {
         side: signal,
@@ -888,7 +954,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         riskAmt,
         openIdx: i,
         component: componentId,
-        marketCond: regime,
+        marketCond,
         plannedRR: riskCfg.riskReward,
 
         confidence: multiSignal.meta?.confidence?.[componentId] ?? null,
@@ -896,10 +962,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
-        dailyRegime,
+        dailyRegime: dailyRegime || "UNKNOWN",
         entryMeta: lastMeta || multiSignal.meta || null,
         strategyLabel: tradeLabel,
         winningComponent,
+        ...mlFeatures,
 
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.

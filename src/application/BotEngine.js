@@ -1409,6 +1409,7 @@ class BotEngine extends EventEmitter {
                 afInstance = new AdaptiveFusionUmbrella();
               }
               const multiSignal = afInstance.detectSignalMulti(indicators, lastIdx, {
+                ...this.config,
                 volatility:           atrPctNow,
                 trend_strength:       trendStr,
                 balance:              this.state.capital,
@@ -1429,6 +1430,8 @@ class BotEngine extends EventEmitter {
                 afMinVotes:           this.config.afMinVotes,
                 selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
                 afActiveRacers:       this.config.afActiveRacers || this.config.afActiveVoters,
+                typeOverrides:        this.config.typeOverrides,
+                candleTimestamp:      Date.now(),
               });
               // Persist vote breakdown onto indicator snapshot for entryContext
               if (multiSignal?.meta?.afVotes || multiSignal?.meta?.signalComponents || multiSignal?.meta?.afRace) {
@@ -2785,12 +2788,35 @@ class BotEngine extends EventEmitter {
 
     const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
     const afStrategy = new SmartMoneyConceptsStrategy();
+    const { resolveScalpingGateFlags, applySmcSideRegimeGate } = require("../domain/strategy/smc/smcScalpGates");
+
+    // Map legacy letters → type names for typeOverrides lookup
+    const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;
+    const typeOverride = this.config.typeOverrides?.[typeName] || this.config.typeOverrides?.[componentId] || {};
+
+    // Sprint 13: Side×Regime for Scalping LONGs in CHOP (live parity with backtest)
+    if (typeName === "Scalping") {
+      const flags = resolveScalpingGateFlags({ ...this.config, ...typeOverride, typeOverrides: this.config.typeOverrides });
+      const dailyRegime = this.state.dailyRegime || indicatorSnapshot?.dailyRegime || "UNKNOWN";
+      const sideGate = applySmcSideRegimeGate({
+        signal,
+        dailyRegime,
+        enabled: flags.smcBlockLongInChop === true,
+      });
+      if (!sideGate.allow) {
+        this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${sideGate.reason}`);
+        return;
+      }
+    }
 
     // Calculate risk config for this component. Pass the real regime so
     // strongTrendTPMult (let winners run in STRONG_TREND) can fire.
-    const riskCfg = afStrategy.calculateRiskConfig(price, atr, signal, componentId, {
+    // Sprint 13: honour typeOverrides SL/TP so Planned RR matches backtest (RR 2.0).
+    const riskCfg = afStrategy.calculateRiskConfig(price, atr, signal, typeName, {
       marketCond: marketCond || "NORMAL",
       strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
+      slMultiplier: typeOverride.slAtrMult ?? this.config.slAtrMult,
+      tpMultiplier: typeOverride.tpAtrMult ?? this.config.tpAtrMult,
     });
 
     const baseSlDist = riskCfg.slDistance;
@@ -2868,6 +2894,7 @@ class BotEngine extends EventEmitter {
     const position = {
       positionId,
       componentId,
+      tradeType: typeName,
       symbol: this.config.symbol,
       side: signal,
       entry: price,
@@ -2879,6 +2906,7 @@ class BotEngine extends EventEmitter {
       openCandle: lastIdx,
       unrealizedPL: 0,
       confidence: confidence ?? null,
+      marketCond: marketCond || "NORMAL",
       marginReserved: requiredMargin,
       coordinatorBotKey: botKey,
     };
@@ -3791,6 +3819,53 @@ class BotEngine extends EventEmitter {
     for (const pos of this.state.openPositions) {
       // ── SL+ milestone check (dry run) ─────────────────────────────────────
       await this._checkSLPlusMilestones(pos, price);
+
+      // Sprint 13: Scalping maxHoldHours TIME_STOP (live parity with backtest)
+      const typeName = pos.tradeType
+        || ({ A: "Scalping", B: "Intraday", C: "Swing" }[pos.componentId] || pos.componentId);
+      const holdOv = this.config.typeOverrides?.[typeName] || {};
+      const maxHoldHours = holdOv.maxHoldHours ?? holdOv.scalpingMaxHoldHours
+        ?? (typeName === "Scalping" ? this.config.maxHoldHours : null);
+      if (maxHoldHours) {
+        const openMs = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+        if (Number.isFinite(openMs) && (Date.now() - openMs) > maxHoldHours * 3600 * 1000) {
+          const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
+          const exitPrice = price;
+          const pnl = pos.side === "LONG"
+            ? (exitPrice - pos.entry) * remaining
+            : (pos.entry - exitPrice) * remaining;
+          const pnlPct = ((pnl / (pos.entry * remaining)) * 100);
+          const fee = await this._resolveFee(pos, exitPrice, remaining);
+          const marginBack = pos.marginReserved != null
+            ? pos.marginReserved
+            : pos.entry * remaining * this.config.riskPerTrade;
+          this.state.capital += pnl - fee + marginBack;
+          const closeTime = Date.now();
+          this._log("info",
+            `[TIME_STOP] ${pos.side} ${this.config.symbol} closed after ${maxHoldHours}h max hold`
+          );
+          if (this.sessionId && pos.dbId) {
+            try {
+              await db.closeTrade(pos.dbId, {
+                exitPrice, pnl, pnlPct, fee,
+                reason: "TIME_STOP",
+                closeTime: new Date(closeTime).toISOString(),
+              });
+              onEngineTradeClose(pos.dbId, pnl);
+            } catch (dbErr) {
+              this._log("warn", `Gagal tutup trade #${pos.dbId} (TIME_STOP) di DB: ${dbErr.message}`);
+            }
+          }
+          this.state.trades.push({
+            ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee,
+            reason: "TIME_STOP", closedAt: closeTime,
+          });
+          this._capTrades();
+          this._updateRiskAfterClose(pnl, pos);
+          toClose.push(pos.id);
+          continue;
+        }
+      }
 
       // Cek SL / TP — intrabar wick + fallback harga monitor (ticker).
       const { hitSL, hitTP, isTP } = this._evaluateSlTpHit(pos, price, barHigh, barLow);
