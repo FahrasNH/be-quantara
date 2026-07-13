@@ -353,8 +353,11 @@ pemenang = confidence tertinggi; atribusi trade = **winning component key** saja
 
 | Type | Win Rate Target | RR | SL | TP |
 |------|-----------------|----|----|-----|
-| Scalping | 35–40% | 1:4.5 | 1.0×ATR | 4.5×ATR |
-| Swing | 45–50% | 1:4.0 | 1.2×ATR | 4.0×ATR |
+| Scalping | 35–40% | 1:4.5 aspirational / **2.0 live** | 1.0×ATR aspirational / **2.2× live** | 4.5×ATR aspirational / **4.4× live** |
+| Swing | 45–50% | 1:4.0 aspirational / **2.5 live** | 1.2×ATR aspirational / **1.8× live** | 4.0×ATR aspirational / **4.5× live** |
+
+Live/backtest SSOT is `typeOverrides` in FE `backtestStrategies.js` + BE `legacyStrategies.js`
+(Sprint 13). PRD multipliers remain aspirational until a re-validation run flips them back.
 
 **Komponen SMC (racer AF_SMC):**
 - Liquidity sweep detection (BSL/SSL)

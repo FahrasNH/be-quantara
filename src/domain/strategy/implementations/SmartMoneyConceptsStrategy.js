@@ -21,6 +21,8 @@ const { calcEMA, calcATR } = require("../../indicators");
 const {
   applySmcSessionFilter,
   resolveScalpingGateFlags,
+  resolveSwingGateFlags,
+  sweetSpotPts,
 } = require("../smc/smcScalpGates");
 
 const EPSILON = 1e-9;
@@ -62,11 +64,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     this.SUB_STRATEGIES = {
       Scalping: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
       Intraday: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
-      Swing:    { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
+      // PRD aspirational: SL 1.2×ATR / TP 4.0×ATR (RR ≈ 3.33). Live/backtest
+      // Planned RR comes from typeOverrides.Swing (Sprint 13 fast-fail SSOT).
+      Swing:    { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
       // Backward-compat aliases (old code that passes "A"/"B"/"C")
       A: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
       B: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
-      C: { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.5,  tpMultiplier: 4.0  },
+      C: { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
     };
 
     // Legacy letter → type name
@@ -86,11 +90,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     this._ablation = {
       seqCandidate: 0,   // bars with an FVG + mitigation (raw setup exists)
       rejByRejection: 0,
-      rejByObRetest: 0,  // Sprint 13: OB retest/mitigation required
+      rejByObRetest: 0,  // Sprint 13: OB retest/mitigation required (Scalp+Swing)
       seqSignal: 0,      // sequence produced a signal (passed rejection)
       rejByRegime: 0,    // rawA killed by HTF regime hard-block
       rejByChoch: 0,     // rawA killed by 5m CHoCH validation
       rejBySession: 0,   // Sprint 13: UTC session filter
+      rejByFunding: 0,   // Sprint 13 Swing: extreme funding premium
       rejByConf: 0,      // rawA killed by confidence floor
       passed: 0,         // survived ALL gates → a tradeable Scalping signal
     };
@@ -1009,9 +1014,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       }
 
       // Causal order guaranteed by construction: sweepIdx ≤ chochIdx ≤ dispIdx ≤ now.
+      const isBreakoutBar = lastIdx <= dispIdx;
+      const brokeThroughFvg = isLong ? cl > fvg.top * 1.001 : cl < fvg.bottom * 0.999;
       // ── Confidence score from the quality of each leg ──────────────────────
       const scored = this._scoreSequence(indicators, lastIdx, {
         isLong, fvg, dispIdx, chochIdx, sweepIdx, config, obConfluence,
+        _isBreakoutBar: isBreakoutBar,
+        _brokeThroughFvg: brokeThroughFvg,
       });
 
       return {
@@ -1024,9 +1033,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
           obDistanceAbs,
           confidenceComponents: scored.components,
           premiumDiscount: structState?.premiumDiscount ?? null,
-          // Stash for Scalping-only OB retest gate in detectSignalMulti
-          _isBreakoutBar: lastIdx <= dispIdx,
-          _brokeThroughFvg: isLong ? cl > fvg.top * 1.001 : cl < fvg.bottom * 0.999,
+          // Stash for Scalping/Swing OB retest gate in detectSignalMulti
+          _isBreakoutBar: isBreakoutBar,
+          _brokeThroughFvg: brokeThroughFvg,
         },
       };
     }
@@ -1042,27 +1051,26 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   _scoreSequence(indicators, lastIdx, ctx) {
     const { closes, highs, lows, volumes, volSMA } = indicators;
     const { isLong, fvg, dispIdx, chochIdx, sweepIdx } = ctx;
-    let score = 45;
+    let score = 40; // slightly lower base — quality bonuses must earn the rest
 
     // Sweep conviction: volume surge on the sweep bar
     const sVol = volumes[sweepIdx] ?? 0, sVSMA = volSMA[sweepIdx] ?? 1;
     const sweepVolRatio = sVSMA > 0 ? sVol / sVSMA : 1;
-    const sweepPts = Math.min(15, (sweepVolRatio - 1) * 15);
+    // Sprint 13 inverted-confidence fix: extreme sweep volume (>2.5×) often
+    // marks continuation stop-runs (high conf, low WR). Sweet-spot ~1.5×.
+    const sweepPts = sweetSpotPts(sweepVolRatio, {
+      peak: 1.5, inner: 0.35, outer: 1.8, maxPts: 14, floor: 2,
+    });
     score += sweepPts;
 
     // Displacement strength: range of the FVG-origin bar
     const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
 
-
-    // unreachable on low TFs — a 5m displacement is 0.2-0.5%, so Scalping's
-    // score ceiling sat at ~the min-confidence gate (3 trades / 180d) while 4h
-    // Swing routinely cleared it. sacScoreAtrNorm normalizes both bonuses by
-    // the entry TF's own ATR%, making "strong displacement" mean the same
-    // thing on every timeframe: 2×ATR displacement / 1×ATR gap = full bonus.
-    // Flag-gated for A/B: live configs don't set it, so live scoring is
-    // unchanged until this is validated in backtest.
+    // Sprint 13: ATR-normalize by default (was flag-gated). Absolute % inflated
+    // Swing 4h scores vs Scalping and rewarded chase bars. Opt-out: sacScoreAtrNorm=false.
+    const useAtrNorm = ctx.config?.sacScoreAtrNorm !== false;
     let atrPct = 0;
-    if (ctx.config?.sacScoreAtrNorm) {
+    if (useAtrNorm) {
       let trSum = 0, n = 0;
       for (let b = Math.max(1, lastIdx - 13); b <= lastIdx; b++) {
         const prevClose = closes[b - 1] ?? closes[b] ?? 0;
@@ -1077,36 +1085,45 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     }
 
     let dispPts = 0;
-    if (atrPct > 0) {
-      dispPts = Math.min(15, (dRange / atrPct) * 7.5);  // 2×ATR displacement → +15
+    const dispAtrMult = atrPct > 0 ? dRange / atrPct : dRange / 0.01;
+    if (useAtrNorm && atrPct > 0) {
+      // Peak ~1.8×ATR displacement; >3×ATR is chase → taper
+      dispPts = sweetSpotPts(dispAtrMult, {
+        peak: 1.8, inner: 0.6, outer: 2.5, maxPts: 14, floor: 1,
+      });
     } else {
-      dispPts = Math.min(15, dRange * 600); // ~2.5% range → +15
+      dispPts = Math.min(15, dRange * 600); // legacy absolute-% path
     }
     score += dispPts;
-
 
     // If the FVG-origin bar had below-average volume, the "displacement" may be noise.
     const dVol = volumes[dispIdx] ?? 0, dVSMA = volSMA[dispIdx] ?? 1;
     const dispVolRatio = dVSMA > 0 ? dVol / dVSMA : 1;
     if (dispVolRatio < 1.2) score -= 12; // penalise weak-volume displacement
 
-    // FVG size (bigger imbalance = stronger)
+    // FVG size — moderate imbalance preferred; huge gaps = volatile traps
     let fvgPts = 0;
-    if (atrPct > 0) {
-      fvgPts = Math.min(10, ((fvg.size || 0) / atrPct) * 10); // 1×ATR gap → +10
+    const fvgSize = fvg.size || 0;
+    const fvgAtrMult = atrPct > 0 ? fvgSize / atrPct : fvgSize / 0.005;
+    if (useAtrNorm && atrPct > 0) {
+      fvgPts = sweetSpotPts(fvgAtrMult, {
+        peak: 0.7, inner: 0.35, outer: 1.8, maxPts: 10, floor: 1,
+      });
     } else {
-      fvgPts = Math.min(10, (fvg.size || 0) * 1500); // 0.67% gap → +10
+      fvgPts = Math.min(10, fvgSize * 1500);
     }
     score += fvgPts;
 
-    // Mitigation depth: deeper into the zone = better entry
+    // Mitigation depth: deeper into the zone = better entry (NOT inverted).
+    // Prior bug class: breakout bars scored via huge disp/FVG with depth≈0 yet
+    // still cleared 75+ — now depth + OB carry more weight, extremes taper.
     const cl = closes[lastIdx];
     const depth = isLong
       ? (fvg.midpoint - cl) / Math.max(fvg.midpoint - fvg.bottom, 1e-9)
       : (cl - fvg.midpoint) / Math.max(fvg.top - fvg.midpoint, 1e-9);
-    const depthPts = Math.max(0, Math.min(15, depth * 15));
+    const depthClamped = Math.max(0, Math.min(1.2, depth));
+    const depthPts = Math.round(Math.min(18, depthClamped * 18)); // was ×15, now ×18
     score += depthPts;
-
 
     // Reward recent sweeps (≤20 bars = setup is still "alive"), penalise very old ones.
     const sweepAge = lastIdx - sweepIdx;
@@ -1114,10 +1131,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     else if (sweepAge <= 40) score += 3;   // acceptable
     else                     score -= 8;   // stale: risk of whipsaw
 
+    // OB confluence = institutional footprint (weighted up vs pre-fix +8)
+    const obPts = ctx.obConfluence ? 12 : 0;
+    if (ctx.obConfluence) score += 12;
 
-    // bias = institutional footprint confluence (pivot structure engine only).
-    const obPts = ctx.obConfluence ? 8 : 0;
-    if (ctx.obConfluence) score += 8;
+    // Breakout / slice-through entries: high raw structure score, poor WR —
+    // explicit penalty so race confidence stops preferring them.
+    if (ctx._isBreakoutBar || ctx._brokeThroughFvg) score -= 15;
 
     // HTF alignment is applied later as a soft −15 in detectSignalMulti; record
     // the provisional contribution here (0 until the gate runs). Callers may
@@ -1125,7 +1145,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const components = {
       sweepStrength: parseFloat(sweepVolRatio.toFixed(4)),
       sweepPts: Math.round(sweepPts),
-      fvgSize: parseFloat((fvg.size || 0).toFixed(6)),
+      fvgSize: parseFloat(fvgSize.toFixed(6)),
       fvgPts: Math.round(fvgPts),
       displacementPct: parseFloat((dRange * 100).toFixed(4)),
       dispPts: Math.round(dispPts),
@@ -1134,7 +1154,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       obConfluence: !!ctx.obConfluence,
       obPts,
       htfAlignment: 0, // filled in detectSignalMulti after HTF gate
-      scoreBase: 45,
+      scoreBase: 40,
+      atrNorm: useAtrNorm,
     };
 
     return {
@@ -1736,6 +1757,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     }
 
     const scalpGates = resolveScalpingGateFlags(config);
+    const swingGates = resolveSwingGateFlags(config);
 
     // Sprint 13: UTC session filter (default on for Scalping via typeOverrides).
     // Blocks new Scalping entries during 21–23 UTC (hours 21,22). Fail-open when
@@ -1756,11 +1778,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       }
     }
 
-    // Sprint 13: OB/FVG retest gate — Scalping only (does not starve Swing).
+    // Sprint 13: OB/FVG retest gate — Scalping + Swing (fast-fail reduction).
     // Reject breakout / slice-through bars. If a same-bias OB is nearby
     // (≤1.5×ATR via obDistanceAbs), require price inside it (true OB retest).
     // Distant or absent OBs: FVG mitigation alone is enough.
-    if (rawA && scalpGates.smcRequireObRetest) {
+    const applyObRetest = (raw, confKey) => {
       const seq = this._lastSequenceMeta;
       const atrNow = indicators.atr?.[lastIdx];
       const nearOb = seq?.obZone
@@ -1771,9 +1793,17 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       const failNearOb = nearOb && !seq.obConfluence;
       if (failBreakout || failNearOb) {
         this._abl("rejByObRetest");
-        rawA = null;
-        confA = 0;
+        return { raw: null, conf: 0 };
       }
+      return { raw, conf: confKey };
+    };
+    if (rawA && scalpGates.smcRequireObRetest) {
+      const r = applyObRetest(rawA, confA);
+      rawA = r.raw; confA = r.conf;
+    }
+    if (rawC && swingGates.smcRequireObRetest) {
+      const r = applyObRetest(rawC, confC);
+      rawC = r.raw; confC = r.conf;
     }
 
 

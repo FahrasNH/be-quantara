@@ -2788,7 +2788,7 @@ class BotEngine extends EventEmitter {
 
     const SmartMoneyConceptsStrategy = require("../domain/strategy/implementations/SmartMoneyConceptsStrategy");
     const afStrategy = new SmartMoneyConceptsStrategy();
-    const { resolveScalpingGateFlags, applySmcSideRegimeGate } = require("../domain/strategy/smc/smcScalpGates");
+    const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../domain/strategy/smc/smcScalpGates");
 
     // Map legacy letters → type names for typeOverrides lookup
     const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;
@@ -2806,6 +2806,27 @@ class BotEngine extends EventEmitter {
       if (!sideGate.allow) {
         this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${sideGate.reason}`);
         return;
+      }
+    }
+
+    // Sprint 13 Swing: funding premium guard
+    if (typeName === "Swing") {
+      const swingFlags = resolveSwingGateFlags({ ...this.config, ...typeOverride, typeOverrides: this.config.typeOverrides });
+      if (swingFlags.smcFundingGuard) {
+        const rate = indicatorSnapshot?.fundingRate
+          ?? indicators?.fundingRate?.[lastIdx]
+          ?? this.state.fundingRate
+          ?? null;
+        const fundGate = applySmcFundingGuard({
+          signal,
+          fundingRate: rate,
+          enabled: true,
+          maxAbsRate: swingFlags.smcMaxFundingRate,
+        });
+        if (!fundGate.allow) {
+          this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${fundGate.reason} (funding=${rate})`);
+          return;
+        }
       }
     }
 
@@ -3820,12 +3841,28 @@ class BotEngine extends EventEmitter {
       // ── SL+ milestone check (dry run) ─────────────────────────────────────
       await this._checkSLPlusMilestones(pos, price);
 
-      // Sprint 13: Scalping maxHoldHours TIME_STOP (live parity with backtest)
+      // Sprint 13: Scalping/Swing maxHoldHours TIME_STOP (live parity with backtest)
       const typeName = pos.tradeType
         || ({ A: "Scalping", B: "Intraday", C: "Swing" }[pos.componentId] || pos.componentId);
       const holdOv = this.config.typeOverrides?.[typeName] || {};
-      const maxHoldHours = holdOv.maxHoldHours ?? holdOv.scalpingMaxHoldHours
+      const maxHoldHours = holdOv.maxHoldHours ?? holdOv.scalpingMaxHoldHours ?? holdOv.swingMaxHoldHours
         ?? (typeName === "Scalping" ? this.config.maxHoldHours : null);
+
+      // Sprint 13 Swing: Telegram warn once when hold exceeds smcHoldWarnHours (default 168h)
+      if (typeName === "Swing" && !pos._holdWarnSent) {
+        const warnH = holdOv.smcHoldWarnHours ?? 168;
+        const openMsWarn = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+        if (Number.isFinite(openMsWarn) && (Date.now() - openMsWarn) > warnH * 3600 * 1000) {
+          pos._holdWarnSent = true;
+          this._log("warn",
+            `[HOLD_WARN] ${pos.side} ${this.config.symbol} Swing held >${warnH}h — consider review (funding drag)`
+          );
+          await this._notifyError(
+            `⚠️ Swing hold >${warnH}h: ${pos.side} ${this.config.symbol} entry=${pos.entry} since ${new Date(openMsWarn).toISOString()}`
+          );
+        }
+      }
+
       if (maxHoldHours) {
         const openMs = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
         if (Number.isFinite(openMs) && (Date.now() - openMs) > maxHoldHours * 3600 * 1000) {

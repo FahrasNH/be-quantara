@@ -714,8 +714,9 @@ const STRATEGIES = {
     winrate: "Target 52–60%",
     risk:    "Rendah-Sedang",
 
-    // Sprint 13 — Scalping typeOverrides (aligned with FE backtestStrategies).
-    // INTENTIONAL RR deviation from PRD 1:4.5 → live/backtest Planned RR = 2.0.
+    // Sprint 13 — Scalping + Swing typeOverrides (aligned with FE backtestStrategies).
+    // Scalping: INTENTIONAL RR deviation from PRD 1:4.5 → live/backtest Planned RR = 2.0.
+    // Swing: PRD aspirational 1.2/4.0 (RR≈3.33); INTENTIONAL fast-fail SSOT → SL 1.8 / TP 4.5 (RR 2.5).
     typeOverrides: {
       Scalping: {
         slAtrMult: 2.2,
@@ -730,6 +731,25 @@ const STRATEGIES = {
         scalpingChochValidate: true,
         makerEntry: true,
         makerFeeRate: 0.0002,
+      },
+      Swing: {
+        // Fast-fail: SL 1.2×ATR too thin vs BTC 4h wick noise → widen to 1.8×ATR.
+        // TP 4.5×ATR keeps Planned RR = 2.5 (breakeven WR 28.6%).
+        slAtrMult: 1.8,
+        tpAtrMult: 4.5,
+        maxHoldHours: 240,           // 10d TIME_STOP (was unbounded → 544h holds)
+        smcRequireObRetest: true,    // require FVG/OB retrace — cut premature entries
+        smcFundingGuard: true,
+        smcMaxFundingRate: 0.0002,   // 0.02% — skip extreme premium
+        smcHoldWarnHours: 168,       // Telegram warn after 7d
+        swingMarketingBlocked: true, // FOUNDRY/FORGE marketing gate until 2023 revalidated
+        makerEntry: true,
+        makerFeeRate: 0.0002,
+        sacPivotStructure: false,
+        sacPremiumDiscountGate: false,
+        sacFvgAutoThreshold: false,
+        sacHtfHardBlock: false,
+        sacSwingV3Gate: false,
       },
     },
   },

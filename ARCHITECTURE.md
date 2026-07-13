@@ -127,6 +127,16 @@ Helpers: `src/domain/strategy/smc/smcScalpGates.js`. CSV adds ML columns
 `marketCond` ≠ `dailyRegime` — both always exported (entry-TF bucket vs daily ADX-proxy).
 Dataset expand recipe: `scripts/smc-scalping-dataset-expand.js`.
 
+**Sprint 13 Swing SSOT** (`typeOverrides.Swing`): Planned RR **2.5** (SL 1.8×ATR / TP 4.5×ATR;
+intentional deviation from PRD aspirational 1.2/4.0 ≈ RR 3.33 — fast-fail: 38% of Swing
+trades died &lt;48h on thin 1.2×ATR stops). Also: `maxHoldHours=240` (10d TIME_STOP),
+`smcRequireObRetest`, `smcFundingGuard` (block |funding| &gt; 0.02%), `smcHoldWarnHours=168`
+(live Telegram warn), `swingMarketingBlocked=true` (FOUNDRY/FORGE marketing gate until
+2023 window revalidated after fast-fail fix). Confidence scoring uses ATR-normalized
+sweet-spot curves (fixes inverted conf→WR). Cost model meta on every BT result
+(`meta.costModel`) — Fee=0 only when `enableFees=false`. Dataset expand:
+`scripts/smc-swing-dataset-expand.js` (4h/1w, multi-symbol).
+
 ### 4.2 Key audit (AF-CONFIG-AUDIT)
 
 Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`,

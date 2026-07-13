@@ -34,8 +34,12 @@ const { riskShareForType } = require("../../domain/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../domain/dailyRegimeGate");
 const {
   resolveScalpingGateFlags,
+  resolveSwingGateFlags,
   buildSmcEntryFeatures,
   applySmcSideRegimeGate,
+  applySmcFundingGuard,
+  buildCostModelMeta,
+  holdHoursBetween,
 } = require("../../domain/strategy/smc/smcScalpGates");
 const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("./csv/strategyReasonFormatters");
@@ -592,6 +596,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const pnl = grossPnl - fee - funding;
     capital += pnl;
 
+    // Sprint 13 Fee=0 audit: if cost model is ON, never emit silent zero fees
+    // on a real-sized close (guards against makerRate/feeRate misconfig).
+    let feeOut = fee;
+    if (feeRate > 0 && closeSize > 0 && feeOut === 0) {
+      feeOut = feeRate * (position.entry + px) * closeSize;
+    }
+
     if (pnl < 0) {
       const compLoss = (componentConsecLoss.get(componentId) || 0) + 1;
       componentConsecLoss.set(componentId, compLoss);
@@ -606,6 +617,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const tradeTypeLabel = typeof strategy.getTradeTypeLabel === "function"
       ? strategy.getTradeTypeLabel(componentId)
       : componentId;
+
+    const holdHours = holdHoursBetween(openTs, closeTs);
 
     trades.push(withBacktestEntryContext({
       date: closeTime,
@@ -622,7 +635,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       tp: position.tp,
       size: closeSize,
       grossPnl,
-      fee,
+      fee: feeOut,
       funding,
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
@@ -643,10 +656,15 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       hourUtc: position.hourUtc ?? null,
       volumeRatio: position.volumeRatio ?? null,
       bbWidth: position.bbWidth ?? null,
+      fundingRateAtEntry: position.fundingRateAtEntry ?? null,
+      fundingForecast24h: position.fundingForecast24h ?? null,
+      holdHours,
       confSweepStrength: position.confSweepStrength ?? null,
       confFvgSize: position.confFvgSize ?? null,
       confDisplacementPct: position.confDisplacementPct ?? null,
       confHtfAlignment: position.confHtfAlignment ?? null,
+      confMitigationDepth: position.confMitigationDepth ?? null,
+      confObConfluence: position.confObConfluence ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
@@ -821,6 +839,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const scalpFlags = componentId === "Scalping"
         ? resolveScalpingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Scalping || {}) })
         : {};
+      const swingFlags = componentId === "Swing"
+        ? resolveSwingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Swing || {}) })
+        : {};
       const regimeResult = applyRegimeGate({
         signal,
         strategyKey,
@@ -840,6 +861,18 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
           enabled: scalpFlags.smcBlockLongInChop === true,
         });
         if (!sideGate.allow) continue;
+      }
+
+      // Sprint 13 Swing: skip entry on extreme perp funding premium
+      const fundingRateNow = cfg.fundingRate ?? indicators.fundingRate?.[i] ?? null;
+      if (componentId === "Swing" && swingFlags.smcFundingGuard) {
+        const fundGate = applySmcFundingGuard({
+          signal,
+          fundingRate: fundingRateNow,
+          enabled: true,
+          maxAbsRate: swingFlags.smcMaxFundingRate,
+        });
+        if (!fundGate.allow) continue;
       }
 
       // AF-SWING-V3: confidence/RVOL/ATR-tiered position size (SWING_ENGINE_V3.md
@@ -942,6 +975,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         price,
         timestamp: c.timestamp,
         htfAdx: indicators.adx?.[i] ?? null,
+        fundingRate: fundingRateNow,
       });
 
       // Open position
@@ -1041,6 +1075,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       higherTf: cfg.higherTf || null,
       feeRate: FEE_RATE_PER_SIDE,
       slippage: slip,
+      // Sprint 13 Fee=0 audit — every window documents cost-model assumptions
+      costModel: buildCostModelMeta({
+        enableFees: feeRate > 0,
+        feeRate: feeRate || FEE_RATE_PER_SIDE,
+        simulateFunding: cfg.simulateFunding !== false,
+        fundingRate8h: FUNDING_RATE_8H,
+      }),
     },
   };
 }
@@ -1948,6 +1989,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const pnl = grossPnl - fee - funding;
     capital += pnl;
 
+    let feeOut = fee;
+    if (feeRate > 0 && closeSize > 0 && feeOut === 0) {
+      feeOut = feeRate * (position.entry + px) * closeSize;
+    }
+
     if (pnl < 0) {
       consecLoss += 1;
       dailyLoss += Math.abs(pnl);
@@ -1957,6 +2003,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     const closeTime = isoOf(entryCandles[exitIdx]);
+    const holdHours = holdHoursBetween(openTs, closeTs);
     trades.push(withBacktestEntryContext({
       date: closeTime, // display field (FE trade table reads t.date) — close-bar date
       openTime: isoOf(entryCandles[position.openIdx]),
@@ -1971,7 +2018,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       tp: position.tp,
       size: closeSize,
       grossPnl,
-      fee,
+      fee: feeOut,
       funding,
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
@@ -1982,6 +2029,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       htfTrend: position.htfTrend ?? null,
       dailyRegime: position.dailyRegime ?? null,
       entryMeta: position.entryMeta ?? null,
+      holdHours,
+      fundingRateAtEntry: position.fundingRateAtEntry ?? null,
+      fundingForecast24h: position.fundingForecast24h ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
