@@ -156,12 +156,14 @@ test("resolveMdTakeProfit: fallback to BB middle when no FVG", () => {
 
 console.log("\n═══ MD-SUB-03: Pipeline integration ═══");
 
-test("TIER_COMPONENT_MAP MINT uses pipeline combination", () => {
+test("TIER_COMPONENT_MAP MINT/VAULT race pools (Sprint 10/11)", () => {
   const mint = TIER_COMPONENT_MAP.MINT;
-  assert.deepStrictEqual(mint.active, ["MD_MR"]);
-  assert.strictEqual(mint.combination.mode, "pipeline");
-  assert.ok(mint.combination.layers.includes("ADX_GATE"));
-  assert.ok(mint.combination.layers.includes("OB_FVG"));
+  assert.deepStrictEqual(mint.active, ["MD_MR", "MD_SD", "MD_SA"]);
+  assert.strictEqual(mint.combination.mode, "race");
+  assert.deepStrictEqual(mint.combination.participants, ["MD_MR", "MD_SD", "MD_SA"]);
+  const vault = TIER_COMPONENT_MAP.VAULT;
+  assert.deepStrictEqual(vault.active, ["BS_BR", "BS_ICT", "BS_LS"]);
+  assert.strictEqual(vault.combination.mode, "race");
 });
 
 function buildOversoldIndicators({ adxVal = 15 } = {}) {

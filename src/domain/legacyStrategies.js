@@ -755,8 +755,12 @@ STRATEGIES.AF_VSA = {
 STRATEGIES.TS_TF  = { ...STRATEGIES.TREND_FOLLOWING, name: "TS_TF",  label: "Trend Following",        signalType: "TS_TF" };
 STRATEGIES.TS_MS  = { ...STRATEGIES.TS_TF,           name: "TS_MS",  label: "Dow Theory",             signalType: "TS_TF" };
 STRATEGIES.TS_VP  = { ...STRATEGIES.TS_TF,           name: "TS_VP",  label: "Auction Market Theory",  signalType: "TS_TF" };
-STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_MR",  label: "Mean Reversion",         signalType: "MD_MR" };
-STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_BR",  label: "Breakout Retest",        signalType: "BS_BR" };
+STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_MR",  label: "Mean Reversion",              signalType: "MD_MR" };
+STRATEGIES.MD_SD  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_SD",  label: "Supply and Demand",           signalType: "MD_MR" };
+STRATEGIES.MD_SA  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_SA",  label: "Statistical Arbitrage",       signalType: "MD_MR" };
+STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_BR",  label: "Breakout Retest",             signalType: "BS_BR" };
+STRATEGIES.BS_ICT = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_ICT", label: "ICT-style trading",           signalType: "BS_BR" };
+STRATEGIES.BS_LS  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_LS",  label: "Liquidation/Squeeze Trading", signalType: "BS_BR" };
 
 function getStrategy(overrideKey = null) {
   const key = (overrideKey || "B").toUpperCase();

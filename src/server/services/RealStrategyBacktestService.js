@@ -55,8 +55,8 @@ function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
 // the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
 // silently failed for "MD_MR", making the MR gate exemption + regime filter dead
 // code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
-const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
-const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
+const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION", "MD_SD", "MD_SA"]);
+const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BS_ICT", "BS_LS"]);
 const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"]);
 const SMC_KEYS = new Set([
   "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
@@ -66,6 +66,64 @@ const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
 const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
 const isSmcKey = (k) => SMC_KEYS.has(String(k || "").toUpperCase());
+
+/**
+ * Resolve MD race participants from Advance selectedComponents.
+ */
+function resolveMdCombination(cfg = {}) {
+  const mode = String(cfg.mdCombinationMode || "race").toLowerCase();
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
+  const mdComps = Array.isArray(comps)
+    ? comps.filter((c) =>
+      ["MD_MR", "MEAN_REVERSION", "MD_SD", "MD_SA", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"].includes(
+        String(c).toUpperCase()
+      )
+    )
+    : [];
+  const upper = mdComps.map((c) => String(c).toUpperCase());
+  const selectedComponents = upper.length
+    ? upper.map((c) => {
+      if (c === "MEAN_REVERSION") return "MD_MR";
+      if (c === "SUPPLY_AND_DEMAND") return "MD_SD";
+      if (c === "STATISTICAL_ARBITRAGE") return "MD_SA";
+      return c;
+    })
+    : null;
+  return {
+    mdCombinationMode: mode === "layering" || mode === "pipeline" ? "pipeline" : mode,
+    selectedComponents,
+    mdActiveRacers: selectedComponents || cfg.mdActiveRacers || null,
+  };
+}
+
+/**
+ * Resolve BS race participants from Advance selectedComponents.
+ */
+function resolveBsCombination(cfg = {}) {
+  const mode = String(cfg.bsCombinationMode || "race").toLowerCase();
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
+  const bsComps = Array.isArray(comps)
+    ? comps.filter((c) =>
+      ["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BS_ICT", "BS_LS", "ICT", "LIQUIDATION_SQUEEZE"].includes(
+        String(c).toUpperCase()
+      )
+    )
+    : [];
+  const upper = bsComps.map((c) => String(c).toUpperCase());
+  const selectedComponents = upper.length
+    ? upper.map((c) => {
+      if (c === "BREAKOUT_RETEST" || c === "BREAKOUT_TRADING") return "BS_BR";
+      if (c === "ICT") return "BS_ICT";
+      if (c === "LIQUIDATION_SQUEEZE") return "BS_LS";
+      return c;
+    })
+    : null;
+  return {
+    bsCombinationMode: mode === "single" || mode === "pipeline" ? "single" : mode,
+    selectedComponents,
+    bsActiveRacers: selectedComponents || cfg.bsActiveRacers || null,
+  };
+}
 
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
@@ -221,6 +279,14 @@ function resolveStrategyDisplayName(strategyKey, cfg = {}) {
       );
       if (isTs && tsMode === "race") return `Trend Surge race (${labels.join(", ")})`;
       if (isAf && afMode === "race") return `Adaptive Fusion race (${labels.join(", ")})`;
+      const mdMode = String(cfg.mdCombinationMode || "race").toLowerCase();
+      const bsMode = String(cfg.bsCombinationMode || "race").toLowerCase();
+      const isMd = comps.some((c) => String(c).startsWith("MD_") || c === "MEAN_REVERSION");
+      const isBs = comps.some((c) =>
+        String(c).startsWith("BS_") || ["BREAKOUT_RETEST", "BREAKOUT_TRADING"].includes(String(c))
+      );
+      if (isMd && mdMode === "race") return `Mean Drift race (${labels.join(", ")})`;
+      if (isBs && bsMode === "race") return `Breakout Storm race (${labels.join(", ")})`;
       return labels.join(" + ");
     }
   }
@@ -1516,10 +1582,21 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const tsUseStructureGate = tsCombo.tsUseStructureGate;
   const tsUseVwapPrecision = tsCombo.tsUseVwapPrecision;
   const tsSelectedComponents = tsCombo.selectedComponents || cfg.selectedComponents;
+  const mdCombo = resolveMdCombination(cfg);
+  const bsCombo = resolveBsCombination(cfg);
+  const mdSelectedComponents = mdCombo.selectedComponents || cfg.selectedComponents;
+  const bsSelectedComponents = bsCombo.selectedComponents || cfg.selectedComponents;
+  const raceSelected =
+    (isTFKey(strategyKey) && tsSelectedComponents)
+    || (isMRKey(strategyKey) && mdSelectedComponents)
+    || (isBRKey(strategyKey) && bsSelectedComponents)
+    || cfg.selectedComponents;
   const strategyDisplayName = resolveStrategyDisplayName(strategyKey, {
     ...cfg,
-    selectedComponents: tsSelectedComponents,
+    selectedComponents: raceSelected,
     tsCombinationMode,
+    mdCombinationMode: mdCombo.mdCombinationMode,
+    bsCombinationMode: bsCombo.bsCombinationMode,
   });
 
   // TrendSurge/TF is a process singleton — reset directional state between runs
@@ -2016,8 +2093,18 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       marketStructure: cfg.marketStructure,
       volumeProfile: cfg.volumeProfile,
       vwapAtrMult: cfg.vwapAtrMult,
-      selectedComponents: tsSelectedComponents || cfg.selectedComponents,
+      selectedComponents: raceSelected || cfg.selectedComponents,
+      tsActiveRacers: tsCombo.selectedComponents || cfg.tsActiveRacers,
+      mdCombinationMode: mdCombo.mdCombinationMode,
+      mdActiveRacers: mdCombo.mdActiveRacers || cfg.mdActiveRacers,
+      bsCombinationMode: bsCombo.bsCombinationMode,
+      bsActiveRacers: bsCombo.bsActiveRacers || cfg.bsActiveRacers,
       afEnabledComponents: cfg.afEnabledComponents || cfg.selectedComponents,
+      // BS_LS optional exchange overlays (fail-open when absent)
+      funding: cfg.funding ?? indicators.funding?.[i] ?? null,
+      fundingRate: cfg.fundingRate ?? indicators.fundingRate?.[i] ?? null,
+      oiHistory: cfg.oiHistory || indicators.oiHistory || null,
+      timestamps: indicators.timestamps,
 
       // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
       // is a server-startup SINGLETON (new TrendSurgeUmbrella(), no per-request
@@ -2481,5 +2568,7 @@ module.exports = {
   _applyRagGate,
   resolveTsCombination,
   resolveTsLayerFlags,
+  resolveMdCombination,
+  resolveBsCombination,
   resolveTradeDisplayName,
 };

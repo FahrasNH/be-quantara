@@ -21,6 +21,10 @@ assert.equal(catalog.aliases.ADAPTIVE_FUSION, "AF_SMC");
 assert.equal(catalog.aliases.TREND_FOLLOWING, "TS_TF");
 assert.ok(catalog.components.some((c) => c.key === "AF_WYCKOFF" && c.label === "Wyckoff Method"));
 assert.ok(catalog.components.some((c) => c.key === "TS_MS" && c.label === "Dow Theory"));
+assert.ok(catalog.components.some((c) => c.key === "MD_SD" && c.label === "Supply and Demand"));
+assert.ok(catalog.components.some((c) => c.key === "MD_SA" && c.label === "Statistical Arbitrage"));
+assert.ok(catalog.components.some((c) => c.key === "BS_ICT" && c.label === "ICT-style trading"));
+assert.ok(catalog.components.some((c) => c.key === "BS_LS" && c.label === "Liquidation/Squeeze Trading"));
 
 assert.equal(normalizeStrategyKey("ADAPTIVE_FUSION"), "AF_SMC");
 assert.equal(normalizeStrategyKey("SAC"), "AF_SMC");

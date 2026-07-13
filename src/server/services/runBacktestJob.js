@@ -31,6 +31,8 @@ const MULTI_TYPE_STRATEGY_MAP = {
   TS_VP: ["Intraday", "Swing"],
   MD_MR: ["Scalping", "Intraday"],
   MEAN_REVERSION: ["Scalping", "Intraday"],
+  MD_SD: ["Scalping", "Intraday"],
+  MD_SA: ["Scalping", "Intraday"],
 };
 
 const TYPE_MAX_PERIOD = {
@@ -188,6 +190,21 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
         && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
       parameters.selectedComponents = [strategyKey];
       parameters.tsActiveRacers = [strategyKey];
+    }
+  }
+  // Standalone MD / BS racers (FE collapse MD_SD/MD_SA → MD_MR, BS_ICT/BS_LS → BS_BR).
+  if (strategyKey === "MD_SD" || strategyKey === "MD_SA") {
+    if (!parameters.mdActiveRacers
+        && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
+      parameters.selectedComponents = [strategyKey];
+      parameters.mdActiveRacers = [strategyKey];
+    }
+  }
+  if (strategyKey === "BS_ICT" || strategyKey === "BS_LS") {
+    if (!parameters.bsActiveRacers
+        && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
+      parameters.selectedComponents = [strategyKey];
+      parameters.bsActiveRacers = [strategyKey];
     }
   }
   return parameters;

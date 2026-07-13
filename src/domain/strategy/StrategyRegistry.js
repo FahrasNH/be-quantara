@@ -5,6 +5,8 @@
  * Canonical engine keys : AF_SMC · TS_TF · MD_MR · BS_BR
  * Component aliases     : AF_WYCKOFF / AF_VSA → AF umbrella instance
  *                         TS_MS / TS_VP → TS umbrella instance
+ *                         MD_SD / MD_SA → MD umbrella instance
+ *                         BS_ICT / BS_LS → BS umbrella instance
  * Legacy aliases        : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SMC
  *                         TREND_FOLLOWING → TS_TF
  *                         MEAN_REVERSION → MD_MR
@@ -58,7 +60,11 @@ class StrategyRegistry {
     this.strategies.set("TS_MS",               ts);
     this.strategies.set("TS_VP",               ts);
     this.strategies.set("MEAN_REVERSION",       md);
+    this.strategies.set("MD_SD",                md);
+    this.strategies.set("MD_SA",                md);
     this.strategies.set("BREAKOUT_RETEST",      bs);
+    this.strategies.set("BS_ICT",               bs);
+    this.strategies.set("BS_LS",                bs);
 
     this.defaultKey = "AF_SMC";
   }

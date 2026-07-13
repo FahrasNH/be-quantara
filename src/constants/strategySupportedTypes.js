@@ -18,7 +18,11 @@ const STRATEGY_SUPPORTED_TYPES = {
   // AMT Swing uses UTC-week session (4h day-session cannot clear min bars) — see volumeProfileComponent
   TS_VP: ["Intraday", "Swing"],
   MD_MR: ["Scalping", "Intraday"],         // Swing not applicable (mean reversion short-term only)
+  MD_SD: ["Scalping", "Intraday"],
+  MD_SA: ["Scalping", "Intraday"],
   BS_BR: ["Scalping", "Intraday", "Swing"], // Breakout works on all timeframes
+  BS_ICT: ["Scalping", "Intraday", "Swing"],
+  BS_LS: ["Scalping", "Intraday", "Swing"],
 };
 
 /**

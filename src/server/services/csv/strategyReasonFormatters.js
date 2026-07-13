@@ -8,8 +8,8 @@
  *
  *   Adaptive Fusion (FOUNDRY): AF_SMC | AF_WYCKOFF | AF_VSA
  *   Trend Surge     (FORGE):   TS_TF  | TS_MS      | TS_VP
- *   Mean Drift      (MINT):    MD_MR
- *   Breakout Storm  (VAULT):   BS_BR
+ *   Mean Drift      (MINT):    MD_MR  | MD_SD      | MD_SA
+ *   Breakout Storm  (VAULT):   BS_BR  | BS_ICT     | BS_LS
  *
  * Legacy aliases (SMART_MONEY_CONCEPTS → AF_SMC, etc.) are normalised below.
  *
@@ -332,6 +332,83 @@ function formatBreakoutReasons(meta) {
   return reasons.join(", ");
 }
 
+// ─── 9. MD_SD ────────────────────────────────────────────────────────────────
+
+function formatSupplyDemandReasons(meta) {
+  if (!meta) return "";
+  const labels = [];
+  const zt = meta.zoneType || "";
+  if (/demand/i.test(zt) || /demand/i.test(meta.reason || "")) labels.push("Demand Zone Retest");
+  if (/supply/i.test(zt) || /supply/i.test(meta.reason || "")) labels.push("Supply Zone Retest");
+  if (/fvg/i.test(zt) || /fvg/i.test(meta.reason || "")) labels.push("FVG Imbalance");
+  if (/ob/i.test(zt) || /order.?block/i.test(meta.reason || "")) labels.push("Order Block");
+  if (labels.length === 0 && (meta.winningComponent === "MD_SD" || meta.component === "MD_SD")) {
+    return "Supply and Demand Retest";
+  }
+  return labels.join(", ");
+}
+
+// ─── 10. MD_SA ───────────────────────────────────────────────────────────────
+
+function formatStatisticalArbitrageReasons(meta) {
+  if (!meta) return "";
+  const labels = ["Statistical Arbitrage v1"];
+  if (meta.zScore != null && Number.isFinite(meta.zScore)) {
+    labels.push(`Z-Score ${Number(meta.zScore).toFixed(2)}`);
+  }
+  if (meta.saMode) labels.push(titleCaseSnake(meta.saMode));
+  if (labels.length === 1 && meta.reason) {
+    return `${labels[0]}, ${titleCaseSnake(meta.reason)}`;
+  }
+  return labels.join(", ");
+}
+
+// ─── 11. BS_ICT ──────────────────────────────────────────────────────────────
+
+function formatIctStyleReasons(meta) {
+  if (!meta) return "";
+  const labels = [];
+  if (meta.killZone?.active || /kz|kill_zone|london|ny_open/i.test(meta.reason || "")) {
+    labels.push("Kill Zone");
+    if (meta.killZone?.zone) labels.push(titleCaseSnake(meta.killZone.zone));
+  }
+  if (meta.raid?.detected || /raid/i.test(meta.reason || "")) {
+    labels.push("Liquidity Raid");
+    if (meta.raid?.direction === "LONG" || /raid_low/i.test(meta.reason || "")) {
+      labels.push("Raid Low → Long");
+    } else if (meta.raid?.direction === "SHORT" || /raid_high/i.test(meta.reason || "")) {
+      labels.push("Raid High → Short");
+    }
+  }
+  if (labels.length === 0 && (meta.winningComponent === "BS_ICT" || meta.component === "BS_ICT")) {
+    return "ICT Kill Zone, Liquidity Raid";
+  }
+  return labels.join(", ");
+}
+
+// ─── 12. BS_LS ───────────────────────────────────────────────────────────────
+
+function formatLiquidationSqueezeReasons(meta) {
+  if (!meta) return "";
+  const labels = [];
+  if (meta.wick?.detected || /liquidation_wick|ls_/i.test(meta.reason || "")) {
+    labels.push("Liquidation Wick");
+  }
+  if (meta.funding != null && Number.isFinite(meta.funding)) {
+    labels.push("Funding Extreme");
+  }
+  if (meta.oiChange != null && Number.isFinite(meta.oiChange)) {
+    labels.push("OI Change");
+  }
+  if (meta.dataAvailable === false) {
+    labels.push("OI/Funding Unavailable (Fail-Open)");
+  }
+  if (labels.length === 0 && (meta.winningComponent === "BS_LS" || meta.component === "BS_LS")) {
+    return "Liquidation/Squeeze Signal";
+  }
+  return labels.join(", ");
+}
+
 /**
  * Dispatch to the per-strategy formatter using winningComponent / strategyKey.
  * @param {string} strategyKey
@@ -344,6 +421,8 @@ function resolveEntryReasons(strategyKey, meta) {
     meta?.component ||
     meta?.afRace?.winningComponent ||
     meta?.tsRace?.winningComponent ||
+    meta?.mdRace?.winningComponent ||
+    meta?.bsRace?.winningComponent ||
     null;
   const key = normalizeStrategyKey(fromMeta || strategyKey);
 
@@ -362,16 +441,27 @@ function resolveEntryReasons(strategyKey, meta) {
       return formatVolumeProfileReasons(meta);
     case "MD_MR":
       return formatMeanReversionReasons(meta);
+    case "MD_SD":
+      return formatSupplyDemandReasons(meta);
+    case "MD_SA":
+      return formatStatisticalArbitrageReasons(meta);
     case "BS_BR":
       return formatBreakoutReasons(meta);
+    case "BS_ICT":
+      return formatIctStyleReasons(meta);
+    case "BS_LS":
+      return formatLiquidationSqueezeReasons(meta);
     default:
-      // Umbrella-only key without winning component — try nested clues.
       if (meta?.sequenceMeta) return formatSmcReasons(meta);
       if (meta?.reason && VP_REASON_MAP[meta.reason]) return formatVolumeProfileReasons(meta);
       if (meta?.reason && String(meta.reason).includes("|")) return formatMeanReversionReasons(meta);
       if (meta?.reason && String(meta.reason).startsWith("vsa_")) return formatVsaReasons(meta);
       if (meta?.reason && String(meta.reason).startsWith("wyckoff_")) return formatWyckoffReasons(meta);
       if (meta?.reason && String(meta.reason).startsWith("dow_")) return formatMarketStructureReasons(meta);
+      if (meta?.reason && String(meta.reason).startsWith("sd_")) return formatSupplyDemandReasons(meta);
+      if (meta?.reason && String(meta.reason).startsWith("sa_")) return formatStatisticalArbitrageReasons(meta);
+      if (meta?.reason && String(meta.reason).startsWith("ict_")) return formatIctStyleReasons(meta);
+      if (meta?.reason && String(meta.reason).startsWith("ls_")) return formatLiquidationSqueezeReasons(meta);
       return "";
   }
 }
@@ -387,6 +477,10 @@ module.exports = {
   formatVolumeProfileReasons,
   formatMeanReversionReasons,
   formatBreakoutReasons,
+  formatSupplyDemandReasons,
+  formatStatisticalArbitrageReasons,
+  formatIctStyleReasons,
+  formatLiquidationSqueezeReasons,
   normalizeStrategyKey,
   EXIT_REASON_LABELS,
 };

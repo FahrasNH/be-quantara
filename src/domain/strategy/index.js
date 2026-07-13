@@ -16,7 +16,11 @@ const TrendFollowingStrategy     = require("./implementations/TrendFollowingStra
 const MarketStructureStrategy    = require("./implementations/MarketStructureStrategy");
 const VolumeProfileStrategy      = require("./implementations/VolumeProfileStrategy");
 const MeanReversionStrategy      = require("./implementations/MeanReversionStrategy");
+const SupplyDemandStrategy       = require("./implementations/SupplyDemandStrategy");
+const StatisticalArbitrageStrategy = require("./implementations/StatisticalArbitrageStrategy");
 const BreakoutTradingStrategy    = require("./implementations/BreakoutTradingStrategy");
+const IctStyleStrategy           = require("./implementations/IctStyleStrategy");
+const LiquidationSqueezeStrategy = require("./implementations/LiquidationSqueezeStrategy");
 const GrokAiTradingStrategy      = require("./implementations/GrokAiTradingStrategy");
 
 // Umbrella wrappers
@@ -41,7 +45,11 @@ module.exports = {
   MarketStructureStrategy,
   VolumeProfileStrategy,
   MeanReversionStrategy,
+  SupplyDemandStrategy,
+  StatisticalArbitrageStrategy,
   BreakoutTradingStrategy,
+  IctStyleStrategy,
+  LiquidationSqueezeStrategy,
   GrokAiTradingStrategy,
 
   // Umbrella wrappers

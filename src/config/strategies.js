@@ -9,8 +9,8 @@
  * ─── Canonical live component keys ───────────────────────────────────────────
  *   AF_SMC · AF_WYCKOFF · AF_VSA   (FOUNDRY — Adaptive Fusion pool)
  *   TS_TF  · TS_MS     · TS_VP    (FORGE  — Trend Surge pool)
- *   MD_MR                          (MINT)
- *   BS_BR                          (VAULT)
+ *   MD_MR  · MD_SD     · MD_SA    (MINT  — Mean Drift pool)
+ *   BS_BR  · BS_ICT    · BS_LS    (VAULT — Breakout Storm pool)
  *
  * ─── Legacy aliases (migrate → canonical; do NOT add new top-level presets) ──
  *   ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS / SAC → AF_SMC
@@ -56,16 +56,16 @@ const COMPONENT_STRATEGIES = {
   TS_EW:  "TS_EW",    // Elliott Wave           ⏳ Future
   TS_PA:  "TS_PA",    // Price Action           ⏳ Future
 
-  // MEAN_DRIFT — MINT Tier (single live key; A→B→C layers inside MD_MR)
-  //   A: BB+RSI mean reversion · B: ADX regime gate · C: OB/FVG precision
-  MD_MR:  "MD_MR",    // Mean Reversion (layered) ✅ LIVE
-  MD_BB:  "MD_BB",    // Bollinger Bands          ⏳ Future
-  MD_RD:  "MD_RD",    // RSI Divergence           ⏳ Future
+  // MEAN_DRIFT — MINT Tier (Sprint 10: race-to-confirm)
+  //   ADX Trend Strength Filter remains overlay inside MD_MR (not a racer)
+  MD_MR:  "MD_MR",    // Mean Reversion           ✅ LIVE (racer)
+  MD_SD:  "MD_SD",    // Supply and Demand        ✅ LIVE (racer — Sprint 10)
+  MD_SA:  "MD_SA",    // Statistical Arbitrage    ✅ LIVE (racer — Sprint 10)
 
-  // BREAKOUT_STORM — VAULT Tier
-  BS_BR:  "BS_BR",    // Breakout Retest        ✅ LIVE
-  BS_VS:  "BS_VS",    // Volatility Spike       ⏳ Future
-  BS_LB:  "BS_LB",    // Level Breakout         ⏳ Future
+  // BREAKOUT_STORM — VAULT Tier (Sprint 11: race-to-confirm)
+  BS_BR:  "BS_BR",    // Breakout Retest              ✅ LIVE (racer)
+  BS_ICT: "BS_ICT",   // ICT-style trading            ✅ LIVE (racer — Sprint 11)
+  BS_LS:  "BS_LS",    // Liquidation/Squeeze Trading  ✅ LIVE (racer — Sprint 11)
 };
 
 /**
@@ -107,7 +107,11 @@ const STRATEGY_ABBREV = {
   TS_MS:                "TS",
   TS_VP:                "TS",
   MD_MR:                "MD",
+  MD_SD:                "MD",
+  MD_SA:                "MD",
   BS_BR:                "BS",
+  BS_ICT:               "BS",
+  BS_LS:                "BS",
   GROK_AI_TRADING:      "GA",
   // Legacy backward compat
   ADAPTIVE_FUSION:      "AF",
@@ -134,13 +138,17 @@ const TIER_COMPONENT_MAP = {
     combination: { mode: "race", participants: ["TS_TF", "TS_MS", "TS_VP"] },
   },
   MINT: {
-    active: ["MD_MR"],
+    active: ["MD_MR", "MD_SD", "MD_SA"],
     umbrella: "MEAN_DRIFT",
     abbrev: "MD",
-    // Layered pipeline inside MD_MR (not a race pool — see MeanReversionStrategy).
-    combination: { mode: "pipeline", layers: ["BB_RSI", "ADX_GATE", "OB_FVG"] },
+    combination: { mode: "race", participants: ["MD_MR", "MD_SD", "MD_SA"] },
   },
-  VAULT:   { active: ["BS_BR"],  umbrella: "BREAKOUT_STORM",  abbrev: "BS" },
+  VAULT: {
+    active: ["BS_BR", "BS_ICT", "BS_LS"],
+    umbrella: "BREAKOUT_STORM",
+    abbrev: "BS",
+    combination: { mode: "race", participants: ["BS_BR", "BS_ICT", "BS_LS"] },
+  },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -170,7 +178,8 @@ function isActiveComponent(key) {
   const liveKeys = [
     "AF_SMC", "AF_WYCKOFF", "AF_VSA",
     "TS_TF", "TS_MS", "TS_VP",
-    "MD_MR", "BS_BR",
+    "MD_MR", "MD_SD", "MD_SA",
+    "BS_BR", "BS_ICT", "BS_LS",
     "GROK_AI_TRADING", // experimental — see EXPERIMENTAL_STRATEGIES
   ];
   return liveKeys.includes(key);
@@ -192,15 +201,20 @@ const STRATEGY_CATALOG = {
   TS_TF:      { label: "Trend Following",          umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "engine",    status: "production", tier: "FORGE" },
   TS_MS:      { label: "Dow Theory",               umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
   TS_VP:      { label: "Auction Market Theory",    umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
-  MD_MR:      { label: "Mean Reversion",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
-  BS_BR:      { label: "Breakout Retest",          umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: "production", tier: "VAULT" },
+  MD_MR:      { label: "Mean Reversion",              umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
+  MD_SD:      { label: "Supply and Demand",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
+  MD_SA:      { label: "Statistical Arbitrage",       umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
+  BS_BR:      { label: "Breakout Retest",             umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: "production", tier: "VAULT" },
+  BS_ICT:     { label: "ICT-style trading",           umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
+  BS_LS:      { label: "Liquidation/Squeeze Trading", umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
 };
 
 const CANONICAL_ENGINE_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
 const LIVE_COMPONENT_KEYS = [
   "AF_SMC", "AF_WYCKOFF", "AF_VSA",
   "TS_TF", "TS_MS", "TS_VP",
-  "MD_MR", "BS_BR",
+  "MD_MR", "MD_SD", "MD_SA",
+  "BS_BR", "BS_ICT", "BS_LS",
 ];
 
 /**
