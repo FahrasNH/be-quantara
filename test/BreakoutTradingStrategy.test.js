@@ -61,30 +61,35 @@ describe("BreakoutTradingStrategy", () => {
       assert.strictEqual(res.widthPct, null, "widthPct should be null");
     });
 
-    it("should detect a squeeze when volatility contracts", () => {
-      // Wide swings early (high BB width), then a flat tail (contracted width).
-      // Need deeper contraction to clear Sprint 14 threshold 0.75×.
-      const wide = [];
-      for (let i = 0; i < 25; i++) wide.push(100 + (i % 2 === 0 ? 12 : -12)); // ±12 zig-zag
-      const flat = new Array(15).fill(100.05); // near-flat → width collapses hard
-      const closes = [...wide, ...flat];
+    it("should detect a healthy-width range (volatility floor passes)", () => {
+      // Moderate expansion: width stays above minBbWidthPct (0.0076)
+      const closes = [];
+      for (let i = 0; i < 40; i++) {
+        closes.push(100 + Math.sin(i / 3) * 2.5); // ~5% peak-peak swings → healthy BB
+      }
+      const atr = 0.4; // 0.4% of ~100
+      const res = strategy.checkConsolidation(closes, atr, 100);
 
-      const res = strategy.checkConsolidation(closes);
-
-      assert.strictEqual(res.squeeze, true, "Contracted tail should register as squeeze");
-      assert(res.widthPct < res.avgPriorWidthPct, "Current width below prior average");
+      assert.strictEqual(res.volatilityOk, true, "Healthy width + ATR should pass volatility floor");
+      assert.ok(res.widthPct != null && res.widthPct >= 0.0076, "widthPct should clear minBbWidthPct");
     });
 
-    it("should NOT detect a squeeze when volatility is expanding", () => {
-      // Flat early (tight width), then widening swings (expanding width).
-      const flat = new Array(20).fill(100);
-      const widening = [];
-      for (let i = 0; i < 12; i++) widening.push(100 + (i % 2 === 0 ? i : -i)); // growing ±
-      const closes = [...flat, ...widening];
+    it("should reject dry / super-tight BB width (v2.6 reverse gate)", () => {
+      // Near-flat closes → BB width collapses below 0.0076
+      const closes = new Array(40).fill(100.01);
+      closes[39] = 100.02;
+      const atr = 0.5;
+      const res = strategy.checkConsolidation(closes, atr, 100);
 
-      const res = strategy.checkConsolidation(closes);
+      assert.strictEqual(res.volatilityOk, false, "Super-tight BB should fail volatility floor");
+    });
 
-      assert.strictEqual(res.squeeze, false, "Expanding width should NOT be a squeeze");
+    it("should reject low ATR% even with adequate BB width", () => {
+      const closes = [];
+      for (let i = 0; i < 40; i++) closes.push(100 + Math.sin(i / 3) * 2.5);
+      const atr = 0.1; // 0.1% of price — below minAtrPct 0.25
+      const res = strategy.checkConsolidation(closes, atr, 100);
+      assert.strictEqual(res.volatilityOk, false, "ATR% below floor should fail");
     });
   });
 
@@ -303,13 +308,29 @@ describe("BreakoutTradingStrategy", () => {
       assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
-    it("should expose Bollinger Band Width squeeze settings (v2.5)", () => {
+    it("should expose Bollinger volatility-floor settings (v2.6)", () => {
       assert.strictEqual(strategy.config.bbPeriod, 20, "BB period 20");
       assert.strictEqual(strategy.config.bbStdDev, 2.0, "BB std dev 2.0");
-      assert.strictEqual(strategy.config.squeezeThreshold, 0.75, "Sprint 14 tighter squeeze");
+      assert.strictEqual(strategy.config.minBbWidthPct, 0.0076, "Sprint 14 QA reverse: min BB width");
+      assert.strictEqual(strategy.config.minAtrPct, 0.25, "Sprint 14 QA reverse: min ATR%");
       assert.strictEqual(strategy.config.volumeMultiplier, 1.5, "Sprint 14 volume gate");
-      assert.strictEqual(strategy.config.minRetestBars, 2, "Sprint 14 min retest wait");
-      assert.strictEqual(strategy.config.requireConsolidation, true, "Consolidation gate on by default");
+      assert.strictEqual(strategy.config.maxVolumeRatio, 3.55, "Exhaustion volume cap");
+      assert.strictEqual(strategy.config.minRetestBars, 16, "Sprint 14 QA: ≥4h wait @15m");
+      assert.strictEqual(strategy.config.retestWindow, 96, "Sprint 14 QA: 24h retest window");
+      assert.strictEqual(strategy.config.preferredTpMode, "full", "Prefer full TP for RR integrity");
+      assert.strictEqual(strategy.config.slPlusPartial1Pct, 0.33, "Partial first take capped at 33%");
+      assert.strictEqual(strategy.config.requireConsolidation, true, "Volatility floor on by default");
+    });
+
+    it("should use structure SL when retest extreme is tighter than ATR stop", () => {
+      const riskCfg = strategy.calculateRiskConfig(106.5, 2, "LONG", {
+        breakoutLevel: 105,
+        retestExtreme: 104.8,
+      });
+      // Structure: 104.8 - 0.4 = 104.4; ATR stop: 106.5 - 3.4 = 103.1
+      // Structure dist = 2.1 (≥0.6×ATR=1.2 and ≤ATR stop dist 3.4) → prefer 104.4
+      assert.strictEqual(riskCfg.stopLoss, 104.4, "Should prefer structure SL inside ATR stop");
+      assert.ok(riskCfg.riskReward > 1.88, "Tighter SL improves realized RR vs planned 1.88");
     });
 
     it("should allow config updates", () => {
@@ -353,11 +374,11 @@ describe("BreakoutTradingStrategy", () => {
 // ── Test Summary ───────────────────────────────────────────────────────
 console.log("\n✅ BreakoutTradingStrategy Unit Tests");
 console.log("   - Level detection: 3 tests");
-console.log("   - Consolidation (BB Width squeeze): 3 tests");
+console.log("   - Consolidation / volatility floor: 4 tests");
 console.log("   - Breakout detection: 5 tests");
-console.log("   - Retest entry: 3 tests");
+console.log("   - Retest entry: 4 tests");
 console.log("   - Risk configuration: 3 tests");
 console.log("   - LONG & SHORT handling: 3 tests");
-console.log("   - Configuration: 3 tests");
+console.log("   - Configuration: 4 tests");
 console.log("   - Entry validation: 4 tests");
-console.log("   Total: 27 tests\n");
+console.log("   Total: 30 tests\n");

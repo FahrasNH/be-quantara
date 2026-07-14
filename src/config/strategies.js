@@ -71,7 +71,8 @@ const COMPONENT_STRATEGIES = {
 /**
  * Sprint 14: BS_BR Halt — realized backtest WR 37.1% / PF 0.72 across 5 windows
  * (n=267). Keep ICT + LS in the VAULT race; do NOT re-enable BS_BR until the
- * 5-window re-test gate clears (see Notion Sprint 14).
+ * 5-window re-test gate clears AFTER v2.6 entry-retest + volatility-floor fixes
+ * (see Notion Sprint 14: ≥4/5 window PF>1, WR≥45%, hold-time matches PRD).
  * Override per-run via config.bsBrHalted === false (backtest validation only).
  */
 const BS_BR_HALTED = true;

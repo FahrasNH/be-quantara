@@ -9,7 +9,7 @@ const { createExchangeClient, getExchangeInfo } = require("../infrastructure/exc
 const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../infrastructure/exchange/candleFetch");
 const { isRateLimitError } = require("../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA, calcADX } = require("../domain/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getBreakoutRetestMeta, getBreakoutRetestInstance, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA, calcADX } = require("../domain/indicators");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../domain/signalIdempotency");
 const { meanReversionRegimeFilter } = require("../domain/htfRegimeFilter");
@@ -1537,14 +1537,26 @@ class BotEngine extends EventEmitter {
                   );
                 }
               } else if (this.config.signalType === "BREAKOUT_RETEST") {
-                const BreakoutTradingStrategy = require("../domain/strategy/implementations/BreakoutTradingStrategy");
-                const brInstance = new BreakoutTradingStrategy();
-                const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal);
+                const brInstance = getBreakoutRetestInstance();
+                const brMeta = getBreakoutRetestMeta() || {};
+                const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal, {
+                  breakoutLevel: brMeta.breakoutLevel,
+                  retestExtreme: brMeta.retestExtreme,
+                });
                 signalOptions.slDist = riskCfg.slDistance;
                 signalOptions.tpDist = riskCfg.tpDistance;
+                // RR slippage: default full TP; if user force-partial, cap first take to 33%
+                signalOptions.tpMode = riskCfg.preferredTpMode || this.config.tpMode || "full";
+                if (signalOptions.tpMode === "partial") {
+                  signalOptions.slPlusPartial1Pct = riskCfg.slPlusPartial1Pct ?? 0.33;
+                }
                 indicatorSnapshot.entryMode = "breakout_retest";
+                indicatorSnapshot.breakoutLevel = brMeta.breakoutLevel ?? null;
+                indicatorSnapshot.retestExtreme = brMeta.retestExtreme ?? null;
+                indicatorSnapshot.barsSinceBreakout = brMeta.barsSinceBreakout ?? null;
                 this._log("info",
-                  `[BR] RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}`
+                  `[BR] RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}` +
+                  ` | wait ${brMeta.barsSinceBreakout ?? "?"} bars | tpMode ${signalOptions.tpMode}`
                 );
               }
 

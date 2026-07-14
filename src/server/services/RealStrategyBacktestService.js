@@ -1895,16 +1895,12 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrGateBlock: 0, validateBlock: 0, opened: 0,
   };
 
-  // ── SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones) ──
-  // Backtest previously had NO partial-TP implementation at all — every trade closed
-  // 100% at SL/TP regardless of tpMode, so "Partial + Trailing" mode was silently a
-  // no-op in backtest (not 1:1 with live, where this is the actual live behavior when
-  // tpMode="partial"). Uses candle high/low (favorable-side extreme) to detect
-  // milestone touches within the bar, same intrabar-check pattern as the SL/TP hit
-  // logic below.
+  // SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones).
+  // BS_BR Sprint 14 QA: prefer full TP; if partial forced, first take ≤33%.
+  const brPartialCap = isBRKey(strategyKey);
   const tpModeCfg = cfg.tpMode ?? "full";
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
-  const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
+  const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? (brPartialCap ? 0.33 : 0.40);
   const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
   // Ladder trigger R-multiples, per-leg tunable via typeOverrides (cfg here is
   // the per-type merged config). Mirrors the multi-position engine — the knob
@@ -2397,6 +2393,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
         slMultiplier: slMult,
         tpMultiplier: tpMult,
+        breakoutLevel: meta.breakoutLevel,
+        retestExtreme: meta.retestExtreme,
       });
       slDist = rc.slDistance * pairSlMult;
       tpDist = rc.tpDistance * pairSlMult;

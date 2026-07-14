@@ -815,6 +815,11 @@ function getBreakoutRetestInstance() {
   return _breakoutRetestInstance;
 }
 
+/** Last BS_BR / BREAKOUT_RETEST signal meta (for structure SL / enrichment). */
+function getBreakoutRetestMeta() {
+  return _breakoutRetestInstance ? _breakoutRetestInstance.getLastSignalMeta() : null;
+}
+
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
   const signalType = config.signalType || "PDF_DAYTRADING";
 
@@ -1048,6 +1053,8 @@ module.exports = {
   detectSignalPdfSwing,
   detectSignalLegacy,
   getAdaptiveFusionMeta,
+  getBreakoutRetestMeta,
+  getBreakoutRetestInstance,
   getTrendFollowingInstance,
   getMeanReversionInstance,
   calcPositionSize,
