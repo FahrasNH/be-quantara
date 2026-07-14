@@ -259,7 +259,7 @@ Backtest: FE `COMPONENT_TO_ENGINE` maps `MD_SD`/`MD_SA` → `MD_MR` engine run w
 
 | Slot | Key | Catalog label | Role | Implementation |
 |------|-----|---------------|------|----------------|
-| A | `BS_BR` | Breakout Retest | Independent racer | `BreakoutTradingStrategy` v2.4 |
+| A | `BS_BR` | Breakout Trading | Independent racer | `BreakoutTradingStrategy` v2.4 |
 | B | `BS_ICT` | ICT-style trading | Independent racer | `IctStyleStrategy` (kill zones, raids) |
 | C | `BS_LS` | Liquidation/Squeeze Trading | Independent racer | `LiquidationSqueezeStrategy` |
 
@@ -269,11 +269,44 @@ Backtest: FE `COMPONENT_TO_ENGINE` maps `MD_SD`/`MD_SA` → `MD_MR` engine run w
 - Active racers (from Advance `selectedComponents` / `bsActiveRacers`, default all three).
 - Same-bar winner = highest confidence; ties break `BS_BR` → `BS_ICT` → `BS_LS`.
 - Trade attribution = winning component only.
-- Rollback: `bsCombinationMode: "single"` → BS_BR-only (legacy Breakout Retest path).
+- Rollback: `bsCombinationMode: "single"` → BS_BR-only (dedicated Breakout Trading backtest path).
 
-**BS_BR (Breakout Retest):** BB-width squeeze → breakout + volume confirm → retest entry
-(Consolidation Gate v2.4). **BS_ICT:** ICT-style kill-zone / liquidity raid entries.
-**BS_LS:** liquidation wick + squeeze detection; optional OI/funding overlays (fail-open).
+**BS_BR (Breakout Trading — PDF name):** BB-width squeeze → breakout + volume confirm → retest entry
+(Consolidation Gate v2.4). **Sprint 14:** halted from live/tier package; Advance backtest-only.
+**BS_ICT:** ICT-style kill-zone / liquidity raid entries (PDF subset).
+**BS_LS:** liquidation wick + squeeze detection; OI/funding overlays when available (fail-open).
+
+### 7.2 Trading Strategy Recap.pdf alignment
+
+**SSOT:** `src/config/strategyRecapCatalog.js` (merged into `STRATEGY_CATALOG` via `getStrategyCatalog()`).
+
+Tier colors in PDF map to package unlock: **Foundry** (green) · **Forge** (purple) · **Mint** (yellow) · **Vault** (red).
+13 uncolored PDF methods are **out of scope** (not implemented this sprint).
+
+| Key | PDF method | Recap status | Known gap vs PDF |
+|-----|------------|--------------|------------------|
+| `AF_SMC` | Smart Money Concepts | Partial | OI/CVD partial; runtime Scalping+Swing only (Intraday dropped AF-SCALP-19) |
+| `AF_WYCKOFF` | Wyckoff | Partial | Runtime adds Scalping; PDF Intraday+Swing |
+| `AF_VSA` | VSA | Partial | Same trade-type drift as AF umbrella |
+| `TS_TF` | Trend Following | Implemented | — |
+| `TS_MS` | Dow Theory | Partial | Position leg not supported |
+| `TS_VP` | Auction Market Theory | Partial | Market Profile partial; Swing wired on 4h |
+| `MD_MR` | Mean Reversion | Implemented | ADX/OB overlays are internal, not separate catalog methods |
+| `MD_SD` | Supply and Demand | Partial | OB/FVG zones vs classic base-rally schematic |
+| `MD_SA` | Statistical Arbitrage | Partial | v1 z-score/residual ≠ PDF cointegration/pairs (roadmap) |
+| `BS_BR` | Breakout Trading | Partial | Retest gate + **live halted**; backtest-only |
+| `BS_ICT` | ICT-style | Partial | Kill-zone/raid subset vs full OTE/MSS |
+| `BS_LS` | Liquidation/Squeeze | Partial | Proxy wick+OI/funding; no true liq feed/DOM |
+
+**Intentional PDF trade-type drifts** (runtime = `STRATEGY_SUPPORTED_TYPES`):
+
+| Keys | PDF | Runtime | Reason |
+|------|-----|---------|--------|
+| `AF_*` | Scalping, Intraday, Swing (SMC) / Intrad+Swing (Wyckoff/VSA) | Scalping, Swing | AF-SCALP-19: 5m Intraday fragility |
+| `TS_MS` | Swing, Position | Intraday, Swing | Position routing not implemented |
+| `TS_VP` | Intraday | Intraday, Swing | 4h UTC-week Swing session |
+| `MD_SD`, `MD_SA` | Intraday, Swing (SA also Algo) | Scalping, Intraday | v1 SA single-symbol; SD short-horizon focus |
+| `BS_BR` | Scalping→Swing | Scalping, Intraday, Swing | All types in backtest; live halted |
 
 ---
 

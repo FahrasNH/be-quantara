@@ -14,8 +14,8 @@ class IctStyleStrategy extends StrategyBase {
       name: "BS_ICT",
       label: "ICT-style trading",
       description:
-        "BS race participant: Kill Zone UTC timing + liquidity raid reversal " +
-        "(raid HIGH→SHORT, raid LOW→LONG).",
+        "BS race participant (PDF ICT): Kill Zone UTC + liquidity raid reversal " +
+        "(raid HIGH→SHORT, raid LOW→LONG); OTE/MSS subset.",
       version: "1.0.0",
       enabled: true,
       ...config,

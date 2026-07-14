@@ -18,7 +18,7 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       name: "BS_LS",
       label: "Liquidation/Squeeze Trading",
       description:
-        "BS race participant: liquidation/squeeze awareness via wick displacement " +
+        "BS race participant (PDF Liquidation/Squeeze): wick displacement proxy " +
         "+ OI change / funding extremes (fail-open when OI/funding unavailable).",
       version: "1.0.0",
       enabled: true,

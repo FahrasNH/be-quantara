@@ -2,7 +2,7 @@
  * BreakoutStormUmbrella.js — VAULT Tier umbrella strategy
  *
  * Umbrella key : BS_BR (tier access bag — not a fusion mechanism)
- * Components   : BS_BR (Breakout Retest) · BS_ICT (ICT-style) · BS_LS (Liquidation/Squeeze)
+ * Components   : BS_BR (Breakout Trading) · BS_ICT (ICT-style) · BS_LS (Liquidation/Squeeze)
  *
  * Sprint 11: race-to-confirm among independent racers.
  * Rollback: set `bsCombinationMode: "single"` to run BS_BR only.
@@ -16,7 +16,7 @@ const { BS_BR_HALTED } = require("../../../config/strategies");
 
 const RACER_PRIORITY = ["BS_BR", "BS_ICT", "BS_LS"];
 const RACER_LABELS = {
-  BS_BR: "Breakout Retest",
+  BS_BR: "Breakout Trading",
   BS_ICT: "ICT-style trading",
   BS_LS: "Liquidation/Squeeze Trading",
 };
@@ -33,7 +33,7 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
       name: "BS_BR",
       label: "Breakout Storm",
       description:
-        "VAULT umbrella (tier access): Breakout Retest, ICT-style trading, and Liquidation/Squeeze race independently — highest confirmation wins.",
+        "VAULT umbrella (tier access): Breakout Trading, ICT-style trading, and Liquidation/Squeeze race independently — highest confirmation wins.",
       version: "3.0.0",
       enabled: true,
       votingThreshold: 0.70,

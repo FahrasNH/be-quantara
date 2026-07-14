@@ -396,7 +396,7 @@ Live/backtest SSOT is `typeOverrides` in FE `backtestStrategies.js` + BE `legacy
 |-------|-----|---------------|------|
 | Mean Reversion | `MD_MR` | Mean Reversion | BB + RSI + VWAP reversion; **ADX overlay internal** |
 | Supply and Demand | `MD_SD` | Supply and Demand | Zone OB retest entries |
-| Statistical Arbitrage | `MD_SA` | Statistical Arbitrage | Z-score / rolling-mean reversion |
+| Statistical Arbitrage | `MD_SA` | Statistical Arbitrage | v1 z-score / rolling-mean reversion (PDF cointegration/pairs — roadmap) |
 
 - Tie-break: `MD_MR` → `MD_SD` → `MD_SA`
 - ADX regime gate lives **inside MD_MR only** — not a selectable racer (Sprint 10 naming lock)
@@ -404,6 +404,29 @@ Live/backtest SSOT is `typeOverrides` in FE `backtestStrategies.js` + BE `legacy
 - Ultra-konservatif pada MR path: risk ~0.8–1%, leverage 1×, max ~3 trade/hari
 
 **Status:** Production-ready (Sprint 10 race pool)
+
+### 8.0 Trading Strategy Recap.pdf — catalog alignment
+
+Reference: `Trading Strategy Recap.pdf` (tier colors: Foundry green · Forge purple · Mint yellow · Vault red).
+
+SSOT: `src/config/strategyRecapCatalog.js` + FE mirror `strategyRecapCatalog.js`.
+
+| Key | PDF method | Implemented | Notes |
+|-----|------------|-------------|-------|
+| `AF_SMC` | Smart Money Concepts | Partial | OI/CVD partial; Intraday intentionally omitted (AF-SCALP-19) |
+| `AF_WYCKOFF` | Wyckoff | Partial | Runtime Scalping+Swing |
+| `AF_VSA` | VSA | Partial | Runtime Scalping+Swing |
+| `TS_TF` | Trend Following | Yes | — |
+| `TS_MS` | Dow Theory | Partial | Position not supported |
+| `TS_VP` | Auction Market Theory | Partial | Market Profile partial |
+| `MD_MR` | Mean Reversion | Yes | — |
+| `MD_SD` | Supply and Demand | Partial | Zone-based vs classic schematic |
+| `MD_SA` | Statistical Arbitrage | Partial | v1 z-score only |
+| `BS_BR` | Breakout Trading | Partial | Retest gate; live halted |
+| `BS_ICT` | ICT-style | Partial | Kill-zone subset |
+| `BS_LS` | Liquidation/Squeeze | Partial | OI/funding proxy |
+
+13 other PDF methods (Order Flow, Grid, Momentum, …) are **Future** — not in Gen2 race pools.
 
 ---
 
@@ -413,7 +436,7 @@ Live/backtest SSOT is `typeOverrides` in FE `backtestStrategies.js` + BE `legacy
 
 | Racer | Key | Catalog label | Role |
 |-------|-----|---------------|------|
-| Breakout Retest | `BS_BR` | Breakout Retest | BB squeeze → breakout → retest (`BreakoutTradingStrategy` v2.4) |
+| Breakout Trading | `BS_BR` | Breakout Trading | BB squeeze → breakout → retest (`BreakoutTradingStrategy` v2.4); **live halted** — backtest-only |
 | ICT-style | `BS_ICT` | ICT-style trading | Kill zones, liquidity raids |
 | Liquidation/Squeeze | `BS_LS` | Liquidation/Squeeze Trading | Liquidation wick + squeeze; optional OI/funding |
 

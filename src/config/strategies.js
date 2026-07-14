@@ -1,3 +1,8 @@
+const {
+  STRATEGY_RECAP_CATALOG,
+  LIVE_RECAP_KEYS,
+} = require("./strategyRecapCatalog");
+
 /**
  * Quantara Strategy Configuration
  * Version: 2.1.0
@@ -233,7 +238,7 @@ function isLegacyAlias(key) {
 }
 
 /** Display metadata for live engines + race components (UI / filter catalog). */
-const STRATEGY_CATALOG = {
+const STRATEGY_CATALOG_BASE = {
   AF_SMC:     { label: "Smart Money Concepts",     umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "engine",    status: "production", tier: "FOUNDRY" },
   AF_WYCKOFF: { label: "Wyckoff Method",           umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
   AF_VSA:     { label: "Volume Spread Analysis",   umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
@@ -243,10 +248,29 @@ const STRATEGY_CATALOG = {
   MD_MR:      { label: "Mean Reversion",              umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
   MD_SD:      { label: "Supply and Demand",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
   MD_SA:      { label: "Statistical Arbitrage",       umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
-  BS_BR:      { label: "Breakout Retest",             umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: BS_BR_HALTED ? "halted" : "production", tier: "VAULT" },
+  BS_BR:      { label: "Breakout Trading",            umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: BS_BR_HALTED ? "halted" : "production", tier: "VAULT" },
   BS_ICT:     { label: "ICT-style trading",           umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
   BS_LS:      { label: "Liquidation/Squeeze Trading", umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
 };
+
+/** Merge Trading Strategy Recap.pdf Konsep/Indicator/trade-type SSOT into catalog rows. */
+const STRATEGY_CATALOG = Object.fromEntries(
+  LIVE_RECAP_KEYS.map((key) => {
+    const base = STRATEGY_CATALOG_BASE[key];
+    const recap = STRATEGY_RECAP_CATALOG[key] || {};
+    return [key, {
+      ...base,
+      pdfName: recap.pdfName || base.label,
+      concept: recap.concept || null,
+      indicators: recap.indicators || null,
+      pdfTradeType: recap.pdfTradeType || null,
+      runtimeTradeTypes: recap.runtimeTradeTypes || null,
+      recapStatus: recap.recapStatus || null,
+      recapNotes: recap.recapNotes || null,
+      description: recap.concept || base.label,
+    }];
+  })
+);
 
 const CANONICAL_ENGINE_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
 const LIVE_COMPONENT_KEYS = [
@@ -296,6 +320,8 @@ module.exports = {
   STRATEGY_ABBREV,
   TIER_COMPONENT_MAP,
   STRATEGY_CATALOG,
+  STRATEGY_RECAP_CATALOG,
+  LIVE_RECAP_KEYS,
   CANONICAL_ENGINE_KEYS,
   LIVE_COMPONENT_KEYS,
   BS_BR_HALTED,

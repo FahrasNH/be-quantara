@@ -18,7 +18,7 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       label: "Statistical Arbitrage",
       description:
         "MD race participant: Statistical Arbitrage v1 — z-score mean reversion " +
-        "vs rolling mean / optional BTC residual (single-symbol pipeline).",
+        "vs rolling mean / optional BTC residual (PDF cointegration/pairs — roadmap).",
       version: "1.0.0",
       enabled: true,
       ...config,
