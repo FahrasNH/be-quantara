@@ -29,6 +29,7 @@ if command -v psql >/dev/null 2>&1; then
     || sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';"
   sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
   sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL ON SCHEMA public TO ${DB_USER};" 2>/dev/null || true
+  sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
   echo "    DB user: ${DB_USER}"
   echo "    DB pass: ${DB_PASS}  (simpan — dipakai di .env)"
 else
