@@ -83,6 +83,18 @@ curl -sf https://dev.quantara.software/api/v1/health
 
 Login page should load at `https://dev.quantara.software`.
 
+### Migration P3009 / P3018 (fresh DB)
+
+If bootstrap fails on `20260610140000_add_trade_export_fields` (`relation "trades" does not exist`):
+
+```bash
+cd /opt/quantara-dev/be
+git pull origin development
+bash scripts/prisma-migrate-deploy.sh
+```
+
+Or re-run bootstrap after pull: `./deploy-development.sh --bootstrap-be --be-only` (requires `git pull` on VPS first).
+
 ---
 
 ## Deploy from local machine

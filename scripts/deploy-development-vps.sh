@@ -34,7 +34,7 @@ bash scripts/ensure-allowed-exchanges.sh .env
 
 npm ci --legacy-peer-deps 2>/dev/null || npm install --legacy-peer-deps
 
-npx prisma migrate deploy
+bash scripts/prisma-migrate-deploy.sh
 
 node --check index.js
 node --check src/server/app.js

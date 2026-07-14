@@ -81,11 +81,7 @@ fi
 bash scripts/ensure-allowed-exchanges.sh .env 2>/dev/null || true
 
 echo "==> prisma migrate deploy..."
-npx prisma migrate deploy || {
-  echo "⚠️  migrate deploy failed — recovering stuck payment migration (P3018)..."
-  npx prisma migrate resolve --rolled-back 20260625120000_add_payment_voucher_system || true
-  npx prisma migrate deploy
-}
+bash scripts/prisma-migrate-deploy.sh
 
 node --check index.js
 node --check ecosystem.config.js
