@@ -12,6 +12,7 @@
 const HistoricalKlinesService = require("./HistoricalKlinesService");
 const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest } = require("./RealStrategyBacktestService");
 const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../constants/strategySupportedTypes");
+const { applyDedicatedBsBrBacktestConfig } = require("../../config/strategies");
 
 const AF_SMC_KEYS = new Set([
   "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
@@ -207,7 +208,7 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
       parameters.bsActiveRacers = [strategyKey];
     }
   }
-  return parameters;
+  return applyDedicatedBsBrBacktestConfig(parameters);
 }
 
 async function runBacktestJob(job, userId, opts) {

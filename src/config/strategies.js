@@ -85,6 +85,23 @@ function isBsBrHaltedKey(key) {
   return BS_BR_HALT_ALIASES.has(String(key || "").toUpperCase());
 }
 
+const BS_BR_ONLY_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BR"]);
+
+/** Dedicated BS_BR backtest — true BR engine, ignore live halt (strategyGuard still blocks live). */
+function applyDedicatedBsBrBacktestConfig(cfg = {}) {
+  const comps = cfg.selectedComponents || cfg.bsActiveRacers || [];
+  const bsOnly = Array.isArray(comps) && comps.length > 0
+    && comps.every((c) => BS_BR_ONLY_KEYS.has(String(c || "").toUpperCase()));
+  if (!bsOnly) return cfg;
+  return {
+    ...cfg,
+    bsCombinationMode: "single",
+    bsBrHalted: false,
+    selectedComponents: ["BS_BR"],
+    bsActiveRacers: ["BS_BR"],
+  };
+}
+
 /**
  * Experimental / bonus keys — registered in StrategyRegistry but NOT part of
  * umbrella race pools or TIER_COMPONENT_MAP.active.
@@ -288,5 +305,6 @@ module.exports = {
   isActiveComponent,
   isLegacyAlias,
   isBsBrHaltedKey,
+  applyDedicatedBsBrBacktestConfig,
   getStrategyCatalog,
 };

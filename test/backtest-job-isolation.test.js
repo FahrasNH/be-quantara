@@ -270,6 +270,17 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(feCollapse.activeTypes, undefined);
   });
 
+  await test("BS_BR dedicated backtest uses single mode and ignores live halt", () => {
+    const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
+    const out = applyStrategyJobDefaults("BS_BR", { selectedComponents: ["BS_BR"] });
+    assert.strictEqual(out.bsCombinationMode, "single");
+    assert.strictEqual(out.bsBrHalted, false);
+    assert.deepStrictEqual(out.bsActiveRacers, ["BS_BR"]);
+    const raceOnly = applyStrategyJobDefaults("BS_BR", { selectedComponents: ["BS_ICT", "BS_LS"] });
+    assert.strictEqual(raceOnly.bsCombinationMode, undefined);
+    assert.strictEqual(raceOnly.bsBrHalted, undefined);
+  });
+
   await test("worker crash path marks job failed without throwing in parent", async () => {
     // Simulate worker exit failure via cancel+fail semantics on a fresh job object.
     const jobId = BacktestJobService.createJob("u2", {
