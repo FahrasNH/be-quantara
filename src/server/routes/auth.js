@@ -1,5 +1,5 @@
 const AuthService = require('../../services/AuthService');
-const { sendPasswordReset, sendEmailVerification } = require('../../services/EmailService');
+const { isEmailConfigured, sendPasswordReset, sendEmailVerification } = require('../../services/EmailService');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { authMiddleware } = require('../../middleware/auth');
 const {
@@ -52,16 +52,27 @@ module.exports = function createAuthRoutes() {
           req.headers['user-agent']
         );
 
-        // Send verification email (best-effort — don't fail registration if SMTP is down)
-        const verifyUrl = `${cfg.APP_URL}/verify-email?token=${user.emailVerificationToken}`;
-        sendEmailVerification(user.email, verifyUrl).catch((emailErr) => {
-          console.error('[Register] Gagal kirim email verifikasi:', emailErr.message);
-        });
+        // Send verification email — registration succeeds even if SMTP fails
+        let verificationEmailSent = false;
+        if (isEmailConfigured()) {
+          const verifyUrl = `${cfg.APP_URL}/verify-email?token=${user.emailVerificationToken}`;
+          try {
+            await sendEmailVerification(user.email, verifyUrl);
+            verificationEmailSent = true;
+          } catch (emailErr) {
+            console.error('[Register] Gagal kirim email verifikasi:', emailErr.message);
+          }
+        } else {
+          console.warn('[Register] EMAIL_* tidak dikonfigurasi — email verifikasi tidak dikirim');
+        }
 
         res.status(201).json({
           ok: true,
           requiresVerification: true,
-          message: 'Registrasi berhasil! Cek email kamu dan klik link verifikasi sebelum login.',
+          verificationEmailSent,
+          message: verificationEmailSent
+            ? 'Registrasi berhasil! Cek email kamu dan klik link verifikasi sebelum login.'
+            : 'Registrasi berhasil, tapi email verifikasi gagal dikirim. Coba kirim ulang dari halaman verifikasi.',
         });
       } catch (err) {
         // Return validation errors with proper format
@@ -159,9 +170,15 @@ module.exports = function createAuthRoutes() {
         const result = await AuthService.regenerateVerificationToken(email);
         if (result) {
           const verifyUrl = `${cfg.APP_URL}/verify-email?token=${result.token}`;
-          sendEmailVerification(result.email, verifyUrl).catch((e) => {
-            console.error('[ResendVerif] Gagal kirim email:', e.message);
-          });
+          if (isEmailConfigured()) {
+            try {
+              await sendEmailVerification(result.email, verifyUrl);
+            } catch (e) {
+              console.error('[ResendVerif] Gagal kirim email:', e.message);
+            }
+          } else {
+            console.warn('[ResendVerif] EMAIL_* tidak dikonfigurasi — email tidak dikirim');
+          }
         }
         // Always return 200 — don't reveal if email exists
         res.json({

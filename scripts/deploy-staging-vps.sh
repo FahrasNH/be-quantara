@@ -23,7 +23,7 @@ echo "    PM2 app: ${PM2_APP}"
 echo "    Branch:  ${GIT_BRANCH}"
 
 if [[ ! -f .env ]]; then
-  echo "ERROR: .env tidak ditemukan. Jalankan scripts/setup-staging-vps.sh atau salin .env.staging.example → .env"
+  echo "ERROR: .env tidak ditemukan. Salin .env.staging.example → .env lalu isi secrets."
   exit 1
 fi
 

@@ -45,6 +45,17 @@ const createParametersRouter   = require("./routes/parameters");
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
 
+const { isEmailConfigured } = require("../services/EmailService");
+if (!isEmailConfigured()) {
+  console.warn(
+    "[startup] EMAIL_* belum dikonfigurasi — email verifikasi & reset password tidak akan terkirim."
+  );
+} else if (cfg.APP_URL === "http://localhost:5173") {
+  console.warn(
+    "[startup] APP_URL masih default localhost — link di email verifikasi/reset akan salah. Set APP_URL ke domain frontend."
+  );
+}
+
 // ── Feature flags ─────────────────────────────────────────────────────────
 // MULTI_STRATEGY_ENABLED: default ON; disable lewat env MULTI_STRATEGY_ENABLED=false.
 const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";

@@ -3,10 +3,14 @@ const cfg = require('../config/env.js');
 
 let _transporter = null;
 
+function isEmailConfigured() {
+  return !!(cfg.EMAIL_HOST && cfg.EMAIL_USER && cfg.EMAIL_PASS);
+}
+
 function getTransporter() {
   if (_transporter) return _transporter;
 
-  if (!cfg.EMAIL_HOST || !cfg.EMAIL_USER || !cfg.EMAIL_PASS) {
+  if (!isEmailConfigured()) {
     throw new Error(
       'Email service not configured. Set EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS in .env'
     );
@@ -171,4 +175,4 @@ async function sendSubscriptionActivated(toEmail, info) {
   });
 }
 
-module.exports = { sendPasswordReset, sendEmailVerification, sendSubscriptionActivated };
+module.exports = { isEmailConfigured, sendPasswordReset, sendEmailVerification, sendSubscriptionActivated };

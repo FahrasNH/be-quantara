@@ -158,6 +158,13 @@ const cfg = {
     return m ? m[1] : "";
   },
 
+  /** True when DATABASE_URL clearly points at a non-production DB name. */
+  isNonProductionDbName(name) {
+    if (!name) return false;
+    // Word-boundary style: match _staging/_dev/_test as segments, not "development".
+    return /(?:^|_)(?:staging|dev|test)(?:$|_)/i.test(name);
+  },
+
   /**
    * Validasi env wajib sebelum server start. Di production, fail-fast jika ada
    * secret yang kosong atau masih memakai nilai placeholder default.
@@ -214,7 +221,7 @@ const cfg = {
       // sengaja dengan ALLOW_DB_ENV_MISMATCH=1 jika memang satu DB dipakai bersama.
       if (
         process.env.ALLOW_DB_ENV_MISMATCH !== "1" &&
-        /staging|dev|test/i.test(this.dbName)
+        this.isNonProductionDbName(this.dbName)
       ) {
         errors.push(
           `NODE_ENV=production tapi DATABASE_URL menunjuk database "${this.dbName}" ` +
