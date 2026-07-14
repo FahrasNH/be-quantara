@@ -305,6 +305,8 @@ describe("BreakoutTradingStrategy", () => {
       assert.strictEqual(strategy.config.riskPerTrade, 0.02, "v2.3: Risk should be 2%");
       assert.strictEqual(strategy.config.slMultiplier, 1.7, "v2.4: SL should be 1.7x ATR");
       assert.strictEqual(strategy.config.tpMultiplier, 3.2, "v2.4: TP should be 3.2x ATR → RR ~1:1.9");
+      assert.strictEqual(strategy.config.minSlAtrFloor, 1.5, "Sprint 14 P0.1-REVISI: SL floor 1.5×ATR");
+      assert.strictEqual(strategy.config.maxPlannedRR, 2.5, "Sprint 14 P0.6: planned R:R hard cap 2.5");
       assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
@@ -348,15 +350,52 @@ describe("BreakoutTradingStrategy", () => {
       );
     });
 
-    it("should use structure SL when retest extreme is tighter than ATR stop", () => {
+    it("P0.1-REVISI: structure must NOT tighten SL inside the wide ATR stop", () => {
       const riskCfg = strategy.calculateRiskConfig(106.5, 2, "LONG", {
         breakoutLevel: 105,
         retestExtreme: 104.8,
       });
-      // Structure: 104.8 - 0.4 = 104.4; ATR stop: 106.5 - 3.4 = 103.1
-      // Structure dist = 2.1 (≥0.6×ATR=1.2 and ≤ATR stop dist 3.4) → prefer 104.4
-      assert.strictEqual(riskCfg.stopLoss, 104.4, "Should prefer structure SL inside ATR stop");
-      assert.ok(riskCfg.riskReward > 1.88, "Tighter SL improves realized RR vs planned 1.88");
+      // Structure would be 104.8 - 0.4 = 104.4 (dist 2.1×) — TIGHTER than the wide
+      // ATR stop 106.5 - 3.4 = 103.1 (1.7×ATR). The old code snapped to the tight
+      // 104.4; the revision keeps the wide 1.7×ATR stop so noise wicks can't clip it.
+      assert.strictEqual(riskCfg.stopLoss, 103.1, "Should keep the wide 1.7×ATR stop, not the tight structure stop");
+      assert.ok(Math.abs(riskCfg.slDistance - 3.4) < 1e-6, "SL distance = 1.7×ATR = 3.4");
+      assert.ok(riskCfg.slDistance >= 2 * 1.5, "SL distance must be ≥ 1.5×ATR floor");
+    });
+
+    it("P0.1-REVISI: structure WIDER than the ATR stop is allowed to widen SL", () => {
+      // retestExtreme far below entry → structure stop sits beyond the 1.7×ATR stop.
+      const riskCfg = strategy.calculateRiskConfig(110, 2, "LONG", {
+        retestExtreme: 105, // structure = 105 - 0.4 = 104.6, dist 5.4 > ATR stop dist 3.4
+      });
+      assert.strictEqual(riskCfg.stopLoss, 104.6, "Wider structure stop should widen the SL");
+      assert.ok(riskCfg.slDistance > 3.4, "Widened SL distance exceeds the 1.7×ATR baseline");
+    });
+
+    it("P0.1-REVISI: SL never tighter than the 1.5×ATR floor", () => {
+      const riskCfg = strategy.calculateRiskConfig(100, 2, "LONG");
+      assert.ok(riskCfg.slDistance >= 2 * 1.5, "Floor guarantees ≥1.5×ATR");
+      assert.ok(Math.abs(riskCfg.slDistance - 3.4) < 1e-6, "Default SL = 1.7×ATR = 3.4 (≥ floor)");
+    });
+
+    it("P0.6: planned R:R is hard-capped at 2.5 even for a far structural target", () => {
+      // A very distant target would imply RR ≫ 2.5; the cap clamps TP to 2.5×SL.
+      const riskCfg = strategy.calculateRiskConfig(100, 2, "LONG", { structuralTarget: 200 });
+      assert.ok(riskCfg.riskReward <= 2.5, `RR ${riskCfg.riskReward} must be ≤ 2.5`);
+      // SL = 1.7×ATR = 3.4 → TP dist capped at 3.4 × 2.5 = 8.5 → TP = 108.5
+      assert.strictEqual(riskCfg.takeProfit, 108.5, "TP clamped to RR 2.5 boundary");
+    });
+
+    it("P0.6: TP anchors to a structural target within the RR cap", () => {
+      // entry 103.5, atr 1 → SL 1.7; target 106 (measured move) → TP dist 2.5, RR ≈ 1.47
+      const riskCfg = strategy.calculateRiskConfig(103.5, 1, "LONG", {
+        breakoutLevel: 103,
+        retestExtreme: 102.5,
+        structuralTarget: 106,
+      });
+      assert.strictEqual(riskCfg.takeProfit, 106, "TP should sit at the structural target");
+      assert.ok(riskCfg.slDistance >= 1.5, "SL ≥ 1.5×ATR floor");
+      assert.ok(riskCfg.riskReward <= 2.5, "Structural RR within cap");
     });
 
     it("should allow config updates", () => {
@@ -395,6 +434,109 @@ describe("BreakoutTradingStrategy", () => {
       assert.strictEqual(result.valid, false, "Volume 0.33x is below 0.8x threshold");
     });
   });
+
+  // ── Confidence grading (Sprint 14 Bug 3) ───────────────────────────
+  describe("_scoreConfidence() grading (Bug 3 — no flat 95)", () => {
+    it("should return DIFFERENT scores for different-quality gate survivors", () => {
+      // Both inputs would pass the P0.2–P0.4 gates, but differ in quality.
+      const strong = strategy._scoreConfidence({
+        squeezeWidthPct: 0.012, volumeRatio: 3.0, rejectionWickPct: 0.72,
+        barsSinceBreakout: 20, retestDepthAtr: 0.4,
+      });
+      const weak = strategy._scoreConfidence({
+        squeezeWidthPct: 0.0078, volumeRatio: 1.5, rejectionWickPct: 0.5,
+        barsSinceBreakout: 60, retestDepthAtr: 0.2,
+      });
+      assert.notStrictEqual(strong, weak, "Different quality must yield different confidence");
+      assert.ok(strong > weak, "Higher-quality setup should score higher");
+    });
+
+    it("should produce a spread (non-zero std) across a population of survivors", () => {
+      const samples = [
+        { squeezeWidthPct: 0.012, volumeRatio: 3.0, rejectionWickPct: 0.72, barsSinceBreakout: 20, retestDepthAtr: 0.40 },
+        { squeezeWidthPct: 0.010, volumeRatio: 2.2, rejectionWickPct: 0.60, barsSinceBreakout: 24, retestDepthAtr: 0.45 },
+        { squeezeWidthPct: 0.0085, volumeRatio: 1.8, rejectionWickPct: 0.55, barsSinceBreakout: 40, retestDepthAtr: 0.30 },
+        { squeezeWidthPct: 0.0078, volumeRatio: 1.5, rejectionWickPct: 0.50, barsSinceBreakout: 60, retestDepthAtr: 0.20 },
+      ].map((s) => strategy._scoreConfidence(s));
+
+      const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+      const std = Math.sqrt(samples.reduce((s, v) => s + (v - mean) ** 2, 0) / samples.length);
+      assert.ok(std > 0, `Confidence std must be > 0 (got ${std.toFixed(2)} from ${samples.join(",")})`);
+      assert.ok(Math.max(...samples) <= 95, "Score never exceeds 95");
+      assert.ok(Math.min(...samples) >= 50, "Score never below floor 50");
+      // Typical survivors should land in the 80–95 window, not pin the ceiling.
+      assert.ok(new Set(samples).size >= 3, "At least 3 distinct confidence values across the population");
+    });
+  });
+
+  // ── detectSignal integration (Sprint 14 Bug 1 + Bug 2) ─────────────
+  describe("detectSignal() SL/TP + structural-target skip (Bug 1/2)", () => {
+    const cfg = { symbol: "SYNTHBR" };
+
+    // Synthetic LONG breakout → displacement → true retest. `support` controls the
+    // consolidation range height (= measured-move target distance) so we can drive
+    // the P0.6 skip-if-target-unreachable branch on/off.
+    function makeBreakoutRetestSeries({ support = 100 } = {}) {
+      const opens = [], highs = [], lows = [], closes = [], volumes = [], volSMA = [], atr = [];
+      const push = (o, h, l, c, v) => {
+        opens.push(o); highs.push(h); lows.push(l); closes.push(c);
+        volumes.push(v); volSMA.push(1000); atr.push(1);
+      };
+      // 40-bar consolidation inside [support, 103]
+      for (let i = 0; i < 40; i++) {
+        if (i % 2 === 0) push(102, 103, support, 101, 1000);
+        else push(101, 102.5, support + 0.5, 102, 1000);
+      }
+      push(103, 104.2, 102.8, 104, 2000);            // idx40: breakout close 104 > 103, 2.0× vol
+      for (let i = 41; i <= 55; i++) push(104.5, 105.0, 104.2, 104.8, 1000); // displacement up
+      push(103.4, 103.6, 102.5, 103.5, 1200);        // idx56: retest (16 bars later), big lower wick
+      for (let i = 57; i < 60; i++) push(103.5, 104, 103, 103.6, 1000);
+      return { opens, highs, lows, closes, volumes, volSMA, atr };
+    }
+
+    function runLoop(strat, ind, config) {
+      const signals = [];
+      for (let i = 30; i < ind.closes.length; i++) {
+        const sig = strat.detectSignal(ind, i, config);
+        if (sig) signals.push({ i, sig, meta: strat.getLastSignalMeta() });
+      }
+      return signals;
+    }
+
+    it("emits a LONG signal on a normal expansion breakout + retest (sanity)", () => {
+      const ind = makeBreakoutRetestSeries({ support: 100 }); // range 3 → target within cap
+      const signals = runLoop(strategy, ind, cfg);
+      assert.ok(signals.length >= 1, `Strategy must still emit signals (got ${signals.length})`);
+      assert.strictEqual(signals[0].sig, "LONG", "Should be a LONG breakout signal");
+      const meta = signals[0].meta;
+      assert.ok(meta.structuralTarget != null, "Signal meta carries a structural target");
+      assert.ok(meta.plannedRR <= 2.5, `Planned RR ${meta.plannedRR} must be ≤ 2.5`);
+    });
+
+    it("produces a wide (≥1.5×ATR) SL and RR ≤ 2.5 for the emitted signal", () => {
+      const ind = makeBreakoutRetestSeries({ support: 100 });
+      const signals = runLoop(strategy, ind, cfg);
+      assert.ok(signals.length >= 1, "Need a signal to size risk");
+      const { meta } = signals[0];
+      const entry = ind.closes[signals[0].i];
+      const atr = ind.atr[signals[0].i];
+      const rc = strategy.calculateRiskConfig(entry, atr, "LONG", {
+        breakoutLevel: meta.breakoutLevel,
+        retestExtreme: meta.retestExtreme,
+        structuralTarget: meta.structuralTarget,
+      });
+      assert.ok(rc.slDistance >= atr * 1.5, `SL distance ${rc.slDistance} must be ≥ 1.5×ATR`);
+      assert.ok(Math.abs(rc.slDistance - atr * 1.7) < 1e-9, "SL distance should be ~1.7×ATR");
+      assert.ok(rc.riskReward <= 2.5, `RR ${rc.riskReward} must be ≤ 2.5`);
+    });
+
+    it("P0.6: skips the trade when no structural target sits within the RR cap", () => {
+      // support 95 → range 8 → measured-move target ~7.5×ATR away → RR would exceed 2.5.
+      const ind = makeBreakoutRetestSeries({ support: 95 });
+      const signals = runLoop(strategy, ind, { symbol: "SYNTHBR_FAR" });
+      assert.strictEqual(signals.length, 0, "Unreachable structural target must skip (return null)");
+    });
+  });
 });
 
 // ── Test Summary ───────────────────────────────────────────────────────
@@ -405,6 +547,8 @@ console.log("   - Breakout detection: 5 tests");
 console.log("   - Retest entry: 4 tests");
 console.log("   - Risk configuration: 3 tests");
 console.log("   - LONG & SHORT handling: 3 tests");
-console.log("   - Configuration: 6 tests");
+console.log("   - Configuration + SL/TP geometry: 10 tests");
 console.log("   - Entry validation: 4 tests");
-console.log("   Total: 32 tests\n");
+console.log("   - Confidence grading (Bug 3): 2 tests");
+console.log("   - detectSignal SL/TP + skip (Bug 1/2): 3 tests");
+console.log("   Total: 41 tests\n");

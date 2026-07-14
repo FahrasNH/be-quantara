@@ -68,7 +68,15 @@ class BreakoutTradingStrategy extends StrategyBase {
       // v2.4: SL 1.7×ATR + TP 3.2×ATR → RR ≈ 1:1.9
       riskPerTrade: 0.02,
       slMultiplier: 1.7,
-      tpMultiplier: 3.2,
+      tpMultiplier: 3.2,       // Fallback ATR TP only (no structural target meta)
+      // Sprint 14 P0.1-REVISI: SL must stay WIDE. Structure may only WIDEN the stop,
+      // never tighten it below this ATR floor (old 0.5×ATR floor → 1.05×ATR median
+      // stops hit by 1-candle noise; 0/35 clean −1.0R stops).
+      minSlAtrFloor: 1.5,
+      // Sprint 14 P0.6: hard cap on planned R:R. PRD BS_BR = 1.9; engine used to
+      // stretch TP (median 3.42×ATR) to fake RR up to 6.40 while SL stayed tight —
+      // worst combo (RR 3.65–6.4 → 20% WR). TP anchors to structure, RR ≤ this cap.
+      maxPlannedRR: 2.5,
       // RR slippage fix: prefer full TP; if user enables partial, cap first take to 33%
       preferredTpMode: "full",
       slPlusPartial1Pct: 0.33,
@@ -103,6 +111,8 @@ class BreakoutTradingStrategy extends StrategyBase {
         breakoutCandleAtr: null,
         maxAwayAtr: 0,
         retestExtreme: null,
+        // Consolidation range height at breakout time → measured-move TP target (P0.6)
+        rangeHeight: null,
       });
     }
     return this._breakoutStates.get(key);
@@ -316,9 +326,19 @@ class BreakoutTradingStrategy extends StrategyBase {
   }
 
   /**
-   * Quality-scored confidence (was flat 65 — race-to-confirm dead).
-   * v2.6: reward HEALTHY width (not deep squeeze) per QA correlation.
-   * Confidence is scoring only — NOT a hard entry gate (trade-count anomaly finding).
+   * Quality-scored confidence.
+   *
+   * Sprint 14 (Bug 3) ROOT CAUSE — gating-induced saturation, NOT a hardcode:
+   * confidence is computed BEFORE the P0.2–P0.4 gates run, and those gates only
+   * admit already-high-quality setups (wick ≥0.5, depth in band, ≥16-bar wait,
+   * volume ≥1.5, healthy BB width). With the old base 48 + large additive steps,
+   * the bonus sum overshot the 95 ceiling for virtually every survivor → all 47
+   * trades clamped to a flat 95 (std 0), killing race-to-confirm meritocracy.
+   *
+   * FIX: rescaled so the survivor population still DISCRIMINATES. Bonuses are
+   * finer-grained and the max realistic sum for a typical survivor lands ~85–92
+   * (only an all-maxed rare setup touches the 95 ceiling), restoring an ~80–95
+   * spread with non-zero variance. Confidence is scoring only — NOT a hard gate.
    */
   _scoreConfidence({
     squeezeWidthPct,
@@ -328,34 +348,45 @@ class BreakoutTradingStrategy extends StrategyBase {
     barsSinceBreakout,
     retestDepthAtr,
   } = {}) {
-    let score = 48;
+    let score = 60;
     if (squeezeWidthPct != null) {
       // Wider / healthier BB → higher score (inverse of old squeeze bonus)
-      if (squeezeWidthPct >= 0.0103) score += 18;
-      else if (squeezeWidthPct >= 0.0076) score += 12;
-      else if (squeezeWidthPct >= 0.0057) score += 4;
+      if (squeezeWidthPct >= 0.0103) score += 10;
+      else if (squeezeWidthPct >= 0.0076) score += 6;
+      else if (squeezeWidthPct >= 0.0057) score += 2;
       // below 0.0057: no bonus (dry liquidity zone)
     }
     if (volumeRatio != null) {
-      if (volumeRatio >= 2.0 && volumeRatio <= 3.55) score += 14;
-      else if (volumeRatio >= 1.5) score += 10;
-      else if (volumeRatio >= 1.3) score += 5;
+      // Graded across the whole passing band so volume actually differentiates.
+      if (volumeRatio >= 3.0) score += 8;
+      else if (volumeRatio >= 2.5) score += 7;
+      else if (volumeRatio >= 2.0) score += 6;
+      else if (volumeRatio >= 1.7) score += 4;
+      else if (volumeRatio >= 1.5) score += 3;
+      else if (volumeRatio >= 1.3) score += 1;
     }
     if (rejectionWickPct != null) {
-      if (rejectionWickPct >= 0.55) score += 12;
-      else if (rejectionWickPct >= 0.4) score += 8;
-      else if (rejectionWickPct >= 0.35) score += 4;
+      // Post-gate wick is already ≥0.5; grade the magnitude ABOVE the floor.
+      if (rejectionWickPct >= 0.70) score += 8;
+      else if (rejectionWickPct >= 0.60) score += 6;
+      else if (rejectionWickPct >= 0.55) score += 4;
+      else if (rejectionWickPct >= 0.50) score += 2;
+      else if (rejectionWickPct >= 0.40) score += 1;
     }
     // Prefer longer waits (true pullback); 16–32 bars ≈ 4–8h on 15m
-    if (barsSinceBreakout >= 16 && barsSinceBreakout <= 32) score += 10;
-    else if (barsSinceBreakout >= 33 && barsSinceBreakout <= 64) score += 8;
-    else if (barsSinceBreakout >= 8) score += 4;
-
-    if (retestDepthAtr != null) {
-      if (retestDepthAtr >= 0.15 && retestDepthAtr <= 0.8) score += 6;
-      else if (retestDepthAtr > 0.8) score += 2;
+    if (barsSinceBreakout != null) {
+      if (barsSinceBreakout >= 16 && barsSinceBreakout <= 32) score += 6;
+      else if (barsSinceBreakout >= 33 && barsSinceBreakout <= 48) score += 5;
+      else if (barsSinceBreakout >= 49 && barsSinceBreakout <= 64) score += 3;
+      else if (barsSinceBreakout >= 8) score += 2;
     }
-    return Math.max(40, Math.min(95, Math.round(score)));
+    if (retestDepthAtr != null) {
+      // Reward mid-band depth (cleanest retests); band edges score lower.
+      if (retestDepthAtr >= 0.30 && retestDepthAtr <= 0.55) score += 6;
+      else if (retestDepthAtr >= 0.17 && retestDepthAtr <= 0.72) score += 3;
+      else if (retestDepthAtr > 0.72) score += 1;
+    }
+    return Math.max(50, Math.min(95, Math.round(score)));
   }
 
   _classifyMarketCond(squeezeWidthPct, avgPriorWidthPct, atrPct) {
@@ -475,6 +506,7 @@ class BreakoutTradingStrategy extends StrategyBase {
       state.breakoutCandleAtr = breakoutCandleAtr;
       state.maxAwayAtr = 0;
       state.retestExtreme = null;
+      state.rangeHeight = levels.range;
     }
 
     // Step 4: Check for SHORT breakout
@@ -491,6 +523,7 @@ class BreakoutTradingStrategy extends StrategyBase {
       state.breakoutCandleAtr = breakoutCandleAtr;
       state.maxAwayAtr = 0;
       state.retestExtreme = null;
+      state.rangeHeight = levels.range;
     }
 
     // Step 5: Wait for TRUE RETEST entry (not immediate / 1–2 bar chase)
@@ -559,6 +592,26 @@ class BreakoutTradingStrategy extends StrategyBase {
           this.resetBreakoutState(config);
           return null;
         }
+
+        // Sprint 14 P0.6: anchor TP to a REAL structural target (measured move =
+        // consolidation range height projected beyond the broken level). Skip the
+        // trade when the nearest structural target is unreachable within the planned
+        // R:R cap (nearest realistic target would need RR > maxPlannedRR) — forcing a
+        // far ATR TP was what inflated planned RR to a mean 3.48 (→ 20% WR band).
+        const rangeHeight = state.rangeHeight || 0;
+        const structuralTarget = signal === "LONG"
+          ? state.breakoutLevel + rangeHeight
+          : state.breakoutLevel - rangeHeight;
+        const targetRoom = signal === "LONG"
+          ? structuralTarget - retestCheck.entry
+          : retestCheck.entry - structuralTarget;
+        const slDistExpected = atr * this.config.slMultiplier;
+        const maxRR = this.config.maxPlannedRR ?? 2.5;
+        if (!(rangeHeight > 0) || targetRoom <= 0 || targetRoom > maxRR * slDistExpected) {
+          this.resetBreakoutState(config);
+          return null;
+        }
+
         const bbSqueezeWidthAtr = atr > 0 && state.squeezeWidthPct != null
           ? (state.squeezeWidthPct * closes[closes.length - 1]) / atr
           : null;
@@ -583,6 +636,8 @@ class BreakoutTradingStrategy extends StrategyBase {
           reason: retestCheck.reason,
           preferredTpMode: this.config.preferredTpMode || "full",
           retestExtreme: retestCheck.retestExtreme ?? null,
+          structuralTarget, // P0.6: measured-move TP target (range projection)
+          plannedRR: parseFloat((targetRoom / slDistExpected).toFixed(2)),
           // Sprint 14 BS_BR enrichment (WinPredictor / CSV)
           bbWidth: state.squeezeWidthPct,
           bbSqueezeWidthAtr,
@@ -604,9 +659,17 @@ class BreakoutTradingStrategy extends StrategyBase {
   }
 
   /**
-   * Calculate SL/TP based on ATR + optional retest structure.
-   * Structure SL (beyond retest wick / breakout level) keeps planned ~−1.0R
-   * closer to thesis invalidation and reduces gap-slippage beyond ATR stop.
+   * Calculate SL/TP.
+   *
+   * Sprint 14 P0.1-REVISI (SL): the earlier "structure-anchored + 0.5×ATR floor"
+   * stop produced a ~1.05×ATR median stop — 38% tighter than the PRD 1.7×ATR
+   * ("wide") spec — and got clipped by 1-candle noise (0/35 clean −1.0R stops).
+   * SL is now the WIDE ATR stop by default; structure (retest wick / broken level)
+   * may only WIDEN it further, never tighten it below `minSlAtrFloor`×ATR.
+   *
+   * Sprint 14 P0.6 (TP): TP anchors to a REAL structural target (measured move,
+   * passed via meta/extras.structuralTarget) instead of a stretched ATR multiple,
+   * and planned R:R is hard-capped at `maxPlannedRR` (PRD 1.9 + tolerance).
    *
    * Signature is tolerant of the SMC-style call
    *   calculateRiskConfig(price, atr, signal, componentId, extras)
@@ -618,11 +681,13 @@ class BreakoutTradingStrategy extends StrategyBase {
       : (maybeExtras && typeof maybeExtras === "object" ? maybeExtras : {});
     const meta = this._lastSignalMeta || {};
     const slDist = atr * this.config.slMultiplier;
-    const tpDist = atr * this.config.tpMultiplier;
+    const minSlDist = atr * (this.config.minSlAtrFloor ?? 1.5);
+    const maxRR = this.config.maxPlannedRR ?? 2.5;
     const breakoutLevel = extras.breakoutLevel ?? meta.breakoutLevel ?? null;
     const retestExtreme = extras.retestExtreme ?? meta.retestExtreme ?? null;
+    const structuralTarget = extras.structuralTarget ?? meta.structuralTarget ?? null;
 
-    let stopLoss, takeProfit;
+    let stopLoss;
 
     if (signal === "LONG") {
       const atrStop = entryPrice - slDist;
@@ -632,22 +697,13 @@ class BreakoutTradingStrategy extends StrategyBase {
       } else if (breakoutLevel != null) {
         structureStop = breakoutLevel - atr * 0.25;
       }
-      // Sprint 14 (P0.1): keep SL tight + structure-anchored. If structure is wider
-      // than the ATR cap → use ATR stop; if inside the cap but ≥0.5×ATR → use structure;
-      // if too tight → floor at 0.5×ATR (do NOT jump out to the wide 1.7×ATR stop).
-      if (structureStop != null && structureStop < entryPrice) {
-        const structDist = entryPrice - structureStop;
-        if (structDist > slDist) {
-          stopLoss = atrStop;
-        } else if (structDist >= atr * 0.5) {
-          stopLoss = structureStop;
-        } else {
-          stopLoss = entryPrice - atr * 0.5;
-        }
-      } else {
-        stopLoss = atrStop;
+      // P0.1-REVISI: start from the wide ATR stop; structure only widens it.
+      stopLoss = atrStop;
+      if (structureStop != null && structureStop < atrStop) {
+        stopLoss = structureStop; // structure invalidation sits further away → give room
       }
-      takeProfit = entryPrice + tpDist;
+      if (entryPrice - stopLoss < minSlDist) stopLoss = entryPrice - minSlDist; // floor
+      if (stopLoss >= entryPrice) stopLoss = entryPrice - minSlDist;            // LONG clamp
     } else {
       const atrStop = entryPrice + slDist;
       let structureStop = null;
@@ -656,22 +712,33 @@ class BreakoutTradingStrategy extends StrategyBase {
       } else if (breakoutLevel != null) {
         structureStop = breakoutLevel + atr * 0.25;
       }
-      if (structureStop != null && structureStop > entryPrice) {
-        const structDist = structureStop - entryPrice;
-        if (structDist > slDist) {
-          stopLoss = atrStop;
-        } else if (structDist >= atr * 0.5) {
-          stopLoss = structureStop;
-        } else {
-          stopLoss = entryPrice + atr * 0.5;
-        }
-      } else {
-        stopLoss = atrStop;
+      stopLoss = atrStop;
+      if (structureStop != null && structureStop > atrStop) {
+        stopLoss = structureStop;
       }
-      takeProfit = entryPrice - tpDist;
+      if (stopLoss - entryPrice < minSlDist) stopLoss = entryPrice + minSlDist; // floor
+      if (stopLoss <= entryPrice) stopLoss = entryPrice + minSlDist;            // SHORT clamp
     }
 
     const actualSlDist = Math.abs(entryPrice - stopLoss);
+    const maxTpDist = actualSlDist * maxRR;
+
+    // P0.6: prefer the structural target; fall back to the ATR multiple only when no
+    // structural target is available (e.g. direct SMC-style call). Always clamp so
+    // planned R:R never exceeds maxPlannedRR.
+    let tpDist;
+    const structOnCorrectSide = structuralTarget != null && (
+      (signal === "LONG" && structuralTarget > entryPrice) ||
+      (signal === "SHORT" && structuralTarget < entryPrice)
+    );
+    if (structOnCorrectSide) {
+      tpDist = Math.abs(structuralTarget - entryPrice);
+    } else {
+      tpDist = atr * this.config.tpMultiplier;
+    }
+    tpDist = Math.min(tpDist, maxTpDist);
+
+    const takeProfit = signal === "LONG" ? entryPrice + tpDist : entryPrice - tpDist;
 
     return {
       stopLoss: parseFloat(stopLoss.toFixed(8)),
