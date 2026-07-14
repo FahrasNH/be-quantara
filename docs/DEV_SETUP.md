@@ -87,6 +87,17 @@ Login page should load at `https://dev.quantara.software`.
 
 ## Deploy from local machine
 
+**First time (no `/opt/quantara-dev/be/.env` yet)?** Bootstrap once:
+
+```bash
+cd fe-bot-trading
+./deploy-development.sh --bootstrap-be
+```
+
+This uploads `scripts/setup-development-vps.sh`, creates Postgres DB/user, clones `development`, generates `.env`, runs migrations, and starts PM2 `be-quantara-dev`.
+
+**Routine deploy:**
+
 ```bash
 cd fe-bot-trading
 git pull origin development
@@ -109,4 +120,5 @@ Environment overrides: `DEV_VPS_SSH_HOST`, `DEV_VPS_HOST`, `REMOTE_FE`, `REMOTE_
 | `fe-bot-trading/.env.development` | Vite build env (same-origin) |
 | `be-bot-trading/ecosystem.config.js` | PM2 app `be-quantara-dev` |
 | `be-bot-trading/.env.development.example` | BE env template |
+| `be-bot-trading/scripts/setup-development-vps.sh` | One-time VPS bootstrap (DB + clone + .env) |
 | `be-bot-trading/scripts/deploy-development-vps.sh` | BE-only deploy on VPS |
