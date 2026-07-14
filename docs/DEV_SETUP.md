@@ -95,6 +95,21 @@ bash scripts/prisma-migrate-deploy.sh
 
 Or re-run bootstrap after pull: `./deploy-development.sh --bootstrap-be --be-only` (requires `git pull` on VPS first).
 
+### pgvector extension (42501 permission denied)
+
+`quantara_dev` cannot `CREATE EXTENSION vector` — must run as Postgres superuser **once per database**:
+
+```bash
+sudo -u postgres psql -d bot_trading_development -c "CREATE EXTENSION IF NOT EXISTS vector;"
+cd /opt/quantara-dev/be && bash scripts/prisma-migrate-deploy.sh
+```
+
+If `postgresql-*-pgvector` is not installed on Ubuntu:
+
+```bash
+apt install postgresql-16-pgvector   # match your Postgres major version
+```
+
 ---
 
 ## Deploy from local machine
