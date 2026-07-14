@@ -45,9 +45,12 @@ class BreakoutTradingStrategy extends StrategyBase {
       // 15m bars: PRD retest sequence is 4h–24h — prior minRetestBars=2 (~30m) was breakout-chase
       retestWindow: 96,        // Allow retest up to 24h after breakout (96×15m)
       minRetestBars: 16,       // Minimum 4h wait before retest entry is valid
-      minRejectionWickRatio: 0.35, // Rejection wick ≥ 35% of candle range
-      minRetestDepthAtr: 0.15, // Wick must pierce back into/through the level
+      minRejectionWickRatio: 0.5, // Rejection wick ≥ 50% of candle range (Sprint 14: <0.5 = 5.9% WR)
+      minRetestDepthAtr: 0.17, // Wick must pierce back into the level (Sprint 14 lower band)
+      maxRetestDepthAtr: 0.72, // Deeper than 0.72×ATR = failed retest (17.6% WR)
       minDisplacementAtr: 0.30, // After breakout, price must move away before return
+      // Sprint 14: block tightest squeezes — COILED (0/8 WR) + SQUEEZE (16.7% WR) + dry
+      blockedMarketConds: ["COILED_BREAKOUT", "SQUEEZE_BREAKOUT", "DRY_SQUEEZE"],
 
       // ── Volatility gate (BB Width + ATR) — v2.6 REVERSED from squeeze ─────
       // QA 63-trade / 5-window: tightest BB width WR 6.2%; widest WR 43.8%.
@@ -258,8 +261,9 @@ class BreakoutTradingStrategy extends StrategyBase {
     const highCurr  = (highs && highs[n - 1] != null) ? highs[n - 1] : closeCurr;
     const tol       = BreakoutTradingStrategy.RETEST_TOUCH_TOL;
     const range     = Math.max(highCurr - lowCurr, 1e-12);
-    const minWick   = this.config.minRejectionWickRatio ?? 0.35;
-    const minDepth  = this.config.minRetestDepthAtr ?? 0.15;
+    const minWick   = this.config.minRejectionWickRatio ?? 0.5;
+    const minDepth  = this.config.minRetestDepthAtr ?? 0.17;
+    const maxDepth  = this.config.maxRetestDepthAtr ?? 0.72;
 
     if (direction === "LONG") {
       const touchedLevel = lowCurr <= breakoutLevel * (1 + tol);
@@ -268,8 +272,12 @@ class BreakoutTradingStrategy extends StrategyBase {
       const wickRatio    = lowerWick / range;
       const hasRejection = wickRatio >= minWick;
       const retestDepth = Math.max(0, breakoutLevel - lowCurr);
-      const depthOk = atr == null || atr <= 0 || (retestDepth / atr) >= minDepth
-        || lowCurr <= breakoutLevel; // piercing through level counts
+      // Sprint 14: retest depth must land inside [minDepth, maxDepth]×ATR.
+      // Shallow (<0.17 ATR = breakout-candle chase) and deep (>0.72 ATR = failed retest)
+      // are the worst performers, so no "piercing" bypass anymore.
+      const depthOk = (atr == null || atr <= 0)
+        ? true
+        : (retestDepth / atr) >= minDepth && (retestDepth / atr) <= maxDepth;
       if (touchedLevel && closedAbove && hasRejection && depthOk) {
         return {
           valid: true,
@@ -288,8 +296,9 @@ class BreakoutTradingStrategy extends StrategyBase {
       const wickRatio    = upperWick / range;
       const hasRejection = wickRatio >= minWick;
       const retestDepth = Math.max(0, highCurr - breakoutLevel);
-      const depthOk = atr == null || atr <= 0 || (retestDepth / atr) >= minDepth
-        || highCurr >= breakoutLevel;
+      const depthOk = (atr == null || atr <= 0)
+        ? true
+        : (retestDepth / atr) >= minDepth && (retestDepth / atr) <= maxDepth;
       if (touchedLevel && closedBelow && hasRejection && depthOk) {
         return {
           valid: true,
@@ -355,6 +364,8 @@ class BreakoutTradingStrategy extends StrategyBase {
       if (avgPriorWidthPct > 0) {
         const ratio = squeezeWidthPct / avgPriorWidthPct;
         if (ratio <= 0.75 && squeezeWidthPct >= 0.0076) return "COILED_BREAKOUT";
+        // Sprint 14: mild compression (0.75–0.90×) still underperforms (16.7% WR)
+        if (ratio > 0.75 && ratio <= 0.90 && squeezeWidthPct >= 0.0076) return "SQUEEZE_BREAKOUT";
       }
       if (squeezeWidthPct >= 0.0103) return "EXPANDED_RANGE";
     }
@@ -363,6 +374,30 @@ class BreakoutTradingStrategy extends StrategyBase {
       if (atrPct > 2.5) return "HIGH_VOL";
     }
     return "NORMAL";
+  }
+
+  /**
+   * Count how many consecutive bars — ending at the bar just BEFORE the breakout
+   * bar — stayed contained within the detected range [support, resistance]
+   * (with a small ~0.3% tolerance). Gives a REAL consolidation length instead of
+   * a constant, so downstream analytics see genuine per-trade variance.
+   */
+  _countConsolidationBars(closes, highs, lows, resistance, support) {
+    const hi = highs && highs.length ? highs : (closes || []);
+    const lo = lows && lows.length ? lows : (closes || []);
+    const n = Math.min(hi.length, lo.length);
+    if (n < 2 || resistance == null || support == null) return 0;
+    const tol = BreakoutTradingStrategy.RETEST_TOUCH_TOL; // 0.3%
+    const upper = resistance * (1 + tol);
+    const lower = support * (1 - tol);
+    const maxCount = 50;
+    let count = 0;
+    // n-1 is the breakout bar itself; start one bar earlier and walk backwards.
+    for (let i = n - 2; i >= 0 && count < maxCount; i--) {
+      if (hi[i] <= upper && lo[i] >= lower) count++;
+      else break;
+    }
+    return count;
   }
 
   /**
@@ -422,10 +457,9 @@ class BreakoutTradingStrategy extends StrategyBase {
       : 0;
     const breakoutCandleAtr = atr > 0 ? breakoutBarRange / atr : null;
 
-    let consolidationBars = 0;
-    if (consol.volatilityOk && consol.avgPriorWidthPct != null) {
-      consolidationBars = this.config.squeezeLookback;
-    }
+    // Real consolidation length (consecutive bars contained in the range before the
+    // breakout bar) — replaces the old constant squeezeLookback (zero variance).
+    const consolidationBars = this._countConsolidationBars(closes, highs, lows, resistance, support);
 
     // Step 3: Check for LONG breakout (only arm when volatility floor passes)
     const longBreakout = this.checkLongBreakout(closes, volumes, volSMA, resistance);
@@ -520,6 +554,11 @@ class BreakoutTradingStrategy extends StrategyBase {
           state.avgPriorWidthPct,
           atrPct
         );
+        // Sprint 14: block the tightest-squeeze regimes (COILED/SQUEEZE/dry) — worst WR
+        if ((this.config.blockedMarketConds || []).includes(marketCond)) {
+          this.resetBreakoutState(config);
+          return null;
+        }
         const bbSqueezeWidthAtr = atr > 0 && state.squeezeWidthPct != null
           ? (state.squeezeWidthPct * closes[closes.length - 1]) / atr
           : null;
@@ -593,13 +632,17 @@ class BreakoutTradingStrategy extends StrategyBase {
       } else if (breakoutLevel != null) {
         structureStop = breakoutLevel - atr * 0.25;
       }
-      // Prefer structure stop when it is tighter than ATR stop but still ≥0.6×ATR risk
+      // Sprint 14 (P0.1): keep SL tight + structure-anchored. If structure is wider
+      // than the ATR cap → use ATR stop; if inside the cap but ≥0.5×ATR → use structure;
+      // if too tight → floor at 0.5×ATR (do NOT jump out to the wide 1.7×ATR stop).
       if (structureStop != null && structureStop < entryPrice) {
         const structDist = entryPrice - structureStop;
-        if (structDist >= atr * 0.6 && structDist <= slDist) {
+        if (structDist > slDist) {
+          stopLoss = atrStop;
+        } else if (structDist >= atr * 0.5) {
           stopLoss = structureStop;
         } else {
-          stopLoss = atrStop;
+          stopLoss = entryPrice - atr * 0.5;
         }
       } else {
         stopLoss = atrStop;
@@ -615,10 +658,12 @@ class BreakoutTradingStrategy extends StrategyBase {
       }
       if (structureStop != null && structureStop > entryPrice) {
         const structDist = structureStop - entryPrice;
-        if (structDist >= atr * 0.6 && structDist <= slDist) {
+        if (structDist > slDist) {
+          stopLoss = atrStop;
+        } else if (structDist >= atr * 0.5) {
           stopLoss = structureStop;
         } else {
-          stopLoss = atrStop;
+          stopLoss = entryPrice + atr * 0.5;
         }
       } else {
         stopLoss = atrStop;

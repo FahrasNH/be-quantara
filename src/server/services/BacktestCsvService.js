@@ -36,6 +36,16 @@ const {
 
 const NA = "N/A";
 
+const TYPE_TRADE_CLASSES = ["Scalping", "Intraday", "Swing"];
+
+// Classify a trade by holding period (hours): <=4h Scalping, <=24h Intraday, else Swing.
+function classifyTypeTrade(holdHours) {
+  if (holdHours == null || !Number.isFinite(holdHours)) return null;
+  if (holdHours <= 4) return "Scalping";
+  if (holdHours <= 24) return "Intraday";
+  return "Swing";
+}
+
 function escapeCsv(val) {
   const s = val == null ? "" : String(val);
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
@@ -109,10 +119,28 @@ function mapBacktestTrade(trade, ctx, index) {
   const openTime = trade.openTime ?? trade.openDate ?? trade.date ?? NA;
   const closeTime = trade.closeTime ?? trade.date ?? NA;
   let duration = NA;
+  let holdHoursNum = null;
   if (openTime !== NA && closeTime !== NA) {
     const ms = new Date(closeTime).getTime() - new Date(openTime).getTime();
     duration = ms > 0 ? formatDuration(ms) : NA;
+    holdHoursNum = ms > 0 ? ms / 3_600_000 : null;
   }
+  if (holdHoursNum == null && Number.isFinite(Number(trade.holdHours))) {
+    holdHoursNum = Number(trade.holdHours);
+  }
+
+  const tradeType = TYPE_TRADE_CLASSES.includes(trade.tradeType)
+    ? trade.tradeType
+    : classifyTypeTrade(holdHoursNum) ?? NA;
+
+  let hourUtc = trade.hourUtc ?? NA;
+  if (openTime !== NA) {
+    const openHour = new Date(openTime).getUTCHours();
+    if (!Number.isNaN(openHour)) hourUtc = openHour;
+  }
+
+  const holdHoursOut =
+    holdHoursNum != null ? parseFloat(holdHoursNum.toFixed(2)) : (trade.holdHours ?? NA);
 
   const reason = trade.reason ?? NA;
   const isPartial = /partial/i.test(String(reason));
@@ -175,7 +203,7 @@ function mapBacktestTrade(trade, ctx, index) {
     htfTrend: trade.htfTrend ?? NA,
     dailyRegime: trade.dailyRegime ?? NA,
     component: trade.component ?? trade.tradeType ?? NA,
-    tradeType: trade.tradeType ?? trade.component ?? NA,
+    tradeType,
     atr: atrOut,
     entryRsi: rsiOut,
     sweepStrength: trade.sweepStrength ?? NA,
@@ -183,7 +211,7 @@ function mapBacktestTrade(trade, ctx, index) {
     obDistanceAtr: trade.obDistanceAtr ?? NA,
     displacementPct: trade.displacementPct ?? NA,
     htfAdx: trade.htfAdx ?? NA,
-    hourUtc: trade.hourUtc ?? NA,
+    hourUtc,
     volumeRatio: trade.volumeRatio ?? NA,
     bbWidth: trade.bbWidth ?? NA,
     bbSqueezeWidthAtr: trade.bbSqueezeWidthAtr ?? NA,
@@ -192,9 +220,9 @@ function mapBacktestTrade(trade, ctx, index) {
     rejectionWickPct: trade.rejectionWickPct ?? NA,
     consolidationBars: trade.consolidationBars ?? NA,
     breakoutCandleAtr: trade.breakoutCandleAtr ?? NA,
-    fundingRateAtEntry: trade.fundingRateAtEntry ?? NA,
+    fundingRateAtEntry: trade.fundingRateAtEntry ?? trade.fundingRate ?? NA,
     fundingForecast24h: trade.fundingForecast24h ?? NA,
-    holdHours: trade.holdHours ?? NA,
+    holdHours: holdHoursOut,
     confSweepStrength: trade.confSweepStrength ?? NA,
     confFvgSize: trade.confFvgSize ?? NA,
     confDisplacementPct: trade.confDisplacementPct ?? NA,

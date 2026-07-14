@@ -160,10 +160,10 @@ describe("BreakoutTradingStrategy", () => {
 
   describe("checkRetestEntry()", () => {
     it("should detect LONG retest entry", () => {
-      // Retest valid: low touches level + rejection lower wick ≥35% of range + close above.
+      // Retest valid: low touches level + rejection lower wick ≥50% of range + close above.
       const closes = [100, 105, 110, 109, 108, 107, 106.5];
       const opens  = [100, 105, 109, 108, 107, 108, 108];
-      const lows   = [ 99, 104, 108, 107, 106, 106, 105];  // wick touches 105
+      const lows   = [ 99, 104, 108, 107, 106, 106, 104];  // wick pierces below 105
       const highs  = [101, 106, 111, 110, 109, 109, 108.5];
       const direction = "LONG";
       const breakoutLevel = 105;
@@ -171,7 +171,7 @@ describe("BreakoutTradingStrategy", () => {
       const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs, opens);
 
       assert.strictEqual(result.valid, true, "Should detect LONG retest");
-      assert.ok(result.rejectionWickPct >= 0.35, "Should report rejection wick");
+      assert.ok(result.rejectionWickPct >= 0.5, "Should report rejection wick ≥50% (Sprint 14)");
       assert.ok(strategy._scoreConfidence({
         squeezeWidthPct: 0.02, avgPriorWidthPct: 0.04, volumeRatio: 1.8,
         rejectionWickPct: result.rejectionWickPct, barsSinceBreakout: 3, retestDepthAtr: 0.3,
@@ -181,7 +181,7 @@ describe("BreakoutTradingStrategy", () => {
     it("should detect SHORT retest entry", () => {
       const closes = [100, 95, 90, 91, 92, 93, 93.5];
       const opens  = [100, 95, 91, 92, 93, 92, 92];
-      const highs  = [101, 96, 91, 92, 93, 94, 95];  // wick touches 95
+      const highs  = [101, 96, 91, 92, 93, 94, 96];  // wick pierces above 95
       const lows   = [ 99, 94, 89, 90, 91, 91, 91.5];
       const direction = "SHORT";
       const breakoutLevel = 95;
@@ -322,6 +322,32 @@ describe("BreakoutTradingStrategy", () => {
       assert.strictEqual(strategy.config.requireConsolidation, true, "Volatility floor on by default");
     });
 
+    it("should expose Sprint 14 retest-quality + regime gates", () => {
+      assert.strictEqual(strategy.config.minRejectionWickRatio, 0.5, "Sprint 14 P0.4: wick ≥0.5");
+      assert.strictEqual(strategy.config.minRetestDepthAtr, 0.17, "Sprint 14 P0.3: retest depth lower band");
+      assert.strictEqual(strategy.config.maxRetestDepthAtr, 0.72, "Sprint 14 P0.3: retest depth upper band");
+      assert.deepStrictEqual(
+        strategy.config.blockedMarketConds,
+        ["COILED_BREAKOUT", "SQUEEZE_BREAKOUT", "DRY_SQUEEZE"],
+        "Sprint 14 P0.2: block tightest-squeeze regimes",
+      );
+    });
+
+    it("should classify SQUEEZE_BREAKOUT for mild compression (0.75–0.90×)", () => {
+      // ratio = 0.008 / 0.01 = 0.80 (in the 0.75–0.90 band) with width ≥ 0.0076
+      assert.strictEqual(
+        strategy._classifyMarketCond(0.008, 0.01, 1.0),
+        "SQUEEZE_BREAKOUT",
+        "Mild compression band should be SQUEEZE_BREAKOUT",
+      );
+      // ratio = 0.007/0.02 = 0.35 (≤0.75) → COILED
+      assert.strictEqual(
+        strategy._classifyMarketCond(0.008, 0.02, 1.0),
+        "COILED_BREAKOUT",
+        "Tight compression should stay COILED_BREAKOUT",
+      );
+    });
+
     it("should use structure SL when retest extreme is tighter than ATR stop", () => {
       const riskCfg = strategy.calculateRiskConfig(106.5, 2, "LONG", {
         breakoutLevel: 105,
@@ -379,6 +405,6 @@ console.log("   - Breakout detection: 5 tests");
 console.log("   - Retest entry: 4 tests");
 console.log("   - Risk configuration: 3 tests");
 console.log("   - LONG & SHORT handling: 3 tests");
-console.log("   - Configuration: 4 tests");
+console.log("   - Configuration: 6 tests");
 console.log("   - Entry validation: 4 tests");
-console.log("   Total: 30 tests\n");
+console.log("   Total: 32 tests\n");

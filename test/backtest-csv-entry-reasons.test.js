@@ -79,6 +79,19 @@ describe("mapBacktestTrade entryReasons", () => {
     expect(br.entryReasons).toContain("BB Squeeze");
   });
 
+  test("tradeType classified by hold duration; hourUtc + holdHours derived", () => {
+    const row = mapBacktestTrade({
+      side: "LONG", entry: 100, exit: 102, reason: "TP",
+      component: "BS_BR", strategyKey: "BS_BR",
+      openTime: "2024-01-01T09:00:00Z",
+      closeTime: "2024-01-01T11:00:00Z",
+    }, { ...ctx, strategy: "Breakout Trading" }, 0);
+    expect(row.tradeType).toBe("Scalping");
+    expect(row.component).toBe("BS_BR");
+    expect(row.hourUtc).toBe(9);
+    expect(row.holdHours).toBe(2);
+  });
+
   test("rejects absurd atr / entryRsi magnitudes", () => {
     const row = mapBacktestTrade({
       side: "LONG", entry: 61877.6, exit: 62000, reason: "TP",
