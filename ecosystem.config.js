@@ -1,5 +1,5 @@
 /**
- * PM2 — production (port 3000) + staging (port 3001)
+ * PM2 — production (port 3000) + staging (port 3001) + development (port 3002)
  *
  * Production (dari folder prod):
  *   pm2 start ecosystem.config.js --only be-quantara-prod
@@ -75,7 +75,36 @@ module.exports = {
         APP_ENV:  "staging",
         RAG_BACKTEST_ENABLED: "true",
         // Profiling heap/RSS tiap 30s di pm2 logs (index.js MEM_DEBUG=1). Matikan di prod.
+        BACKTEST_ISOLATE: "1",
+        BACKTEST_WORKER_HEAP_MB: "768",
+        BACKTEST_MAX_CONCURRENT: "1",
         MEM_DEBUG: "1",
+      },
+    },
+    {
+      name:          "be-quantara-dev",
+      script:        "index.js",
+      cwd:           __dirname,
+      instances:     1,
+      autorestart:   true,
+      max_restarts:  10,
+      min_uptime:    "30s",
+      kill_timeout:  30000,
+      // Dev stack: lower ceiling than prod/staging — dry-run/backtest only on shared VPS.
+      max_memory_restart: "1536M",
+      error_file:    "logs/be-quantara-dev.err.log",
+      out_file:      "logs/be-quantara-dev.out.log",
+      merge_logs:    true,
+      time:          true,
+      env: {
+        NODE_ENV: "production",
+        PORT:     3002,
+        APP_ENV:  "development",
+        RAG_BACKTEST_ENABLED: "true",
+        BACKTEST_ISOLATE: "1",
+        BACKTEST_WORKER_HEAP_MB: "512",
+        BACKTEST_MAX_CONCURRENT: "1",
+        MEM_DEBUG: "0",
       },
     },
   ],

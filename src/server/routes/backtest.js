@@ -4,8 +4,6 @@
  */
 
 const express = require("express");
-const { EventEmitter } = require("events");
-const crypto = require("crypto");
 const { asyncHandler } = require("../../middleware/errorHandler");
 const BacktestLoader = require("../services/BacktestLoader");
 const BacktestHistoryService = require("../services/BacktestHistoryService");
@@ -16,81 +14,22 @@ const OptimizationAnalysisService = require("../services/OptimizationAnalysisSer
 const db = require("../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../scripts/lib/simulator");
 const { STRATEGIES } = require("../../domain/legacyStrategies");
-const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest } = require("../services/RealStrategyBacktestService");
 const GrokConfirmService = require("../services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../services/GrokBacktestJobService");
+const BacktestJobService = require("../services/BacktestJobService");
 const cfg = require("../../config/env");
-const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../constants/strategySupportedTypes");
 
-// ─── Backtest Job Store ────────────────────────────────────────────────────────
-// Each job runs async on the server; clients subscribe via SSE.
-// Jobs survive client disconnects — the computation keeps running on the server.
-class BacktestJob extends EventEmitter {
-  constructor(id) {
-    super();
-    this.setMaxListeners(20);
-    this.id = id;
-    this.status = "pending"; // pending | running | done | error | cancelled
-    this.createdAt = Date.now();
-    this.result = null;
-    this.error = null;
-    this.aborted = false;
-    this.progressLog = []; // replay buffer for reconnecting clients
-    this.abortController = new AbortController();
-  }
-
-  progress(data) {
-    const ev = { ...data, ts: Date.now() };
-    this.progressLog.push(ev);
-    if (this.progressLog.length > 300) this.progressLog.shift();
-    this.emit("progress", ev);
-  }
-
-  done(result) {
-    this.status = "done";
-    this.result = result;
-    this.emit("result", result);
-  }
-
-  fail(errMsg) {
-    this.status = "error";
-    this.error = errMsg;
-    this.emit("jobError", errMsg);
-  }
-
-  cancel() {
-    if (this.aborted) return;
-    this.aborted = true;
-    this.status = "cancelled";
-    this.abortController.abort();
-    this.emit("cancelled");
-  }
-}
-
-const jobStore = new Map();
-
-// Cleanup jobs older than 30 minutes
-setInterval(() => {
-  const cutoff = Date.now() - 30 * 60_000;
-  for (const [id, job] of jobStore) {
-    if (job.createdAt < cutoff) jobStore.delete(id);
-  }
-}, 5 * 60_000).unref?.();
-
-const USER_STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
-// GROK_CONFIRM_STRATEGIES includes USER keys + internal AF aliases (AF_SMC runs real engine w/ server-side gate)
-// + the v2.0 component keys (TS_TF/MD_MR/BS_BR). The FE sends v2.0 component keys for tier legs
-// (FORGE/MINT/VAULT), so omitting them here rejected every Grok-gated Trend Following / Mean Reversion /
-// Breakout leg with a 400 even though the tier was valid. legacyStrategies.STRATEGIES already resolves
-// these keys downstream, so accepting them is safe.
+// Gen2 canonical engines for picker/list APIs (legacy aliases accepted elsewhere via normalize).
+const USER_STRATEGY_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
+// GROK_CONFIRM accepts Gen2 engines + legacy Gen1 aliases + SMART_MONEY_CONCEPTS.
 const GROK_CONFIRM_STRATEGIES = new Set([
   ...USER_STRATEGY_KEYS,
-  "AF_SMC",
+  "ADAPTIVE_FUSION",
   "SMART_MONEY_CONCEPTS",
-  "TS_TF",
-  "MD_MR",
-  "BS_BR",
+  "TREND_FOLLOWING",
+  "MEAN_REVERSION",
+  "BREAKOUT_RETEST",
 ]);
 const GROK_CONFIRM_MAX_SIGNALS = 500;
 
@@ -149,10 +88,15 @@ function validateGrokConfirmPayload(body) {
   };
 }
 const STRATEGY_ABBREV = {
+  AF_SMC: "AF",
+  TS_TF: "TS",
+  MD_MR: "MD",
+  BS_BR: "BS",
+  // Legacy abbrev kept for historical archive rows
   ADAPTIVE_FUSION: "AF",
-  TREND_FOLLOWING: "TM",
-  MEAN_REVERSION: "MR",
-  BREAKOUT_RETEST: "BR",
+  TREND_FOLLOWING: "TS",
+  MEAN_REVERSION: "MD",
+  BREAKOUT_RETEST: "BS",
 };
 
 function buildStrategyList() {
@@ -496,6 +440,15 @@ module.exports = function createBacktestRouter(context) {
       return res.status(400).json({ ok: false, error: "pair/symbol dan metrics diperlukan" });
     }
 
+    // Extend must send equity_curve atomically with metrics (COALESCE partial-write bug).
+    if (clientAction === "extend" && !Array.isArray(equityCurve)) {
+      return res.status(400).json({
+        ok: false,
+        error: "equity_curve array diperlukan saat action=extend (cegah desync metrics/equity)",
+        code: "EQUITY_CURVE_REQUIRED",
+      });
+    }
+
     if (clientAction === "reused") {
       const canonicalKey = BacktestHistoryService._buildKeyFromMeta({
         symbol: sym,
@@ -540,8 +493,10 @@ module.exports = function createBacktestRouter(context) {
       exchange: config?.exchange || "sim",
       dataSource: config?.dataSource || "sim",
       metrics: normalized,
-      equityCurve: equityCurve || null,
-      tradesData: trades || tradesData || null,
+      equityCurve: Array.isArray(equityCurve) ? equityCurve : null,
+      tradesData: Array.isArray(trades)
+        ? trades
+        : (Array.isArray(tradesData) ? tradesData : null),
       config: runConfig,
       notes: notes || null,
       userId: req.userId,
@@ -1244,6 +1199,8 @@ module.exports = function createBacktestRouter(context) {
       debug: debugMode = false,
       grok_gate: grokGate = false,
       rag_gate: ragGate = false,
+      exchange_type: exchangeTypeBody,
+      exchangeType: exchangeTypeCamel,
     } = req.body;
 
     const sym = (pair || symbol || "").toUpperCase();
@@ -1261,19 +1218,23 @@ module.exports = function createBacktestRouter(context) {
       return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
     }
 
-    // Create job
-    const jobId = crypto.randomUUID();
-    const job = new BacktestJob(jobId);
-    jobStore.set(jobId, job);
+    const { normalizeExchangeType } = require("../../constants/exchangeFeeSchedules");
+    const exchangeType = normalizeExchangeType(exchangeTypeBody || exchangeTypeCamel) || undefined;
 
-    // Run async — client subscribes via SSE, server keeps running even if client disconnects
-    _runBacktestJobAsync(job, req.userId, {
-      sym, strategyKey, strategyCfg,
+    // Isolated async job (child_process by default) — see BacktestJobService.
+    // Pass only JSON-safe strategyCfg fields (IPC structured clone).
+    const jobId = BacktestJobService.createJob(req.userId, {
+      sym, strategyKey,
+      strategyCfg: strategyCfg ? {
+        label: strategyCfg.label,
+        interval: strategyCfg.interval,
+        higherTf: strategyCfg.higherTf,
+        name: strategyCfg.name,
+      } : null,
       periodId, customStart, customEnd,
       capital, enableFees, enableSlippage,
       parameters, entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
-    }).catch((err) => {
-      if (job.status !== "cancelled") job.fail(err.message || "Backtest failed");
+      exchangeType,
     });
 
     return res.json({ ok: true, jobId });
@@ -1285,8 +1246,8 @@ module.exports = function createBacktestRouter(context) {
    * Re-connect safe: replays progress log on reconnect; sends cached result if already done.
    */
   router.get("/stream/:jobId", (req, res) => {
-    const job = jobStore.get(req.params.jobId);
-    if (!job) return res.status(404).json({ error: "Job not found or expired (30-min TTL)" });
+    const job = BacktestJobService.getJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job not found or expired (TTL)" });
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -1330,20 +1291,30 @@ module.exports = function createBacktestRouter(context) {
 
   /**
    * GET /api/v1/backtest/job-status/:jobId
-   * Polling-based alternative to SSE stream. Returns current job state + all progress logs.
-   * Client polls every ~1s until status is "done", "error", or "cancelled".
+   * Lightweight poll — progress cursor via ?since=N. Full result via GET /job-result/:jobId.
    */
   router.get("/job-status/:jobId", asyncHandler(async (req, res) => {
-    const job = jobStore.get(req.params.jobId);
-    if (!job) return res.status(404).json({ ok: false, error: "Job not found or expired (30-min TTL)" });
+    const job = BacktestJobService.getJob(req.params.jobId);
+    if (!job) return res.status(404).json({ ok: false, error: "Job not found or expired (TTL)" });
 
-    return res.json({
-      ok: true,
-      status: job.status,           // "pending"|"running"|"done"|"error"|"cancelled"
-      progress: job.progressLog,    // all progress events accumulated so far
-      result: job.result || null,
-      error: job.error || null,
-    });
+    const progressSince = parseInt(req.query.since, 10) || 0;
+    const includeResult = req.query.full === "1" || req.query.full === "true";
+    return res.json(BacktestJobService.toPublicStatus(job, { progressSince, includeResult }));
+  }));
+
+  /**
+   * GET /api/v1/backtest/job-result/:jobId
+   * One-shot fetch of the full backtest payload after job-status reports done.
+   */
+  router.get("/job-result/:jobId", asyncHandler(async (req, res) => {
+    const payload = await BacktestJobService.getJobResult(req.params.jobId);
+    if (!payload) {
+      return res.status(404).json({ ok: false, error: "Job not found or expired (TTL)" });
+    }
+    if (payload.status && payload.status !== "done" && !payload.trades && !payload.stats) {
+      return res.status(409).json(payload);
+    }
+    return res.json(payload);
   }));
 
   /**
@@ -1351,434 +1322,13 @@ module.exports = function createBacktestRouter(context) {
    * Abort a running or pending backtest job.
    */
   router.delete("/cancel/:jobId", asyncHandler(async (req, res) => {
-    const job = jobStore.get(req.params.jobId);
-    if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
-    job.cancel();
+    const ok = BacktestJobService.cancelJob(req.params.jobId);
+    if (!ok) return res.status(404).json({ ok: false, error: "Job not found" });
     return res.json({ ok: true, message: "Backtest cancelled" });
   }));
 
   return router;
 };
 
-// ─── Async job runner ─────────────────────────────────────────────────────────
-const AF_SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
-// Shared across AF_SMC, TS_TF (Intraday+Swing), and MD_MR (Scalping+Intraday) —
-// do not scope changes here to one strategy without checking MULTI_TYPE_STRATEGY_MAP
-// below. (Tried moving Intraday to 1h/4h for an AF_SMC-only experiment; that
-// would have silently shifted TS_TF's already-validated Intraday leg off 15m/4h
-// too. AF_SMC's Intraday@1h variant failed validation anyway — see
-// scripts/smc-intraday-1h-validation.js — so left at the shared 15m/4h.)
-const TYPE_TF = {
-  Scalping: { entry: "15m", trend: "4h" },
-  Intraday: { entry: "15m", trend: "4h" },
-  Swing:    { entry: "4h",  trend: "1w" },
-};
-
-// TS_TF/MD_MR reuse AF_SMC's own Scalping/Intraday/Swing TF definitions (same
-// TYPE_TF above) instead of a single fragile entry TF. TS_TF's canonical
-// single-TF entry was 5m — on exchanges with shallow 5m history (e.g. Bitget)
-// that ONE fetch failing killed the whole backtest. Running Intraday(15m)+
-// Swing(4h) avoids 5m entirely; MD_MR keeps Scalping(5m)+Intraday(15m) but now
-// degrades per-type like AF instead of failing outright if 5m comes back empty.
-const MULTI_TYPE_STRATEGY_MAP = {
-  TS_TF: ["Intraday", "Swing"],
-  TREND_FOLLOWING: ["Intraday", "Swing"],
-  MD_MR: ["Scalping", "Intraday"],
-  MEAN_REVERSION: ["Scalping", "Intraday"],
-};
-
-// Per-TF period caps: limit how far back short TFs fetch (avoids timeout).
-// 5m: 150 days covers multiple regimes without huge fetch
-// 15m: 365 days fits comfortably (~35k bars)
-// 4h+: no limit (few bars by nature)
-const TYPE_MAX_PERIOD = {
-  "1m":  "30d",     // (legacy fallback if sequence engine off)
-  "5m": "180d",     // Scalping entry now 5m: 180 days ≈ 51.8k bars
-  "15m": "365d",    // Intraday entry now 15m: 365 days ≈ 35k bars
-  // Higher TFs used as trend/HTF (Scalping trend 1h, Intraday trend + Swing entry 4h,
-  // Swing trend 1w). Previously UNCAPPED → picking "Maximum available" resolved to
-  // 2020→now: 1h ≈ 57k bars, 4h ≈ 14k bars, each an unbounded paginated exchange
-  // fetch (10s gate per page) → timeout / KLINES_NOT_FOUND on exchanges whose futures
-  // history is shallower than 2020 (e.g. Bitget). Bounding "max" here keeps the
-  // fetch finite while still giving multi-year coverage. Only bites when userDays
-  // (max=3650) exceeds the cap; 3m/6m/12m pass through unchanged.
-  "1h":  "730d",    // ≈ 17.5k bars
-  "4h": "1460d",    // ≈ 8.7k bars (4 years)
-  "1w": "3650d",    // ≈ 520 bars — effectively uncapped, explicit for clarity
-};
-
-// Safety: extra bar cap per TF (period cap is primary, this is backup)
-const TYPE_MAX_BARS = {
-  "1m":  90_000,
-  "5m": 120_000,
-  "15m": 60_000,
-};
-
-function getEffectivePeriod(userPeriodId, timeframe) {
-  const maxPeriod = TYPE_MAX_PERIOD[timeframe];
-  if (!maxPeriod) return userPeriodId; // no cap for this TF
-
-  // Map user period to days
-  const userDays = {
-    "3m": 90,
-    "6m": 180,
-    "12m": 365,
-    "max": 3650,
-  }[userPeriodId] || null;
-
-  if (!userDays) return userPeriodId; // custom/unknown, pass through
-
-  const maxDays = parseInt(maxPeriod);
-  if (userDays > maxDays) {
-    return `${maxDays}d`;  // return synthetic period like "90d"
-  }
-  return userPeriodId;  // user period is shorter, use it
-}
-
-async function _runBacktestJobAsync(job, userId, opts) {
-  const {
-    sym, strategyKey, strategyCfg,
-    periodId, customStart, customEnd,
-    capital, enableFees, enableSlippage,
-    parameters, entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
-  } = opts;
-
-  job.status = "running";
-  const startMs = Date.now();
-  const fetchOpts = { periodId, customStart, customEnd };
-  const abortSignal = job.abortController.signal;
-
-  const isAF = AF_SMC_KEYS.has(strategyKey);
-  const multiTypeOrder = MULTI_TYPE_STRATEGY_MAP[strategyKey] || null;
-
-  // Advance config: restrict run to selected trade types (Scalping/Intraday/Swing).
-  // Sent by the FE as parameters.activeTypes; stripped from parameters so it never
-  // leaks into the strategy config. Fallback to the full set when the filter would
-  // empty the strategy (defensive — the FE already drops non-matching strategies).
-  const VALID_TYPES = new Set(["Scalping", "Intraday", "Swing"]);
-  const activeTypes = Array.isArray(parameters?.activeTypes)
-    ? parameters.activeTypes.filter(t => VALID_TYPES.has(t))
-    : null;
-  if (parameters && "activeTypes" in parameters) delete parameters.activeTypes;
-  const applyTypeFilter = (order) => {
-    if (!activeTypes?.length) return order;
-    const filtered = order.filter(t => activeTypes.includes(t));
-    return filtered.length ? filtered : order;
-  };
-
-  if ((isAF || multiTypeOrder) && !entryTfOverride) {
-    // Multi-type mode: each type fetches its own candles, runs only its own component.
-
-    // TS_TF/MD_MR use a subset (see MULTI_TYPE_STRATEGY_MAP) but share the exact same
-    // TF definitions/fetch resilience/period caps below.
-    const entryCandles = {};
-    const htfCandles   = {};
-    const dataInfo     = {};
-
-    // Normalize typeOrder: filter to supported types, expand "All", then apply FE filter
-    let typeOrder = isAF ? Object.keys(TYPE_TF) : multiTypeOrder;
-
-    // (1) Filter to only types supported by this strategy (mandatory)
-    const supportedForStrategy = STRATEGY_SUPPORTED_TYPES[strategyKey] || [];
-    typeOrder = typeOrder.filter(t => supportedForStrategy.includes(t));
-
-    // (2) Expand "All" pseudo-type to actual supported types
-    typeOrder = expandAllTypes(strategyKey, typeOrder);
-
-    // (3) Apply FE advance-config filter (activeTypes parameter, optional)
-    typeOrder = applyTypeFilter(typeOrder);
-
-    // Validate typeOrder against strategy's supported types
-    // (Should always pass now, but kept as safety check)
-    const validation = validateTypeOrderForStrategy(strategyKey, typeOrder);
-    if (!validation.valid) {
-      throw new Error(validation.error);
-    }
-
-    for (const type of typeOrder) {
-      const tfs = TYPE_TF[type];
-      if (abortSignal.aborted) throw new Error("Cancelled");
-
-      job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `Fetching ${type} candles (${tfs.entry})…`, pct: 0 });
-
-      try {
-        // Adjust period for this TF: Scalping 1m with user's 12m → use 90d instead
-        const effectivePeriod = getEffectivePeriod(fetchOpts.periodId, tfs.entry);
-        const typeMaxBars = TYPE_MAX_BARS[tfs.entry]; // undefined for 4h+ (no cap)
-        const entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-          symbol: sym, timeframe: tfs.entry, ...fetchOpts, periodId: effectivePeriod, allowClamp: true, abortSignal,
-          ...(typeMaxBars ? { maxBarsOverride: typeMaxBars } : {}),
-          onProgress: (loaded, total) => {
-            const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
-            job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `${type} (${tfs.entry}): ${loaded.toLocaleString()} / ${total.toLocaleString()} bars`, pct });
-          },
-        });
-        entryCandles[type] = entryRes.candles || [];
-        dataInfo[type] = {
-          entryBars: entryCandles[type].length,
-          realBars: entryRes.realBars,
-          coverage: entryRes.coverage,
-          startDate: entryRes.startDate,
-          endDate: entryRes.endDate,
-          clamped: entryRes.clamped || false,
-        };
-      } catch (e) {
-        if (e.code === "CANCELLED") throw e;
-        entryCandles[type] = [];
-        dataInfo[type] = { error: e.message };
-      }
-
-      job.progress({ phase: "fetch", type, timeframe: tfs.trend, message: `Fetching ${type} HTF candles (${tfs.trend})…`, pct: 0 });
-      try {
-        const effectiveHtfPeriod = getEffectivePeriod(fetchOpts.periodId, tfs.trend);
-        // warmupBars 60: HTF indicators (EMA50, ADX14) need closed HTF history
-        // BEFORE the eval window. Without padding, a 12m run's Swing leg gets 52
-        // weekly bars → EMA50(1w) valid only for the last ~2 weeks and the
-        // fail-closed HTF ADX gate blocks nearly every Swing entry. Engine
-        // aligns by timestamp (htfPtr), so pre-window HTF bars are NOT lookahead.
-        const trendRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-          symbol: sym, timeframe: tfs.trend, ...fetchOpts, periodId: effectiveHtfPeriod, allowClamp: true, abortSignal,
-          warmupBars: 60,
-        });
-        htfCandles[type] = trendRes.candles || [];
-      } catch (e) {
-        if (e.code === "CANCELLED") throw e;
-        htfCandles[type] = [];
-      }
-    }
-
-    if (abortSignal.aborted) throw new Error("Cancelled");
-
-    job.progress({ phase: "compute", message: isAF ? "Running triple-TF simulation…" : "Running multi-TF simulation…", pct: 0 });
-
-    const typeTotal = typeOrder.length;
-    let typesDone = 0;
-
-    // Fetch daily candles for regime gate (shared across all types/strategies)
-    let dailyCandles = [];
-    try {
-      job.progress({ phase: "fetch", message: "Fetching daily candles for regime gate…", pct: 0 });
-      const dailyRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-        symbol: sym, timeframe: "1d", ...fetchOpts, allowClamp: true, abortSignal,
-      });
-      dailyCandles = dailyRes.candles || [];
-    } catch (e) {
-      if (e.code === "CANCELLED") throw e;
-      console.warn("Failed to fetch daily candles for regime gate:", e.message);
-      dailyCandles = [];
-    }
-
-    const computeOpts = {
-      entryCandles,
-      htfCandles,
-      dailyCandles,
-      // Risk ladder must normalize over the strategy's NATURAL type set, not the
-      // user-filtered one — else "Scalping only" hands the 0.5%-weight leg the
-      // FULL combined 3.5% cap (7x the ladder). See riskShareForType callers.
-      naturalTypeOrder: isAF ? Object.keys(TYPE_TF) : multiTypeOrder,
-      strategyKey,
-      capital: Number(capital) || 1000,
-      enableFees: enableFees !== false,
-      enableSlippage: !!enableSlippage,
-      config: parameters,
-      abortSignal,
-      // Grok Confirm Gate (AI) — post-hoc filter over produced trades
-      grokGate: !!grokGate,
-      ragGate: !!ragGate,
-      userId,
-      symbol: sym,
-      onGrokProgress: (done, total) => {
-        // phase:"grok" is routed by the FE to the right-hand Grok drawer (not the
-        // inline stream log); done/total let the drawer show an accurate progress bar.
-        job.progress({ phase: "grok", done, total, message: `Grok Confirm Gate: ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
-      },
-      onRagProgress: (done, total) => {
-        job.progress({ phase: "rag", done, total, message: `RAG Gate (ML): ${done}/${total} entri…`, pct: total > 0 ? Math.round(done / total * 100) : 0 });
-      },
-      onProgress: (pct, _bar, _total, type) => {
-        const basePct = Math.round(typesDone / typeTotal * 100);
-        const typePct = Math.round(pct / typeTotal);
-        job.progress({ phase: "compute", type, message: `Computing ${type} signals… ${pct}%`, pct: basePct + typePct });
-        if (pct >= 100) typesDone++;
-      },
-    };
-
-    const result = isAF
-      ? await runTripleTypeBacktest({ ...computeOpts, typeOrder })
-      : await runMultiTypeBacktest(computeOpts, typeOrder);
-
-
-    const scalping = result.perTypeStats?.Scalping;
-    if (scalping?.ablation) {
-      const a = scalping.ablation;
-      const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
-      const funnel = {
-        phase: "info",
-        type: "AF-SCALP-13-ABLATION",
-        message: `[AF-SCALP-13] Scalping filter funnel:\n` +
-          `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}\n` +
-          `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}%)\n` +
-          `     -> signals after rejection   : ${a.seqSignal}\n` +
-          `  3. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}%)\n` +
-          `  4. - 5m CHoCH validation        : -${a.rejByChoch}\n` +
-          `  5. - Confidence floor           : -${a.rejByConf}\n` +
-          `  = PASSED (tradeable signals)    : ${a.passed}`,
-        ablation: a,
-      };
-      job.progress(funnel);
-    }
-
-    // Surface silently-degraded legs. Per-type resilience means a failed/short
-    // fetch just skips that leg (0 trades) while the others run — correct for
-    // robustness, but invisible in the result: a 6y "All Type" TS_TF run whose
-    // 15m fetch timed out exported 16 trades that were 100% the Swing leg, and
-    // downstream analysis (user + Grok) read it as combined-strategy performance.
-    // Stamp the skip into the mode label + a warnings array the FE can show.
-    const typeWarnings = [];
-    for (const t of typeOrder) {
-      const di = dataInfo[t] || {};
-      if (di.error) {
-        typeWarnings.push(`${t}: SKIPPED — data fetch failed (${di.error})`);
-      } else if (!di.entryBars || di.entryBars < 60) {
-        typeWarnings.push(`${t}: SKIPPED — insufficient candles (${di.entryBars ?? 0} bars)`);
-      } else if (di.clamped) {
-        typeWarnings.push(`${t}: data clamped to last ${di.entryBars.toLocaleString()} bars (${di.startDate ?? "?"} → ${di.endDate ?? "?"}) — shorter than requested period`);
-      }
-    }
-    if (typeWarnings.length) {
-      job.progress({ phase: "warn", message: `⚠ Type coverage:\n  ${typeWarnings.join("\n  ")}` });
-    }
-
-    const modeLabel = typeOrder.map(t => {
-      const di = dataInfo[t] || {};
-      const skipped = di.error || !di.entryBars || di.entryBars < 60;
-      return `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})${skipped ? " — SKIPPED, no data" : ""}`;
-    }).join(" + ");
-
-    job.done({
-      ok: true,
-      engine: isAF ? "real-1to1-triple-tf" : "real-1to1-multi-tf",
-      strategyKey,
-      symbol: sym,
-      mode: isAF ? `SMC Sequence — ${modeLabel}` : `Multi-TF — ${modeLabel}`,
-      dataInfo,
-      typeWarnings,
-      computeTimeMs: Date.now() - startMs,
-      ...result,
-    });
-    return;
-  }
-
-  // Single-TF mode
-  const entryTf = entryTfOverride || strategyCfg?.interval || "15m";
-  const htfTf   = htfTfOverride !== undefined ? htfTfOverride : (strategyCfg?.higherTf || null);
-
-  // Per-TF period cap (same as the AF triple-TF path): a short entry TF like 5m
-  // (Trend Following) over "12m" would fetch ~105k bars → huge fetch + a heavy
-  // compute loop. Cap short TFs (5m→180d, 15m→365d) so single-strategy real-engine
-  // runs stay responsive. 4h+ has no cap.
-  const entryEffectivePeriod = getEffectivePeriod(fetchOpts.periodId, entryTf);
-  const entryMaxBars = TYPE_MAX_BARS[entryTf];
-
-  job.progress({ phase: "fetch", timeframe: entryTf, message: `Fetching ${entryTf} candles…`, pct: 0 });
-
-  // A single-TF strategy (TS_TF entry 5m, MD_MR entry 15m) has ONLY this one data
-  // source — unlike AF's triple-TF path, which catches per-type and degrades the
-  // failing component to 0 trades while the others still run. A short TF like 5m
-  // often has no deep history on some exchanges (e.g. Bitget serves only recent
-  // 5m candles) → fetchOHLCV returns empty → KLINES_NOT_FOUND. Without this guard
-  // that raw error propagates and kills the whole job (and, in a tier package, the
-  // whole tier). Wrap it and fail with an ACTIONABLE, strategy-aware message.
-  const stratLabel = strategyCfg?.label || strategyKey;
-  let entryRes;
-  try {
-    entryRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-      symbol: sym, timeframe: entryTf, ...fetchOpts, periodId: entryEffectivePeriod, allowClamp: true, abortSignal,
-      ...(entryMaxBars ? { maxBarsOverride: entryMaxBars } : {}),
-      onProgress: (loaded, total) => {
-        const pct = total > 0 ? Math.min(99, Math.round(loaded / total * 100)) : 0;
-        job.progress({ phase: "fetch", timeframe: entryTf, message: `Loading ${entryTf} candles: ${loaded.toLocaleString()} / ${total.toLocaleString()}`, pct });
-      },
-    });
-  } catch (e) {
-    if (e.code === "CANCELLED") throw e;
-    const err = new Error(
-      `${stratLabel}: gagal memuat candle ${entryTf} — ${e.message} ` +
-      `Exchange mungkin tak menyediakan data ${entryTf} sejauh periode itu. ` +
-      `Coba periode lebih pendek/terbaru, timeframe lebih tinggi, atau exchange lain (mis. Binance).`
-    );
-    err.code = e.code || "ENTRY_FETCH_FAILED";
-    err.strategyKey = strategyKey;
-    throw err;
-  }
-  const entryCandles = entryRes.candles || [];
-  if (entryCandles.length < 60) {
-    const err = new Error(
-      `${stratLabel}: data ${entryTf} tidak cukup (${entryCandles.length} bar) untuk backtest. ` +
-      `Coba periode lebih panjang, timeframe lebih tinggi, atau exchange lain.`
-    );
-    err.code = "INSUFFICIENT_DATA";
-    err.strategyKey = strategyKey;
-    throw err;
-  }
-
-  let htfCandles = null;
-  if (htfTf) {
-    job.progress({ phase: "fetch", timeframe: htfTf, message: `Fetching HTF candles (${htfTf})…`, pct: 0 });
-    try {
-      const htfRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-        symbol: sym, timeframe: htfTf, ...fetchOpts, periodId: getEffectivePeriod(fetchOpts.periodId, htfTf), allowClamp: true, abortSignal,
-        warmupBars: 60, // HTF indicator warmup — see multi-type fetch note
-      });
-      htfCandles = htfRes.candles || null;
-    } catch { htfCandles = null; }
-  }
-
-  job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
-
-  // Fetch daily candles for regime gate
-  let dailyCandles = [];
-  try {
-    job.progress({ phase: "fetch", message: "Fetching daily candles for regime gate…", pct: 0 });
-    const dailyRes = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
-      symbol: sym, timeframe: "1d", ...fetchOpts, allowClamp: true, abortSignal,
-    });
-    dailyCandles = dailyRes.candles || [];
-  } catch (e) {
-    if (e.code === "CANCELLED") throw e;
-    console.warn("Failed to fetch daily candles for regime gate:", e.message);
-    dailyCandles = [];
-  }
-
-  job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
-
-  const result = await runRealBacktest({
-    entryCandles,
-    htfCandles,
-    dailyCandles,
-    strategyKey,
-    capital: Number(capital) || 1000,
-    enableFees: enableFees !== false,
-    enableSlippage: !!enableSlippage,
-    config: parameters,
-    debug: !!debugMode,
-    abortSignal,
-    onProgress: (pct) => job.progress({ phase: "compute", message: `Simulating… ${pct}%`, pct }),
-  });
-
-  job.done({
-    ok: true,
-    engine: "real-1to1",
-    strategyKey,
-    symbol: sym,
-    entryTimeframe: entryTf,
-    htfTimeframe: htfTf,
-    entryBars: entryCandles.length,
-    htfBars: htfCandles?.length ?? 0,
-    dataStart: entryRes.startDate,
-    dataEnd: entryRes.endDate,
-    source: entryRes.source,
-    computeTimeMs: Date.now() - startMs,
-    ...result,
-  });
-}
+// Job runner extracted to src/server/services/runBacktestJob.js + BacktestJobService.js
+// (BUG-CRITICAL 502: child_process isolation + candle/memory caps).

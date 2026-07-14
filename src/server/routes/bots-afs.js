@@ -724,6 +724,36 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+      // Sprint 14 HALT: never arm BS_BR / BREAKOUT_RETEST live, even when
+      // strategyKey is omitted from body (existing bot or multi-tier path).
+      {
+        const { isBsBrHaltedKey } = require("../../config/strategies");
+        const dryMode = botData.dryRun === true;
+        const haltedInPool = strategies.filter((s) => isBsBrHaltedKey(s));
+        if (!dryMode && haltedInPool.length) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message:
+              `Strategi ${haltedInPool.join(", ")} di-HALT (Sprint 14: expectancy negatif). ` +
+              `Hanya Dry Run / backtest sampai re-test gate lolos.`,
+            code: "STRATEGY_DRYRUN_ONLY",
+            strategies: haltedInPool,
+          });
+        }
+        if (bot && !dryMode && isBsBrHaltedKey(bot.strategyKey)) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message:
+              `Bot ${symbol} memakai ${bot.strategyKey} yang di-HALT (Sprint 14). ` +
+              `Ubah strategy atau jalankan Dry Run saja.`,
+            code: "STRATEGY_DRYRUN_ONLY",
+            strategy: bot.strategyKey,
+          });
+        }
+      }
+
       // ── Resolve exchange + credentials (dibutuhkan gate margin & start) ──────
       const { getExchangeCredentials } = require("../../services/userExchange");
       const { getConnectedExchange } = require("../../services/ExchangeService");
@@ -1434,6 +1464,16 @@ module.exports = function createBotsRouter(helpers) {
   );
 
   /**
+   * GET /api/v1/bots/strategies/catalog
+   * Canonical strategy registry for FE pickers/filters (engines + race components).
+   * Legacy Gen1 aliases are listed under `aliases` only — never as selectable options.
+   */
+  router.get("/strategies/catalog", asyncHandler(async (_req, res) => {
+    const { getStrategyCatalog } = require("../../config/strategies");
+    res.json({ ok: true, ...getStrategyCatalog() });
+  }));
+
+  /**
    * GET /api/v1/bots/strategies/available
    * List strategies filtered by user's tier.
    * Returns allowed strategies + locked list with required tier.
@@ -1517,13 +1557,16 @@ module.exports = function createBotsRouter(helpers) {
       riskConfig,
     };
 
-    // Add component info for ADAPTIVE_FUSION
-    if (key === "ADAPTIVE_FUSION") {
-      response.components = [
-        { key: "A", name: "Aggressive Scalping", minBalance: 500 },
-        { key: "B", name: "Day Trading", minBalance: 50 },
-        { key: "C", name: "Swing Trading", minBalance: 0 },
-      ];
+    // Race-pool components for AF (Gen2). Legacy A/B/C PDF presets are unrelated.
+    const { normalizeStrategyKey, TIER_COMPONENT_MAP } = require("../../config/strategies");
+    const canonical = normalizeStrategyKey(key);
+    if (canonical === "AF_SMC" || key === "ADAPTIVE_FUSION") {
+      response.components = (TIER_COMPONENT_MAP.FOUNDRY?.active || []).map((ck) => ({
+        key: ck,
+        name: STRATEGIES[ck]?.label || ck,
+      }));
+      response.canonicalKey = "AF_SMC";
+      if (key !== "AF_SMC") response.deprecatedAliasOf = "AF_SMC";
     }
 
     res.json({

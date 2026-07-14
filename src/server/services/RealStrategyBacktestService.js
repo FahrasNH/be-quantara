@@ -32,23 +32,160 @@ const { STRATEGIES } = require("../../domain/legacyStrategies");
 const { meanReversionRegimeFilter } = require("../../domain/htfRegimeFilter");
 const { riskShareForType } = require("../../domain/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../domain/dailyRegimeGate");
+const {
+  resolveScalpingGateFlags,
+  resolveSwingGateFlags,
+  buildSmcEntryFeatures,
+  applySmcSideRegimeGate,
+  applySmcFundingGuard,
+  buildCostModelMeta,
+  holdHoursBetween,
+} = require("../../domain/strategy/smc/smcScalpGates");
 const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter");
+const { resolveEntryReasons } = require("./csv/strategyReasonFormatters");
+const { resolveFeeSchedule } = require("../../constants/exchangeFeeSchedules");
+
+/** Coerce indicator snapshots to a finite scalar (reject arrays / absurd values). */
+function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
+  if (v == null || v === "") return null;
+  if (Array.isArray(v)) {
+    for (let i = v.length - 1; i >= 0; i--) {
+      const n = Number(v[i]);
+      if (Number.isFinite(n) && n >= min && n <= max) return n;
+    }
+    return null;
+  }
+  if (typeof v === "object") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
 
 // Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
 // the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
 // silently failed for "MD_MR", making the MR gate exemption + regime filter dead
 // code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
-const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION"]);
-const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING"]);
-const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING"]);
-const SMC_KEYS = new Set(["AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"]);
+const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION", "MD_SD", "MD_SA"]);
+const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BS_ICT", "BS_LS"]);
+const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"]);
+const SMC_KEYS = new Set([
+  "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
+  "AF_WYCKOFF", "AF_VSA",
+]);
 const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
 const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
 const isSmcKey = (k) => SMC_KEYS.has(String(k || "").toUpperCase());
 
-const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
+/**
+ * Resolve MD race participants from Advance selectedComponents.
+ */
+function resolveMdCombination(cfg = {}) {
+  const mode = String(cfg.mdCombinationMode || "race").toLowerCase();
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
+  const mdComps = Array.isArray(comps)
+    ? comps.filter((c) =>
+      ["MD_MR", "MEAN_REVERSION", "MD_SD", "MD_SA", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"].includes(
+        String(c).toUpperCase()
+      )
+    )
+    : [];
+  const upper = mdComps.map((c) => String(c).toUpperCase());
+  const selectedComponents = upper.length
+    ? upper.map((c) => {
+      if (c === "MEAN_REVERSION") return "MD_MR";
+      if (c === "SUPPLY_AND_DEMAND") return "MD_SD";
+      if (c === "STATISTICAL_ARBITRAGE") return "MD_SA";
+      return c;
+    })
+    : null;
+  return {
+    mdCombinationMode: mode === "layering" || mode === "pipeline" ? "pipeline" : mode,
+    selectedComponents,
+    mdActiveRacers: selectedComponents || cfg.mdActiveRacers || null,
+  };
+}
+
+/**
+ * Resolve BS race participants from Advance selectedComponents.
+ */
+function resolveBsCombination(cfg = {}) {
+  const mode = String(cfg.bsCombinationMode || "race").toLowerCase();
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
+  const bsComps = Array.isArray(comps)
+    ? comps.filter((c) =>
+      ["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BS_ICT", "BS_LS", "ICT", "LIQUIDATION_SQUEEZE"].includes(
+        String(c).toUpperCase()
+      )
+    )
+    : [];
+  const upper = bsComps.map((c) => String(c).toUpperCase());
+  const selectedComponents = upper.length
+    ? upper.map((c) => {
+      if (c === "BREAKOUT_RETEST" || c === "BREAKOUT_TRADING") return "BS_BR";
+      if (c === "ICT") return "BS_ICT";
+      if (c === "LIQUIDATION_SQUEEZE") return "BS_LS";
+      return c;
+    })
+    : null;
+  return {
+    bsCombinationMode: mode === "single" || mode === "pipeline" ? "single" : mode,
+    selectedComponents,
+    bsActiveRacers: selectedComponents || cfg.bsActiveRacers || null,
+  };
+}
+
+/** Sprint 14: BS_BR enrichment for CSV / WinPredictor (from getLastSignalMeta). */
+function extractBsBrEnrichment(meta) {
+  if (!meta) return {};
+  return {
+    bbSqueezeWidthAtr: meta.bbSqueezeWidthAtr ?? null,
+    breakoutVolumeRatio: meta.breakoutVolumeRatio ?? null,
+    retestDepthAtr: meta.retestDepthAtr ?? null,
+    rejectionWickPct: meta.rejectionWickPct ?? null,
+    consolidationBars: meta.consolidationBars ?? null,
+    breakoutCandleAtr: meta.breakoutCandleAtr ?? null,
+    bbWidth: meta.bbWidth ?? meta.squeezeWidthPct ?? null,
+    volumeRatio: meta.volumeRatio ?? meta.breakoutVolumeRatio ?? null,
+  };
+}
+
+/** Defaults = Bitget retail schedule (historical hardcode; prefer resolveFeeModel). */
+const _DEFAULT_FEE = resolveFeeSchedule("bitget");
+const FEE_RATE_PER_SIDE = _DEFAULT_FEE.takerFeeRate; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
+/** Typical crypto perpetual funding ~0.01% per 8h (conservative cost model). */
+const FUNDING_RATE_8H = _DEFAULT_FEE.fundingRate8h;
+const MS_PER_8H = 8 * 60 * 60 * 1000;
+
+/**
+ * Resolve taker/maker/funding from opts.feeSchedule, opts.exchangeType, or Bitget default.
+ * @param {{ exchangeType?: string, feeSchedule?: object, enableFees?: boolean }} opts
+ */
+function resolveFeeModel(opts = {}) {
+  const schedule = opts.feeSchedule?.takerFeeRate != null
+    ? opts.feeSchedule
+    : resolveFeeSchedule(opts.exchangeType);
+  const enableFees = opts.enableFees !== false;
+  return {
+    schedule,
+    exchange: schedule.exchange,
+    exchangeLabel: schedule.label,
+    takerFeeRate: schedule.takerFeeRate,
+    makerFeeRate: schedule.makerFeeRate,
+    fundingRate8h: schedule.fundingRate8h,
+    feeRate: enableFees ? schedule.takerFeeRate : 0,
+  };
+}
+
+/** Accrue absolute funding cost over hold time (parity with live funding drag). */
+function estimateFundingCost(entryPrice, size, openTs, closeTs, enabled, fundingRate8h = FUNDING_RATE_8H) {
+  if (!enabled || !(entryPrice > 0) || !(size > 0)) return 0;
+  const holdMs = Math.max(0, (closeTs || 0) - (openTs || 0));
+  const periods = holdMs / MS_PER_8H;
+  const rate = Number.isFinite(fundingRate8h) ? fundingRate8h : FUNDING_RATE_8H;
+  return periods * rate * entryPrice * size;
+}
 
 /** Map an entry-bar timestamp → index of last CLOSED htf candle at/just before it. */
 function buildHtfIndexPointer(entryCandles, htfCandles) {
@@ -69,23 +206,157 @@ function isoOf(c) {
 }
 
 /** Attach full entryContext for RAG gate / WinPredictor (mirrors live ML pipeline). */
-function withBacktestEntryContext(tradeObj, position, strategyKey) {
+function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) {
+  const label = displayName || strategyKey;
+  const entry = tradeObj.entry ?? position?.entry;
+  // Guard against array/object bleed into CSV numeric columns (ATR/RSI showing 1e15+).
+  const atr = scalarIndicator(position?.atr ?? tradeObj.atr, { min: 0, max: 1e9 });
+  const entryRsi = scalarIndicator(position?.entryRsi ?? tradeObj.entryRsi, { min: 0, max: 100 });
+  if (atr != null) tradeObj.atr = atr;
+  if (entryRsi != null) tradeObj.entryRsi = entryRsi;
+  else if (tradeObj.entryRsi != null && entryRsi == null) tradeObj.entryRsi = null;
+
   const ctxSource = {
-    entry:      tradeObj.entry ?? position?.entry,
-    atr:        position?.atr ?? tradeObj.atr ?? null,
-    entryRsi:   position?.entryRsi ?? tradeObj.entryRsi ?? null,
+    entry,
+    atr:        atr ?? 0,
+    entryRsi:   entryRsi ?? 50,
     htfTrend:   position?.htfTrend ?? tradeObj.htfTrend ?? null,
     marketCond: position?.marketCond ?? tradeObj.marketCond ?? null,
     confidence: position?.confidence ?? tradeObj.confidence ?? null,
     tradeType:  tradeObj.tradeType ?? tradeObj.component ?? position?.component,
-    strategy:   strategyKey,
+    strategy:   label,
   };
+  tradeObj.strategy = label;
+  tradeObj.strategyKey = strategyKey;
+  tradeObj.strategyLabel = label;
+  if (position?.winningComponent && tradeObj.winningComponent == null) {
+    tradeObj.winningComponent = position.winningComponent;
+  }
+
+  // Sprint 14: pass through BS_BR enrichment columns for CSV / WinPredictor
+  const BR_ENRICH_KEYS = [
+    "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr",
+    "rejectionWickPct", "consolidationBars", "breakoutCandleAtr",
+    "bbWidth", "volumeRatio",
+  ];
+  for (const k of BR_ENRICH_KEYS) {
+    if (tradeObj[k] == null && position?.[k] != null) tradeObj[k] = position[k];
+  }
+
+  // Compute human-readable entryReasons at close so FE client CSV + archive
+  // export both see a string (FE previously only passthrough'd entryReasons).
+  const entryMeta = tradeObj.entryMeta ?? position?.entryMeta ?? null;
+  if (tradeObj.entryMeta == null && entryMeta != null) tradeObj.entryMeta = entryMeta;
+  const reasonKey =
+    tradeObj.winningComponent
+    || position?.winningComponent
+    || entryMeta?.winningComponent
+    || entryMeta?.component
+    || strategyKey;
+  if (tradeObj.entryReasons == null || tradeObj.entryReasons === "") {
+    const resolved = resolveEntryReasons(reasonKey, entryMeta);
+    tradeObj.entryReasons = resolved || null;
+  }
+
   tradeObj.entryContext = buildBacktestEntryContext(ctxSource, {
     strategyKey,
     openTime: tradeObj.openTime,
     price:    ctxSource.entry,
   });
   return tradeObj;
+}
+
+/**
+ * Resolve TS combination mode + racer set from Advance selectedComponents.
+ *
+ * Sprint 12 default: race-to-confirm (independent TS_TF / TS_MS / TS_VP).
+ * Gate flags only apply when tsCombinationMode is "gate" or "hybrid".
+ */
+function resolveTsCombination(cfg = {}) {
+  const mode = String(cfg.tsCombinationMode || "race").toLowerCase();
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
+  const tsComps = Array.isArray(comps)
+    ? comps.filter((c) =>
+      ["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"].includes(String(c).toUpperCase())
+    )
+    : [];
+  const upper = tsComps.map((c) => String(c).toUpperCase());
+  const selectedComponents = upper.length
+    ? upper.map((c) => (c === "TREND_FOLLOWING" ? "TS_TF" : c))
+    : null;
+
+  // Legacy gate-flag resolution (only meaningful for gate/hybrid modes).
+  let tsUseStructureGate = cfg.tsUseStructureGate;
+  let tsUseVwapPrecision = cfg.tsUseVwapPrecision;
+  if (upper.length) {
+    const onlyTrigger = upper.every((c) => c === "TS_TF" || c === "TREND_FOLLOWING");
+    if (onlyTrigger) {
+      tsUseStructureGate = false;
+      tsUseVwapPrecision = false;
+    } else if (mode === "gate" || mode === "layering" || mode === "hybrid") {
+      tsUseStructureGate = upper.includes("TS_MS");
+      tsUseVwapPrecision = upper.includes("TS_VP");
+    }
+  }
+
+  return {
+    tsCombinationMode: mode === "layering" ? "gate" : mode,
+    selectedComponents,
+    tsUseStructureGate,
+    tsUseVwapPrecision,
+  };
+}
+
+/** @deprecated Use resolveTsCombination — kept for older callers/tests. */
+function resolveTsLayerFlags(cfg = {}) {
+  const r = resolveTsCombination(cfg);
+  return {
+    tsUseStructureGate: r.tsUseStructureGate,
+    tsUseVwapPrecision: r.tsUseVwapPrecision,
+  };
+}
+
+function resolveStrategyDisplayName(strategyKey, cfg = {}) {
+  if (cfg.strategyDisplayName) return cfg.strategyDisplayName;
+  if (cfg.displayLabel) return cfg.displayLabel;
+  const comps = cfg.selectedComponents || cfg.activeStrategyComponents;
+  if (Array.isArray(comps) && comps.length) {
+    // Race mode: run header lists the unlocked pool; per-trade labels come from
+    // the winning racer via getLastSignalMeta().strategyLabel.
+    const labels = comps.map((c) => {
+      const s = STRATEGIES[c];
+      return s?.label || c;
+    });
+    if (labels.length === 1) return labels[0];
+    if (labels.length > 1) {
+      const tsMode = String(cfg.tsCombinationMode || "race").toLowerCase();
+      const afMode = String(cfg.afCombinationMode || "race").toLowerCase();
+      const isTs = comps.some((c) => String(c).startsWith("TS_") || c === "TREND_FOLLOWING");
+      const isAf = comps.some((c) =>
+        ["AF_SMC", "AF_WYCKOFF", "AF_VSA", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"].includes(String(c))
+      );
+      if (isTs && tsMode === "race") return `Trend Surge race (${labels.join(", ")})`;
+      if (isAf && afMode === "race") return `Adaptive Fusion race (${labels.join(", ")})`;
+      const mdMode = String(cfg.mdCombinationMode || "race").toLowerCase();
+      const bsMode = String(cfg.bsCombinationMode || "race").toLowerCase();
+      const isMd = comps.some((c) => String(c).startsWith("MD_") || c === "MEAN_REVERSION");
+      const isBs = comps.some((c) =>
+        String(c).startsWith("BS_") || ["BREAKOUT_RETEST", "BREAKOUT_TRADING"].includes(String(c))
+      );
+      if (isMd && mdMode === "race") return `Mean Drift race (${labels.join(", ")})`;
+      if (isBs && bsMode === "race") return `Breakout Storm race (${labels.join(", ")})`;
+      return labels.join(" + ");
+    }
+  }
+  return STRATEGIES[strategyKey]?.label || strategyKey;
+}
+
+function resolveTradeDisplayName(strategyKey, cfg, meta, fallbackDisplayName) {
+  if (meta?.strategyLabel) return meta.strategyLabel;
+  if (meta?.winningComponent && STRATEGIES[meta.winningComponent]?.label) {
+    return STRATEGIES[meta.winningComponent].label;
+  }
+  return fallbackDisplayName || resolveStrategyDisplayName(strategyKey, cfg);
 }
 
 /**
@@ -131,6 +402,10 @@ function buildAtrBaseline(atrArr, window = 100) {
 async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
+  const strategyDisplayName = resolveStrategyDisplayName(strategyKey, cfg);
+
+  // AF umbrella is a process singleton — clear ablation counters between runs.
+  if (typeof strategy.resetAblation === "function") strategy.resetAblation();
 
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
@@ -140,11 +415,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
-  // AF_SMC entry-TF ADX (chop gate): SmartMoneyConceptsStrategy reads
-  // indicators.adx but calcIndicators never populated it — the gate has been
-  // permanently fail-open (dead code) regardless of config. Populate it here
-  // so typeOverrides[component].minAdx can actually filter chop bars.
-  if (isSmcKey(strategyKey)) {
+  // AF_SMC entry-TF ADX (chop gate) + MD_MR ADX regime gate (MD-SUB-01):
+  // calcIndicators does not populate adx — attach it for strategies that need it.
+  if (isSmcKey(strategyKey) || isMRKey(strategyKey)) {
     indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
   }
 
@@ -225,9 +498,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   let dailyLoss = 0;
   let dailyStartCapital = startCapital;
 
-  const maxConsecLoss = cfg.maxConsecLoss ?? 2;
+  const maxConsecLoss = cfg.maxConsecLoss ?? 3;
   const maxTradesPerDay = cfg.maxTradesPerDay ?? 6;
-  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
+  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.03;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
 
@@ -299,10 +572,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         atr: position.atr ?? null,
         entryRsi: position.entryRsi ?? null,
         htfTrend: position.htfTrend ?? null,
+        dailyRegime: position.dailyRegime ?? null,
+        entryMeta: position.entryMeta ?? null,
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      }, position, strategyKey));
+      }, position, position.winningComponent || strategyKey, position.strategyLabel || strategyDisplayName));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
@@ -362,8 +637,22 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const entryFeeRate = useMaker ? makerRate : feeRate;
     const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
     const fee = entryFeeRate * position.entry * closeSize + exitFeeRate * px * closeSize;
-    const pnl = grossPnl - fee;
+    const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
+    const closeTs = entryCandles[exitIdx]?.timestamp ?? 0;
+    const funding = estimateFundingCost(
+      position.entry, closeSize, openTs, closeTs,
+      cfg.simulateFunding !== false && feeRate > 0,
+      cfg.fundingRate8h ?? FUNDING_RATE_8H
+    );
+    const pnl = grossPnl - fee - funding;
     capital += pnl;
+
+    // Sprint 13 Fee=0 audit: if cost model is ON, never emit silent zero fees
+    // on a real-sized close (guards against makerRate/feeRate misconfig).
+    let feeOut = fee;
+    if (feeRate > 0 && closeSize > 0 && feeOut === 0) {
+      feeOut = feeRate * (position.entry + px) * closeSize;
+    }
 
     if (pnl < 0) {
       const compLoss = (componentConsecLoss.get(componentId) || 0) + 1;
@@ -380,6 +669,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       ? strategy.getTradeTypeLabel(componentId)
       : componentId;
 
+    const holdHours = holdHoursBetween(openTs, closeTs);
+
     trades.push(withBacktestEntryContext({
       date: closeTime,
       openTime: isoOf(entryCandles[position.openIdx]),
@@ -388,14 +679,15 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       strategy: strategyKey,
       component: tradeTypeLabel,
       tradeType: tradeTypeLabel,
-      marketCond: position.marketCond,
+      marketCond: position.marketCond || "NORMAL",
       entry: position.entry,
       exit: px,
       sl: position.sl,
       tp: position.tp,
       size: closeSize,
       grossPnl,
-      fee,
+      fee: feeOut,
+      funding,
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
@@ -404,10 +696,36 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       atr: position.atr ?? null,
       entryRsi: position.entryRsi ?? null,
       htfTrend: position.htfTrend ?? null,
+      dailyRegime: position.dailyRegime ?? "UNKNOWN",
+      entryMeta: position.entryMeta ?? null,
+      // Sprint 13 ML / confidence component columns
+      sweepStrength: position.sweepStrength ?? null,
+      fvgSizeAtr: position.fvgSizeAtr ?? null,
+      obDistanceAtr: position.obDistanceAtr ?? null,
+      displacementPct: position.displacementPct ?? null,
+      htfAdx: position.htfAdx ?? null,
+      hourUtc: position.hourUtc ?? null,
+      volumeRatio: position.volumeRatio ?? null,
+      bbWidth: position.bbWidth ?? null,
+      bbSqueezeWidthAtr: position.bbSqueezeWidthAtr ?? null,
+      breakoutVolumeRatio: position.breakoutVolumeRatio ?? null,
+      retestDepthAtr: position.retestDepthAtr ?? null,
+      rejectionWickPct: position.rejectionWickPct ?? null,
+      consolidationBars: position.consolidationBars ?? null,
+      breakoutCandleAtr: position.breakoutCandleAtr ?? null,
+      fundingRateAtEntry: position.fundingRateAtEntry ?? null,
+      fundingForecast24h: position.fundingForecast24h ?? null,
+      holdHours,
+      confSweepStrength: position.confSweepStrength ?? null,
+      confFvgSize: position.confFvgSize ?? null,
+      confDisplacementPct: position.confDisplacementPct ?? null,
+      confHtfAlignment: position.confHtfAlignment ?? null,
+      confMitigationDepth: position.confMitigationDepth ?? null,
+      confObConfluence: position.confObConfluence ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey));
+    }, position, position.winningComponent || strategyKey, position.strategyLabel || strategyDisplayName));
     positions.delete(componentId);
   }
 
@@ -421,10 +739,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
-    // BT-FIX: yield the event loop every 2000 bars so concurrent job-status polls
-    // get served during heavy compute. Without this, large ranges ("max") block
-    // Node's single thread → poll requests hang → FE aborts at 10s → "Request timed out".
-    if (i % 2000 === 0) {
+    // BT-FIX: yield every 250 bars on large runs (was 500). AF Wyckoff+VSA is ~3×
+    // heavier per bar; keep the main/worker event loop free for health + job polls.
+    // Child-process isolation (BacktestJobService) is the primary 502 guard; this
+    // yield still matters for BACKTEST_ISOLATE=0 and for IPC progress flush.
+    const yieldEvery = totalBars > 20_000 ? 250 : 500;
+    if (i % yieldEvery === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const c = entryCandles[i];
@@ -446,12 +766,28 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       componentConsecLoss.clear();
     }
 
-    // Monitor all open positions for SL/TP
+    // Monitor all open positions for SL/TP / TIME_STOP (maxHoldHours)
     for (const [componentId, pos] of positions.entries()) {
 
       // the SL/TP check below (mirrors runRealBacktest's single-position order).
       checkPartialMilestones(componentId, pos, c, i);
       if (!positions.has(componentId)) continue; // safety: milestone logic never fully closes, but guard anyway
+
+      // Sprint 13: enforce Scalping maxHoldHours in multi-position AF path
+      // (previously only wired in single-position backtest → 60h "Scalping" holds).
+      const holdOv = cfg.typeOverrides?.[pos.component || componentId] || {};
+      const maxHoldHours = holdOv.maxHoldHours
+        ?? (componentId === "Scalping" || pos.component === "Scalping"
+          ? holdOv.scalpingMaxHoldHours : undefined)
+        ?? (componentId === "Scalping" ? cfg.maxHoldHours : undefined);
+      if (maxHoldHours) {
+        const openTs = entryCandles[pos.openIdx]?.timestamp ?? 0;
+        const holdMs = (c.timestamp ?? 0) - openTs;
+        if (holdMs > maxHoldHours * 3600 * 1000) {
+          closePosition(componentId, pos, price, "TIME_STOP", i);
+          continue;
+        }
+      }
 
       const stopLevel = pos.slCurrent;
       const hitSL = pos.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
@@ -497,6 +833,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       regimeDetection: cfg.regimeDetection, // EMA gap thresholds, ADX strength
       typeOverrides: cfg.typeOverrides, // per-leg overrides (Scalping/Intraday/Swing)
+      candleTimestamp: c.timestamp, // Sprint 13 session filter
     });
 
 
@@ -556,13 +893,44 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
       const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
       const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
+      const scalpFlags = componentId === "Scalping"
+        ? resolveScalpingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Scalping || {}) })
+        : {};
+      const swingFlags = componentId === "Swing"
+        ? resolveSwingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Swing || {}) })
+        : {};
       const regimeResult = applyRegimeGate({
         signal,
         strategyKey,
         regime: dailyRegime,
         riskPerTrade,
+        // Sprint 13: Side×Regime — block LONG in CHOP for Scalping (config flag)
+        blockLongInChop: componentId === "Scalping" && scalpFlags.smcBlockLongInChop === true,
       });
       if (!regimeResult.allow) continue;
+
+      // Redundant explicit check (same gate) so unit tests / future callers that
+      // bypass applyRegimeGate still see the Side×Regime contract.
+      if (componentId === "Scalping") {
+        const sideGate = applySmcSideRegimeGate({
+          signal,
+          dailyRegime,
+          enabled: scalpFlags.smcBlockLongInChop === true,
+        });
+        if (!sideGate.allow) continue;
+      }
+
+      // Sprint 13 Swing: skip entry on extreme perp funding premium
+      const fundingRateNow = cfg.fundingRate ?? indicators.fundingRate?.[i] ?? null;
+      if (componentId === "Swing" && swingFlags.smcFundingGuard) {
+        const fundGate = applySmcFundingGuard({
+          signal,
+          fundingRate: fundingRateNow,
+          enabled: true,
+          maxAbsRate: swingFlags.smcMaxFundingRate,
+        });
+        if (!fundGate.allow) continue;
+      }
 
       // AF-SWING-V3: confidence/RVOL/ATR-tiered position size (SWING_ENGINE_V3.md
       // improvement 9). No-op (multiplier 1) unless typeOverrides.Swing.sacSwingV3Gate
@@ -581,10 +949,17 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const compLoss = componentConsecLoss.get(componentId) || 0;
       if (compLoss >= maxConsecLoss) continue;
 
-      // Check daily limits
+      // Check daily limits — include floating loss (live BotEngine._checkRiskGates parity)
       if (dailyTradeCount >= maxTradesPerDay) continue;
+      const floatingLoss = [...positions.values()].reduce((s, p) => {
+        const sz = p.remainingSize ?? p.size ?? 0;
+        const u = p.side === "LONG"
+          ? (price - p.entry) * sz
+          : (p.entry - price) * sz;
+        return u < 0 ? s + Math.abs(u) : s;
+      }, 0);
       const dailyBase = dailyStartCapital || capital;
-      if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) continue;
+      if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) continue;
 
       // Check ATR gate — relative to the leg's own baseline when enabled
       const atrPct = (atr / price) * 100;
@@ -598,7 +973,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // strongTrendTPMult (let winners run in STRONG_TREND) can fire — it was
       // hardcoded "NORMAL", so the ×1.8 TP extension never applied and every
       // winner was capped at the base RR.
-      const regime = multiSignal.meta?.marketCond || "NORMAL";
+      // Sprint 13 field SSOT:
+      //   marketCond  = entry-TF vol/trend bucket (SMC meta)
+      //   dailyRegime = daily ADX-proxy (STRONG_TREND/CHOP/TRANSITION/UNKNOWN)
+      const marketCond = multiSignal.meta?.marketCond || "NORMAL";
 
 
       // Backtest uses full type names (Scalping/Intraday/Swing), not legacy A/B/C
@@ -607,7 +985,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const tpMult = typeOverride.tpAtrMult ?? cfg.tpAtrMult;
 
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
-        marketCond: regime,
+        marketCond,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
 
         // typeConfig → cfg). Merged from typeOverrides per componentId.
@@ -639,6 +1017,25 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       if (size <= 0) continue;
 
+      const lastMeta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+      const meta = multiSignal.meta || lastMeta;
+      const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
+      const winningComponent = meta?.winningComponent || null;
+
+      // Sprint 13: granular ML features + confidence components for CSV
+      const seqMeta = meta?.sequenceMeta || null;
+      if (seqMeta && atr > 0 && seqMeta.obDistanceAbs != null) {
+        seqMeta.obDistanceAtr = seqMeta.obDistanceAbs / atr;
+      }
+      const mlFeatures = buildSmcEntryFeatures(indicators, i, seqMeta, {
+        atr,
+        price,
+        timestamp: c.timestamp,
+        htfAdx: indicators.adx?.[i] ?? null,
+        fundingRate: fundingRateNow,
+      });
+      const brEnrich = extractBsBrEnrichment(meta || lastMeta);
+
       // Open position
       positions.set(componentId, {
         side: signal,
@@ -649,14 +1046,23 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         riskAmt,
         openIdx: i,
         component: componentId,
-        marketCond: regime,
+        marketCond,
         plannedRR: riskCfg.riskReward,
 
-        confidence: multiSignal.meta?.confidence?.[componentId] ?? null,
+        confidence: multiSignal.meta?.confidence?.[componentId]
+          ?? meta?.componentConfidence
+          ?? lastMeta?.componentConfidence
+          ?? null,
         // GROK-FIX: entry-context snapshot so the trade can be Grok-confirmed post-hoc.
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
+        dailyRegime: dailyRegime || "UNKNOWN",
+        entryMeta: lastMeta || multiSignal.meta || null,
+        strategyLabel: tradeLabel,
+        winningComponent,
+        ...mlFeatures,
+        ...brEnrich,
 
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.
@@ -729,8 +1135,22 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
       higherTf: cfg.higherTf || null,
-      feeRate: FEE_RATE_PER_SIDE,
+      feeRate: cfg._feeModel?.takerFeeRate ?? FEE_RATE_PER_SIDE,
       slippage: slip,
+      // Sprint 13 Fee=0 audit — every window documents cost-model assumptions
+      costModel: buildCostModelMeta({
+        enableFees: feeRate > 0,
+        feeRate: feeRate || (cfg._feeModel?.takerFeeRate ?? FEE_RATE_PER_SIDE),
+        simulateFunding: cfg.simulateFunding !== false,
+        fundingRate8h: cfg.fundingRate8h ?? FUNDING_RATE_8H,
+      }),
+      exchange: cfg._feeModel?.exchange,
+      exchangeLabel: cfg._feeModel?.exchangeLabel,
+      feeSchedule: cfg._feeModel ? {
+        takerFeeRate: cfg._feeModel.takerFeeRate,
+        makerFeeRate: cfg._feeModel.makerFeeRate,
+        fundingRate8h: cfg._feeModel.fundingRate8h,
+      } : undefined,
     },
   };
 }
@@ -1100,9 +1520,16 @@ async function runTripleTypeBacktest(opts = {}) {
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
   const strategy = validation.strategy;
 
+  const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = { ...base, ...(opts.config || {}) };
-  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const cfg = {
+    ...base,
+    ...(opts.config || {}),
+    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  };
+  const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
   // opts.typeOrder: Advance-config subset (e.g. ["Swing"]); risk weights normalize
@@ -1118,13 +1545,10 @@ async function runTripleTypeBacktest(opts = {}) {
   // by TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1 : Swing 2) instead of equally,
   // so Swing runners get full size and Scalping chop gets the least. Live parity:
   // BotEngine._handleMultiPositionSignal uses the SAME riskShareForType helper.
-  // cooldownAfterLoss=0: in backtest candle time, cooldown in real minutes is meaningless.
-  // maxConsecLoss raised: daily reset already handles this in _runMultiPositionBacktest;
-  // the higher cap prevents intra-day blocking during heavy drawdown periods.
+  // FULL PARITY: keep cooldownAfterLoss / maxConsecLoss from strategy config
+  // (previously forced cooldown=0 and maxConsecLoss≥5 — broke 1:1 with live).
   const baseTypeConfig = {
     ...cfg,
-    cooldownAfterLoss: 0,
-    maxConsecLoss:    Math.max(cfg.maxConsecLoss ?? 2, 5),
   };
 
 
@@ -1289,6 +1713,13 @@ async function runTripleTypeBacktest(opts = {}) {
       grokStats: grokResult?.stats ?? null,
       ragGate: !!opts.ragGate,
       ragStats: ragResult?.stats ?? null,
+      exchange: feeModel.exchange,
+      exchangeLabel: feeModel.exchangeLabel,
+      feeSchedule: {
+        takerFeeRate: feeModel.takerFeeRate,
+        makerFeeRate: feeModel.makerFeeRate,
+        fundingRate8h: feeModel.fundingRate8h,
+      },
     },
   };
 }
@@ -1310,10 +1741,17 @@ async function runRealBacktest(opts = {}) {
   const strategy = validation.strategy;
 
   // Canonical live config (legacyStrategies) merged with caller overrides.
+  const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = { ...base, ...(opts.config || {}) };
+  const cfg = {
+    ...base,
+    ...(opts.config || {}),
+    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  };
 
-  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const feeRate = feeModel.feeRate;
   const slip = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
   // Multi-position mode (v3.0): ADAPTIVE_FUSION opens up to 3 concurrent positions
@@ -1337,6 +1775,35 @@ async function runRealBacktest(opts = {}) {
 async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
+  const tsCombo = resolveTsCombination(cfg);
+  const tsCombinationMode = tsCombo.tsCombinationMode;
+  const tsUseStructureGate = tsCombo.tsUseStructureGate;
+  const tsUseVwapPrecision = tsCombo.tsUseVwapPrecision;
+  const tsSelectedComponents = tsCombo.selectedComponents || cfg.selectedComponents;
+  const mdCombo = resolveMdCombination(cfg);
+  const bsCombo = resolveBsCombination(cfg);
+  const mdSelectedComponents = mdCombo.selectedComponents || cfg.selectedComponents;
+  const bsSelectedComponents = bsCombo.selectedComponents || cfg.selectedComponents;
+  const raceSelected =
+    (isTFKey(strategyKey) && tsSelectedComponents)
+    || (isMRKey(strategyKey) && mdSelectedComponents)
+    || (isBRKey(strategyKey) && bsSelectedComponents)
+    || cfg.selectedComponents;
+  const strategyDisplayName = resolveStrategyDisplayName(strategyKey, {
+    ...cfg,
+    selectedComponents: raceSelected,
+    tsCombinationMode,
+    mdCombinationMode: mdCombo.mdCombinationMode,
+    bsCombinationMode: bsCombo.bsCombinationMode,
+  });
+
+  // TrendSurge/TF is a process singleton — reset directional state between runs
+  // so a prior SHORT streak cannot contaminate the next backtest.
+  if (typeof strategy.resetTrendState === "function") {
+    strategy.resetTrendState();
+  } else if (strategy._tf && typeof strategy._tf.resetTrendState === "function") {
+    strategy._tf.resetTrendState();
+  }
 
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
@@ -1346,14 +1813,19 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  // MD_MR entry-TF ADX regime gate (MD-SUB-01)
+  const isMeanReversion = isMRKey(strategyKey);
+  if (isMeanReversion) {
+    indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
+  }
+
   // MR regime filter (FIX-MR-01): precompute HTF indicators once for regime checks
   // per-bar (O(1) lookup). Live BotEngine computes these fresh per tick, but
   // backtest can cache since HTF data is static.
-  const isMeanReversion = isMRKey(strategyKey);
   let htfIndicators = null;
 
   // tfHtfLayerEnabled gates the whole TF Layer-1 path (injection + ADX gate) so
-  // A/B harnesses can run a true control; default ON per TREND_FOLLOWING_STRATEGY.md.
+  // A/B harnesses can run a true control; default ON per TS_TF config defaults.
   const tfHtfLayer = isTFKey(strategyKey) && cfg.tfHtfLayerEnabled !== false;
   const needsHTF = isMeanReversion || tfHtfLayer;
   if (needsHTF && htfCandles?.length >= 30) {
@@ -1382,11 +1854,18 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     // the 15m→4h / 4h→1w legs (measured: PF 0.83 → 0.49 when misaligned).
     if (tfHtfLayer) {
       indicators.closesHTF = htfCloses;
+      indicators.highsHTF = htfHighs;
+      indicators.lowsHTF = htfLows;
       indicators.emaFastHTF = htfIndicators.emaFast;
       indicators.emaMidHTF = htfIndicators.emaSlow;
       indicators.emaSlowHTF = calcEMA(htfCloses, 50); // 50-bar EMA for HTF slow
       indicators.adxHTF = htfAdx;
     }
+  }
+
+  // Session VWAP (TS_VP) needs timestamps even when HTF layer is off.
+  if (!indicators.timestamps) {
+    indicators.timestamps = entryCandles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
   }
 
   const htfPtr = htfCandles?.length
@@ -1445,9 +1924,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   let dailyLoss = 0;
   let dailyStartCapital = capital;
 
-  const maxConsecLoss = cfg.maxConsecLoss ?? 2;
+  const maxConsecLoss = cfg.maxConsecLoss ?? 3;
   const maxTradesPerDay = cfg.maxTradesPerDay ?? 6;
-  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.035;
+  const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.03;
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
 
@@ -1470,16 +1949,12 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrGateBlock: 0, validateBlock: 0, opened: 0,
   };
 
-  // ── SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones) ──
-  // Backtest previously had NO partial-TP implementation at all — every trade closed
-  // 100% at SL/TP regardless of tpMode, so "Partial + Trailing" mode was silently a
-  // no-op in backtest (not 1:1 with live, where this is the actual live behavior when
-  // tpMode="partial"). Uses candle high/low (favorable-side extreme) to detect
-  // milestone touches within the bar, same intrabar-check pattern as the SL/TP hit
-  // logic below.
+  // SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones).
+  // BS_BR Sprint 14 QA: prefer full TP; if partial forced, first take ≤33%.
+  const brPartialCap = isBRKey(strategyKey);
   const tpModeCfg = cfg.tpMode ?? "full";
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
-  const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
+  const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? (brPartialCap ? 0.33 : 0.40);
   const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
   // Ladder trigger R-multiples, per-leg tunable via typeOverrides (cfg here is
   // the per-type merged config). Mirrors the multi-position engine — the knob
@@ -1528,10 +2003,12 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         atr: position.atr ?? null,
         entryRsi: position.entryRsi ?? null,
         htfTrend: position.htfTrend ?? null,
+        dailyRegime: position.dailyRegime ?? null,
+        entryMeta: position.entryMeta ?? null,
         reason,
         result: pnl > 0 ? "win" : "loss",
         isPartial: true,
-      }, position, strategyKey));
+      }, position, strategyKey, position.strategyLabel || strategyDisplayName));
     };
 
     // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP).
@@ -1590,8 +2067,20 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const entryFeeRate = useMaker ? makerRate : feeRate;
     const exitFeeRate  = (useMaker && isLimitExit) ? makerRate : feeRate;
     const fee = entryFeeRate * position.entry * closeSize + exitFeeRate * px * closeSize;
-    const pnl = grossPnl - fee;
+    const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
+    const closeTs = entryCandles[exitIdx]?.timestamp ?? 0;
+    const funding = estimateFundingCost(
+      position.entry, closeSize, openTs, closeTs,
+      cfg.simulateFunding !== false && feeRate > 0,
+      cfg.fundingRate8h ?? FUNDING_RATE_8H
+    );
+    const pnl = grossPnl - fee - funding;
     capital += pnl;
+
+    let feeOut = fee;
+    if (feeRate > 0 && closeSize > 0 && feeOut === 0) {
+      feeOut = feeRate * (position.entry + px) * closeSize;
+    }
 
     if (pnl < 0) {
       consecLoss += 1;
@@ -1602,6 +2091,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     const closeTime = isoOf(entryCandles[exitIdx]);
+    const holdHours = holdHoursBetween(openTs, closeTs);
     trades.push(withBacktestEntryContext({
       date: closeTime, // display field (FE trade table reads t.date) — close-bar date
       openTime: isoOf(entryCandles[position.openIdx]),
@@ -1616,7 +2106,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       tp: position.tp,
       size: closeSize,
       grossPnl,
-      fee,
+      fee: feeOut,
+      funding,
       pnl,
       pnlPct: closeSize > 0 ? (pnl / (position.entry * closeSize)) * 100 : 0,
       plannedRR: position.plannedRR,
@@ -1624,10 +2115,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       atr: position.atr ?? null,
       entryRsi: position.entryRsi ?? null,
       htfTrend: position.htfTrend ?? null,
+      dailyRegime: position.dailyRegime ?? null,
+      entryMeta: position.entryMeta ?? null,
+      holdHours,
+      fundingRateAtEntry: position.fundingRateAtEntry ?? null,
+      fundingForecast24h: position.fundingForecast24h ?? null,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey));
+    }, position, strategyKey, position.strategyLabel || strategyDisplayName));
     position = null;
   }
 
@@ -1640,7 +2136,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (i % progressEvery === 0 && opts.onProgress) {
       opts.onProgress(Math.round(i / totalBars * 100), i, totalBars);
     }
-    if (i % 2000 === 0) {
+    const yieldEvery = totalBars > 20_000 ? 250 : 500;
+    if (i % yieldEvery === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
 
@@ -1731,6 +2228,10 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
             atr: pendingOrder.atr ?? null,
             entryRsi: pendingOrder.entryRsi ?? null,
             htfTrend: pendingOrder.htfTrend ?? null,
+            dailyRegime: pendingOrder.dailyRegime ?? null,
+            entryMeta: pendingOrder.entryMeta ?? null,
+            strategyLabel: pendingOrder.strategyLabel || strategyDisplayName,
+            winningComponent: pendingOrder.winningComponent || pendingOrder.component,
             R: pendingOrder.slDist,
             slCurrent: openSl,
             remainingSize: size,
@@ -1789,6 +2290,27 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // strategy degrades to entry-TF fallback for the warmup bars.
       htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
 
+      // Sprint 12 TS race — selectedComponents = active racers; gate flags only
+      // apply when tsCombinationMode is "gate"/"hybrid".
+      tsCombinationMode,
+      tsUseStructureGate,
+      tsUseVwapPrecision,
+      marketStructure: cfg.marketStructure,
+      volumeProfile: cfg.volumeProfile,
+      vwapAtrMult: cfg.vwapAtrMult,
+      selectedComponents: raceSelected || cfg.selectedComponents,
+      tsActiveRacers: tsCombo.selectedComponents || cfg.tsActiveRacers,
+      mdCombinationMode: mdCombo.mdCombinationMode,
+      mdActiveRacers: mdCombo.mdActiveRacers || cfg.mdActiveRacers,
+      bsCombinationMode: bsCombo.bsCombinationMode,
+      bsActiveRacers: bsCombo.bsActiveRacers || cfg.bsActiveRacers,
+      afEnabledComponents: cfg.afEnabledComponents || cfg.selectedComponents,
+      // BS_LS optional exchange overlays (fail-open when absent)
+      funding: cfg.funding ?? indicators.funding?.[i] ?? null,
+      fundingRate: cfg.fundingRate ?? indicators.fundingRate?.[i] ?? null,
+      oiHistory: cfg.oiHistory || indicators.oiHistory || null,
+      timestamps: indicators.timestamps,
+
       // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
       // is a server-startup SINGLETON (new TrendSurgeUmbrella(), no per-request
       // config), so its internal `this.config.adxMinStrength`/`minVolRatio`
@@ -1809,7 +2331,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (tfHtfLayer && htfIndicators?.adx && htfPtr) {
       const j = (htfPtr[i] ?? 0) - 1;
       const adxVal = j >= 0 && j < htfIndicators.adx.length ? htfIndicators.adx[j] : null;
-      const adxMin = cfg.adxMinStrength ?? 25;
+      // Weekly ADX ≥ 30 is rare; soft-cap when HTF is 1w so Swing legs can fire.
+      // Per-leg typeOverrides.Swing.adxMinStrength (20) also merges into cfg.
+      let adxMin = cfg.adxMinStrength ?? 25;
+      const htfLabel = String(higherTf || cfg.higherTf || "").toLowerCase();
+      if (htfLabel === "1w" || htfLabel === "1d") {
+        adxMin = Math.min(adxMin, 20);
+      }
       if (adxVal == null || adxVal < adxMin) {
         diag.adxHTFGate = (diag.adxHTFGate || 0) + 1;
         equity.push({ date: isoOf(c), value: round2(capital) });
@@ -1878,7 +2406,16 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     if (consecLoss >= maxConsecLoss) { diag.consecLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     if (dailyTradeCount >= maxTradesPerDay) { diag.maxTradesBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const dailyBase = dailyStartCapital || capital;
-    if (dailyBase > 0 && dailyLoss / dailyBase >= maxDailyLossPct) { diag.dailyLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+    // Include floating loss on open position (live BotEngine._checkRiskGates parity)
+    let floatingLoss = 0;
+    if (position) {
+      const sz = position.remainingSize ?? position.size ?? 0;
+      const u = position.side === "LONG"
+        ? (price - position.entry) * sz
+        : (position.entry - price) * sz;
+      if (u < 0) floatingLoss = Math.abs(u);
+    }
+    if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) { diag.dailyLossBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     const atrPct = (atr / price) * 100;
     if (atrBaseline) {
       const base = atrBaseline[i];
@@ -1896,8 +2433,10 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 8. Component-aware SL/TP (mirror step 11d) ──────────────────────────
     const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+    const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
+    let brEnrich = {};
     if (meta && typeof strategy.calculateRiskConfig === "function") {
 
       // Backtest passes full type names (Scalping/Intraday/Swing), not legacy A/B/C
@@ -1910,14 +2449,17 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
         slMultiplier: slMult,
         tpMultiplier: tpMult,
+        breakoutLevel: meta.breakoutLevel,
+        retestExtreme: meta.retestExtreme,
       });
       slDist = rc.slDistance * pairSlMult;
       tpDist = rc.tpDistance * pairSlMult;
-      component = meta.component;
+      component = meta.winningComponent || meta.component;
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
 
       confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
+      brEnrich = extractBsBrEnrichment(meta);
     } else {
       slDist = atr * (cfg.atrMultiplier ?? 1.4) * pairSlMult;
       tpDist = slDist * (cfg.riskReward ?? 2);
@@ -1943,6 +2485,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
         htfTrend,
+        dailyRegime,
+        entryMeta: meta || null,
+        strategyLabel: tradeLabel,
+        winningComponent: meta?.winningComponent || component,
+        ...brEnrich,
       };
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -1967,6 +2514,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       atr,
       entryRsi: indicators.rsi?.[i] ?? null,
       htfTrend,
+      dailyRegime,
+      entryMeta: meta || null,
+      strategyLabel: tradeLabel,
+      winningComponent: meta?.winningComponent || component,
+      ...brEnrich,
       // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
       // slCurrent is the live stop (moves to BEP/+1R after milestones fire),
       // remainingSize shrinks as partials execute; originalSize stays fixed for
@@ -1994,9 +2546,16 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
       higherTf,
-      feeRate,
+      feeRate: feeRate || (cfg._feeModel?.takerFeeRate ?? FEE_RATE_PER_SIDE),
       slippage: slip,
       diagnostics: diag,
+      exchange: cfg._feeModel?.exchange,
+      exchangeLabel: cfg._feeModel?.exchangeLabel,
+      feeSchedule: cfg._feeModel ? {
+        takerFeeRate: cfg._feeModel.takerFeeRate,
+        makerFeeRate: cfg._feeModel.makerFeeRate,
+        fundingRate8h: cfg._feeModel.fundingRate8h,
+      } : undefined,
     },
   };
 }
@@ -2030,7 +2589,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 // strategies (e.g. SMC, where it must stay dead) — mapping it globally would
 // silently change their SL/TP too.
 function normalizeTfGeometryKeys(strategyKey, cfg) {
-  if (strategyKey !== "TS_TF" && strategyKey !== "TREND_FOLLOWING") return cfg;
+  const key = String(strategyKey || "").toUpperCase();
+  if (!TF_KEYS.has(key)) return cfg;
   const out = { ...cfg };
   if (out.slAtrMult == null) out.slAtrMult = out.atrMult ?? out.atrMultiplier;
   if (out.tpAtrMult == null && out.slAtrMult != null) {
@@ -2046,9 +2606,16 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
   const strategy = validation.strategy;
 
+  const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = { ...base, ...(opts.config || {}) };
-  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const cfg = {
+    ...base,
+    ...(opts.config || {}),
+    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  };
+  const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
   const allTrades = [];
@@ -2062,6 +2629,13 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
     : typeOrder;
+  // Mirror backtest.js TYPE_TF so ADX weekly soft-cap + HTF directional gates
+  // know which trend TF each leg uses.
+  const TYPE_TF_HTF = {
+    Scalping: "4h",
+    Intraday: "4h",
+    Swing: "1w",
+  };
   for (const tradeType of typeOrder) {
 
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
@@ -2069,7 +2643,14 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       ...cfg,
 
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
+      higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
+      // AMT / TS_VP: Swing → utc_week session; Intraday → utc_day (volumeProfileComponent)
+      tradeType,
+      entryTf: tradeType === "Swing" ? "4h"
+        : tradeType === "Intraday" ? "15m"
+          : tradeType === "Scalping" ? "15m"
+            : cfg.entryTf,
     });
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
@@ -2156,6 +2737,13 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       grokStats: grokResult?.stats ?? null,
       ragGate: !!opts.ragGate,
       ragStats: ragResult?.stats ?? null,
+      exchange: feeModel.exchange,
+      exchangeLabel: feeModel.exchangeLabel,
+      feeSchedule: {
+        takerFeeRate: feeModel.takerFeeRate,
+        makerFeeRate: feeModel.makerFeeRate,
+        fundingRate8h: feeModel.fundingRate8h,
+      },
     },
   };
 }
@@ -2203,4 +2791,18 @@ function buildStats(trades, startCapital, endCapital) {
   };
 }
 
-module.exports = { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, _computeTripleStats, _applyGrokGate, _applyRagGate };
+module.exports = {
+  runRealBacktest,
+  runTripleTypeBacktest,
+  runMultiTypeBacktest,
+  resolveFeeModel,
+  estimateFundingCost,
+  _computeTripleStats,
+  _applyGrokGate,
+  _applyRagGate,
+  resolveTsCombination,
+  resolveTsLayerFlags,
+  resolveMdCombination,
+  resolveBsCombination,
+  resolveTradeDisplayName,
+};

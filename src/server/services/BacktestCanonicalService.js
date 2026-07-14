@@ -156,6 +156,121 @@ function resolveAction(record, requestedStartMs, requestedEndMs) {
   return "extend";
 }
 
+/**
+ * Guard for canonical extend/update writes.
+ * equity_curve must be present (array, may be empty) whenever we overwrite metrics
+ * so we never leave a stale curve beside fresh stats (COALESCE partial-write bug).
+ */
+function assertAtomicCanonicalExtendPayload({ equityCurve, tradesData } = {}) {
+  if (!Array.isArray(equityCurve)) {
+    const err = new Error(
+      "equity_curve array required for canonical archive extend/update (prevents metrics/equity desync)",
+    );
+    err.statusCode = 400;
+    err.code = "EQUITY_CURVE_REQUIRED";
+    throw err;
+  }
+  if (tradesData != null && !Array.isArray(tradesData)) {
+    const err = new Error(
+      "trades_data must be an array when provided for canonical archive extend/update",
+    );
+    err.statusCode = 400;
+    err.code = "TRADES_DATA_INVALID";
+    throw err;
+  }
+}
+
+/**
+ * Detect metrics/trades vs equity mismatch (COALESCE partial-write leftover).
+ * True when there are no trades but equity moves materially (e.g. 0 trades + -70% curve).
+ */
+function isEquityTradesDesync(metrics, trades, equityCurve, movePctThreshold = 1) {
+  const tradeCount = Array.isArray(trades) ? trades.length : 0;
+  const metricTrades = Number(metrics?.totalTrades);
+  const noTrades = tradeCount === 0 || (Number.isFinite(metricTrades) && metricTrades === 0);
+  if (!noTrades) return false;
+
+  const equity = Array.isArray(equityCurve) ? equityCurve : [];
+  if (equity.length < 2) return false;
+
+  let first = null;
+  let last = null;
+  let peak = null;
+  let maxDd = 0;
+  for (const pt of equity) {
+    const v = Number(pt?.value);
+    if (!Number.isFinite(v)) continue;
+    if (first == null) first = v;
+    last = v;
+    if (peak == null || v > peak) peak = v;
+    if (peak > 0) {
+      const dd = ((peak - v) / peak) * 100;
+      if (dd > maxDd) maxDd = dd;
+    }
+  }
+  if (first == null || last == null || !(Math.abs(first) > 0)) return false;
+  const movePct = (Math.abs(last - first) / Math.abs(first)) * 100;
+  return movePct >= movePctThreshold || maxDd >= movePctThreshold;
+}
+
+function buildEquityFromTrades(trades, initialCapital = 1000) {
+  if (!trades?.length) return [];
+  let capital = Number(initialCapital) || 1000;
+  const firstDate = trades[0]?.openTime || trades[0]?.date;
+  const curve = firstDate ? [{ date: firstDate, value: capital }] : [];
+  for (const t of trades) {
+    capital += Number(t.pnl ?? t.netPnL ?? 0);
+    curve.push({
+      date: t.closeTime || t.date,
+      value: Math.round(capital * 100) / 100,
+    });
+  }
+  return curve;
+}
+
+/**
+ * Heal archive payload on read so corrupted COALESCE rows never reach the UI.
+ * Prefer trades as source of truth; clear moving equity when trades are empty.
+ * @returns {{ metrics, trades, equity_curve, healed: boolean, healReason: string|null }}
+ */
+function healArchivePayload({ metrics, trades, equity_curve, capital = 1000 } = {}) {
+  const tradesArr = Array.isArray(trades) ? trades : [];
+  const equity = Array.isArray(equity_curve) ? equity_curve : [];
+  const cap = Number(capital) || 1000;
+  let nextMetrics = metrics || {};
+  let nextEquity = equity;
+  let healed = false;
+  let healReason = null;
+
+  if (tradesArr.length > 0) {
+    const rebuilt = recalcMetrics(tradesArr, cap);
+    const metricTrades = Number(nextMetrics?.totalTrades);
+    if (!Number.isFinite(metricTrades) || metricTrades !== tradesArr.length) {
+      nextMetrics = { ...nextMetrics, ...rebuilt };
+      healed = true;
+      healReason = "rebuild_metrics_from_trades";
+    }
+    if (isEquityTradesDesync(nextMetrics, tradesArr, nextEquity) || !nextEquity.length) {
+      nextEquity = buildEquityFromTrades(tradesArr, cap);
+      healed = true;
+      healReason = healReason || "rebuild_equity_from_trades";
+    }
+  } else if (isEquityTradesDesync(nextMetrics, tradesArr, nextEquity)) {
+    nextEquity = [];
+    nextMetrics = { ...nextMetrics, ...recalcMetrics([], cap) };
+    healed = true;
+    healReason = "clear_equity_empty_trades";
+  }
+
+  return {
+    metrics: nextMetrics,
+    trades: tradesArr,
+    equity_curve: nextEquity,
+    healed,
+    healReason,
+  };
+}
+
 module.exports = {
   ENGINE_VERSION,
   buildCanonicalKey,
@@ -163,4 +278,8 @@ module.exports = {
   resolveAction,
   recalcMetrics,
   filterTradesByRange,
+  assertAtomicCanonicalExtendPayload,
+  isEquityTradesDesync,
+  healArchivePayload,
+  buildEquityFromTrades,
 };

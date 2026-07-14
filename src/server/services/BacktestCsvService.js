@@ -1,16 +1,52 @@
 /**
  * BacktestCsvService — export backtest runs ke CSV (format Trade History admin).
+ *
+ * Strategy Reason Formatters — Per-Strategy Entry Reason Assembly
+ *
+ * Each strategy has distinct entry-trigger vocabulary (not generic across all).
+ * mapBacktestTrade routes trade.entryMeta via resolveEntryReasons().
+ *
+ * Supported strategies & their reason variability:
+ * - AF_SMC: Hard-gate (sweep+CHoCH+FVG=prerequisites) → low variance
+ * - AF_WYCKOFF: Multi-item checklist → very low variance
+ * - AF_VSA: 4 patterns × 3 locations → medium variance
+ * - TS_TF: 3-layer checklist → very low variance
+ * - TS_MS: 4-layer checklist → very low variance
+ * - TS_VP: 1-of-4 mutually-exclusive → low variance
+ * - MD_MR: Hybrid (hard entry + soft regime/confluence) → HIGHEST variance
+ * - BS_BR: 3-phase sequential → very low variance
+ *
+ * Umbrellas use race-to-confirm: exactly ONE component wins per bar.
+ * Trade attribution shows winning component key (AF_SMC, AF_WYCKOFF, etc).
+ *
+ * Umbrella_Component scheme: AF_* / TS_* / MD_MR / BS_BR (see strategyReasonFormatters.js).
  */
 
 const { formatDuration } = require("../../infrastructure/db/database");
 const {
-  ADMIN_TRADE_EXPORT_COLUMNS,
-  TRADE_EXPORT_COLUMNS,
+  TRADE_EXPORT_COLUMN_KEYS,
+  pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
 } = require("../../domain/tradeExportCsv");
+const {
+  formatExitReason,
+  resolveEntryReasons,
+  normalizeStrategyKey,
+  resolveExportColumnKeys,
+} = require("./csv/strategyReasonFormatters");
 
 const NA = "N/A";
+
+const TYPE_TRADE_CLASSES = ["Scalping", "Intraday", "Swing"];
+
+// Classify a trade by holding period (hours): <=4h Scalping, <=24h Intraday, else Swing.
+function classifyTypeTrade(holdHours) {
+  if (holdHours == null || !Number.isFinite(holdHours)) return null;
+  if (holdHours <= 4) return "Scalping";
+  if (holdHours <= 24) return "Intraday";
+  return "Swing";
+}
 
 function escapeCsv(val) {
   const s = val == null ? "" : String(val);
@@ -85,13 +121,60 @@ function mapBacktestTrade(trade, ctx, index) {
   const openTime = trade.openTime ?? trade.openDate ?? trade.date ?? NA;
   const closeTime = trade.closeTime ?? trade.date ?? NA;
   let duration = NA;
+  let holdHoursNum = null;
   if (openTime !== NA && closeTime !== NA) {
     const ms = new Date(closeTime).getTime() - new Date(openTime).getTime();
     duration = ms > 0 ? formatDuration(ms) : NA;
+    holdHoursNum = ms > 0 ? ms / 3_600_000 : null;
   }
+  if (holdHoursNum == null && Number.isFinite(Number(trade.holdHours))) {
+    holdHoursNum = Number(trade.holdHours);
+  }
+
+  const tradeType = TYPE_TRADE_CLASSES.includes(trade.tradeType)
+    ? trade.tradeType
+    : classifyTypeTrade(holdHoursNum) ?? NA;
+
+  let hourUtc = trade.hourUtc ?? NA;
+  if (openTime !== NA) {
+    const openHour = new Date(openTime).getUTCHours();
+    if (!Number.isNaN(openHour)) hourUtc = openHour;
+  }
+
+  const holdHoursOut =
+    holdHoursNum != null ? parseFloat(holdHoursNum.toFixed(2)) : (trade.holdHours ?? NA);
 
   const reason = trade.reason ?? NA;
   const isPartial = /partial/i.test(String(reason));
+  const strategyKeyForReasons =
+    trade.winningComponent || trade.strategyKey || ctx.strategy;
+  const entryMeta = trade.entryMeta || null;
+  const conf = trade.confidence;
+  const confidenceOut =
+    conf == null
+      ? NA
+      : typeof conf === "object"
+        ? (conf.Scalping ?? conf.Intraday ?? conf.Swing ?? conf.A ?? conf.B ?? conf.C ?? NA)
+        : conf;
+
+  // Prefer trade-close enrichment; fall back to live resolve from entryMeta.
+  const precomputed =
+    trade.entryReasons != null && String(trade.entryReasons).trim() !== ""
+      ? String(trade.entryReasons).trim()
+      : "";
+  const entryReasons =
+    precomputed || resolveEntryReasons(strategyKeyForReasons, entryMeta) || NA;
+
+  const atrNum = Number(trade.atr);
+  const rsiNum = Number(trade.entryRsi);
+  const atrOut =
+    trade.atr == null || Array.isArray(trade.atr) || !Number.isFinite(atrNum) || atrNum < 0 || atrNum > 1e9
+      ? NA
+      : atrNum;
+  const rsiOut =
+    trade.entryRsi == null || Array.isArray(trade.entryRsi) || !Number.isFinite(rsiNum) || rsiNum < 0 || rsiNum > 100
+      ? NA
+      : rsiNum;
 
   return {
     user: ctx.userLabel ?? "Backtest",
@@ -115,6 +198,39 @@ function mapBacktestTrade(trade, ctx, index) {
     actualRR,
     duration,
     reason,
+    exitReason: formatExitReason(reason === NA ? null : reason) || NA,
+    entryReasons,
+    confidence: confidenceOut,
+    marketCond: trade.marketCond ?? NA,
+    htfTrend: trade.htfTrend ?? NA,
+    dailyRegime: trade.dailyRegime ?? NA,
+    component: trade.component ?? trade.tradeType ?? NA,
+    tradeType,
+    atr: atrOut,
+    entryRsi: rsiOut,
+    sweepStrength: trade.sweepStrength ?? NA,
+    fvgSizeAtr: trade.fvgSizeAtr ?? NA,
+    obDistanceAtr: trade.obDistanceAtr ?? NA,
+    displacementPct: trade.displacementPct ?? NA,
+    htfAdx: trade.htfAdx ?? NA,
+    hourUtc,
+    volumeRatio: trade.volumeRatio ?? NA,
+    bbWidth: trade.bbWidth ?? NA,
+    bbSqueezeWidthAtr: trade.bbSqueezeWidthAtr ?? NA,
+    breakoutVolumeRatio: trade.breakoutVolumeRatio ?? NA,
+    retestDepthAtr: trade.retestDepthAtr ?? NA,
+    rejectionWickPct: trade.rejectionWickPct ?? NA,
+    consolidationBars: trade.consolidationBars ?? NA,
+    breakoutCandleAtr: trade.breakoutCandleAtr ?? NA,
+    fundingRateAtEntry: trade.fundingRateAtEntry ?? trade.fundingRate ?? NA,
+    fundingForecast24h: trade.fundingForecast24h ?? NA,
+    holdHours: holdHoursOut,
+    confSweepStrength: trade.confSweepStrength ?? NA,
+    confFvgSize: trade.confFvgSize ?? NA,
+    confDisplacementPct: trade.confDisplacementPct ?? NA,
+    confHtfAlignment: trade.confHtfAlignment ?? NA,
+    confMitigationDepth: trade.confMitigationDepth ?? NA,
+    confObConfluence: trade.confObConfluence ?? NA,
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,
@@ -143,10 +259,24 @@ function collectTradeRows(records, { adminFormat = true } = {}) {
   return rows;
 }
 
+function collectExportComponents(rows, records) {
+  const fromRows = rows
+    .map((r) => r.component)
+    .filter((c) => c != null && c !== "" && c !== NA);
+  if (fromRows.length) return [...new Set(fromRows)];
+
+  const fromRecords = (records || [])
+    .map((rec) => normalizeStrategyKey(rec.strategy_key || rec.config?.strategyKey || ""))
+    .filter(Boolean);
+  return [...new Set(fromRecords)];
+}
+
 function buildTradesCsv(records, opts = {}) {
   const { includeSummary = true, adminFormat = true } = opts;
   const rows = collectTradeRows(records, { adminFormat });
-  const columns = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+  const components = collectExportComponents(rows, records);
+  const columnKeys = resolveExportColumnKeys(components, TRADE_EXPORT_COLUMN_KEYS);
+  const columns = pickExportColumns(columnKeys, { adminFormat });
   const body = toCsv(rows, columns);
   if (!includeSummary) return body;
   const summary = buildPerformanceSummaryCsv(rows);
@@ -164,4 +294,5 @@ module.exports = {
   buildTradesCsv,
   mapBacktestTrade,
   collectTradeRows,
+  collectExportComponents,
 };

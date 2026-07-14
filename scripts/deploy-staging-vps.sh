@@ -43,6 +43,11 @@ npm ci
 echo "==> prisma migrate deploy..."
 npx prisma migrate deploy
 
+echo "==> Syntax check (fail fast before PM2 reload)..."
+node --check index.js
+node --check src/server/app.js
+node --check ecosystem.config.js
+
 # PENTING (OOM-loop fix): `pm2 restart <nama>` TIDAK membaca ulang
 # max_memory_restart dari ecosystem.config.js — opsi PM2-level itu hanya
 # diterapkan saat proses dibuat DARI file ecosystem. Akibatnya fix 512M→1024M
@@ -59,6 +64,31 @@ pm2 save
 
 echo ""
 echo "==> Health check..."
-sleep 2
-curl -sf "http://127.0.0.1:3001/health" && echo "" || echo "WARN: health check gagal — cek: pm2 logs ${PM2_APP}"
+sleep 3
+HEALTH_OK=false
+if curl -sf "http://127.0.0.1:3001/health" >/dev/null 2>&1; then
+  echo "✓ GET /health OK"
+  HEALTH_OK=true
+else
+  echo "❌ GET /health FAILED — cek: pm2 logs ${PM2_APP} --lines 50"
+fi
+if curl -sf "http://127.0.0.1:3001/api/v1/health" >/dev/null 2>&1; then
+  echo "✓ GET /api/v1/health OK"
+else
+  echo "❌ GET /api/v1/health FAILED"
+  HEALTH_OK=false
+fi
+LOGIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:3001/api/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"deploy-check@test.com","password":"wrong"}' || echo "000")
+if [[ "${LOGIN_CODE}" == "401" || "${LOGIN_CODE}" == "400" ]]; then
+  echo "✓ POST /api/v1/auth/login reachable (HTTP ${LOGIN_CODE})"
+else
+  echo "❌ POST /api/v1/auth/login returned HTTP ${LOGIN_CODE} (expect 401/400, not 502/000)"
+  HEALTH_OK=false
+fi
+if [[ "${HEALTH_OK}" != "true" ]]; then
+  echo "WARN: staging BE not fully healthy — investigate before QA"
+  pm2 logs "${PM2_APP}" --lines 30 --nostream 2>&1 | tail -35 || true
+fi
 echo "Done."

@@ -122,7 +122,10 @@ const limiter = rateLimit({
   skip: (req) => {
     if (process.env.NODE_ENV !== "production") return true;
     // Exempt backtest polling — called every few seconds during long-running jobs
-    if (req.method === "GET" && req.path.startsWith("/backtest/job-status/")) return true;
+    if (req.method === "GET" && (
+      req.path.startsWith("/backtest/job-status/")
+      || req.path.startsWith("/backtest/job-result/")
+    )) return true;
     return false;
   },
 });
@@ -467,9 +470,9 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       grokConfirmTpBandPct:      opts.grokConfirmTpBandPct,
       grokConfirmTpRejectAction: opts.grokConfirmTpRejectAction,
     },
-    // Cap posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
-    // Default 2; override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN.
-    maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 2,
+    // Race-to-confirm: max 1 posisi terbuka per koin (PRD §9.2).
+    // Override via env MULTI_STRATEGY_MAX_POSITIONS_PER_COIN hanya untuk debugging.
+    maxPositionsPerCoin: parseInt(process.env.MULTI_STRATEGY_MAX_POSITIONS_PER_COIN, 10) || 1,
     // Inject DB → canEnter pakai DB sebagai sumber kebenaran tunggal (cap menghormati
     // SEMUA posisi terbuka termasuk orphan, bukan hanya state engine live).
     db,
@@ -482,12 +485,16 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
 // ── Routes ────────────────────────────────────────────────────────────────
 
 // Health check (public)
+const BacktestJobService = require("./services/BacktestJobService");
+
 const healthHandler = (req, res) => {
+  const backtest = BacktestJobService.queueStats();
   res.json({
     ok: true,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     allowedExchanges: cfg.allowedExchanges,
+    backtest,
   });
 };
 
@@ -538,15 +545,6 @@ app.use("/api/v1/admin/vouchers", createAdminVouchersRouter());
 app.use("/api/v1/admin",   createAdminRouter({ stopAllBotsInMemory, getBot })); // routes self-guard (JWT+role); ADMIN_SECRET only for the legacy billing stub
 
 // Sprint 2 / PA-3 — Internal Analytics API (authMiddleware already ran)
-app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
-
-// Sprint 3 / MS-3 — MetaSelector API (wss injected lazily after server creation)
-// Route uses a lazy wss reference so advisory WS events work correctly.
-const _metaSelectorWssRef = { current: null };
-app.use("/api/v1/internal/meta-selector", authMiddleware, createMetaSelectorRouter(_metaSelectorWssRef));
-app.use("/api/v1/internal/parameters",   authMiddleware, createParametersRouter());
-
-// Sprint 2 / PA-3 — Internal Analytics API
 app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
 
 // Sprint 3 / MS-3 — MetaSelector API (wss injected lazily after server creation)

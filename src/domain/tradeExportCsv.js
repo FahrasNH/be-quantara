@@ -24,6 +24,41 @@ const TRADE_EXPORT_COLUMNS = [
   ["actualRR",    "Actual R:R"],
   ["duration",    "Duration"],
   ["reason",      "Reason"],
+  ["exitReason",  "Exit Reason"],
+  ["entryReasons","Entry Reasons"],
+  ["confidence",  "Confidence"],
+  ["marketCond",  "Market Cond"],
+  ["htfTrend",    "HTF Trend"],
+  ["dailyRegime", "Daily Regime"],
+  ["component",   "Component"],
+  ["tradeType",   "Trade Type"],
+  ["atr",         "ATR"],
+  ["entryRsi",    "Entry RSI"],
+  // Sprint 13 — SMC Scalping/Swing ML / confidence forensics
+  ["sweepStrength", "Sweep Strength"],
+  ["fvgSizeAtr", "FVG Size ATR"],
+  ["obDistanceAtr", "OB Distance ATR"],
+  ["displacementPct", "Displacement %"],
+  ["htfAdx", "HTF ADX"],
+  ["hourUtc", "Hour UTC"],
+  ["volumeRatio", "Volume Ratio"],
+  ["bbWidth", "BB Width"],
+  // Sprint 14 — BS_BR WinPredictor features (null for non-BR strategies)
+  ["bbSqueezeWidthAtr", "BB Squeeze Width ATR"],
+  ["breakoutVolumeRatio", "Breakout Volume Ratio"],
+  ["retestDepthAtr", "Retest Depth ATR"],
+  ["rejectionWickPct", "Rejection Wick %"],
+  ["consolidationBars", "Consolidation Bars"],
+  ["breakoutCandleAtr", "Breakout Candle ATR"],
+  ["fundingRateAtEntry", "Funding Rate At Entry"],
+  ["fundingForecast24h", "Funding Forecast 24h"],
+  ["holdHours", "Hold Hours"],
+  ["confSweepStrength", "Conf Sweep"],
+  ["confFvgSize", "Conf FVG"],
+  ["confDisplacementPct", "Conf Disp %"],
+  ["confHtfAlignment", "Conf HTF Align"],
+  ["confMitigationDepth", "Conf Mitigation"],
+  ["confObConfluence", "Conf OB Confluence"],
   ["dryRun",      "DryRun"],
   ["mode",        "Mode"],
   ["exchange",    "Exchange"],
@@ -55,6 +90,21 @@ function toCsv(data, columns = TRADE_EXPORT_COLUMNS) {
   return [header, ...rows].join("\n");
 }
 
+/** Master column order (keys only) — used to preserve stable CSV header ordering. */
+const TRADE_EXPORT_COLUMN_KEYS = TRADE_EXPORT_COLUMNS.map(([k]) => k);
+
+/**
+ * Pick [key, label] tuples for export from a resolved key list.
+ * @param {string[]} columnKeys
+ * @param {{ adminFormat?: boolean }} [opts]
+ * @returns {[string, string][]}
+ */
+function pickExportColumns(columnKeys, { adminFormat = false } = {}) {
+  const keySet = new Set(columnKeys);
+  const cols = TRADE_EXPORT_COLUMNS.filter(([k]) => keySet.has(k));
+  return adminFormat ? [["user", "User"], ...cols] : cols;
+}
+
 function buildPerformanceSummaryCsv(data) {
   const closed = data.filter(r => r.status === "Closed");
   const wins = closed.filter(r => r.result === "win").length;
@@ -82,7 +132,9 @@ function buildPerformanceSummaryCsv(data) {
 module.exports = {
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
+  TRADE_EXPORT_COLUMN_KEYS,
   escapeCsv,
   toCsv,
+  pickExportColumns,
   buildPerformanceSummaryCsv,
 };

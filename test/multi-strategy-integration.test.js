@@ -67,15 +67,15 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
 
     // AF LONG → boleh
     t("AF LONG → diizinkan", engines.ADAPTIVE_FUSION.tryEnter("LONG").ok === true);
-    // TM LONG (searah) → boleh (diversified)
-    t("TM LONG (searah) → diizinkan", engines.TREND_FOLLOWING.tryEnter("LONG").ok === true);
-    // MR SHORT (berlawanan) → DITOLAK (AC-05)
+    // TM LONG (searah) → DITOLAK (race-to-confirm: max 1 posisi/simbol)
+    t("TM LONG (searah) → DITOLAK (max 1/simbol)", engines.TREND_FOLLOWING.tryEnter("LONG").ok === false);
+    // MR SHORT (berlawanan) → DITOLAK (AC-05 / max 1)
     const mr = engines.MEAN_REVERSION.tryEnter("SHORT");
     t("AC-05: MR SHORT ditolak (grup sudah LONG)", mr.ok === false);
 
-    // State teragregasi: 2 posisi terbuka (AF + TM), MR tidak ada
+    // State teragregasi: hanya 1 posisi terbuka (AF)
     const st = coord.getState();
-    t("agregasi openPositions = 2 (AF+TM)", st.openPositions.length === 2);
+    t("agregasi openPositions = 1 (AF only)", st.openPositions.length === 1);
     t("openPositions diberi tag strategyKey",
       st.openPositions.every((p) => p.strategyKey));
 
@@ -100,7 +100,7 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     t("FOUNDRY stop bersih", ac.committedMargin() === 0);
   }
 
-  // ── Scenario: semua SHORT → semua boleh (entry terdiversifikasi) ──────────
+  // ── Scenario: race-to-confirm — 2nd same-direction entry DITOLAK ──────────
   {
     const ac = new AccountCoordinator({ userId: "u3", maxAccountUtilization: 0.8 });
     const { factory, engines } = makeReservingEngineFactory(ac);
@@ -111,7 +111,8 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     });
     await coord.start();
     t("AF SHORT → boleh", engines.ADAPTIVE_FUSION.tryEnter("SHORT").ok === true);
-    t("TM SHORT → boleh (searah)", engines.TREND_FOLLOWING.tryEnter("SHORT").ok === true);
+    t("TM SHORT → DITOLAK (sudah ada posisi AF)", engines.TREND_FOLLOWING.tryEnter("SHORT").ok === false);
+    t("canEnter: 1 open → entry ke-2 ditolak", (await coord.canEnter("TREND_FOLLOWING", "SHORT")).allowed === false);
     await coord.stop();
   }
 

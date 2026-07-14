@@ -18,7 +18,11 @@ types.setTypeParser(20, (v) => parseInt(v, 10));
 // gagal cepat (caller menangani) alih-alih membuat server "seakan mati".
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: parseInt(process.env.PG_POOL_MAX, 10) || 10,
+  // Default 35: 27 multi-strategy coins can have ~100 tick loops; each tick needs
+  // 2–4 queries. Old default 10 caused "timeout exceeded when trying to connect"
+  // on position reconcile under staging load. Keep PG_POOL_MAX + PRISMA_CONNECTION_LIMIT
+  // well under Postgres max_connections (prefer PgBouncer in front for prod).
+  max: parseInt(process.env.PG_POOL_MAX, 10) || 35,
   connectionTimeoutMillis: 10000, // tunggu maks 10s ambil koneksi, lalu error
   idleTimeoutMillis: 30000,       // lepas koneksi idle setelah 30s
 });
@@ -255,6 +259,13 @@ async function init() {
   } catch (e) {
     console.warn(`[DB repair] Gagal: ${e.message}`);
   }
+
+  // Best-effort: normalize legacy/abbrev strategy_name + prefer winningComponent.
+  try {
+    await backfillTradeStrategyNames({ limit: 10000 });
+  } catch (e) {
+    console.warn(`[DB] backfillTradeStrategyNames: ${e.message}`);
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -473,11 +484,12 @@ function parseSession(row) {
 // ── Trades ────────────────────────────────────
 
 async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators, strategyName, isPartial }) {
-  // BUG-001: denormalisasi strategyName di kolom eksplisit AT OPEN time. Fallback
-  // ke field di dalam snapshot indikator (strategy / firedByStrategy) agar caller
-  // lama yang hanya mengirim indicators tetap tercatat.
-  const resolvedStrategy =
-    strategyName ?? indicators?.strategy ?? indicators?.firedByStrategy ?? null;
+  // Prefer winning-racer / firedByStrategy over umbrella engine keys.
+  const { resolvePersistedStrategyKey } = require("../../domain/tradeAttribution");
+  const resolvedStrategy = resolvePersistedStrategyKey({
+    strategyName,
+    indicators,
+  });
 
   if (!resolvedStrategy) {
     console.warn('[DB] insertTrade: strategyName null — trade akan masuk sebagai Untracked', { sessionId, symbol, side });
@@ -507,6 +519,53 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
     ]
   );
   return rows[0].id;
+}
+
+/**
+ * Backfill `trades.strategy_name` from indicators.winningComponent / firedByStrategy
+ * and normalize legacy Gen1 / abbrev values → Gen2 canonical keys.
+ * Best-effort; rows without attribution metadata can only normalize to the
+ * umbrella engine (AF_SMC / TS_TF / …) — per-racer identity is accepted as lost.
+ * @returns {{ scanned: number, updated: number }}
+ */
+async function backfillTradeStrategyNames({ limit = 5000 } = {}) {
+  const { resolvePersistedStrategyKey } = require("../../domain/tradeAttribution");
+  const { rows } = await pool.query(
+    `SELECT id, strategy_name, indicators
+       FROM trades
+      ORDER BY id DESC
+      LIMIT $1`,
+    [limit]
+  );
+
+  let updated = 0;
+  for (const row of rows) {
+    let ind = null;
+    if (row.indicators) {
+      try {
+        ind = typeof row.indicators === "string" ? JSON.parse(row.indicators) : row.indicators;
+      } catch { ind = null; }
+    }
+    const next = resolvePersistedStrategyKey({
+      strategyName: row.strategy_name,
+      indicators: ind,
+    });
+    if (!next || next === row.strategy_name) continue;
+    await pool.query(`UPDATE trades SET strategy_name = $1 WHERE id = $2`, [next, row.id]);
+    updated += 1;
+  }
+  if (updated > 0) {
+    console.log(`[DB] backfillTradeStrategyNames: updated ${updated}/${rows.length} trades`);
+  }
+  return { scanned: rows.length, updated };
+}
+
+/** Distinct symbols present in the trades store (admin / backtest validation). */
+async function getAdminTradeSymbols() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT symbol FROM trades WHERE symbol IS NOT NULL ORDER BY symbol ASC`
+  );
+  return rows.map((r) => r.symbol);
 }
 
 async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime }) {
@@ -832,9 +891,13 @@ function mapExportRow(row) {
   const pnlNet = pnl - fee - funding;
 
   // BUG-001: strategi dari kolom denormalisasi; fallback ke blob lama untuk
-  // baris pra-migrasi. "Untracked" hanya bila benar-benar tak ada data.
+  // baris pra-migrasi. Prefer winning racer over umbrella engine key.
   const strategy =
-    row.strategy_name ?? ind?.strategy ?? ind?.firedByStrategy ?? "Untracked";
+    row.strategy_name
+    ?? ind?.winningComponent
+    ?? ind?.firedByStrategy
+    ?? ind?.strategy
+    ?? "Untracked";
 
   // FEAT-001: Planned R:R = |tp-entry| / |entry-sl|; Actual R:R (R-multiple)
   // = pnlNet / plannedRisk, plannedRisk = |entry-sl| * size.
@@ -1186,34 +1249,34 @@ async function getAllEquity(mode = "live", userId = null) {
 
 const DB_BACKTEST_KLINES_TTL = Number(process.env.BACKTEST_KLINES_DB_TTL_SEC) || 86_400;
 
-/** Fire-and-forget best-effort — upsert dalam transaksi (batch untuk dataset besar). */
+/** Fire-and-forget best-effort — batch upsert via UNNEST (no long-held client). */
 async function cacheCandles(exchange, symbol, interval, candles) {
   if (!candles || candles.length === 0) return;
   const BATCH = 200;
-  const client = await pool.connect();
   try {
     for (let i = 0; i < candles.length; i += BATCH) {
       const slice = candles.slice(i, i + BATCH);
-      await client.query("BEGIN");
-      for (const c of slice) {
-        await client.query(
-          `INSERT INTO candle_cache
-             (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, extract(epoch from now())::bigint)
-           ON CONFLICT (exchange, symbol, "interval", timestamp)
-           DO UPDATE SET
-             open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
-             close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
-          [exchange, symbol, interval, c.timestamp, c.open, c.high, c.low, c.close, c.volume ?? 0]
-        );
-      }
-      await client.query("COMMIT");
+      const timestamps = slice.map((c) => c.timestamp);
+      const opens = slice.map((c) => c.open);
+      const highs = slice.map((c) => c.high);
+      const lows = slice.map((c) => c.low);
+      const closes = slice.map((c) => c.close);
+      const volumes = slice.map((c) => c.volume ?? 0);
+      await pool.query(
+        `INSERT INTO candle_cache
+           (exchange, symbol, "interval", timestamp, open, high, low, close, volume, cached_at)
+         SELECT $1, $2, $3, t, o, h, l, c, v, extract(epoch from now())::bigint
+         FROM UNNEST($4::bigint[], $5::float8[], $6::float8[], $7::float8[], $8::float8[], $9::float8[])
+           AS u(t, o, h, l, c, v)
+         ON CONFLICT (exchange, symbol, "interval", timestamp)
+         DO UPDATE SET
+           open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+           close = EXCLUDED.close, volume = EXCLUDED.volume, cached_at = EXCLUDED.cached_at`,
+        [exchange, symbol, interval, timestamps, opens, highs, lows, closes, volumes]
+      );
     }
   } catch (e) {
-    try { await client.query("ROLLBACK"); } catch { /* noop */ }
     console.warn(`[DB] cacheCandles gagal: ${e.message}`);
-  } finally {
-    client.release();
   }
 }
 
@@ -1247,6 +1310,33 @@ async function getCachedCandlesInRange(exchange, symbol, interval, startTs, endT
        AND cached_at > extract(epoch from now())::bigint - $6
      ORDER BY timestamp ASC`,
     [exchange, symbol, interval, startTs, endTs, ttl]
+  );
+  if (rows.length === 0) return null;
+  return rows.map((r) => ({
+    timestamp: r.timestamp,
+    date:      new Date(r.timestamp).toISOString(),
+    open:      r.open,
+    high:      r.high,
+    low:       r.low,
+    close:     r.close,
+    volume:    r.volume,
+  }));
+}
+
+/**
+ * Backtest candle_cache read — closed historical bars skip TTL (immutable pool).
+ * Recent frontier bars still respect cached_at so open candles can refresh.
+ */
+async function getCachedCandlesInRangeForBacktest(exchange, symbol, interval, startTs, endTs, frontierTs, maxAgeSeconds = DB_BACKTEST_KLINES_TTL) {
+  const ttl = maxAgeSeconds ?? 86_400;
+  const frontier = Number.isFinite(frontierTs) ? frontierTs : endTs;
+  const { rows } = await pool.query(
+    `SELECT * FROM candle_cache
+     WHERE exchange = $1 AND symbol = $2 AND "interval" = $3
+       AND timestamp >= $4 AND timestamp <= $5
+       AND (timestamp < $6 OR cached_at > extract(epoch from now())::bigint - $7)
+     ORDER BY timestamp ASC`,
+    [exchange, symbol, interval, startTs, endTs, frontier, ttl]
   );
   if (rows.length === 0) return null;
   return rows.map((r) => ({
@@ -1353,24 +1443,28 @@ async function insertBacktestHistory({
 async function updateBacktestHistory(id, {
   metrics, equityCurve, tradesData, config, dataStart, dataEnd, engineVersion,
 }) {
+  // Atomic write (no per-column COALESCE): COALESCE($n, col) caused metrics/equity
+  // desync when extend updates sent fresh metrics but omitted equity_curve —
+  // stale curve stayed while stats reset (e.g. 0 trades + -70% equity chart).
+  // Match upsertBacktestHistory: always overwrite result payload together.
   const { rows } = await pool.query(
     `UPDATE backtest_history SET
-       metrics = COALESCE($2, metrics),
-       equity_curve = COALESCE($3, equity_curve),
-       trades_data = COALESCE($4, trades_data),
-       config = COALESCE($5, config),
-       data_start = COALESCE($6, data_start),
-       data_end = COALESCE($7, data_end),
-       engine_version = COALESCE($8, engine_version),
+       metrics = $2,
+       equity_curve = $3,
+       trades_data = $4,
+       config = $5,
+       data_start = $6,
+       data_end = $7,
+       engine_version = $8,
        updated_at = now(),
        hit_count = COALESCE(hit_count, 0) + 1
      WHERE id = $1 RETURNING id`,
     [
       id,
-      metrics ? JSON.stringify(metrics) : null,
-      equityCurve ? JSON.stringify(equityCurve) : null,
-      tradesData ? JSON.stringify(tradesData) : null,
-      config ? JSON.stringify(config) : null,
+      metrics != null ? JSON.stringify(metrics) : null,
+      equityCurve != null ? JSON.stringify(equityCurve) : null,
+      tradesData != null ? JSON.stringify(tradesData) : null,
+      config != null ? JSON.stringify(config) : null,
       dataStart ? new Date(dataStart) : null,
       dataEnd ? new Date(dataEnd) : null,
       engineVersion ?? null,
@@ -1676,6 +1770,8 @@ module.exports = {
   getTradeStats,
   getAdminTrades,
   getAdminTradeStats,
+  getAdminTradeSymbols,
+  backfillTradeStrategyNames,
   getAdminStrategyStats,
   getAdminStrategyPnlHistory,
   getAdminTradesExport,
@@ -1702,6 +1798,7 @@ module.exports = {
   cacheCandles,
   getCachedCandles,
   getCachedCandlesInRange,
+  getCachedCandlesInRangeForBacktest,
   clearOldCache,
   // logs
   insertLog,

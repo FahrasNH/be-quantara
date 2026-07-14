@@ -61,7 +61,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     conflictMode = "skip",
     pollIntervalMs = 0,
     engineConfig = {},
-    maxPositionsPerCoin = 2,
+    maxPositionsPerCoin = 1,
     db = null,
   }) {
     super();
@@ -85,8 +85,9 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.conflictMode = conflictMode === "majority" ? "majority" : "skip";
     this.pollIntervalMs = Number(pollIntervalMs) || 0;
     this.engineConfig = engineConfig;
-    // Cap jumlah posisi terbuka per koin lintas-strategi (anti penumpukan satu arah).
-    this.maxPositionsPerCoin = Math.max(1, Number(maxPositionsPerCoin) || 2);
+    // Race-to-confirm: max 1 posisi terbuka per koin lintas-strategi (PRD §9.2).
+    // Strategi lain baru boleh entry SETELAH posisi yang berjalan flat.
+    this.maxPositionsPerCoin = Math.max(1, Number(maxPositionsPerCoin) || 1);
     // DB di-inject (DI) → canEnter pakai DB sebagai sumber kebenaran tunggal.
     // Null saat unit test → fallback ke state engine live.
     this._db = db;
@@ -480,7 +481,8 @@ class MultiStrategyCoordinator extends EventEmitter {
    * GATE entry lintas-strategi (dipanggil engine SEBELUM membuka posisi).
    * ASYNC — menghitung exposure dari DB (sumber kebenaran tunggal). Aturan:
    *   1. Proteksi hedge: tolak jika sudah ada posisi arah BERLAWANAN di koin ini.
-   *   2. Cap konsentrasi: tolak jika posisi terbuka >= maxPositionsPerCoin.
+   *   2. Single-position-per-symbol (race-to-confirm): tolak jika sudah ada
+   *      posisi terbuka apa pun (default maxPositionsPerCoin = 1).
    *
    * @param {string} strategyKey
    * @param {"LONG"|"SHORT"} direction
@@ -503,7 +505,9 @@ class MultiStrategyCoordinator extends EventEmitter {
     }
     if (totalOpen >= this.maxPositionsPerCoin) {
       return { allowed: false, open: totalOpen, cap: this.maxPositionsPerCoin,
-        reason: `Cap per-koin tercapai (${totalOpen}/${this.maxPositionsPerCoin}) di ${this.symbol}` };
+        reason: this.maxPositionsPerCoin === 1
+          ? `Sudah ada posisi terbuka di ${this.symbol} — race-to-confirm: max 1 per simbol`
+          : `Cap per-koin tercapai (${totalOpen}/${this.maxPositionsPerCoin}) di ${this.symbol}` };
     }
     return { allowed: true, open: totalOpen, cap: this.maxPositionsPerCoin, reason: "OK" };
   }

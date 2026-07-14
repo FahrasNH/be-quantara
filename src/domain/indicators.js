@@ -174,6 +174,9 @@ function calcIndicators(candles, config = {}) {
   const lows    = candles.map(c => c.low);
   const volumes = candles.map(c => c.volume || 0);
   const opens   = candles.map((c, i) => c.open ?? (i > 0 ? closes[i - 1] : c.close));
+  // Session VWAP (TS_VP) needs bar timestamps; without these the whole series
+  // collapses into one "session" and Value Area blocks almost all trend entries.
+  const timestamps = candles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
 
   const result = {
     emaFast:  calcEMA(closes, emaFast),
@@ -187,6 +190,7 @@ function calcIndicators(candles, config = {}) {
     highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
     lows,
     opens,
+    timestamps,
   };
 
   // EMA trend filter (EMA50 untuk Day Trading, EMA200 untuk Swing)
@@ -756,8 +760,13 @@ let _meanReversionInstance = null;
 let _breakoutRetestInstance = null;
 function getAdaptiveFusionInstance() {
   if (!_adaptiveFusionInstance) {
-    const SmartMoneyConceptsStrategy = require("./strategy/implementations/SmartMoneyConceptsStrategy");
-    _adaptiveFusionInstance = new SmartMoneyConceptsStrategy();
+    // Sprint 8: use umbrella (SMC + Wyckoff + VSA) so detectSignal runs 3-component voting
+    const { strategyRegistry } = require("./strategy");
+    _adaptiveFusionInstance = strategyRegistry.get("AF_SMC");
+    if (!_adaptiveFusionInstance) {
+      const AdaptiveFusionUmbrella = require("./strategy/umbrellas/AdaptiveFusionUmbrella");
+      _adaptiveFusionInstance = new AdaptiveFusionUmbrella();
+    }
   }
   return _adaptiveFusionInstance;
 }
@@ -771,12 +780,18 @@ function getAdaptiveFusionMeta() {
 }
 
 /**
- * Singleton getter untuk TREND_FOLLOWING strategy
+ * Singleton getter untuk TREND_FOLLOWING / Trend Surge umbrella
+ * (TS_TF race bag: Trend Following + Dow Theory + Auction Market Theory —
+ * same instance as backtest registry; Sprint 12 race-to-confirm).
  */
 function getTrendFollowingInstance() {
   if (!_trendFollowingInstance) {
-    const TrendFollowingStrategy = require("./strategy/implementations/TrendFollowingStrategy");
-    _trendFollowingInstance = new TrendFollowingStrategy();
+    const { strategyRegistry } = require("./strategy");
+    _trendFollowingInstance = strategyRegistry.get("TS_TF");
+    if (!_trendFollowingInstance) {
+      const TrendSurgeUmbrella = require("./strategy/umbrellas/TrendSurgeUmbrella");
+      _trendFollowingInstance = new TrendSurgeUmbrella();
+    }
   }
   return _trendFollowingInstance;
 }
@@ -800,6 +815,11 @@ function getBreakoutRetestInstance() {
   return _breakoutRetestInstance;
 }
 
+/** Last BS_BR / BREAKOUT_RETEST signal meta (for structure SL / enrichment). */
+function getBreakoutRetestMeta() {
+  return _breakoutRetestInstance ? _breakoutRetestInstance.getLastSignalMeta() : null;
+}
+
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
   const signalType = config.signalType || "PDF_DAYTRADING";
 
@@ -821,8 +841,10 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
       return tf.detectSignal(indicators, i, config);
     }
 
-    // MEAN_REVERSION — Bollinger Bands extremes (VAULT tier)
-    case "MEAN_REVERSION": {
+    // MEAN_REVERSION / MD_MR — layered BB+RSI → ADX gate → OB/FVG (MINT tier)
+    case "MEAN_REVERSION":
+    case "MD_MR":
+    case "MR": {
       const mr = getMeanReversionInstance();
       return mr.detectSignal(indicators, i, config);
     }
@@ -1031,6 +1053,8 @@ module.exports = {
   detectSignalPdfSwing,
   detectSignalLegacy,
   getAdaptiveFusionMeta,
+  getBreakoutRetestMeta,
+  getBreakoutRetestInstance,
   getTrendFollowingInstance,
   getMeanReversionInstance,
   calcPositionSize,

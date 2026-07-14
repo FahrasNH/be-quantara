@@ -14,9 +14,9 @@
 const { PrismaClient } = require("@prisma/client");
 
 // Bound pool satu client ini. Boleh override via PRISMA_CONNECTION_LIMIT.
-// Default 20 → cukup untuk start banyak bot serentak, tetap jauh di bawah
-// max_connections Postgres (100) walau ada pg.Pool (database.js) berdampingan.
-const CONNECTION_LIMIT = parseInt(process.env.PRISMA_CONNECTION_LIMIT, 10) || 20;
+// Default 15 (was 20): paired with pg pool default 35 so total stays under
+// typical Postgres max_connections=100 with headroom for admin/backup.
+const CONNECTION_LIMIT = parseInt(process.env.PRISMA_CONNECTION_LIMIT, 10) || 15;
 
 function buildUrl() {
   const raw = process.env.DATABASE_URL;

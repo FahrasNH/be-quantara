@@ -91,6 +91,8 @@ function buildBacktestEntryContext(position = {}, meta = {}) {
     strategyKey:      meta.strategyKey ?? position.strategy ?? "ADAPTIVE_FUSION",
     tradeType:        position.tradeType ?? position.component ?? "Intraday",
     regime:           position.marketCond ?? null,
+    signalComponents: position.signalComponents ?? meta.signalComponents ?? meta.afVotes?.breakdown ?? {},
+    afVotes:          position.afVotes ?? meta.afVotes ?? null,
     source:           "backtest-simulation",
   };
 }
