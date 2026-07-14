@@ -64,7 +64,7 @@ fi
 
 # ── Migrate ──────────────────────────────────────────────────────────────────
 echo "==> prisma migrate deploy..."
-npx prisma migrate deploy
+bash scripts/prisma-migrate-deploy.sh
 
 # ── PM2 ──────────────────────────────────────────────────────────────────────
 if pm2 describe quantara-staging >/dev/null 2>&1; then

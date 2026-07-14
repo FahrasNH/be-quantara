@@ -9,7 +9,7 @@
     "predev": "prisma generate",
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "backtest": "node scripts/backtest.js",
+    "backtest": "node scripts/backtest-af-real.js --source mock --days 120",
     "seed:admin": "node scripts/seed-super-admin.js",
     "seed:payment": "node scripts/seed-payment.js",
     "analyze:fees": "node scripts/analyze-net-of-fee.js",

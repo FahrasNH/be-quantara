@@ -41,7 +41,7 @@ echo "==> npm ci..."
 npm ci
 
 echo "==> prisma migrate deploy..."
-npx prisma migrate deploy
+bash scripts/prisma-migrate-deploy.sh
 
 echo "==> Syntax check (fail fast before PM2 reload)..."
 node --check index.js
