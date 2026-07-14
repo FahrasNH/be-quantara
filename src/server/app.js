@@ -500,11 +500,14 @@ const BacktestJobService = require("./services/BacktestJobService");
 
 const healthHandler = (req, res) => {
   const backtest = BacktestJobService.queueStats();
+  const { isEmailConfigured } = require("../services/EmailService");
   res.json({
     ok: true,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     allowedExchanges: cfg.allowedExchanges,
+    emailConfigured: isEmailConfigured(),
+    appUrl: cfg.APP_URL,
     backtest,
   });
 };

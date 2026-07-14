@@ -331,6 +331,10 @@ module.exports = function createAuthRoutes() {
       AuthService.forgotPassword(email)
         .then(async (result) => {
           if (!result) return; // email not found — stay silent
+          if (!isEmailConfigured()) {
+            console.warn('[forgot-password] EMAIL_* tidak dikonfigurasi — reset email tidak dikirim');
+            return;
+          }
           const resetUrl = `${cfg.APP_URL}/reset-password?token=${result.token}`;
           try {
             await sendPasswordReset(result.user.email, resetUrl);
