@@ -43,6 +43,7 @@ const {
 } = require("../../domain/strategy/smc/smcScalpGates");
 const { buildBacktestEntryContext } = require("../../domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("./csv/strategyReasonFormatters");
+const { resolveFeeSchedule } = require("../../constants/exchangeFeeSchedules");
 
 /** Coerce indicator snapshots to a finite scalar (reject arrays / absurd values). */
 function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
@@ -149,18 +150,41 @@ function extractBsBrEnrichment(meta) {
   };
 }
 
-const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
+/** Defaults = Bitget retail schedule (historical hardcode; prefer resolveFeeModel). */
+const _DEFAULT_FEE = resolveFeeSchedule("bitget");
+const FEE_RATE_PER_SIDE = _DEFAULT_FEE.takerFeeRate; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
 /** Typical crypto perpetual funding ~0.01% per 8h (conservative cost model). */
-const FUNDING_RATE_8H = 0.0001;
+const FUNDING_RATE_8H = _DEFAULT_FEE.fundingRate8h;
 const MS_PER_8H = 8 * 60 * 60 * 1000;
 
+/**
+ * Resolve taker/maker/funding from opts.feeSchedule, opts.exchangeType, or Bitget default.
+ * @param {{ exchangeType?: string, feeSchedule?: object, enableFees?: boolean }} opts
+ */
+function resolveFeeModel(opts = {}) {
+  const schedule = opts.feeSchedule?.takerFeeRate != null
+    ? opts.feeSchedule
+    : resolveFeeSchedule(opts.exchangeType);
+  const enableFees = opts.enableFees !== false;
+  return {
+    schedule,
+    exchange: schedule.exchange,
+    exchangeLabel: schedule.label,
+    takerFeeRate: schedule.takerFeeRate,
+    makerFeeRate: schedule.makerFeeRate,
+    fundingRate8h: schedule.fundingRate8h,
+    feeRate: enableFees ? schedule.takerFeeRate : 0,
+  };
+}
+
 /** Accrue absolute funding cost over hold time (parity with live funding drag). */
-function estimateFundingCost(entryPrice, size, openTs, closeTs, enabled) {
+function estimateFundingCost(entryPrice, size, openTs, closeTs, enabled, fundingRate8h = FUNDING_RATE_8H) {
   if (!enabled || !(entryPrice > 0) || !(size > 0)) return 0;
   const holdMs = Math.max(0, (closeTs || 0) - (openTs || 0));
   const periods = holdMs / MS_PER_8H;
-  return periods * FUNDING_RATE_8H * entryPrice * size;
+  const rate = Number.isFinite(fundingRate8h) ? fundingRate8h : FUNDING_RATE_8H;
+  return periods * rate * entryPrice * size;
 }
 
 /** Map an entry-bar timestamp → index of last CLOSED htf candle at/just before it. */
@@ -616,7 +640,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
     const closeTs = entryCandles[exitIdx]?.timestamp ?? 0;
     const funding = estimateFundingCost(
-      position.entry, closeSize, openTs, closeTs, cfg.simulateFunding !== false && feeRate > 0
+      position.entry, closeSize, openTs, closeTs,
+      cfg.simulateFunding !== false && feeRate > 0,
+      cfg.fundingRate8h ?? FUNDING_RATE_8H
     );
     const pnl = grossPnl - fee - funding;
     capital += pnl;
@@ -1109,15 +1135,22 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
       higherTf: cfg.higherTf || null,
-      feeRate: FEE_RATE_PER_SIDE,
+      feeRate: cfg._feeModel?.takerFeeRate ?? FEE_RATE_PER_SIDE,
       slippage: slip,
       // Sprint 13 Fee=0 audit — every window documents cost-model assumptions
       costModel: buildCostModelMeta({
         enableFees: feeRate > 0,
-        feeRate: feeRate || FEE_RATE_PER_SIDE,
+        feeRate: feeRate || (cfg._feeModel?.takerFeeRate ?? FEE_RATE_PER_SIDE),
         simulateFunding: cfg.simulateFunding !== false,
-        fundingRate8h: FUNDING_RATE_8H,
+        fundingRate8h: cfg.fundingRate8h ?? FUNDING_RATE_8H,
       }),
+      exchange: cfg._feeModel?.exchange,
+      exchangeLabel: cfg._feeModel?.exchangeLabel,
+      feeSchedule: cfg._feeModel ? {
+        takerFeeRate: cfg._feeModel.takerFeeRate,
+        makerFeeRate: cfg._feeModel.makerFeeRate,
+        fundingRate8h: cfg._feeModel.fundingRate8h,
+      } : undefined,
     },
   };
 }
@@ -1487,9 +1520,16 @@ async function runTripleTypeBacktest(opts = {}) {
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
   const strategy = validation.strategy;
 
+  const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = { ...base, ...(opts.config || {}) };
-  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const cfg = {
+    ...base,
+    ...(opts.config || {}),
+    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  };
+  const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
   // opts.typeOrder: Advance-config subset (e.g. ["Swing"]); risk weights normalize
@@ -1673,6 +1713,13 @@ async function runTripleTypeBacktest(opts = {}) {
       grokStats: grokResult?.stats ?? null,
       ragGate: !!opts.ragGate,
       ragStats: ragResult?.stats ?? null,
+      exchange: feeModel.exchange,
+      exchangeLabel: feeModel.exchangeLabel,
+      feeSchedule: {
+        takerFeeRate: feeModel.takerFeeRate,
+        makerFeeRate: feeModel.makerFeeRate,
+        fundingRate8h: feeModel.fundingRate8h,
+      },
     },
   };
 }
@@ -1694,10 +1741,17 @@ async function runRealBacktest(opts = {}) {
   const strategy = validation.strategy;
 
   // Canonical live config (legacyStrategies) merged with caller overrides.
+  const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = { ...base, ...(opts.config || {}) };
+  const cfg = {
+    ...base,
+    ...(opts.config || {}),
+    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  };
 
-  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const feeRate = feeModel.feeRate;
   const slip = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
   // Multi-position mode (v3.0): ADAPTIVE_FUSION opens up to 3 concurrent positions
@@ -2016,7 +2070,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
     const closeTs = entryCandles[exitIdx]?.timestamp ?? 0;
     const funding = estimateFundingCost(
-      position.entry, closeSize, openTs, closeTs, cfg.simulateFunding !== false && feeRate > 0
+      position.entry, closeSize, openTs, closeTs,
+      cfg.simulateFunding !== false && feeRate > 0,
+      cfg.fundingRate8h ?? FUNDING_RATE_8H
     );
     const pnl = grossPnl - fee - funding;
     capital += pnl;
@@ -2490,9 +2546,16 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
       higherTf,
-      feeRate,
+      feeRate: feeRate || (cfg._feeModel?.takerFeeRate ?? FEE_RATE_PER_SIDE),
       slippage: slip,
       diagnostics: diag,
+      exchange: cfg._feeModel?.exchange,
+      exchangeLabel: cfg._feeModel?.exchangeLabel,
+      feeSchedule: cfg._feeModel ? {
+        takerFeeRate: cfg._feeModel.takerFeeRate,
+        makerFeeRate: cfg._feeModel.makerFeeRate,
+        fundingRate8h: cfg._feeModel.fundingRate8h,
+      } : undefined,
     },
   };
 }
@@ -2543,9 +2606,16 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
   const strategy = validation.strategy;
 
+  const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = { ...base, ...(opts.config || {}) };
-  const feeRate = enableFees ? FEE_RATE_PER_SIDE : 0;
+  const cfg = {
+    ...base,
+    ...(opts.config || {}),
+    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  };
+  const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
   const allTrades = [];
@@ -2667,6 +2737,13 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       grokStats: grokResult?.stats ?? null,
       ragGate: !!opts.ragGate,
       ragStats: ragResult?.stats ?? null,
+      exchange: feeModel.exchange,
+      exchangeLabel: feeModel.exchangeLabel,
+      feeSchedule: {
+        takerFeeRate: feeModel.takerFeeRate,
+        makerFeeRate: feeModel.makerFeeRate,
+        fundingRate8h: feeModel.fundingRate8h,
+      },
     },
   };
 }
@@ -2718,6 +2795,8 @@ module.exports = {
   runRealBacktest,
   runTripleTypeBacktest,
   runMultiTypeBacktest,
+  resolveFeeModel,
+  estimateFundingCost,
   _computeTripleStats,
   _applyGrokGate,
   _applyRagGate,

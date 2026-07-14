@@ -1199,6 +1199,8 @@ module.exports = function createBacktestRouter(context) {
       debug: debugMode = false,
       grok_gate: grokGate = false,
       rag_gate: ragGate = false,
+      exchange_type: exchangeTypeBody,
+      exchangeType: exchangeTypeCamel,
     } = req.body;
 
     const sym = (pair || symbol || "").toUpperCase();
@@ -1216,6 +1218,9 @@ module.exports = function createBacktestRouter(context) {
       return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
     }
 
+    const { normalizeExchangeType } = require("../../constants/exchangeFeeSchedules");
+    const exchangeType = normalizeExchangeType(exchangeTypeBody || exchangeTypeCamel) || undefined;
+
     // Isolated async job (child_process by default) — see BacktestJobService.
     // Pass only JSON-safe strategyCfg fields (IPC structured clone).
     const jobId = BacktestJobService.createJob(req.userId, {
@@ -1229,6 +1234,7 @@ module.exports = function createBacktestRouter(context) {
       periodId, customStart, customEnd,
       capital, enableFees, enableSlippage,
       parameters, entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
+      exchangeType,
     });
 
     return res.json({ ok: true, jobId });

@@ -408,6 +408,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
                       // most of the run and fail-closed gates block every entry)
     onProgress,
     abortSignal,
+    exchangeType: exchangeTypeOverride, // Advance: public OHLCV from chosen venue
   } = opts;
 
   const sym = String(symbol || "").toUpperCase().trim();
@@ -417,12 +418,19 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     throw e;
   }
 
-  const exchange = await getConnectedExchange(userId);
-  if (!exchange) {
-    const e = new Error("No exchange connected. Connect an exchange in Settings.");
-    e.statusCode = 400;
-    e.code = "NO_EXCHANGE_CONNECTED";
-    throw e;
+  const override = String(exchangeTypeOverride || "").toLowerCase().trim();
+  let exchange;
+  if (override && SUPPORTED.has(override)) {
+    // Advance candle-source override — public CCXT, no need to be connected to that venue.
+    exchange = override;
+  } else {
+    exchange = await getConnectedExchange(userId);
+    if (!exchange) {
+      const e = new Error("No exchange connected. Connect an exchange in Settings.");
+      e.statusCode = 400;
+      e.code = "NO_EXCHANGE_CONNECTED";
+      throw e;
+    }
   }
   if (!SUPPORTED.has(exchange)) {
     const e = new Error(`Exchange "${exchange}" is not yet supported for backtesting.`);
@@ -694,6 +702,7 @@ function _clearCaches() {
 module.exports = {
   fetchHistoricalKlines,
   getDataSourceStatus,
+  getPublicClient,
   dedupeAndValidate,
   fillGaps,
   clampDateRange,
@@ -705,5 +714,6 @@ module.exports = {
   CANDLE_INTERVAL_MS,
   MIN_HISTORICAL_MS,
   MAX_BARS,
+  SUPPORTED,
   _clearCaches,
 };

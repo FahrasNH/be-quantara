@@ -13,6 +13,10 @@ const HistoricalKlinesService = require("./HistoricalKlinesService");
 const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest } = require("./RealStrategyBacktestService");
 const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../constants/strategySupportedTypes");
 const { applyDedicatedBsBrBacktestConfig } = require("../../config/strategies");
+const {
+  normalizeExchangeType,
+  resolveFeeSchedule,
+} = require("../../constants/exchangeFeeSchedules");
 
 const AF_SMC_KEYS = new Set([
   "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
@@ -218,16 +222,32 @@ async function runBacktestJob(job, userId, opts) {
     capital, enableFees, enableSlippage,
     parameters: parametersIn = {},
     entryTfOverride, htfTfOverride, debugMode, grokGate, ragGate,
+    exchangeType: exchangeTypeIn,
   } = opts;
 
   const parameters = applyStrategyJobDefaults(strategyKey, parametersIn);
+
+  // Advance: public OHLCV from chosen venue + that venue's fee schedule.
+  // Basic: omit override → HistoricalKlinesService uses connected exchange; fees follow fetched venue.
+  const exchangeTypeOverride = normalizeExchangeType(exchangeTypeIn);
+  const klinesExchangeOpts = exchangeTypeOverride ? { exchangeType: exchangeTypeOverride } : {};
 
   job.status = "running";
   assertHeapHeadroom(job);
 
   const startMs = Date.now();
-  const fetchOpts = { periodId, customStart, customEnd };
+  const fetchOpts = { periodId, customStart, customEnd, ...klinesExchangeOpts };
   const abortSignal = job.abortController.signal;
+
+  /** Resolve fee model once we know which venue supplied OHLCV. */
+  function feeOptsFor(exchangeUsed) {
+    const ex = normalizeExchangeType(exchangeUsed) || exchangeTypeOverride || "bitget";
+    const schedule = resolveFeeSchedule(ex);
+    return {
+      exchangeType: schedule.exchange,
+      feeSchedule: schedule,
+    };
+  }
 
   const isAF = AF_SMC_KEYS.has(strategyKey);
   const multiTypeOrder = MULTI_TYPE_STRATEGY_MAP[strategyKey] || null;
@@ -247,6 +267,7 @@ async function runBacktestJob(job, userId, opts) {
     const entryCandles = {};
     const htfCandles = {};
     const dataInfo = {};
+    let candleExchange = null;
 
     let typeOrder = isAF ? Object.keys(TYPE_TF) : multiTypeOrder;
     const supportedForStrategy = STRATEGY_SUPPORTED_TYPES[strategyKey] || [];
@@ -284,7 +305,10 @@ async function runBacktestJob(job, userId, opts) {
           startDate: entryRes.startDate,
           endDate: entryRes.endDate,
           clamped: entryRes.clamped || false,
+          exchange: entryRes.exchange,
+          exchangeLabel: entryRes.exchangeLabel,
         };
+        if (!candleExchange) candleExchange = entryRes.exchange;
       } catch (e) {
         if (e.code === "CANCELLED") throw e;
         entryCandles[type] = [];
@@ -327,6 +351,7 @@ async function runBacktestJob(job, userId, opts) {
       dailyCandles = [];
     }
 
+    const feeModel = feeOptsFor(candleExchange);
     const computeOpts = {
       entryCandles,
       htfCandles,
@@ -337,6 +362,8 @@ async function runBacktestJob(job, userId, opts) {
       capital: Number(capital) || 1000,
       enableFees: enableFees !== false,
       enableSlippage: !!enableSlippage,
+      exchangeType: feeModel.exchangeType,
+      feeSchedule: feeModel.feeSchedule,
       config: parameters,
       abortSignal,
       grokGate: !!grokGate,
@@ -411,6 +438,13 @@ async function runBacktestJob(job, userId, opts) {
       typeWarnings,
       computeTimeMs: Date.now() - startMs,
       ...result,
+      exchange: feeModel.exchangeType,
+      exchangeLabel: feeModel.feeSchedule.label,
+      feeSchedule: {
+        takerFeeRate: feeModel.feeSchedule.takerFeeRate,
+        makerFeeRate: feeModel.feeSchedule.makerFeeRate,
+        fundingRate8h: feeModel.feeSchedule.fundingRate8h,
+      },
     });
     return;
   }
@@ -493,6 +527,7 @@ async function runBacktestJob(job, userId, opts) {
   assertHeapHeadroom(job);
   job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
 
+  const feeModel = feeOptsFor(entryRes.exchange);
   const result = await runRealBacktest({
     entryCandles,
     htfCandles,
@@ -501,6 +536,8 @@ async function runBacktestJob(job, userId, opts) {
     capital: Number(capital) || 1000,
     enableFees: enableFees !== false,
     enableSlippage: !!enableSlippage,
+    exchangeType: feeModel.exchangeType,
+    feeSchedule: feeModel.feeSchedule,
     config: parameters,
     debug: !!debugMode,
     abortSignal,
@@ -521,6 +558,13 @@ async function runBacktestJob(job, userId, opts) {
     source: entryRes.source,
     computeTimeMs: Date.now() - startMs,
     ...result,
+    exchange: feeModel.exchangeType,
+    exchangeLabel: feeModel.feeSchedule.label,
+    feeSchedule: {
+      takerFeeRate: feeModel.feeSchedule.takerFeeRate,
+      makerFeeRate: feeModel.feeSchedule.makerFeeRate,
+      fundingRate8h: feeModel.feeSchedule.fundingRate8h,
+    },
   });
 }
 
