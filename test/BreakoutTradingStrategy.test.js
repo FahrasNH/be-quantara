@@ -63,9 +63,10 @@ describe("BreakoutTradingStrategy", () => {
 
     it("should detect a squeeze when volatility contracts", () => {
       // Wide swings early (high BB width), then a flat tail (contracted width).
+      // Need deeper contraction to clear Sprint 14 threshold 0.75×.
       const wide = [];
-      for (let i = 0; i < 20; i++) wide.push(100 + (i % 2 === 0 ? 8 : -8)); // ±8 zig-zag
-      const flat = new Array(12).fill(100.2); // near-flat → width collapses
+      for (let i = 0; i < 25; i++) wide.push(100 + (i % 2 === 0 ? 12 : -12)); // ±12 zig-zag
+      const flat = new Array(15).fill(100.05); // near-flat → width collapses hard
       const closes = [...wide, ...flat];
 
       const res = strategy.checkConsolidation(closes);
@@ -154,29 +155,45 @@ describe("BreakoutTradingStrategy", () => {
 
   describe("checkRetestEntry()", () => {
     it("should detect LONG retest entry", () => {
-      // Retest valid: low bar terakhir MENYENTUH level 105 (wick), close di atas (106).
-      const closes = [100, 105, 110, 109, 108, 105, 106];
-      const lows   = [ 99, 104, 108, 107, 106, 104, 105];  // wick turun menyentuh 105
-      const highs  = [101, 106, 111, 110, 109, 106, 107];
+      // Retest valid: low touches level + rejection lower wick ≥35% of range + close above.
+      const closes = [100, 105, 110, 109, 108, 107, 106.5];
+      const opens  = [100, 105, 109, 108, 107, 108, 108];
+      const lows   = [ 99, 104, 108, 107, 106, 106, 105];  // wick touches 105
+      const highs  = [101, 106, 111, 110, 109, 109, 108.5];
       const direction = "LONG";
       const breakoutLevel = 105;
 
-      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs);
+      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs, opens);
 
       assert.strictEqual(result.valid, true, "Should detect LONG retest");
+      assert.ok(result.rejectionWickPct >= 0.35, "Should report rejection wick");
+      assert.ok(strategy._scoreConfidence({
+        squeezeWidthPct: 0.02, avgPriorWidthPct: 0.04, volumeRatio: 1.8,
+        rejectionWickPct: result.rejectionWickPct, barsSinceBreakout: 3, retestDepthAtr: 0.3,
+      }) !== 65, "Confidence must not be flat 65");
     });
 
     it("should detect SHORT retest entry", () => {
-      // Retest valid: high bar terakhir MENYENTUH level 95 (wick), close di bawah (94).
-      const closes = [100, 95, 90, 91, 92, 95, 94];
-      const highs  = [101, 96, 91, 92, 93, 96, 95];  // wick naik menyentuh 95
-      const lows   = [ 99, 94, 89, 90, 91, 94, 93];
+      const closes = [100, 95, 90, 91, 92, 93, 93.5];
+      const opens  = [100, 95, 91, 92, 93, 92, 92];
+      const highs  = [101, 96, 91, 92, 93, 94, 95];  // wick touches 95
+      const lows   = [ 99, 94, 89, 90, 91, 91, 91.5];
       const direction = "SHORT";
       const breakoutLevel = 95;
 
-      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs);
+      const result = strategy.checkRetestEntry(closes, direction, breakoutLevel, lows, highs, opens);
 
       assert.strictEqual(result.valid, true, "Should detect SHORT retest");
+    });
+
+    it("should reject retest without rejection wick", () => {
+      // Touches level but tiny lower wick (doji near close) — chase quality
+      const closes = [100, 105, 110, 109, 108, 105, 105.1];
+      const opens  = [100, 105, 109, 108, 107, 106, 105.05];
+      const lows   = [ 99, 104, 108, 107, 106, 104, 105];
+      const highs  = [101, 106, 111, 110, 109, 106, 105.2];
+      const result = strategy.checkRetestEntry(closes, "LONG", 105, lows, highs, opens);
+      assert.strictEqual(result.valid, false, "Should reject superficial wick");
     });
 
     it("should reject retest if no pullback (trending away)", () => {
@@ -286,9 +303,12 @@ describe("BreakoutTradingStrategy", () => {
       assert.strictEqual(strategy.config.leverage, 1, "Leverage should be 1x (conservative for VAULT)");
     });
 
-    it("should expose Bollinger Band Width squeeze settings (v2.4)", () => {
+    it("should expose Bollinger Band Width squeeze settings (v2.5)", () => {
       assert.strictEqual(strategy.config.bbPeriod, 20, "BB period 20");
       assert.strictEqual(strategy.config.bbStdDev, 2.0, "BB std dev 2.0");
+      assert.strictEqual(strategy.config.squeezeThreshold, 0.75, "Sprint 14 tighter squeeze");
+      assert.strictEqual(strategy.config.volumeMultiplier, 1.5, "Sprint 14 volume gate");
+      assert.strictEqual(strategy.config.minRetestBars, 2, "Sprint 14 min retest wait");
       assert.strictEqual(strategy.config.requireConsolidation, true, "Consolidation gate on by default");
     });
 

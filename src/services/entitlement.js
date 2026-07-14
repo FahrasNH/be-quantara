@@ -8,18 +8,21 @@
 const { canUseStrategy, getTierConfig, migrateLegacyTier } = require("../domain/tierConfig");
 // Sumber kebenaran strategi yang belum boleh live (single source of truth).
 const { DRY_RUN_ONLY_STRATEGIES } = require("../middleware/strategyGuard");
+const { isBsBrHaltedKey } = require("../config/strategies");
 
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 const prisma = require("../infrastructure/db/prismaClient");
 
 /**
  * Apakah strategi sudah siap untuk LIVE trading (bukan dry-run-only)?
- * Pure function — mengacu ke DRY_RUN_ONLY_STRATEGIES (mis. BREAKOUT_RETEST).
+ * Pure function — mengacu ke DRY_RUN_ONLY_STRATEGIES (mis. BREAKOUT_RETEST / BS_BR).
  * @param {string} strategyKey
  * @returns {boolean}
  */
 function isStrategyLiveReady(strategyKey) {
-  return !DRY_RUN_ONLY_STRATEGIES.has(strategyKey);
+  if (isBsBrHaltedKey(strategyKey)) return false;
+  return !DRY_RUN_ONLY_STRATEGIES.has(strategyKey)
+    && !DRY_RUN_ONLY_STRATEGIES.has(String(strategyKey || "").toUpperCase());
 }
 
 /**
@@ -31,7 +34,9 @@ function isStrategyLiveReady(strategyKey) {
  */
 function filterStrategiesByMode(strategies, mode) {
   const list = Array.isArray(strategies) ? strategies : [];
-  return mode === "live" ? list.filter(isStrategyLiveReady) : list.slice();
+  // Sprint 14: always drop halted BS_BR from auto multi-strategy pools
+  const withoutHalted = list.filter((s) => !isBsBrHaltedKey(s));
+  return mode === "live" ? withoutHalted.filter(isStrategyLiveReady) : withoutHalted.slice();
 }
 
 /**

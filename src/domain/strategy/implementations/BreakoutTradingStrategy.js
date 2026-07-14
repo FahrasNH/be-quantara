@@ -31,7 +31,7 @@ class BreakoutTradingStrategy extends StrategyBase {
         "Trades breakouts that emerge from a Bollinger Band Width squeeze " +
         "(consolidation), confirmed by volume and a RETEST of the broken level. " +
         "Risk-to-reward ~1:2 with wide invalidation. Works in any market condition.",
-      version: "2.4.0",
+      version: "2.5.0",
       enabled: true,
       ...config,
     });
@@ -40,18 +40,18 @@ class BreakoutTradingStrategy extends StrategyBase {
       ...this.config,           // preserve name/label/version from StrategyBase
       // Level detection (4h timeframe)
       lookbackBars: 20,        // High/low of last 20 candles = S&R level
-      volumeMultiplier: 1.3,   // Breakout butuh 1.3x volume (Fix #2: 1.1 terlalu longgar)
-      retestWindow: 5,         // Retest must occur within N bars of breakout, else level is stale
+      // Sprint 14: fee drag — 1.3× was too loose (freq 2–3.7/wk vs PRD ≤2)
+      volumeMultiplier: 1.5,   // Breakout needs ≥1.5× volume SMA20
+      retestWindow: 6,         // Retest must occur within N bars of breakout
+      minRetestBars: 2,        // Reject same/next-bar chase; need real pullback
+      minRejectionWickRatio: 0.35, // Rejection wick ≥ 35% of candle range
 
-      // ── Consolidation gate (Bollinger Band Width squeeze) — v2.4 ─────────
-      // A quality breakout expands OUT of a low-volatility squeeze. We measure
-      // BB width% = (upper − lower) / middle on the bar before the breakout and
-      // require it to be contracted vs its own recent average. This filters
-      // breakouts that fire mid-trend (no coiled energy) which tend to fail.
+      // ── Consolidation gate (Bollinger Band Width squeeze) — v2.5 ─────────
+      // Sprint 14: tighten from 0.9→0.75 to cut over-trading / fee bleed.
       bbPeriod: 20,            // Bollinger Band SMA period
       bbStdDev: 2.0,           // Band multiplier (±2σ)
       squeezeLookback: 10,     // Bars of BB-width history to compare against
-      squeezeThreshold: 0.9,   // Squeeze if current width ≤ 0.9× avg prior width
+      squeezeThreshold: 0.75,  // Squeeze if current width ≤ 0.75× avg prior width
       requireConsolidation: true, // Set false to disable the gate (legacy behaviour)
 
       // Risk management (VAULT tier)
@@ -70,8 +70,8 @@ class BreakoutTradingStrategy extends StrategyBase {
       slMultiplier: 1.7,
       tpMultiplier: 3.2,
 
-      // Position management
-      maxTradesPerDay: 5,
+      // Position management — PRD ≤2 trades/week; hard daily cap cuts fee churn
+      maxTradesPerDay: 2,
       minCapital: 100,         // Minimum $100 to trade
       leverage: 1,             // Conservative leverage for VAULT
     };
@@ -94,6 +94,10 @@ class BreakoutTradingStrategy extends StrategyBase {
         breakoutBar: null,
         confirmed: false,
         squeezeWidthPct: null,
+        avgPriorWidthPct: null,
+        breakoutVolumeRatio: null,
+        consolidationBars: null,
+        breakoutCandleAtr: null,
       });
     }
     return this._breakoutStates.get(key);
@@ -219,45 +223,112 @@ class BreakoutTradingStrategy extends StrategyBase {
   static get RETEST_TOUCH_TOL() { return 0.003; } // 0.3%
 
   /**
-   * Check for RETEST entry (lebih aman dari mengejar spike breakout).
-   * Retest VALID hanya jika bar benar-benar MENYENTUH level lalu DITOLAK:
-   *  - LONG : low bar menyentuh zona level (wick turun ke ≈level), close di atas level.
-   *  - SHORT: high bar menyentuh zona level (wick naik ke ≈level), close di bawah level.
-   * Sebelumnya hanya cek "prev close di sisi lain" → lolos noise tanpa benar-benar
-   * menguji level (Fix #3). lows/highs opsional → fallback ke closes (kompatibel).
+   * Sprint 14: reject superficial 1-wick taps.
+   * True retest = pullback TO level + rejection wick in breakout direction + close confirm.
    */
-  checkRetestEntry(closes, direction, breakoutLevel, lows = null, highs = null) {
+  checkRetestEntry(closes, direction, breakoutLevel, lows = null, highs = null, opens = null) {
     const n         = closes.length;
     const closeCurr = closes[n - 1];
+    const openCurr  = (opens && opens[n - 1] != null) ? opens[n - 1] : closeCurr;
     const lowCurr   = (lows  && lows[n - 1]  != null) ? lows[n - 1]  : closeCurr;
     const highCurr  = (highs && highs[n - 1] != null) ? highs[n - 1] : closeCurr;
     const tol       = BreakoutTradingStrategy.RETEST_TOUCH_TOL;
+    const range     = Math.max(highCurr - lowCurr, 1e-12);
+    const minWick   = this.config.minRejectionWickRatio ?? 0.35;
 
     if (direction === "LONG") {
-      // Wick turun menyentuh level (≤ level×(1+tol)) lalu close di atas level
       const touchedLevel = lowCurr <= breakoutLevel * (1 + tol);
       const closedAbove  = closeCurr > breakoutLevel;
-      if (touchedLevel && closedAbove) {
+      const lowerWick    = Math.min(closeCurr, openCurr) - lowCurr;
+      const wickRatio    = lowerWick / range;
+      const hasRejection = wickRatio >= minWick;
+      if (touchedLevel && closedAbove && hasRejection) {
+        const retestDepth = Math.max(0, breakoutLevel - lowCurr);
         return {
           valid: true,
           entry: closeCurr,
-          reason: `Retest LONG: low ${lowCurr.toFixed(2)} menyentuh ${breakoutLevel.toFixed(2)}, close di atas ${closeCurr.toFixed(2)}`,
+          rejectionWickPct: wickRatio,
+          retestDepth,
+          reason: `Retest LONG: low ${lowCurr.toFixed(2)} menyentuh ${breakoutLevel.toFixed(2)}, ` +
+            `rejection wick ${(wickRatio * 100).toFixed(0)}%, close ${closeCurr.toFixed(2)}`,
         };
       }
     } else if (direction === "SHORT") {
-      // Wick naik menyentuh level (≥ level×(1−tol)) lalu close di bawah level
       const touchedLevel = highCurr >= breakoutLevel * (1 - tol);
       const closedBelow  = closeCurr < breakoutLevel;
-      if (touchedLevel && closedBelow) {
+      const upperWick    = highCurr - Math.max(closeCurr, openCurr);
+      const wickRatio    = upperWick / range;
+      const hasRejection = wickRatio >= minWick;
+      if (touchedLevel && closedBelow && hasRejection) {
+        const retestDepth = Math.max(0, highCurr - breakoutLevel);
         return {
           valid: true,
           entry: closeCurr,
-          reason: `Retest SHORT: high ${highCurr.toFixed(2)} menyentuh ${breakoutLevel.toFixed(2)}, close di bawah ${closeCurr.toFixed(2)}`,
+          rejectionWickPct: wickRatio,
+          retestDepth,
+          reason: `Retest SHORT: high ${highCurr.toFixed(2)} menyentuh ${breakoutLevel.toFixed(2)}, ` +
+            `rejection wick ${(wickRatio * 100).toFixed(0)}%, close ${closeCurr.toFixed(2)}`,
         };
       }
     }
 
     return { valid: false };
+  }
+
+  /**
+   * Sprint 14: quality-scored confidence (was flat 65 — race-to-confirm dead).
+   * Inputs are setup quality, not circular hard-gates.
+   */
+  _scoreConfidence({
+    squeezeWidthPct,
+    avgPriorWidthPct,
+    volumeRatio,
+    rejectionWickPct,
+    barsSinceBreakout,
+    retestDepthAtr,
+  } = {}) {
+    let score = 48;
+    if (avgPriorWidthPct > 0 && squeezeWidthPct != null) {
+      const squeezeRatio = squeezeWidthPct / avgPriorWidthPct;
+      // Deeper squeeze → higher score (0.75 threshold; 0.5 is excellent)
+      if (squeezeRatio <= 0.5) score += 18;
+      else if (squeezeRatio <= 0.65) score += 14;
+      else if (squeezeRatio <= 0.75) score += 10;
+      else if (squeezeRatio <= 0.9) score += 4;
+    }
+    if (volumeRatio != null) {
+      if (volumeRatio >= 2.0) score += 14;
+      else if (volumeRatio >= 1.5) score += 10;
+      else if (volumeRatio >= 1.3) score += 5;
+    }
+    if (rejectionWickPct != null) {
+      if (rejectionWickPct >= 0.55) score += 12;
+      else if (rejectionWickPct >= 0.4) score += 8;
+      else if (rejectionWickPct >= 0.35) score += 4;
+    }
+    // Prefer 2–4 bar retests (true pullback); 1-bar chase is rejected elsewhere
+    if (barsSinceBreakout === 2 || barsSinceBreakout === 3) score += 8;
+    else if (barsSinceBreakout === 4 || barsSinceBreakout === 5) score += 5;
+    else if (barsSinceBreakout >= 6) score += 2;
+
+    if (retestDepthAtr != null) {
+      if (retestDepthAtr >= 0.15 && retestDepthAtr <= 0.8) score += 6;
+      else if (retestDepthAtr > 0.8) score += 2; // deep retest — still valid but riskier
+    }
+    return Math.max(40, Math.min(95, Math.round(score)));
+  }
+
+  _classifyMarketCond(squeezeWidthPct, avgPriorWidthPct, atrPct) {
+    if (avgPriorWidthPct > 0 && squeezeWidthPct != null) {
+      const ratio = squeezeWidthPct / avgPriorWidthPct;
+      if (ratio <= 0.75) return "SQUEEZE_BREAKOUT";
+      if (ratio <= 0.95) return "TIGHT_RANGE";
+    }
+    if (atrPct != null) {
+      if (atrPct < 0.4) return "LOW_VOL";
+      if (atrPct > 2.5) return "HIGH_VOL";
+    }
+    return "NORMAL";
   }
 
   /**
@@ -287,6 +358,7 @@ class BreakoutTradingStrategy extends StrategyBase {
     const volumes = (indicators.volumes || []).slice(start, lastIdx + 1);
     const highs = (indicators.highs || []).slice(start, lastIdx + 1);
     const lows  = (indicators.lows  || []).slice(start, lastIdx + 1);
+    const opens = (indicators.opens || []).slice(start, lastIdx + 1);
     const volSMA = indicators.volSMA?.[lastIdx] || 0;
     const atr = indicators.atr?.[lastIdx];
 
@@ -310,6 +382,19 @@ class BreakoutTradingStrategy extends StrategyBase {
     const consol = this.checkConsolidation(closes.slice(0, -1));
     const consolidationOK = !this.config.requireConsolidation || consol.squeeze;
 
+    const volCurr = volumes[volumes.length - 1] || 0;
+    const volRatioNow = volSMA > 0 ? volCurr / volSMA : 0;
+    const breakoutBarRange = highs.length && lows.length
+      ? Math.abs(highs[highs.length - 1] - lows[lows.length - 1])
+      : 0;
+    const breakoutCandleAtr = atr > 0 ? breakoutBarRange / atr : null;
+
+    // Estimate consolidation length: consecutive bars where width was ≤ threshold×avg
+    let consolidationBars = 0;
+    if (consol.squeeze && consol.avgPriorWidthPct != null) {
+      consolidationBars = this.config.squeezeLookback;
+    }
+
     // Step 3: Check for LONG breakout (only arm when it exits a squeeze)
     const longBreakout = this.checkLongBreakout(closes, volumes, volSMA, resistance);
     if (longBreakout.valid && consolidationOK) {
@@ -318,6 +403,10 @@ class BreakoutTradingStrategy extends StrategyBase {
       state.breakoutBar = lastIdx;
       state.confirmed = false;
       state.squeezeWidthPct = consol.widthPct;
+      state.avgPriorWidthPct = consol.avgPriorWidthPct;
+      state.breakoutVolumeRatio = volRatioNow;
+      state.consolidationBars = consolidationBars;
+      state.breakoutCandleAtr = breakoutCandleAtr;
     }
 
     // Step 4: Check for SHORT breakout (only arm when it exits a squeeze)
@@ -328,12 +417,17 @@ class BreakoutTradingStrategy extends StrategyBase {
       state.breakoutBar = lastIdx;
       state.confirmed = false;
       state.squeezeWidthPct = consol.widthPct;
+      state.avgPriorWidthPct = consol.avgPriorWidthPct;
+      state.breakoutVolumeRatio = volRatioNow;
+      state.consolidationBars = consolidationBars;
+      state.breakoutCandleAtr = breakoutCandleAtr;
     }
 
     // Step 5: Wait for RETEST entry (not immediate breakout)
     // Only check for retest if breakout was detected on a PREVIOUS bar
-    if (state.direction && state.breakoutBar < lastIdx) {
+    if (state.direction && state.breakoutBar != null && state.breakoutBar < lastIdx) {
       const barsSinceBreakout = lastIdx - state.breakoutBar;
+      const minBars = this.config.minRetestBars ?? 2;
 
       // Expire stale breakouts: if the retest hasn't come within the window,
       // the level is no longer relevant — drop it to avoid entries on old levels.
@@ -342,18 +436,44 @@ class BreakoutTradingStrategy extends StrategyBase {
         return null;
       }
 
+      // Reject breakout-chase / 1-bar superficial pullback (Sprint 14)
+      if (barsSinceBreakout < minBars) {
+        return null;
+      }
+
       const retestCheck = this.checkRetestEntry(
         closes,
         state.direction,
         state.breakoutLevel,
         lows,
-        highs
+        highs,
+        opens.length ? opens : null
       );
 
       if (retestCheck.valid) {
         const signal = state.direction;
+        const retestDepthAtr = atr > 0 && retestCheck.retestDepth != null
+          ? retestCheck.retestDepth / atr
+          : null;
+        const atrPct = (atr / closes[closes.length - 1]) * 100;
+        const confidence = this._scoreConfidence({
+          squeezeWidthPct: state.squeezeWidthPct,
+          avgPriorWidthPct: state.avgPriorWidthPct,
+          volumeRatio: state.breakoutVolumeRatio,
+          rejectionWickPct: retestCheck.rejectionWickPct,
+          barsSinceBreakout,
+          retestDepthAtr,
+        });
+        const marketCond = this._classifyMarketCond(
+          state.squeezeWidthPct,
+          state.avgPriorWidthPct,
+          atrPct
+        );
+        const bbSqueezeWidthAtr = atr > 0 && state.squeezeWidthPct != null
+          ? (state.squeezeWidthPct * closes[closes.length - 1]) / atr
+          : null;
+
         // Hard-gate 3-phase: BB Squeeze → Range Breakout → Retest Confirmation.
-        // Labels are nearly identical across fills by design.
         this._lastSignalMeta = {
           component: "BS_BR",
           winningComponent: "BS_BR",
@@ -367,6 +487,21 @@ class BreakoutTradingStrategy extends StrategyBase {
           direction: signal,
           breakoutLevel: state.breakoutLevel,
           squeezeWidthPct: state.squeezeWidthPct,
+          avgPriorWidthPct: state.avgPriorWidthPct,
+          componentConfidence: confidence,
+          confidence: confidence / 100,
+          marketCond,
+          reason: retestCheck.reason,
+          // Sprint 14 BS_BR enrichment (WinPredictor / CSV)
+          bbWidth: state.squeezeWidthPct,
+          bbSqueezeWidthAtr,
+          breakoutVolumeRatio: state.breakoutVolumeRatio,
+          volumeRatio: state.breakoutVolumeRatio,
+          retestDepthAtr,
+          rejectionWickPct: retestCheck.rejectionWickPct,
+          consolidationBars: state.consolidationBars,
+          breakoutCandleAtr: state.breakoutCandleAtr,
+          barsSinceBreakout,
         };
         this.resetBreakoutState(config);
         return signal;

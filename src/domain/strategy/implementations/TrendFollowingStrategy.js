@@ -420,12 +420,14 @@ class TrendFollowingStrategy extends StrategyBase {
     // Never apply MR's checkHTFRegime here (it blocks with-trend entries).
     if (longCheck.valid) {
       // Hard-gate caveat: all checklist flags are true on every fill — low variance.
+      const volRatio = volumeSMAEntry > 0 ? volumeCurrentEntry / volumeSMAEntry : null;
       this._lastEntryChecklist = {
         htfTrendAligned: true,
         adxPassed: true,
         donchianBroken: true,
         ema9Retest: true,
         volumeConfirmed: true,
+        volRatio,
         adxMinStrength,
         donchianPeriod,
       };
@@ -440,12 +442,14 @@ class TrendFollowingStrategy extends StrategyBase {
     );
 
     if (shortCheck.valid) {
+      const volRatio = volumeSMAEntry > 0 ? volumeCurrentEntry / volumeSMAEntry : null;
       this._lastEntryChecklist = {
         htfTrendAligned: true,
         adxPassed: true,
         donchianBroken: true,
         ema9Retest: true,
         volumeConfirmed: true,
+        volRatio,
         adxMinStrength,
         donchianPeriod,
       };
@@ -639,6 +643,25 @@ class TrendFollowingStrategy extends StrategyBase {
     const checklist = this._lastEntryChecklist || {};
     const adxMinStrength = checklist.adxMinStrength ?? this.config.adxMinStrength ?? 25;
     const donchianPeriod = checklist.donchianPeriod ?? this.config.donchianPeriod ?? 20;
+    const adx = this._trendState.htfAdxStrength || 0;
+    const volRatio = checklist.volRatio ?? null;
+    // Sprint 14 audit: TS_TF previously fell back to flat 0.7 in TrendSurgeUmbrella
+    // because componentConfidence was never set — race selection was tie-break only.
+    let confidence = 50;
+    if (adx >= adxMinStrength + 15) confidence += 18;
+    else if (adx >= adxMinStrength + 5) confidence += 12;
+    else if (adx >= adxMinStrength) confidence += 8;
+    if (this._trendState.donchianBroken) confidence += 8;
+    if (this._trendState.htfTrendConfirmed) confidence += 6;
+    if (volRatio != null) {
+      if (volRatio >= 1.5) confidence += 10;
+      else if (volRatio >= 1.0) confidence += 5;
+    }
+    const bars = this._trendState.barsInTrend || 0;
+    if (bars >= 8 && bars <= 40) confidence += 6;
+    else if (bars > 40) confidence += 2;
+    confidence = Math.max(40, Math.min(95, Math.round(confidence)));
+
     return {
       // Racer identity — trade-type (Intraday/Swing) is stamped by the multi-TF harness.
       // Hardcoding "Swing" painted every TF fill as Swing and broke AMT/TF type stats.
@@ -651,6 +674,8 @@ class TrendFollowingStrategy extends StrategyBase {
       adxStrength: this._trendState.htfAdxStrength,
       donchianBroken: this._trendState.donchianBroken,
       barsInTrend: this._trendState.barsInTrend,
+      componentConfidence: confidence,
+      confidence: confidence / 100,
       // Entry reason sources for CSV (hard-gate — nearly identical across trades).
       entryChecklist: {
         htfTrendAligned: checklist.htfTrendAligned ?? this._trendState.htfTrendConfirmed,

@@ -162,7 +162,8 @@ test("TIER_COMPONENT_MAP MINT/VAULT race pools (Sprint 10/11)", () => {
   assert.strictEqual(mint.combination.mode, "race");
   assert.deepStrictEqual(mint.combination.participants, ["MD_MR", "MD_SD", "MD_SA"]);
   const vault = TIER_COMPONENT_MAP.VAULT;
-  assert.deepStrictEqual(vault.active, ["BS_BR", "BS_ICT", "BS_LS"]);
+  assert.deepStrictEqual(vault.active, ["BS_ICT", "BS_LS"]);
+  assert.deepStrictEqual(vault.halted, ["BS_BR"]);
   assert.strictEqual(vault.combination.mode, "race");
 });
 

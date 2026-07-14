@@ -433,12 +433,12 @@ Live/backtest SSOT is `typeOverrides` in FE `backtestStrategies.js` + BE `legacy
 |-------|--------|
 | Holding | 4 jam – 3 hari (swing) |
 | Frekuensi | 0.5–2 trade/minggu (sangat selektif) |
-| Win Rate Target | 50–65% |
+| Win Rate Target | **HOLD** — unverified (realized 5-window ~37% WR / PF 0.72; do not publish 50–65% until re-test gate ≥4/5) |
 | RR | 1:1.9 |
 | Modal Minimum | Rp 30M+ (tier VAULT `capitalRange`) |
 | SL | 1.7×ATR (wide) |
 
-**Status:** Production-ready (Sprint 11 race pool + BS_BR v2.4)
+**Status:** ⛔ HALTED Sprint 14 (BS_BR removed from VAULT live race; ICT/LS remain). Re-enable only after 5-window re-test gate.
 
 ---
 

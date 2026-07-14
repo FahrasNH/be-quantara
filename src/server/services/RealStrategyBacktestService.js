@@ -134,6 +134,21 @@ function resolveBsCombination(cfg = {}) {
   };
 }
 
+/** Sprint 14: BS_BR enrichment for CSV / WinPredictor (from getLastSignalMeta). */
+function extractBsBrEnrichment(meta) {
+  if (!meta) return {};
+  return {
+    bbSqueezeWidthAtr: meta.bbSqueezeWidthAtr ?? null,
+    breakoutVolumeRatio: meta.breakoutVolumeRatio ?? null,
+    retestDepthAtr: meta.retestDepthAtr ?? null,
+    rejectionWickPct: meta.rejectionWickPct ?? null,
+    consolidationBars: meta.consolidationBars ?? null,
+    breakoutCandleAtr: meta.breakoutCandleAtr ?? null,
+    bbWidth: meta.bbWidth ?? meta.squeezeWidthPct ?? null,
+    volumeRatio: meta.volumeRatio ?? meta.breakoutVolumeRatio ?? null,
+  };
+}
+
 const FEE_RATE_PER_SIDE = 0.0006; // Bitget USDT-M taker ~0.06%/side
 const DEFAULT_SLIPPAGE = 0.0005;
 /** Typical crypto perpetual funding ~0.01% per 8h (conservative cost model). */
@@ -192,6 +207,16 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
   tradeObj.strategyLabel = label;
   if (position?.winningComponent && tradeObj.winningComponent == null) {
     tradeObj.winningComponent = position.winningComponent;
+  }
+
+  // Sprint 14: pass through BS_BR enrichment columns for CSV / WinPredictor
+  const BR_ENRICH_KEYS = [
+    "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr",
+    "rejectionWickPct", "consolidationBars", "breakoutCandleAtr",
+    "bbWidth", "volumeRatio",
+  ];
+  for (const k of BR_ENRICH_KEYS) {
+    if (tradeObj[k] == null && position?.[k] != null) tradeObj[k] = position[k];
   }
 
   // Compute human-readable entryReasons at close so FE client CSV + archive
@@ -656,6 +681,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       hourUtc: position.hourUtc ?? null,
       volumeRatio: position.volumeRatio ?? null,
       bbWidth: position.bbWidth ?? null,
+      bbSqueezeWidthAtr: position.bbSqueezeWidthAtr ?? null,
+      breakoutVolumeRatio: position.breakoutVolumeRatio ?? null,
+      retestDepthAtr: position.retestDepthAtr ?? null,
+      rejectionWickPct: position.rejectionWickPct ?? null,
+      consolidationBars: position.consolidationBars ?? null,
+      breakoutCandleAtr: position.breakoutCandleAtr ?? null,
       fundingRateAtEntry: position.fundingRateAtEntry ?? null,
       fundingForecast24h: position.fundingForecast24h ?? null,
       holdHours,
@@ -977,6 +1008,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         htfAdx: indicators.adx?.[i] ?? null,
         fundingRate: fundingRateNow,
       });
+      const brEnrich = extractBsBrEnrichment(meta || lastMeta);
 
       // Open position
       positions.set(componentId, {
@@ -991,7 +1023,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         marketCond,
         plannedRR: riskCfg.riskReward,
 
-        confidence: multiSignal.meta?.confidence?.[componentId] ?? null,
+        confidence: multiSignal.meta?.confidence?.[componentId]
+          ?? meta?.componentConfidence
+          ?? lastMeta?.componentConfidence
+          ?? null,
         // GROK-FIX: entry-context snapshot so the trade can be Grok-confirmed post-hoc.
         atr,
         entryRsi: indicators.rsi?.[i] ?? null,
@@ -1001,6 +1036,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         strategyLabel: tradeLabel,
         winningComponent,
         ...mlFeatures,
+        ...brEnrich,
 
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.
@@ -2348,6 +2384,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
+    let brEnrich = {};
     if (meta && typeof strategy.calculateRiskConfig === "function") {
 
       // Backtest passes full type names (Scalping/Intraday/Swing), not legacy A/B/C
@@ -2368,6 +2405,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       plannedRR = rc.riskReward;
 
       confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
+      brEnrich = extractBsBrEnrichment(meta);
     } else {
       slDist = atr * (cfg.atrMultiplier ?? 1.4) * pairSlMult;
       tpDist = slDist * (cfg.riskReward ?? 2);
@@ -2397,6 +2435,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         entryMeta: meta || null,
         strategyLabel: tradeLabel,
         winningComponent: meta?.winningComponent || component,
+        ...brEnrich,
       };
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -2425,6 +2464,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       entryMeta: meta || null,
       strategyLabel: tradeLabel,
       winningComponent: meta?.winningComponent || component,
+      ...brEnrich,
       // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
       // slCurrent is the live stop (moves to BEP/+1R after milestones fire),
       // remainingSize shrinks as partials execute; originalSize stays fixed for

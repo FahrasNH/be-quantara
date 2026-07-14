@@ -61,11 +61,27 @@ function getRegimeForDate(date, cache) {
   if (!cache?.dateMap) return "UNKNOWN";
 
   const dateStr = typeof date === "string" ? date.split("T")[0] : date.toISOString().split("T")[0];
-  const idx = cache.dateMap.get(dateStr);
+  let idx = cache.dateMap.get(dateStr);
+
+  // Sprint 14: backfill gaps (timezone / missing daily bar) — walk back up to 3 days
+  // so Daily Regime is not UNKNOWN solely due to dateMap holes at window edges.
+  if (idx === undefined) {
+    const base = new Date(`${dateStr}T00:00:00.000Z`);
+    if (!Number.isNaN(base.getTime())) {
+      for (let d = 1; d <= 3; d++) {
+        const prev = new Date(base.getTime() - d * 86400000).toISOString().split("T")[0];
+        idx = cache.dateMap.get(prev);
+        if (idx !== undefined) break;
+      }
+    }
+  }
 
   if (idx === undefined) return "UNKNOWN";
 
   const strength = cache.dailyTrend[idx];
+  if (strength == null || Number.isNaN(strength)) return "UNKNOWN";
+  // Warmup days (EMA/ATR not ready) — treat early nulls as UNKNOWN; after
+  // first valid strength, reuse last known for sparse maps already handled above.
   if (strength >= TREND_STRENGTH_THRESHOLD_STRONG) return "STRONG_TREND";
   if (strength < TREND_STRENGTH_THRESHOLD_CHOP) return "CHOP";
   return "TRANSITION";

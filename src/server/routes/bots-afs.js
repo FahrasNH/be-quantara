@@ -724,6 +724,36 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
+      // Sprint 14 HALT: never arm BS_BR / BREAKOUT_RETEST live, even when
+      // strategyKey is omitted from body (existing bot or multi-tier path).
+      {
+        const { isBsBrHaltedKey } = require("../../config/strategies");
+        const dryMode = botData.dryRun === true;
+        const haltedInPool = strategies.filter((s) => isBsBrHaltedKey(s));
+        if (!dryMode && haltedInPool.length) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message:
+              `Strategi ${haltedInPool.join(", ")} di-HALT (Sprint 14: expectancy negatif). ` +
+              `Hanya Dry Run / backtest sampai re-test gate lolos.`,
+            code: "STRATEGY_DRYRUN_ONLY",
+            strategies: haltedInPool,
+          });
+        }
+        if (bot && !dryMode && isBsBrHaltedKey(bot.strategyKey)) {
+          return res.status(403).json({
+            ok: false,
+            statusCode: 403,
+            message:
+              `Bot ${symbol} memakai ${bot.strategyKey} yang di-HALT (Sprint 14). ` +
+              `Ubah strategy atau jalankan Dry Run saja.`,
+            code: "STRATEGY_DRYRUN_ONLY",
+            strategy: bot.strategyKey,
+          });
+        }
+      }
+
       // ── Resolve exchange + credentials (dibutuhkan gate margin & start) ──────
       const { getExchangeCredentials } = require("../../services/userExchange");
       const { getConnectedExchange } = require("../../services/ExchangeService");

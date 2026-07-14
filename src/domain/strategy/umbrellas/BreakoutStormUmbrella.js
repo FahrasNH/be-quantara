@@ -12,6 +12,7 @@ const UmbrellaStrategy = require("../base/UmbrellaStrategy");
 const BreakoutTradingStrategy = require("../implementations/BreakoutTradingStrategy");
 const IctStyleStrategy = require("../implementations/IctStyleStrategy");
 const LiquidationSqueezeStrategy = require("../implementations/LiquidationSqueezeStrategy");
+const { BS_BR_HALTED } = require("../../../config/strategies");
 
 const RACER_PRIORITY = ["BS_BR", "BS_ICT", "BS_LS"];
 const RACER_LABELS = {
@@ -19,6 +20,12 @@ const RACER_LABELS = {
   BS_ICT: "ICT-style trading",
   BS_LS: "Liquidation/Squeeze Trading",
 };
+
+/** Default race pool — BS_BR excluded while halted (Sprint 14). */
+function defaultActiveRacers(config = {}) {
+  const halt = config.bsBrHalted !== false && (BS_BR_HALTED || config.bsBrHalted === true);
+  return halt ? new Set(["BS_ICT", "BS_LS"]) : new Set(RACER_PRIORITY);
+}
 
 class BreakoutStormUmbrella extends UmbrellaStrategy {
   constructor() {
@@ -45,14 +52,18 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
   }
 
   _resolveActiveRacers(config = {}) {
+    const halt = config.bsBrHalted !== false && (BS_BR_HALTED || config.bsBrHalted === true);
     const raw = config.bsActiveRacers || config.selectedComponents || config.activeStrategyComponents || null;
     if (!Array.isArray(raw) || raw.length === 0) {
-      return new Set(RACER_PRIORITY);
+      // Default VAULT race: BS_BR excluded while halted (Sprint 14)
+      return defaultActiveRacers(config);
     }
     const active = new Set();
     for (const c of raw) {
       const k = String(c || "").toUpperCase();
       if (k === "BS_BR" || k === "BREAKOUT_RETEST" || k === "BREAKOUT_TRADING" || k === "BR") {
+        // Explicit selection (dedicated backtest / override) still allowed —
+        // live bots blocked by strategyGuard + getTierStrategies filter.
         active.add("BS_BR");
       } else if (k === "BS_ICT" || k === "ICT" || k === "ICT_STYLE") {
         active.add("BS_ICT");
@@ -60,7 +71,14 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
         active.add("BS_LS");
       }
     }
-    if (active.size === 0) return new Set(RACER_PRIORITY);
+    // If caller only picked the halted racer under default halt+implicit race,
+    // keep it (explicit). Empty after filter → fall back to non-halted default.
+    if (active.size === 0) return defaultActiveRacers(config);
+    if (halt && active.has("BS_BR") && active.size > 1) {
+      // Multi-racer race pool: drop BS_BR so ICT/LS compete without the broken leg
+      active.delete("BS_BR");
+    }
+    if (active.size === 0) return defaultActiveRacers(config);
     return active;
   }
 
@@ -161,6 +179,8 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
   }
 
   _detectSingle(indicators, lastIdx, config = {}) {
+    // Explicit single-mode always runs BR engine (used by dedicated backtests).
+    // Live starts of BS_BR are blocked by strategyGuard (DRY_RUN_ONLY).
     const signal = this._br.detectSignal(indicators, lastIdx, config);
     const meta = this._br.getLastSignalMeta?.() || null;
     this._lastRaceMeta = {

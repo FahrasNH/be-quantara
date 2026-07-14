@@ -43,6 +43,13 @@ const TRADE_EXPORT_COLUMNS = [
   ["hourUtc", "Hour UTC"],
   ["volumeRatio", "Volume Ratio"],
   ["bbWidth", "BB Width"],
+  // Sprint 14 — BS_BR WinPredictor features (null for non-BR strategies)
+  ["bbSqueezeWidthAtr", "BB Squeeze Width ATR"],
+  ["breakoutVolumeRatio", "Breakout Volume Ratio"],
+  ["retestDepthAtr", "Retest Depth ATR"],
+  ["rejectionWickPct", "Rejection Wick %"],
+  ["consolidationBars", "Consolidation Bars"],
+  ["breakoutCandleAtr", "Breakout Candle ATR"],
   ["fundingRateAtEntry", "Funding Rate At Entry"],
   ["fundingForecast24h", "Funding Forecast 24h"],
   ["holdHours", "Hold Hours"],

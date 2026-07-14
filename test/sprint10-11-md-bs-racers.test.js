@@ -51,7 +51,9 @@ console.log("\n═══ Sprint 10/11 catalog + race pools ═══");
 
 test("TIER_COMPONENT_MAP MINT/VAULT race participants", () => {
   assert.deepStrictEqual(TIER_COMPONENT_MAP.MINT.active, ["MD_MR", "MD_SD", "MD_SA"]);
-  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.active, ["BS_BR", "BS_ICT", "BS_LS"]);
+  // Sprint 14: BS_BR halted from default VAULT race pool
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.active, ["BS_ICT", "BS_LS"]);
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.halted, ["BS_BR"]);
   assert.strictEqual(TIER_COMPONENT_MAP.MINT.combination.mode, "race");
   assert.strictEqual(TIER_COMPONENT_MAP.VAULT.combination.mode, "race");
 });

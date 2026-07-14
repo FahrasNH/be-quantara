@@ -63,10 +63,26 @@ const COMPONENT_STRATEGIES = {
   MD_SA:  "MD_SA",    // Statistical Arbitrage    ✅ LIVE (racer — Sprint 10)
 
   // BREAKOUT_STORM — VAULT Tier (Sprint 11: race-to-confirm)
-  BS_BR:  "BS_BR",    // Breakout Retest              ✅ LIVE (racer)
+  BS_BR:  "BS_BR",    // Breakout Retest              ⛔ HALTED Sprint 14 (5/5 windows loss)
   BS_ICT: "BS_ICT",   // ICT-style trading            ✅ LIVE (racer — Sprint 11)
   BS_LS:  "BS_LS",    // Liquidation/Squeeze Trading  ✅ LIVE (racer — Sprint 11)
 };
+
+/**
+ * Sprint 14: BS_BR Halt — realized backtest WR 37.1% / PF 0.72 across 5 windows
+ * (n=267). Keep ICT + LS in the VAULT race; do NOT re-enable BS_BR until the
+ * 5-window re-test gate clears (see Notion Sprint 14).
+ * Override per-run via config.bsBrHalted === false (backtest validation only).
+ */
+const BS_BR_HALTED = true;
+const BS_BR_HALT_ALIASES = new Set([
+  "BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BR", "BREAKOUT_STORM",
+]);
+
+function isBsBrHaltedKey(key) {
+  if (!BS_BR_HALTED) return false;
+  return BS_BR_HALT_ALIASES.has(String(key || "").toUpperCase());
+}
 
 /**
  * Experimental / bonus keys — registered in StrategyRegistry but NOT part of
@@ -144,10 +160,15 @@ const TIER_COMPONENT_MAP = {
     combination: { mode: "race", participants: ["MD_MR", "MD_SD", "MD_SA"] },
   },
   VAULT: {
-    active: ["BS_BR", "BS_ICT", "BS_LS"],
+    // Sprint 14: BS_BR removed from live race pool until re-test gate passes.
+    active: BS_BR_HALTED ? ["BS_ICT", "BS_LS"] : ["BS_BR", "BS_ICT", "BS_LS"],
     umbrella: "BREAKOUT_STORM",
     abbrev: "BS",
-    combination: { mode: "race", participants: ["BS_BR", "BS_ICT", "BS_LS"] },
+    combination: {
+      mode: "race",
+      participants: BS_BR_HALTED ? ["BS_ICT", "BS_LS"] : ["BS_BR", "BS_ICT", "BS_LS"],
+    },
+    halted: BS_BR_HALTED ? ["BS_BR"] : [],
   },
 };
 
@@ -204,7 +225,7 @@ const STRATEGY_CATALOG = {
   MD_MR:      { label: "Mean Reversion",              umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
   MD_SD:      { label: "Supply and Demand",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
   MD_SA:      { label: "Statistical Arbitrage",       umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
-  BS_BR:      { label: "Breakout Retest",             umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: "production", tier: "VAULT" },
+  BS_BR:      { label: "Breakout Retest",             umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: BS_BR_HALTED ? "halted" : "production", tier: "VAULT" },
   BS_ICT:     { label: "ICT-style trading",           umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
   BS_LS:      { label: "Liquidation/Squeeze Trading", umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
 };
@@ -259,9 +280,12 @@ module.exports = {
   STRATEGY_CATALOG,
   CANONICAL_ENGINE_KEYS,
   LIVE_COMPONENT_KEYS,
+  BS_BR_HALTED,
+  BS_BR_HALT_ALIASES,
   normalizeStrategyKey,
   getActiveComponentsForTier,
   isActiveComponent,
   isLegacyAlias,
+  isBsBrHaltedKey,
   getStrategyCatalog,
 };
