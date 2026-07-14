@@ -90,6 +90,21 @@ function toCsv(data, columns = TRADE_EXPORT_COLUMNS) {
   return [header, ...rows].join("\n");
 }
 
+/** Master column order (keys only) — used to preserve stable CSV header ordering. */
+const TRADE_EXPORT_COLUMN_KEYS = TRADE_EXPORT_COLUMNS.map(([k]) => k);
+
+/**
+ * Pick [key, label] tuples for export from a resolved key list.
+ * @param {string[]} columnKeys
+ * @param {{ adminFormat?: boolean }} [opts]
+ * @returns {[string, string][]}
+ */
+function pickExportColumns(columnKeys, { adminFormat = false } = {}) {
+  const keySet = new Set(columnKeys);
+  const cols = TRADE_EXPORT_COLUMNS.filter(([k]) => keySet.has(k));
+  return adminFormat ? [["user", "User"], ...cols] : cols;
+}
+
 function buildPerformanceSummaryCsv(data) {
   const closed = data.filter(r => r.status === "Closed");
   const wins = closed.filter(r => r.result === "win").length;
@@ -117,7 +132,9 @@ function buildPerformanceSummaryCsv(data) {
 module.exports = {
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
+  TRADE_EXPORT_COLUMN_KEYS,
   escapeCsv,
   toCsv,
+  pickExportColumns,
   buildPerformanceSummaryCsv,
 };

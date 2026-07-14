@@ -466,6 +466,68 @@ function resolveEntryReasons(strategyKey, meta) {
   }
 }
 
+// ─── Per-strategy CSV column schema ─────────────────────────────────────────
+// Universal columns are always exported. Strategy-specific columns are included
+// only when that component appears in the export batch (or single-trade context).
+
+/** @type {readonly string[]} */
+const UNIVERSAL_CSV_COLUMN_KEYS = [
+  "id", "sessionId", "symbol", "side", "strategy", "status",
+  "entryPrice", "exitPrice", "sl", "tp", "size",
+  "pnl", "fee", "funding", "pnlNet", "pnlPct",
+  "plannedRR", "actualRR", "duration",
+  "reason", "exitReason", "entryReasons",
+  "confidence", "marketCond", "htfTrend", "dailyRegime",
+  "component", "tradeType", "atr", "entryRsi",
+  "hourUtc", "holdHours",
+  "fundingRateAtEntry", "fundingForecast24h",
+  "dryRun", "mode", "exchange", "openTime", "closeTime", "isPartial", "result",
+];
+
+/**
+ * Extra export columns per winning component (beyond universal).
+ * Empty array = universal columns only.
+ * @type {Record<string, readonly string[]>}
+ */
+const STRATEGY_CSV_SCHEMA = {
+  AF_SMC: [
+    "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct", "htfAdx",
+    "confSweepStrength", "confFvgSize", "confDisplacementPct", "confHtfAlignment",
+    "confMitigationDepth", "confObConfluence",
+  ],
+  BS_BR: [
+    "bbWidth", "volumeRatio",
+    "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr",
+    "rejectionWickPct", "consolidationBars", "breakoutCandleAtr",
+  ],
+  BS_ICT: ["bbWidth", "volumeRatio"],
+  BS_LS: ["bbWidth", "volumeRatio"],
+  TS_TF: ["volumeRatio", "bbWidth", "htfAdx"],
+  MD_MR: ["volumeRatio", "bbWidth"],
+};
+
+function strategyCsvColumnKeys(componentOrStrategy) {
+  const key = normalizeStrategyKey(componentOrStrategy);
+  return STRATEGY_CSV_SCHEMA[key] || [];
+}
+
+/**
+ * Resolve ordered export column keys for a batch of trades.
+ * @param {string[]} components — unique winning components in the export
+ * @param {string[]} masterOrder — canonical column order (from TRADE_EXPORT_COLUMNS)
+ * @returns {string[]}
+ */
+function resolveExportColumnKeys(components = [], masterOrder = []) {
+  const keys = new Set(UNIVERSAL_CSV_COLUMN_KEYS);
+  for (const comp of components) {
+    for (const k of strategyCsvColumnKeys(comp)) keys.add(k);
+  }
+  const ordered = masterOrder.length
+    ? masterOrder.filter((k) => keys.has(k))
+    : [...keys];
+  return ordered;
+}
+
 module.exports = {
   formatExitReason,
   resolveEntryReasons,
@@ -483,4 +545,8 @@ module.exports = {
   formatLiquidationSqueezeReasons,
   normalizeStrategyKey,
   EXIT_REASON_LABELS,
+  UNIVERSAL_CSV_COLUMN_KEYS,
+  STRATEGY_CSV_SCHEMA,
+  strategyCsvColumnKeys,
+  resolveExportColumnKeys,
 };

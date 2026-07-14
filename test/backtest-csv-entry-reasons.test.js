@@ -4,7 +4,12 @@
  */
 
 const { describe, test, expect, run } = require("./helpers/jest-lite");
-const { mapBacktestTrade } = require("../src/server/services/BacktestCsvService");
+const { mapBacktestTrade, buildTradesCsv } = require("../src/server/services/BacktestCsvService");
+const {
+  strategyCsvColumnKeys,
+  resolveExportColumnKeys,
+} = require("../src/server/services/csv/strategyReasonFormatters");
+const { TRADE_EXPORT_COLUMN_KEYS } = require("../src/domain/tradeExportCsv");
 
 const ctx = {
   backtestId: "bt-1",
@@ -101,6 +106,62 @@ describe("mapBacktestTrade entryReasons", () => {
     }, ctx, 0);
     expect(row.atr).toBe("N/A");
     expect(row.entryRsi).toBe("N/A");
+  });
+});
+
+describe("per-strategy CSV schema", () => {
+  const baseTrade = {
+    date: "2026-01-01", side: "LONG", entry: 100, exit: 110, pnl: 10, fee: 0.5, reason: "TP",
+  };
+
+  test("BS_BR export omits SMC-only columns", () => {
+    const csv = buildTradesCsv([{
+      id: 1, symbol: "BTCUSDT", strategy_key: "BS_BR",
+      trades_data: [{ ...baseTrade, component: "BS_BR" }],
+    }], { includeSummary: false });
+    expect(csv).toContain("BB Squeeze Width ATR");
+    expect(csv).toContain("Retest Depth ATR");
+    expect(csv).not.toContain("Sweep Strength");
+    expect(csv).not.toContain("FVG Size ATR");
+    expect(csv).not.toContain("Conf Sweep");
+    expect(csv).not.toContain("Conf OB Confluence");
+    expect(csv).not.toContain("HTF ADX");
+  });
+
+  test("AF_SMC export omits BR-only columns", () => {
+    const csv = buildTradesCsv([{
+      id: 2, symbol: "BTCUSDT", strategy_key: "AF_SMC",
+      trades_data: [{ ...baseTrade, component: "AF_SMC" }],
+    }], { includeSummary: false });
+    expect(csv).toContain("Sweep Strength");
+    expect(csv).toContain("Conf Sweep");
+    expect(csv).not.toContain("BB Squeeze Width ATR");
+    expect(csv).not.toContain("Retest Depth ATR");
+    expect(csv).not.toContain("Consolidation Bars");
+  });
+
+  test("mixed batch uses union of component columns", () => {
+    const keys = resolveExportColumnKeys(["AF_SMC", "BS_BR"], TRADE_EXPORT_COLUMN_KEYS);
+    expect(keys).toContain("sweepStrength");
+    expect(keys).toContain("bbSqueezeWidthAtr");
+    expect(strategyCsvColumnKeys("BS_BR")).not.toContain("sweepStrength");
+    expect(strategyCsvColumnKeys("AF_SMC")).not.toContain("retestDepthAtr");
+  });
+
+  test("universal columns always present for BS_BR", () => {
+    const csv = buildTradesCsv([{
+      id: 3, symbol: "BTCUSDT", strategy_key: "BS_BR",
+      trades_data: [{
+        ...baseTrade,
+        component: "BS_BR",
+        openTime: "2024-01-01T09:00:00Z",
+        closeTime: "2024-01-01T11:00:00Z",
+      }],
+    }], { includeSummary: false });
+    expect(csv).toContain("Hour UTC");
+    expect(csv).toContain("Hold Hours");
+    expect(csv).toContain("Trade Type");
+    expect(csv).toContain("Funding Rate At Entry");
   });
 });
 

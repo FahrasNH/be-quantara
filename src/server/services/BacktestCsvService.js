@@ -24,14 +24,16 @@
 
 const { formatDuration } = require("../../infrastructure/db/database");
 const {
-  ADMIN_TRADE_EXPORT_COLUMNS,
-  TRADE_EXPORT_COLUMNS,
+  TRADE_EXPORT_COLUMN_KEYS,
+  pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
 } = require("../../domain/tradeExportCsv");
 const {
   formatExitReason,
   resolveEntryReasons,
+  normalizeStrategyKey,
+  resolveExportColumnKeys,
 } = require("./csv/strategyReasonFormatters");
 
 const NA = "N/A";
@@ -257,10 +259,24 @@ function collectTradeRows(records, { adminFormat = true } = {}) {
   return rows;
 }
 
+function collectExportComponents(rows, records) {
+  const fromRows = rows
+    .map((r) => r.component)
+    .filter((c) => c != null && c !== "" && c !== NA);
+  if (fromRows.length) return [...new Set(fromRows)];
+
+  const fromRecords = (records || [])
+    .map((rec) => normalizeStrategyKey(rec.strategy_key || rec.config?.strategyKey || ""))
+    .filter(Boolean);
+  return [...new Set(fromRecords)];
+}
+
 function buildTradesCsv(records, opts = {}) {
   const { includeSummary = true, adminFormat = true } = opts;
   const rows = collectTradeRows(records, { adminFormat });
-  const columns = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+  const components = collectExportComponents(rows, records);
+  const columnKeys = resolveExportColumnKeys(components, TRADE_EXPORT_COLUMN_KEYS);
+  const columns = pickExportColumns(columnKeys, { adminFormat });
   const body = toCsv(rows, columns);
   if (!includeSummary) return body;
   const summary = buildPerformanceSummaryCsv(rows);
@@ -278,4 +294,5 @@ module.exports = {
   buildTradesCsv,
   mapBacktestTrade,
   collectTradeRows,
+  collectExportComponents,
 };
