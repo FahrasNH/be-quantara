@@ -45,6 +45,7 @@ const {
 const { buildBacktestEntryContext } = require("../../analytics/domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 /** Coerce indicator snapshots to a finite scalar (reject arrays / absurd values). */
 function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
@@ -62,21 +63,28 @@ function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
   return n;
 }
 
-// Strategy-key checks MUST accept BOTH v2.0 component keys and legacy long names —
-// the FE sends v2.0 keys (MD_MR/BS_BR) for tier legs. `includes("MEAN_REVERSION")`
-// silently failed for "MD_MR", making the MR gate exemption + regime filter dead
-// code (same key-vocab lesson as the Grok gate 400 bug, c9f9d38).
-const MR_KEYS = new Set(["MD_MR", "MEAN_REVERSION", "MD_SD", "MD_SA"]);
-const BR_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BS_ICT", "BS_LS"]);
-const TF_KEYS = new Set(["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"]);
-const SMC_KEYS = new Set([
-  "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
-  "AF_WYCKOFF", "AF_VSA",
-]);
-const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
-const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
-const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
-const isSmcKey = (k) => SMC_KEYS.has(String(k || "").toUpperCase());
+// Strategy-key checks normalize ingress aliases via ACL — FE may send Gen2 component keys.
+const MR_COMPONENTS = new Set(["MD_MR", "MD_SD", "MD_SA"]);
+const BR_COMPONENTS = new Set(["BS_BR", "BS_ICT", "BS_LS"]);
+const TF_COMPONENTS = new Set(["TS_TF", "TS_MS", "TS_VP"]);
+const SMC_COMPONENTS = new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+
+const isMRKey = (k) => {
+  const n = normalizeStrategyKey(String(k || "").toUpperCase());
+  return MR_COMPONENTS.has(n)
+    || ["SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"].includes(String(k || "").toUpperCase());
+};
+const isBRKey = (k) => {
+  const u = String(k || "").toUpperCase();
+  const n = normalizeStrategyKey(u);
+  return BR_COMPONENTS.has(n)
+    || ["BREAKOUT_TRADING", "ICT", "LIQUIDATION_SQUEEZE"].includes(u);
+};
+const isTFKey = (k) => TF_COMPONENTS.has(normalizeStrategyKey(String(k || "").toUpperCase()));
+const isSmcKey = (k) => {
+  const n = normalizeStrategyKey(String(k || "").toUpperCase());
+  return SMC_COMPONENTS.has(n) || n === "ADAPTIVE_FUSION";
+};
 
 function mergeBacktestCfg(base, optsConfig, feeModel) {
   return normalizeSmcParams({
@@ -95,20 +103,15 @@ function resolveMdCombination(cfg = {}) {
   const mode = String(cfg.mdCombinationMode || "race").toLowerCase();
   const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
   const mdComps = Array.isArray(comps)
-    ? comps.filter((c) =>
-      ["MD_MR", "MEAN_REVERSION", "MD_SD", "MD_SA", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"].includes(
-        String(c).toUpperCase()
-      )
-    )
+    ? comps.filter((c) => isMRKey(c))
     : [];
   const upper = mdComps.map((c) => String(c).toUpperCase());
   const selectedComponents = upper.length
     ? upper.map((c) => {
-      if (c === "MEAN_REVERSION") return "MD_MR";
       if (c === "SUPPLY_AND_DEMAND") return "MD_SD";
       if (c === "STATISTICAL_ARBITRAGE") return "MD_SA";
-      return c;
-    })
+      return normalizeStrategyKey(c);
+    }).filter((c) => MR_COMPONENTS.has(c))
     : null;
   return {
     mdCombinationMode: mode === "layering" || mode === "pipeline" ? "pipeline" : mode,
@@ -124,20 +127,16 @@ function resolveBsCombination(cfg = {}) {
   const mode = String(cfg.bsCombinationMode || "race").toLowerCase();
   const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
   const bsComps = Array.isArray(comps)
-    ? comps.filter((c) =>
-      ["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BS_ICT", "BS_LS", "ICT", "LIQUIDATION_SQUEEZE"].includes(
-        String(c).toUpperCase()
-      )
-    )
+    ? comps.filter((c) => isBRKey(c))
     : [];
   const upper = bsComps.map((c) => String(c).toUpperCase());
   const selectedComponents = upper.length
     ? upper.map((c) => {
-      if (c === "BREAKOUT_RETEST" || c === "BREAKOUT_TRADING") return "BS_BR";
+      if (c === "BREAKOUT_TRADING") return "BS_BR";
       if (c === "ICT") return "BS_ICT";
       if (c === "LIQUIDATION_SQUEEZE") return "BS_LS";
-      return c;
-    })
+      return normalizeStrategyKey(c);
+    }).filter((c) => BR_COMPONENTS.has(c))
     : null;
   return {
     bsCombinationMode: mode === "single" || mode === "pipeline" ? "single" : mode,
@@ -319,20 +318,16 @@ function resolveTsCombination(cfg = {}) {
   const mode = String(cfg.tsCombinationMode || "race").toLowerCase();
   const comps = cfg.selectedComponents || cfg.activeStrategyComponents || null;
   const tsComps = Array.isArray(comps)
-    ? comps.filter((c) =>
-      ["TS_TF", "TREND_FOLLOWING", "TS_MS", "TS_VP"].includes(String(c).toUpperCase())
-    )
+    ? comps.filter((c) => isTFKey(c))
     : [];
-  const upper = tsComps.map((c) => String(c).toUpperCase());
-  const selectedComponents = upper.length
-    ? upper.map((c) => (c === "TREND_FOLLOWING" ? "TS_TF" : c))
-    : null;
+  const upper = tsComps.map((c) => normalizeStrategyKey(String(c).toUpperCase()));
+  const selectedComponents = upper.length ? upper.filter((c) => TF_COMPONENTS.has(c)) : null;
 
   // Legacy gate-flag resolution (only meaningful for gate/hybrid modes).
   let tsUseStructureGate = cfg.tsUseStructureGate;
   let tsUseVwapPrecision = cfg.tsUseVwapPrecision;
   if (upper.length) {
-    const onlyTrigger = upper.every((c) => c === "TS_TF" || c === "TREND_FOLLOWING");
+    const onlyTrigger = upper.every((c) => c === "TS_TF");
     if (onlyTrigger) {
       tsUseStructureGate = false;
       tsUseVwapPrecision = false;
@@ -374,18 +369,14 @@ function resolveStrategyDisplayName(strategyKey, cfg = {}) {
     if (labels.length > 1) {
       const tsMode = String(cfg.tsCombinationMode || "race").toLowerCase();
       const afMode = String(cfg.afCombinationMode || "race").toLowerCase();
-      const isTs = comps.some((c) => String(c).startsWith("TS_") || c === "TREND_FOLLOWING");
-      const isAf = comps.some((c) =>
-        ["AF_SMC", "AF_WYCKOFF", "AF_VSA", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"].includes(String(c))
-      );
+      const isTs = comps.some((c) => isTFKey(c));
+      const isAf = comps.some((c) => isSmcKey(c));
       if (isTs && tsMode === "race") return `Trend Surge race (${labels.join(", ")})`;
       if (isAf && afMode === "race") return `Adaptive Fusion race (${labels.join(", ")})`;
       const mdMode = String(cfg.mdCombinationMode || "race").toLowerCase();
       const bsMode = String(cfg.bsCombinationMode || "race").toLowerCase();
-      const isMd = comps.some((c) => String(c).startsWith("MD_") || c === "MEAN_REVERSION");
-      const isBs = comps.some((c) =>
-        String(c).startsWith("BS_") || ["BREAKOUT_RETEST", "BREAKOUT_TRADING"].includes(String(c))
-      );
+      const isMd = comps.some((c) => isMRKey(c));
+      const isBs = comps.some((c) => isBRKey(c));
       if (isMd && mdMode === "race") return `Mean Drift race (${labels.join(", ")})`;
       if (isBs && bsMode === "race") return `Breakout Storm race (${labels.join(", ")})`;
       return labels.join(" + ");
@@ -1272,10 +1263,9 @@ function _computeTripleStats(trades, startCapital) {
   };
 }
 
-// AF_SMC/SMART_MONEY_CONCEPTS are aliases; Grok prompt/validation only knows ADAPTIVE_FUSION.
+// AF_SMC ingress normalizes to ADAPTIVE_FUSION for Grok prompt/validation.
 const GROK_KEY_ALIAS = {
   AF_SMC: "ADAPTIVE_FUSION",
-  SMART_MONEY_CONCEPTS: "ADAPTIVE_FUSION",
 };
 
 /**
@@ -2429,8 +2419,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const adjustedRiskPerTrade = regimeResult.riskPerTrade;
 
     // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
-    // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
-    // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
+    // MD_MR (counter-trend) is exempt from directional block — has its own
+    // regime filter (step 2c in live BotEngine). BS_BR exempt (consolidation
     // reversal valid). Other trend-following strategies require HTF alignment.
     const isMR = isMRKey(strategyKey);
     const isBR = isBRKey(strategyKey);
@@ -2439,7 +2429,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     }
 
-    // ── 5b. MEAN_REVERSION regime gate (mirror step 2c in live BotEngine) ──
+    // ── 5b. MD_MR regime gate (mirror step 2c in live BotEngine) ──
     // MR counter-trend entries need regime check: block SHORT in strong bull,
     // LONG in strong bear, and all entries during ATR spike (wide spreads).
     if (isMR && htfIndicators && htfPtr) {
@@ -2647,7 +2637,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
  * @param {string[]} typeOrder   - subset of ["Scalping","Intraday","Swing"]
  */
 // AF-SCALP-22: TS_TF geometry key TRANSLATION. The FE sends the legacy knob
-// names (atrMult / riskReward — FE backtestStrategies TREND_FOLLOWING defaults
+// names (atrMult / riskReward — FE backtestStrategies TS_TF defaults
 // 1.3 / 1.92) and the BE legacy config uses atrMultiplier / riskReward, but the
 // engine's SL/TP override chain only reads slAtrMult / tpAtrMult. AF-SCALP-21
 // made the chain live inside TrendFollowingStrategy, yet post-deploy CSVs
@@ -2657,8 +2647,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 // strategies (e.g. SMC, where it must stay dead) — mapping it globally would
 // silently change their SL/TP too.
 function normalizeTfGeometryKeys(strategyKey, cfg) {
-  const key = String(strategyKey || "").toUpperCase();
-  if (!TF_KEYS.has(key)) return cfg;
+  if (!isTFKey(strategyKey)) return cfg;
   const out = { ...cfg };
   if (out.slAtrMult == null) out.slAtrMult = out.atrMult ?? out.atrMultiplier;
   if (out.tpAtrMult == null && out.slAtrMult != null) {

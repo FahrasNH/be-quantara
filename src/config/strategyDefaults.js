@@ -14,11 +14,16 @@
 // FOUNDRY / Adaptive Fusion single source of truth:
 //   ADAPTIVE_FUSION = canonical root (SMC params + AF race flags). AF_SMC /
 //   AF_WYCKOFF / AF_VSA derive FLAT from ADAPTIVE_FUSION (same pattern as MD/BS).
-//   SMART_MONEY_CONCEPTS removed from STRATEGIES — thin backward-compat alias only.
+//   Gen1 strategy keys resolve via strategyKeyNormalizer ACL at getStrategy() ingress.
 //
 // Confidence floors: prefer smcMinConfidenceScalping/Intraday/Swing; legacy
 // smcMinConfidenceA/B/C still accepted via smcParamCompat normalizeSmcParams().
 // ─────────────────────────────────────────────
+
+const {
+  normalizeStrategyKey,
+  normalizeTradeTypeKey,
+} = require("./strategyKeyNormalizer");
 
 const STRATEGIES = {
 
@@ -216,7 +221,7 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // TREND_FOLLOWING — Multi-TF Momentum (MINT Tier)
+  // TS_TF — Multi-TF Momentum (FORGE Tier)
   //
   //   HTF: 1H (EMA trend)
   //   MTF: 15m (MACD + RSI momentum)
@@ -224,8 +229,8 @@ const STRATEGIES = {
 
   //   Target: 54-58% WR, 100-180% annual
   // ─────────────────────────────────────────────
-  TREND_FOLLOWING: {
-    name:          "TREND_FOLLOWING",
+  TS_TF: {
+    name:          "TS_TF",
     label:         "Trend Momentum",
     description:   "Multi-TF MACD + RSI momentum. 3-layer confirmation (HTF/MTF/Entry).",
 
@@ -274,7 +279,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 7,
     grokConfirmMinTp:    7,
 
-    signalType:    "TREND_FOLLOWING",
+    signalType:    "TS_TF",
 
     // No per-type overrides — every leg uses the canonical geometry above.
     typeOverrides: {},
@@ -297,7 +302,7 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // MEAN_REVERSION — BB Extremes (VAULT Tier)
+  // MD_MR — BB Extremes (MINT Tier)
   //
   //   BB: 20 period, 2σ deviation
   //   RSI: 14 period (oversold <25, overbought >75)
@@ -305,8 +310,8 @@ const STRATEGIES = {
 
   //   Target: 55-60% WR, 100-150% annual
   // ─────────────────────────────────────────────
-  MEAN_REVERSION: {
-    name:          "MEAN_REVERSION",
+  MD_MR: {
+    name:          "MD_MR",
     label:         "Mean Reversion",
     description:   "Bollinger Bands extremes + RSI. Ultra-selective, ultra-conservative (VAULT).",
 
@@ -351,7 +356,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 8,
     grokConfirmMinTp:    7,
 
-    signalType:    "MEAN_REVERSION",
+    signalType:    "MD_MR",
 
     trades:        "5-15 trade/minggu",
     winrate:       "~55-60%",
@@ -359,13 +364,13 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // BREAKOUT_RETEST — Breakout + Retest (VAULT Tier)
+  // BS_BR — Breakout + Retest (VAULT Tier)
   //
   //   Entry TF  : 15m — deteksi level S&R 20-bar, breakout + retest
 
   // ─────────────────────────────────────────────
-  BREAKOUT_RETEST: {
-    name:          "BREAKOUT_RETEST",
+  BS_BR: {
+    name:          "BS_BR",
     label:         "Breakout + Retest",
     description:   "Breakout level S&R dengan konfirmasi retest. RR 1:4, cocok market konsolidasi.",
 
@@ -411,7 +416,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 8,
     grokConfirmMinTp:    7,
 
-    signalType:    "BREAKOUT_RETEST",
+    signalType:    "BS_BR",
 
     trades:        "2-7 trade/hari",
     winrate:       "~51-56%",
@@ -642,39 +647,19 @@ STRATEGIES.AF_VSA = {
   label: "Volume Spread Analysis",
   signalType: "AF_SMC",
 };
-// Backward-compat: legacy descriptor key → same config as ADAPTIVE_FUSION root.
-STRATEGIES.SMART_MONEY_CONCEPTS = {
-  ...STRATEGIES.ADAPTIVE_FUSION,
-  name: "SMART_MONEY_CONCEPTS",
-  label: "Smart Money Concepts (SMC)",
-  signalType: "SMART_MONEY_CONCEPTS",
-};
-STRATEGIES.TS_TF  = { ...STRATEGIES.TREND_FOLLOWING, name: "TS_TF",  label: "Trend Following",        signalType: "TS_TF" };
-STRATEGIES.TS_MS  = { ...STRATEGIES.TS_TF,           name: "TS_MS",  label: "Dow Theory",             signalType: "TS_TF" };
-STRATEGIES.TS_VP  = { ...STRATEGIES.TS_TF,           name: "TS_VP",  label: "Auction Market Theory",  signalType: "TS_TF" };
-STRATEGIES.MD_MR  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_MR",  label: "Mean Reversion",              signalType: "MD_MR" };
-STRATEGIES.MD_SD  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_SD",  label: "Supply and Demand",           signalType: "MD_MR" };
-STRATEGIES.MD_SA  = { ...STRATEGIES.MEAN_REVERSION,  name: "MD_SA",  label: "Statistical Arbitrage",       signalType: "MD_MR" };
-STRATEGIES.BS_BR  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_BR",  label: "Breakout Trading",             signalType: "BS_BR" };
-STRATEGIES.BS_ICT = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_ICT", label: "ICT-style trading",           signalType: "BS_BR" };
-STRATEGIES.BS_LS  = { ...STRATEGIES.BREAKOUT_RETEST, name: "BS_LS",  label: "Liquidation/Squeeze Trading", signalType: "BS_BR" };
-
-// Backward-compat: old persisted PDF trade-type keys A/B/C → real identity keys.
-// Thin mapping in ONE place so no duplicated config or ambiguous single-letter keys.
-const LEGACY_TRADE_TYPE_ALIASES = {
-  A: "AGGRESSIVE_SCALPING",
-  B: "DAY_TRADING",
-  C: "SWING_TRADING",
-};
+STRATEGIES.TS_MS  = { ...STRATEGIES.TS_TF, name: "TS_MS",  label: "Dow Theory",             signalType: "TS_TF" };
+STRATEGIES.TS_VP  = { ...STRATEGIES.TS_TF, name: "TS_VP",  label: "Auction Market Theory",  signalType: "TS_TF" };
+STRATEGIES.MD_SD  = { ...STRATEGIES.MD_MR, name: "MD_SD",  label: "Supply and Demand",           signalType: "MD_MR" };
+STRATEGIES.MD_SA  = { ...STRATEGIES.MD_MR, name: "MD_SA",  label: "Statistical Arbitrage",       signalType: "MD_MR" };
+STRATEGIES.BS_ICT = { ...STRATEGIES.BS_BR, name: "BS_ICT", label: "ICT-style trading",           signalType: "BS_BR" };
+STRATEGIES.BS_LS  = { ...STRATEGIES.BS_BR, name: "BS_LS",  label: "Liquidation/Squeeze Trading", signalType: "BS_BR" };
 
 function getStrategy(overrideKey = null) {
   const raw = (overrideKey || "DAY_TRADING").toUpperCase();
-  const key = LEGACY_TRADE_TYPE_ALIASES[raw] || raw;
-  const strat = STRATEGIES[key];
-  if (!strat) {
-    return STRATEGIES["DAY_TRADING"];
-  }
-  return strat;
+  const stratKey = normalizeStrategyKey(raw);
+  if (STRATEGIES[stratKey]) return STRATEGIES[stratKey];
+  const tradeKey = normalizeTradeTypeKey(raw);
+  return STRATEGIES[tradeKey] || STRATEGIES.DAY_TRADING;
 }
 
 function listStrategies() {

@@ -30,7 +30,7 @@ const PER_STRATEGY_LIVE_ELIGIBLE_TYPES = {
 };
 
 /**
- * @param {string} strategyKey - e.g. "AF_SMC" / "SMART_MONEY_CONCEPTS" / "TS_TF"
+ * @param {string} strategyKey - e.g. "AF_SMC" / "TS_TF"
  * @param {string} type - "Scalping" | "Intraday" | "Swing"
  * @returns {boolean} true if this (strategy, type) leg may trade real money.
  */

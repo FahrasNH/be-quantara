@@ -17,6 +17,8 @@
 
 'use strict';
 
+const { normalizeStrategyKey } = require('../../config/strategyKeyNormalizer');
+
 /**
  * Analisis kondisi market dan rekomendasikan strategi terbaik.
  *
@@ -34,10 +36,10 @@ function analyzeStrategyFit(marketData, currentStrategy) {
 
   const signals = [];
   const scores  = {
-    ADAPTIVE_FUSION:  0,
-    TREND_FOLLOWING:   0,
-    MEAN_REVERSION:   0,
-    BREAKOUT_RETEST:  0,
+    AF_SMC:  0,
+    TS_TF:   0,
+    MD_MR:   0,
+    BS_BR:   0,
   };
 
   // === Market regime detection ===
@@ -51,60 +53,62 @@ function analyzeStrategyFit(marketData, currentStrategy) {
   const highATR       = atr > atrBaseline * 1.5;
   const ranging       = !emaStrong; // RSI extreme di EMA-flat market = ideal MR setup
 
-  // === ADAPTIVE_FUSION score ===
+  // === AF_SMC score ===
   // Bekerja baik di mixed/uncertain conditions — voting system menyaringnya
-  scores.ADAPTIVE_FUSION += rsiNeutral  ? 10 : 0;
-  scores.ADAPTIVE_FUSION += !highATR    ? 8  : 0;
-  scores.ADAPTIVE_FUSION += highVolume  ? 5  : 0;
-  scores.ADAPTIVE_FUSION += emaStrong   ? 7  : 0;
+  scores.AF_SMC += rsiNeutral  ? 10 : 0;
+  scores.AF_SMC += !highATR    ? 8  : 0;
+  scores.AF_SMC += highVolume  ? 5  : 0;
+  scores.AF_SMC += emaStrong   ? 7  : 0;
 
-  // === TREND_FOLLOWING score ===
+  // === TS_TF score ===
   // Perlu trend kuat + volume support
   if (emaBullish && emaStrong && highVolume && !rsiOverbought) {
-    scores.TREND_FOLLOWING += 25;
+    scores.TS_TF += 25;
     signals.push({ type: 'bullish_momentum', confidence: 'high' });
   }
   if (!emaBullish && emaStrong && highVolume && !rsiOversold) {
-    scores.TREND_FOLLOWING += 20;
+    scores.TS_TF += 20;
     signals.push({ type: 'bearish_momentum', confidence: 'high' });
   }
-  scores.TREND_FOLLOWING += lowVolume ? -15 : 0; // volume lemah = penalty besar
+  scores.TS_TF += lowVolume ? -15 : 0; // volume lemah = penalty besar
 
-  // === MEAN_REVERSION score ===
+  // === MD_MR score ===
   // Perlu ranging market + BB extreme touch
   if (ranging && bbLower && lastClose <= bbLower * 1.01 && rsiOversold) {
-    scores.MEAN_REVERSION += 30;
+    scores.MD_MR += 30;
     signals.push({ type: 'oversold_bb_touch', confidence: 'high' });
   }
   if (ranging && bbUpper && lastClose >= bbUpper * 0.995 && rsiOverbought) {
-    scores.MEAN_REVERSION += 30;
+    scores.MD_MR += 30;
     signals.push({ type: 'overbought_bb_touch', confidence: 'high' });
   }
-  scores.MEAN_REVERSION += ranging ? 15 : -10;
+  scores.MD_MR += ranging ? 15 : -10;
   // Penalti jika trend HTF terlalu kuat — MR berbahaya di strong trend
   if (htfTrend === 'strong_bull' || htfTrend === 'strong_bear') {
-    scores.MEAN_REVERSION -= 20;
-    signals.push({ type: 'htf_trend_warning', detail: `MR tidak direkomendasikan saat HTF ${htfTrend}` });
+    scores.MD_MR -= 20;
+    signals.push({ type: 'htf_trend_warning', detail: `MD_MR tidak direkomendasikan saat HTF ${htfTrend}` });
   }
 
-  // === BREAKOUT_RETEST score ===
+  // === BS_BR score ===
   // Cocok saat konsolidasi / volatilitas sedang-tinggi + volume breakout
-  scores.BREAKOUT_RETEST += ranging ? 20 : 0;
-  scores.BREAKOUT_RETEST += highVolume ? 10 : 0;
-  scores.BREAKOUT_RETEST += highATR ? 8 : 0;
+  scores.BS_BR += ranging ? 20 : 0;
+  scores.BS_BR += highVolume ? 10 : 0;
+  scores.BS_BR += highATR ? 8 : 0;
 
   // === Tentukan rekomendasi ===
   const eligible = Object.entries(scores)
     .filter(([, s]) => s > 0)
     .sort(([, a], [, b]) => b - a);
 
-  const recommended = eligible[0]?.[0] ?? 'ADAPTIVE_FUSION'; // AF sebagai default safe
+  const recommended = eligible[0]?.[0] ?? 'AF_SMC'; // AF sebagai default safe
   const confidence  = eligible[0]?.[1] > 20 ? 'high' : eligible[0]?.[1] > 10 ? 'medium' : 'low';
 
   const regime = ranging ? 'ranging'
     : emaStrong && emaBullish ? 'trending_bull'
     : emaStrong && !emaBullish ? 'trending_bear'
     : 'uncertain';
+
+  const current = normalizeStrategyKey(String(currentStrategy || '').toUpperCase());
 
   return {
     ok: true,
@@ -124,8 +128,8 @@ function analyzeStrategyFit(marketData, currentStrategy) {
     ),
     recommended,
     confidence,
-    currentStrategy,
-    switchRecommended: recommended !== currentStrategy && confidence === 'high',
+    currentStrategy: current,
+    switchRecommended: recommended !== current && confidence === 'high',
     blockedStrategies: [],
   };
 }

@@ -30,6 +30,7 @@
 'use strict';
 
 const https = require("https");
+const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
 
 // ─── Pair Tier Constants ──────────────────────────────────────────────────────
 // v2.3 spec (PAIR_VOLATILITY.md): tier SEMI_VOLATILE baru ditambahkan sebagai
@@ -62,33 +63,33 @@ const VOLATILE_PAIRS = new Set([]);
 
 // ─── Strategy Recommendations per Pair Tier ───────────────────────────────────
 // v2.3 spec (PAIR_VOLATILITY.md §6): VOLATILE & SEMI_VOLATILE merekomendasikan
-// MEAN_REVERSION + TREND_FOLLOWING (dengan regime filter ketat). ADAPTIVE_FUSION
+// MD_MR + TS_TF (dengan regime filter ketat). AF_SMC
 // hanya diizinkan di LIQUID/STABLE (diblokir di SEMI_VOLATILE & VOLATILE).
 const STRATEGIES_BY_PAIR_TIER = Object.freeze({
   LIQUID: {
-    recommended: ['ADAPTIVE_FUSION', 'TREND_FOLLOWING', 'MEAN_REVERSION'],
-    cautious:    ['BREAKOUT_RETEST'],
+    recommended: ['ADAPTIVE_FUSION', 'TS_TF', 'MD_MR'],
+    cautious:    ['BS_BR'],
     blocked:     [],
   },
   STABLE: {
-    recommended: ['ADAPTIVE_FUSION', 'MEAN_REVERSION'],
-    cautious:    ['TREND_FOLLOWING', 'BREAKOUT_RETEST'],
+    recommended: ['ADAPTIVE_FUSION', 'MD_MR'],
+    cautious:    ['TS_TF', 'BS_BR'],
     blocked:     [],
   },
   SEMI_VOLATILE: {
-    // Transisi: TM diizinkan (dengan regime filter wajib), AF diblokir karena
-    // voting-nya rentan over-trading di pair transisi. BR masih hati-hati.
-    recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
-    cautious:    ['BREAKOUT_RETEST'],
+    // Transisi: TS_TF diizinkan (dengan regime filter wajib), AF diblokir karena
+    // voting-nya rentan over-trading di pair transisi. BS_BR masih hati-hati.
+    recommended: ['MD_MR', 'TS_TF'],
+    cautious:    ['BS_BR'],
     blocked:     ['ADAPTIVE_FUSION'],
   },
   VOLATILE: {
-    // MR + TM (dengan HTF regime filter ketat). AF & BR diblokir di altcoin
+    // MD_MR + TS_TF (dengan HTF regime filter ketat). AF & BS_BR diblokir di altcoin
 
     // hanya jika lolos triple-EMA regime filter (regimeFilterRequired=true).
-    recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
+    recommended: ['MD_MR', 'TS_TF'],
     cautious:    [],
-    blocked:     ['ADAPTIVE_FUSION', 'BREAKOUT_RETEST'],
+    blocked:     ['ADAPTIVE_FUSION', 'BS_BR'],
   },
 });
 
@@ -851,7 +852,10 @@ class PairClassifier {
    */
   isStrategyBlocked(symbol, strategyKey, metrics = null) {
     const tier = this.determineTier(symbol, metrics);
-    return this.getStrategiesForTier(tier).blocked.includes(strategyKey);
+    const upper = String(strategyKey || "").toUpperCase();
+    const canonical = normalizeStrategyKey(upper);
+    const blocked = this.getStrategiesForTier(tier).blocked;
+    return blocked.includes(canonical) || blocked.includes(upper);
   }
 }
 

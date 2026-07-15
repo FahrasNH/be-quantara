@@ -12,6 +12,7 @@
 
 const UmbrellaStrategy = require("../base/UmbrellaStrategy");
 const MeanReversionStrategy = require("../implementations/MeanReversionStrategy");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 const SupplyDemandStrategy = require("../implementations/SupplyDemandStrategy");
 const StatisticalArbitrageStrategy = require("../implementations/StatisticalArbitrageStrategy");
 
@@ -53,8 +54,8 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     }
     const active = new Set();
     for (const c of raw) {
-      const k = String(c || "").toUpperCase();
-      if (k === "MD_MR" || k === "MEAN_REVERSION" || k === "MR") active.add("MD_MR");
+      const k = normalizeStrategyKey(String(c || "").toUpperCase());
+      if (k === "MD_MR") active.add("MD_MR");
       else if (k === "MD_SD" || k === "SUPPLY_AND_DEMAND" || k === "SUPPLY_DEMAND") active.add("MD_SD");
       else if (k === "MD_SA" || k === "STATISTICAL_ARBITRAGE" || k === "STAT_ARB") active.add("MD_SA");
     }

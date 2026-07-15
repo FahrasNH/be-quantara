@@ -187,7 +187,7 @@ function calcIndicators(candles, config = {}) {
     vwap:     calcVWAP(candles),  // O(n) cumulative — precomputed once (Mean Reversion confirmation)
     closes,
     volumes,
-    highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
+    highs,   // S&R sejati pakai high/low, bukan close (BS_BR Fix #1)
     lows,
     opens,
     timestamps,
@@ -780,7 +780,7 @@ function getAdaptiveFusionMeta() {
 }
 
 /**
- * Singleton getter untuk TREND_FOLLOWING / Trend Surge umbrella
+ * Singleton getter untuk TS_TF / Trend Surge umbrella
  * (TS_TF race bag: Trend Following + Dow Theory + Auction Market Theory —
  * same instance as backtest registry; Sprint 12 race-to-confirm).
  */
@@ -797,7 +797,7 @@ function getTrendFollowingInstance() {
 }
 
 /**
- * Singleton getter untuk MEAN_REVERSION strategy
+ * Singleton getter untuk MD_MR strategy
  */
 function getMeanReversionInstance() {
   if (!_meanReversionInstance) {
@@ -815,7 +815,7 @@ function getBreakoutRetestInstance() {
   return _breakoutRetestInstance;
 }
 
-/** Last BS_BR / BREAKOUT_RETEST signal meta (for structure SL / enrichment). */
+/** Last BS_BR signal meta (for structure SL / enrichment). */
 function getBreakoutRetestMeta() {
   return _breakoutRetestInstance ? _breakoutRetestInstance.getLastSignalMeta() : null;
 }
@@ -834,23 +834,20 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
       return afs.detectSignal(indicators, i, config);
     }
 
-    // TREND_FOLLOWING — Multi-TF trend following with Donchian + ADX (FORGE tier)
-    case "TREND_FOLLOWING":
+    // TS_TF — Multi-TF trend following with Donchian + ADX (FORGE tier)
     case "TS_TF": {
       const tf = getTrendFollowingInstance();
       return tf.detectSignal(indicators, i, config);
     }
 
-    // MEAN_REVERSION / MD_MR — layered BB+RSI → ADX gate → OB/FVG (MINT tier)
-    case "MEAN_REVERSION":
-    case "MD_MR":
-    case "MR": {
+    // MD_MR — layered BB+RSI → ADX gate → OB/FVG (MINT tier)
+    case "MD_MR": {
       const mr = getMeanReversionInstance();
       return mr.detectSignal(indicators, i, config);
     }
 
-    // BREAKOUT_RETEST — level breakout + retest confirmation (VAULT tier)
-    case "BREAKOUT_RETEST": {
+    // BS_BR — level breakout + retest confirmation (VAULT tier)
+    case "BS_BR": {
       const br = getBreakoutRetestInstance();
       return br.detectSignal(indicators, i, config);
     }

@@ -20,6 +20,7 @@ const SmartMoneyConceptsStrategy = require("../implementations/SmartMoneyConcept
 const WyckoffStrategy            = require("../implementations/WyckoffStrategy");
 const VsaStrategy                = require("../implementations/VsaStrategy");
 const { aggregateAfVotes }       = require("../af/afVoting");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 const RACER_PRIORITY = ["AF_SMC", "AF_WYCKOFF", "AF_VSA"];
 const RACER_LABELS = {
@@ -95,10 +96,10 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     }
     const active = new Set();
     for (const c of raw) {
-      const k = String(c || "").toUpperCase();
-      if (k === "AF_SMC" || k === "SMART_MONEY_CONCEPTS" || k === "ADAPTIVE_FUSION" || k === "SMC") {
+      const k = normalizeStrategyKey(String(c || "").toUpperCase());
+      if (k === "AF_SMC" || String(c || "").toUpperCase() === "SMC") {
         active.add("AF_SMC");
-      } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
+      } else if (k === "AF_WYCKOFF" || String(c || "").toUpperCase() === "WYCKOFF") {
         active.add("AF_WYCKOFF");
       } else if (k === "AF_VSA" || k === "VSA") {
         active.add("AF_VSA");
