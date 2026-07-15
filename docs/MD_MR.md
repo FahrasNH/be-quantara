@@ -1,9 +1,9 @@
-# MD_MR — Entry Triggers (AS-IS)
+# MEAN_REVERSION — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an MD_MR entry and the signal labels emitted on fill.  
-**Strategy key**: `MD_MR` (`MeanReversionStrategy`, v3.0) — Mean Drift racer A  
+**Scope**: What triggers an MEAN_REVERSION entry and the signal labels emitted on fill.  
+**Strategy key**: `MEAN_REVERSION` (`MeanReversionStrategy`, v3.0) — Mean Drift racer A  
 **Engine SSOT**: `MeanReversionStrategy.js` → `detectSignal`  
-**Config SSOT**: `strategyDefaults.js` → `MEAN_REVERSION` / `MD_MR` (+ ctor `MeanReversionStrategy.js`)  
+**Config SSOT**: `strategyDefaults.js` → `MEAN_REVERSION` / `MEAN_REVERSION` (+ ctor `MeanReversionStrategy.js`)  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — no `typeOverrides` on MD_MR preset. Risk/SL/TP dari **`strategyDefaults.js`**; layer thresholds dari **engine ctor** (merge saat runtime).
+Sprint 14 baseline — no `typeOverrides` on MEAN_REVERSION preset. Risk/SL/TP dari **`strategyDefaults.js`**; layer thresholds dari **engine ctor** (merge saat runtime).
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -52,17 +52,17 @@ Sprint 14 baseline — no `typeOverrides` on MD_MR preset. Risk/SL/TP dari **`st
 
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
-| *(implicit)* | race | MD_MR / MD_SD / MD_SA race independently |
+| *(implicit)* | race | MEAN_REVERSION / SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE race independently |
 
 ### Per trade type overrides
 
-Tidak ada pada preset `MD_MR`. Scalping vs Intraday legs use ctor A/B thresholds above.
+Tidak ada pada preset `MEAN_REVERSION`. Scalping vs Intraday legs use ctor A/B thresholds above.
 
 ---
 
 ## What triggers an entry
 
-MD_MR is a **three-layer pipeline**: mean-reversion signal → ADX regime gate → optional OB/FVG refinement.
+MEAN_REVERSION is a **three-layer pipeline**: mean-reversion signal → ADX regime gate → optional OB/FVG refinement.
 
 ```
 BB + RSI + VWAP extreme → ADX Regime Gate → OB/FVG Confluence (optional) → signal
@@ -136,7 +136,7 @@ Labels come from pipe-delimited `entryMeta.reason` + `adxRegime` + `hasObFvgConf
 
 ## AS-IS quirks
 
-- **MINT umbrella**: MD_MR wins stamp `winningComponent: "MD_MR"`. MD_SD / MD_SA use their own label vocabularies.
+- **MINT umbrella**: MEAN_REVERSION wins stamp `winningComponent: "MEAN_REVERSION"`. SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE use their own label vocabularies.
 - **Soft OB/FVG miss**: `OB/FVG~` in reason does not produce the confluence label.
 - **strategyDefaults vs ctor drift**: `riskPerTrade`, `minVolRatio`, `maxTradesPerDay` differ between preset and engine ctor.
 

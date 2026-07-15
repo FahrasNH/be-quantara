@@ -57,10 +57,10 @@ test("GATE-CHOP-LONG: blocks LONG in CHOP, allows SHORT", () => {
   assert.equal(longTrend.allow, true);
 });
 
-test("GATE-CHOP-LONG: applyRegimeGate blockLongInChop for AF_SMC", () => {
+test("GATE-CHOP-LONG: applyRegimeGate blockLongInChop for SMART_MONEY_CONCEPTS", () => {
   const blocked = applyRegimeGate({
     signal: "LONG",
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     regime: "CHOP",
     riskPerTrade: 0.01,
     blockLongInChop: true,
@@ -69,7 +69,7 @@ test("GATE-CHOP-LONG: applyRegimeGate blockLongInChop for AF_SMC", () => {
 
   const shortOk = applyRegimeGate({
     signal: "SHORT",
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     regime: "CHOP",
     riskPerTrade: 0.01,
     blockLongInChop: true,
@@ -79,7 +79,7 @@ test("GATE-CHOP-LONG: applyRegimeGate blockLongInChop for AF_SMC", () => {
 
   const legacy = applyRegimeGate({
     signal: "LONG",
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     regime: "CHOP",
     riskPerTrade: 0.01,
   });

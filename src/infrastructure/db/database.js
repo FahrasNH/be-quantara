@@ -525,7 +525,7 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
  * Backfill `trades.strategy_name` from indicators.winningComponent / firedByStrategy
  * and normalize legacy Gen1 / abbrev values → Gen2 canonical keys.
  * Best-effort; rows without attribution metadata can only normalize to the
- * umbrella engine (AF_SMC / TS_TF / …) — per-racer identity is accepted as lost.
+ * umbrella engine (SMART_MONEY_CONCEPTS / TREND_FOLLOWING / …) — per-racer identity is accepted as lost.
  * @returns {{ scanned: number, updated: number }}
  */
 async function backfillTradeStrategyNames({ limit = 5000 } = {}) {

@@ -1,7 +1,7 @@
 /**
  * htfRegimeFilter.js  (core/signal-engine)
  *
- *   MD_MR akan terus counter-trend jika tidak ada HTF filter.
+ *   MEAN_REVERSION akan terus counter-trend jika tidak ada HTF filter.
  *   Di strong bull market → SHORT terus kena SL.
  *   Di strong bear market → LONG terus kena SL.
  *
@@ -10,7 +10,7 @@
  *   before any MR entry. The checkHTFRegime() function checks the full
  *   EMA9 > EMA50 > EMA200 uptrend structure and blocks counter-trend entries.
  *
- * Fungsi ini dipanggil SEBELUM MD_MR evaluate entry signal.
+ * Fungsi ini dipanggil SEBELUM MEAN_REVERSION evaluate entry signal.
  * Jika regime tidak aman → return { allowed: false } → skip entry.
  *
  * Diintegrasikan via MeanReversionStrategy.detectSignal (opsional, fail-open jika
@@ -65,7 +65,7 @@ function classifyHTFRegime(htfData) {
 }
 
 /**
- * Filter entry untuk MD_MR berdasarkan HTF regime.
+ * Filter entry untuk MEAN_REVERSION berdasarkan HTF regime.
  *
  * @param {Object} params
  * @param {'LONG' | 'SHORT'} params.direction  - Arah entry yang akan dieksekusi
@@ -89,7 +89,7 @@ function meanReversionRegimeFilter({ direction, htfData }) {
   if (direction === 'SHORT' && regime === 'strong_bull') {
     return {
       allowed: false,
-      reason: 'HTF strong bull — SHORT MD_MR diblokir untuk mencegah counter-trend loss',
+      reason: 'HTF strong bull — SHORT MEAN_REVERSION diblokir untuk mencegah counter-trend loss',
       regime,
     };
   }
@@ -98,12 +98,12 @@ function meanReversionRegimeFilter({ direction, htfData }) {
   if (direction === 'LONG' && regime === 'strong_bear') {
     return {
       allowed: false,
-      reason: 'HTF strong bear — LONG MD_MR diblokir untuk mencegah counter-trend loss',
+      reason: 'HTF strong bear — LONG MEAN_REVERSION diblokir untuk mencegah counter-trend loss',
       regime,
     };
   }
 
-  return { allowed: true, reason: 'HTF regime compatible dengan MD_MR', regime };
+  return { allowed: true, reason: 'HTF regime compatible dengan MEAN_REVERSION', regime };
 }
 
 // ─── PAIR-TIER-06: Triple-EMA regime check ────────────────────────────────────
@@ -161,7 +161,7 @@ function checkHTFRegime({ direction, htfData, required = false }) {
   if (aligned && trend === 'uptrend' && direction === 'LONG') {
     return {
       allowed: false,
-      reason: 'HTF uptrend confirmed (EMA9>EMA50>EMA200) — LONG MD_MR blocks trend-chasing entries',
+      reason: 'HTF uptrend confirmed (EMA9>EMA50>EMA200) — LONG MEAN_REVERSION blocks trend-chasing entries',
       trend,
     };
   }
@@ -171,7 +171,7 @@ function checkHTFRegime({ direction, htfData, required = false }) {
   if (aligned && trend === 'downtrend' && direction === 'SHORT') {
     return {
       allowed: false,
-      reason: 'HTF downtrend confirmed (EMA9<EMA50<EMA200) — SHORT MD_MR blocks trend-chasing entries',
+      reason: 'HTF downtrend confirmed (EMA9<EMA50<EMA200) — SHORT MEAN_REVERSION blocks trend-chasing entries',
       trend,
     };
   }

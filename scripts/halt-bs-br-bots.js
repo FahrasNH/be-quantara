@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Sprint 14: stop any RUNNING bots on BS_BR / BREAKOUT_RETEST / BR.
+ * Sprint 14: stop any RUNNING bots on BREAKOUT_RETEST / BREAKOUT_RETEST / BR.
  *
  * Usage (from be-bot-trading):
  *   node scripts/halt-bs-br-bots.js [--dry-run]
@@ -11,7 +11,7 @@
 
 const prisma = require("../src/infrastructure/db/prismaClient");
 
-const HALTED = ["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BR", "BREAKOUT_STORM"];
+const HALTED = ["BREAKOUT_RETEST", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BR", "BREAKOUT_STORM"];
 
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
@@ -20,7 +20,7 @@ async function main() {
       running: true,
       OR: [
         { strategyKey: { in: HALTED } },
-        // strategyGroup may contain BS_BR among multi-strategy bots
+        // strategyGroup may contain BREAKOUT_RETEST among multi-strategy bots
         ...HALTED.map((k) => ({ strategyGroup: { has: k } })),
       ],
     },
@@ -35,7 +35,7 @@ async function main() {
     },
   });
 
-  console.log(`Found ${bots.length} running bot(s) matching halted BS_BR keys.`);
+  console.log(`Found ${bots.length} running bot(s) matching halted BREAKOUT_RETEST keys.`);
   for (const b of bots) {
     console.log(
       ` - ${b.id} user=${b.userId} ${b.symbol} strategy=${b.strategyKey}` +

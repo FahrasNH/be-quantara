@@ -106,13 +106,13 @@ test("AF race mode — per-trade strategyLabel is winning racer, not race header
     capital: 1000,
     config: {
       afCombinationMode: "race",
-      selectedComponents: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+      selectedComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
       volSmaMultiplier: 1.0,
     },
   });
   assert.ok(r.trades.length > 0, "race-mode AF backtest should produce trades");
   const racerLabels = new Set(["Smart Money Concepts", "Wyckoff Method", "Volume Spread Analysis"]);
-  const racerKeys = new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+  const racerKeys = new Set(["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"]);
   for (const t of r.trades) {
     assert.ok(t.strategyLabel, "trade should have strategyLabel");
     assert.ok(!t.strategyLabel.startsWith("Adaptive Fusion race"),
@@ -122,38 +122,38 @@ test("AF race mode — per-trade strategyLabel is winning racer, not race header
   }
 });
 
-// ── runMultiTypeBacktest (TS_TF/MD_MR sharing AF_SMC's own TF definitions) ──
-test("runMultiTypeBacktest (TS_TF: Intraday+Swing) never touches Scalping/5m", async () => {
+// ── runMultiTypeBacktest (TREND_FOLLOWING/MEAN_REVERSION sharing SMART_MONEY_CONCEPTS's own TF definitions) ──
+test("runMultiTypeBacktest (TREND_FOLLOWING: Intraday+Swing) never touches Scalping/5m", async () => {
   const r = await runMultiTypeBacktest({
     entryCandles: { Intraday: entry, Swing: entry4h },
     htfCandles: { Intraday: htf4h, Swing: htf1w },
-    strategyKey: "TS_TF",
+    strategyKey: "TREND_FOLLOWING",
     capital: 1000,
   }, ["Intraday", "Swing"]);
   assert.ok(Array.isArray(r.trades));
   assert.ok(Array.isArray(r.equity));
   assert.ok(r.perTypeStats.Intraday);
   assert.ok(r.perTypeStats.Swing);
-  assert.ok(!("Scalping" in r.perTypeStats), "TS_TF must never fetch/run Scalping (5m)");
+  assert.ok(!("Scalping" in r.perTypeStats), "TREND_FOLLOWING must never fetch/run Scalping (5m)");
   // Regression lock for the self-inclusive Donchian channel bug (2026-07-02): the
   // fallback breakout check compared close[i] against a channel that included bar
   // i's own high/low, making close>upper / close<lower mathematically impossible —
-  // TS_TF produced ZERO trades in live AND backtest regardless of data/timeframe.
+  // TREND_FOLLOWING produced ZERO trades in live AND backtest regardless of data/timeframe.
   // Fixed by comparing against the PRIOR bar's channel instead.
-  assert.ok(r.trades.length > 0, "TS_TF must be able to produce trades — 0 trades indicates the Donchian self-inclusion regression has returned");
+  assert.ok(r.trades.length > 0, "TREND_FOLLOWING must be able to produce trades — 0 trades indicates the Donchian self-inclusion regression has returned");
   for (const t of r.trades) {
     assert.ok(["Intraday", "Swing"].includes(t.component), `unexpected component ${t.component}`);
-    assert.strictEqual(t.plannedRR, 2, "TS_TF's fixed RR is 1:2.0 (ATR×1.5 SL / ATR×3.0 TP)");
+    assert.strictEqual(t.plannedRR, 2, "TREND_FOLLOWING's fixed RR is 1:2.0 (ATR×1.5 SL / ATR×3.0 TP)");
   }
 });
 
 test("runMultiTypeBacktest degrades gracefully when one type has no candles", async () => {
-  // Simulates Bitget returning empty 5m candles for MD_MR's Scalping type —
+  // Simulates Bitget returning empty 5m candles for MEAN_REVERSION's Scalping type —
   // Intraday (15m) must still produce a result instead of the whole job failing.
   const r = await runMultiTypeBacktest({
     entryCandles: { Scalping: [], Intraday: entry },
     htfCandles: { Scalping: [], Intraday: htf },
-    strategyKey: "MD_MR",
+    strategyKey: "MEAN_REVERSION",
     capital: 1000,
   }, ["Scalping", "Intraday"]);
   assert.strictEqual(r.perTypeStats.Scalping.skipped, true);

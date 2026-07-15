@@ -12,8 +12,8 @@
 // Key lama "A"/"B"/"C" dipetakan ke identitas ini di getStrategy() (backward-compat).
 //
 // FOUNDRY / Adaptive Fusion single source of truth:
-//   ADAPTIVE_FUSION = canonical root (SMC params + AF race flags). AF_SMC /
-//   AF_WYCKOFF / AF_VSA derive FLAT from ADAPTIVE_FUSION (same pattern as MD/BS).
+//   ADAPTIVE_FUSION = canonical root (SMC params + AF race flags). SMART_MONEY_CONCEPTS /
+//   WYCKOFF / VOLUME_SPREAD_ANALYSIS derive FLAT from ADAPTIVE_FUSION (same pattern as MD/BS).
 //   Gen1 strategy keys resolve via strategyKeyNormalizer ACL at getStrategy() ingress.
 //
 // Confidence floors: prefer smcMinConfidenceScalping/Intraday/Swing; legacy
@@ -221,7 +221,7 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // TS_TF — Multi-TF Momentum (FORGE Tier)
+  // TREND_FOLLOWING — Multi-TF Momentum (FORGE Tier)
   //
   //   HTF: 1H (EMA trend)
   //   MTF: 15m (MACD + RSI momentum)
@@ -229,8 +229,8 @@ const STRATEGIES = {
 
   //   Target: 54-58% WR, 100-180% annual
   // ─────────────────────────────────────────────
-  TS_TF: {
-    name:          "TS_TF",
+  TREND_FOLLOWING: {
+    name:          "TREND_FOLLOWING",
     label:         "Trend Momentum",
     description:   "Multi-TF MACD + RSI momentum. 3-layer confirmation (HTF/MTF/Entry).",
 
@@ -279,7 +279,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 7,
     grokConfirmMinTp:    7,
 
-    signalType:    "TS_TF",
+    signalType:    "TREND_FOLLOWING",
 
     // No per-type overrides — every leg uses the canonical geometry above.
     typeOverrides: {},
@@ -302,7 +302,7 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // MD_MR — BB Extremes (MINT Tier)
+  // MEAN_REVERSION — BB Extremes (MINT Tier)
   //
   //   BB: 20 period, 2σ deviation
   //   RSI: 14 period (oversold <25, overbought >75)
@@ -310,8 +310,8 @@ const STRATEGIES = {
 
   //   Target: 55-60% WR, 100-150% annual
   // ─────────────────────────────────────────────
-  MD_MR: {
-    name:          "MD_MR",
+  MEAN_REVERSION: {
+    name:          "MEAN_REVERSION",
     label:         "Mean Reversion",
     description:   "Bollinger Bands extremes + RSI. Ultra-selective, ultra-conservative (VAULT).",
 
@@ -356,7 +356,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 8,
     grokConfirmMinTp:    7,
 
-    signalType:    "MD_MR",
+    signalType:    "MEAN_REVERSION",
 
     trades:        "5-15 trade/minggu",
     winrate:       "~55-60%",
@@ -364,13 +364,13 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // BS_BR — Breakout + Retest (VAULT Tier)
+  // BREAKOUT_RETEST — Breakout + Retest (VAULT Tier)
   //
   //   Entry TF  : 15m — deteksi level S&R 20-bar, breakout + retest
 
   // ─────────────────────────────────────────────
-  BS_BR: {
-    name:          "BS_BR",
+  BREAKOUT_RETEST: {
+    name:          "BREAKOUT_RETEST",
     label:         "Breakout + Retest",
     description:   "Breakout level S&R dengan konfirmasi retest. RR 1:4, cocok market konsolidasi.",
 
@@ -416,7 +416,7 @@ const STRATEGIES = {
     grokConfirmMinEntry: 8,
     grokConfirmMinTp:    7,
 
-    signalType:    "BS_BR",
+    signalType:    "BREAKOUT_RETEST",
 
     trades:        "2-7 trade/hari",
     winrate:       "~51-56%",
@@ -487,9 +487,9 @@ const STRATEGIES = {
   // ─────────────────────────────────────────────
   // ADAPTIVE_FUSION — SMC v3.0 (FOUNDRY tier) · CANONICAL ROOT
   //
-  //   SSOT tuning SMC + AF race flags. AF_SMC / AF_WYCKOFF / AF_VSA spread
+  //   SSOT tuning SMC + AF race flags. SMART_MONEY_CONCEPTS / WYCKOFF / VOLUME_SPREAD_ANALYSIS spread
   //   verbatim below (FLAT pattern). Persisted umbrella key ADAPTIVE_FUSION
-  //   resolves to AF_SMC engine via StrategyRegistry.
+  //   resolves to SMART_MONEY_CONCEPTS engine via StrategyRegistry.
   //
   //   Legs (Scalping / Intraday / Swing) — smcEnabledComponents slot A/B/C
   //   maps via SmartMoneyConceptsStrategy.COMPONENT_TO_TYPE.
@@ -582,7 +582,7 @@ const STRATEGIES = {
     interval:      "1h",
     checkInterval: 3_600_000,
 
-    // AF umbrella race flags — SINGLE SOURCE for AF_SMC / AF_WYCKOFF / AF_VSA
+    // AF umbrella race flags — SINGLE SOURCE for SMART_MONEY_CONCEPTS / WYCKOFF / VOLUME_SPREAD_ANALYSIS
     // (dulu di blok ADAPTIVE_FUSION yang duplikatif; sekarang hidup di sini).
     // Default "race" (Sprint 12); "vote" = rollback Sprint 8 (2/3 majority).
     afCombinationMode: "race",
@@ -620,39 +620,39 @@ const STRATEGIES = {
   // Canonical keys are assigned below from parent presets (single source of
   // truth — avoids copy-paste drift). signalType points at the umbrella engine
   // key so StrategyRegistry resolves one instance; per-trade attribution uses
-  // the winning racer label (AF_SMC / AF_WYCKOFF / AF_VSA, etc.).
+  // the winning racer label (SMART_MONEY_CONCEPTS / WYCKOFF / VOLUME_SPREAD_ANALYSIS, etc.).
   //
   // NOTE: AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING above are PDF trade-type
-  // presets, NOT Adaptive Fusion components. Do not confuse with AF_SMC / AF_WYCKOFF /
-  // AF_VSA. Old persisted keys "A"/"B"/"C" map to them via getStrategy() below.
+  // presets, NOT Adaptive Fusion components. Do not confuse with SMART_MONEY_CONCEPTS / WYCKOFF /
+  // VOLUME_SPREAD_ANALYSIS. Old persisted keys "A"/"B"/"C" map to them via getStrategy() below.
   // ─────────────────────────────────────────────
 };
 
 // Canonical component keys — FLAT spread from ADAPTIVE_FUSION root (no copy-paste drift).
-STRATEGIES.AF_SMC = {
+STRATEGIES.SMART_MONEY_CONCEPTS = {
   ...STRATEGIES.ADAPTIVE_FUSION,
-  name: "AF_SMC",
+  name: "SMART_MONEY_CONCEPTS",
   label: "Smart Money Concepts",
-  signalType: "AF_SMC",
+  signalType: "SMART_MONEY_CONCEPTS",
 };
-STRATEGIES.AF_WYCKOFF = {
+STRATEGIES.WYCKOFF = {
   ...STRATEGIES.ADAPTIVE_FUSION,
-  name: "AF_WYCKOFF",
+  name: "WYCKOFF",
   label: "Wyckoff Method",
-  signalType: "AF_SMC",
+  signalType: "SMART_MONEY_CONCEPTS",
 };
-STRATEGIES.AF_VSA = {
+STRATEGIES.VOLUME_SPREAD_ANALYSIS = {
   ...STRATEGIES.ADAPTIVE_FUSION,
-  name: "AF_VSA",
+  name: "VOLUME_SPREAD_ANALYSIS",
   label: "Volume Spread Analysis",
-  signalType: "AF_SMC",
+  signalType: "SMART_MONEY_CONCEPTS",
 };
-STRATEGIES.TS_MS  = { ...STRATEGIES.TS_TF, name: "TS_MS",  label: "Dow Theory",             signalType: "TS_TF" };
-STRATEGIES.TS_VP  = { ...STRATEGIES.TS_TF, name: "TS_VP",  label: "Auction Market Theory",  signalType: "TS_TF" };
-STRATEGIES.MD_SD  = { ...STRATEGIES.MD_MR, name: "MD_SD",  label: "Supply and Demand",           signalType: "MD_MR" };
-STRATEGIES.MD_SA  = { ...STRATEGIES.MD_MR, name: "MD_SA",  label: "Statistical Arbitrage",       signalType: "MD_MR" };
-STRATEGIES.BS_ICT = { ...STRATEGIES.BS_BR, name: "BS_ICT", label: "ICT-style trading",           signalType: "BS_BR" };
-STRATEGIES.BS_LS  = { ...STRATEGIES.BS_BR, name: "BS_LS",  label: "Liquidation/Squeeze Trading", signalType: "BS_BR" };
+STRATEGIES.MARKET_STRUCTURE  = { ...STRATEGIES.TREND_FOLLOWING, name: "MARKET_STRUCTURE",  label: "Dow Theory",             signalType: "TREND_FOLLOWING" };
+STRATEGIES.AUCTION_MARKET_THEORY  = { ...STRATEGIES.TREND_FOLLOWING, name: "AUCTION_MARKET_THEORY",  label: "Auction Market Theory",  signalType: "TREND_FOLLOWING" };
+STRATEGIES.SUPPLY_AND_DEMAND  = { ...STRATEGIES.MEAN_REVERSION, name: "SUPPLY_AND_DEMAND",  label: "Supply and Demand",           signalType: "MEAN_REVERSION" };
+STRATEGIES.STATISTICAL_ARBITRAGE  = { ...STRATEGIES.MEAN_REVERSION, name: "STATISTICAL_ARBITRAGE",  label: "Statistical Arbitrage",       signalType: "MEAN_REVERSION" };
+STRATEGIES.ICT_STYLE_TRADING = { ...STRATEGIES.BREAKOUT_RETEST, name: "ICT_STYLE_TRADING", label: "ICT-style trading",           signalType: "BREAKOUT_RETEST" };
+STRATEGIES.LIQUIDATION_SQUEEZE  = { ...STRATEGIES.BREAKOUT_RETEST, name: "LIQUIDATION_SQUEEZE",  label: "Liquidation/Squeeze Trading", signalType: "BREAKOUT_RETEST" };
 
 function getStrategy(overrideKey = null) {
   const raw = (overrideKey || "DAY_TRADING").toUpperCase();

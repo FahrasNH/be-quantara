@@ -174,7 +174,7 @@ function calcIndicators(candles, config = {}) {
   const lows    = candles.map(c => c.low);
   const volumes = candles.map(c => c.volume || 0);
   const opens   = candles.map((c, i) => c.open ?? (i > 0 ? closes[i - 1] : c.close));
-  // Session VWAP (TS_VP) needs bar timestamps; without these the whole series
+  // Session VWAP (AUCTION_MARKET_THEORY) needs bar timestamps; without these the whole series
   // collapses into one "session" and Value Area blocks almost all trend entries.
   const timestamps = candles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
 
@@ -187,7 +187,7 @@ function calcIndicators(candles, config = {}) {
     vwap:     calcVWAP(candles),  // O(n) cumulative — precomputed once (Mean Reversion confirmation)
     closes,
     volumes,
-    highs,   // S&R sejati pakai high/low, bukan close (BS_BR Fix #1)
+    highs,   // S&R sejati pakai high/low, bukan close (BREAKOUT_RETEST Fix #1)
     lows,
     opens,
     timestamps,
@@ -762,7 +762,7 @@ function getAdaptiveFusionInstance() {
   if (!_adaptiveFusionInstance) {
     // Sprint 8: use umbrella (SMC + Wyckoff + VSA) so detectSignal runs 3-component voting
     const { strategyRegistry } = require("../strategy-engine");
-    _adaptiveFusionInstance = strategyRegistry.get("AF_SMC");
+    _adaptiveFusionInstance = strategyRegistry.get("SMART_MONEY_CONCEPTS");
     if (!_adaptiveFusionInstance) {
       const AdaptiveFusionUmbrella = require("../strategy-engine/umbrellas/AdaptiveFusionUmbrella");
       _adaptiveFusionInstance = new AdaptiveFusionUmbrella();
@@ -780,14 +780,14 @@ function getAdaptiveFusionMeta() {
 }
 
 /**
- * Singleton getter untuk TS_TF / Trend Surge umbrella
- * (TS_TF race bag: Trend Following + Dow Theory + Auction Market Theory —
+ * Singleton getter untuk TREND_FOLLOWING / Trend Surge umbrella
+ * (TREND_FOLLOWING race bag: Trend Following + Dow Theory + Auction Market Theory —
  * same instance as backtest registry; Sprint 12 race-to-confirm).
  */
 function getTrendFollowingInstance() {
   if (!_trendFollowingInstance) {
     const { strategyRegistry } = require("../strategy-engine");
-    _trendFollowingInstance = strategyRegistry.get("TS_TF");
+    _trendFollowingInstance = strategyRegistry.get("TREND_FOLLOWING");
     if (!_trendFollowingInstance) {
       const TrendSurgeUmbrella = require("../strategy-engine/umbrellas/TrendSurgeUmbrella");
       _trendFollowingInstance = new TrendSurgeUmbrella();
@@ -797,7 +797,7 @@ function getTrendFollowingInstance() {
 }
 
 /**
- * Singleton getter untuk MD_MR strategy
+ * Singleton getter untuk MEAN_REVERSION strategy
  */
 function getMeanReversionInstance() {
   if (!_meanReversionInstance) {
@@ -815,7 +815,7 @@ function getBreakoutRetestInstance() {
   return _breakoutRetestInstance;
 }
 
-/** Last BS_BR signal meta (for structure SL / enrichment). */
+/** Last BREAKOUT_RETEST signal meta (for structure SL / enrichment). */
 function getBreakoutRetestMeta() {
   return _breakoutRetestInstance ? _breakoutRetestInstance.getLastSignalMeta() : null;
 }
@@ -834,20 +834,20 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
       return afs.detectSignal(indicators, i, config);
     }
 
-    // TS_TF — Multi-TF trend following with Donchian + ADX (FORGE tier)
-    case "TS_TF": {
+    // TREND_FOLLOWING — Multi-TF trend following with Donchian + ADX (FORGE tier)
+    case "TREND_FOLLOWING": {
       const tf = getTrendFollowingInstance();
       return tf.detectSignal(indicators, i, config);
     }
 
-    // MD_MR — layered BB+RSI → ADX gate → OB/FVG (MINT tier)
-    case "MD_MR": {
+    // MEAN_REVERSION — layered BB+RSI → ADX gate → OB/FVG (MINT tier)
+    case "MEAN_REVERSION": {
       const mr = getMeanReversionInstance();
       return mr.detectSignal(indicators, i, config);
     }
 
-    // BS_BR — level breakout + retest confirmation (VAULT tier)
-    case "BS_BR": {
+    // BREAKOUT_RETEST — level breakout + retest confirmation (VAULT tier)
+    case "BREAKOUT_RETEST": {
       const br = getBreakoutRetestInstance();
       return br.detectSignal(indicators, i, config);
     }

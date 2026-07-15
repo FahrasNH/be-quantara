@@ -1,9 +1,9 @@
-# AF_WYCKOFF — Entry Triggers (AS-IS)
+# WYCKOFF — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an AF_WYCKOFF entry and the signal labels emitted on fill.  
-**Strategy key**: `AF_WYCKOFF` (`WyckoffStrategy`, v2.0)  
+**Scope**: What triggers an WYCKOFF entry and the signal labels emitted on fill.  
+**Strategy key**: `WYCKOFF` (`WyckoffStrategy`, v2.0)  
 **Engine SSOT**: `wyckoffComponent.js` → `evaluateWyckoffComponent`  
-**Config SSOT**: `strategyDefaults.js` → `AF_WYCKOFF` (inherits `SMART_MONEY_CONCEPTS` risk) + `wyckoffComponent.js` DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `WYCKOFF` (inherits `SMART_MONEY_CONCEPTS` risk) + `wyckoffComponent.js` DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`AF_WYCKOFF`** preset (= SMC geometry); Wyckoff-specific knobs dari **component DEFAULTS**.
+Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`WYCKOFF`** preset (= SMC geometry); Wyckoff-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -62,7 +62,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-AF_WYCKOFF scans for a **valid trading range**, then looks for a schematic manipulation event and an entry checklist pass.
+WYCKOFF scans for a **valid trading range**, then looks for a schematic manipulation event and an entry checklist pass.
 
 ```
 Trading Range → Spring (LONG) or Upthrust (SHORT) → Entry Checklist → signal
@@ -140,7 +140,7 @@ Labels come from the **pattern reason code** and optional **checklist flags** on
 
 ## AS-IS quirks
 
-- **AF umbrella**: When AF_WYCKOFF wins the FOUNDRY race, SMC/VSA wins use their own label vocabularies.
+- **AF umbrella**: When WYCKOFF wins the FOUNDRY race, SMC/VSA wins use their own label vocabularies.
 - **Backtest default**: `runBacktestJob.js` forces `entryModel: "aggressive"` when unset — aligns with factory reset.
 - **Low variance on aggressive**: direction (Spring vs Upthrust) is the main difference between fills.
 

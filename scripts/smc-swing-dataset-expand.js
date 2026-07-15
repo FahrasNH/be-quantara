@@ -2,7 +2,7 @@
 /**
  * smc-swing-dataset-expand.js — Sprint 13 Swing expand-dataset task
  *
- * Batch AF_SMC Swing backtests across multiple symbols × 12 months to grow
+ * Batch SMART_MONEY_CONCEPTS Swing backtests across multiple symbols × 12 months to grow
  * the ML / forensic CSV dataset (target 300+ trades). Walk-forward per window
  * is the caller's responsibility — this script dumps multi-symbol samples.
  *
@@ -113,7 +113,7 @@ async function loadCandles(symbol, tf) {
 }
 
 function buildConfig() {
-  const base = { ...(STRATEGIES.ADAPTIVE_FUSION || STRATEGIES.AF_SMC) };
+  const base = { ...(STRATEGIES.ADAPTIVE_FUSION || STRATEGIES.SMART_MONEY_CONCEPTS) };
   const swing = { ...(base.typeOverrides?.Swing || {}) };
   if (RELAX) {
     // Research-only denser sample — do NOT use for live promotion.
@@ -122,7 +122,7 @@ function buildConfig() {
   }
   return {
     ...base,
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     typeOverrides: {
       ...(base.typeOverrides || {}),
       Swing: swing,
@@ -139,7 +139,7 @@ function mapTradeRow(t, symbol, idx) {
     sessionId: `EXPAND-SWING-${symbol}`,
     symbol,
     side: t.side,
-    strategy: "AF_SMC",
+    strategy: "SMART_MONEY_CONCEPTS",
     status: "Closed",
     entryPrice: t.entry,
     exitPrice: t.exit,
@@ -200,7 +200,7 @@ async function runSymbol(symbol, cfg) {
   console.log(`  candles entry=${entry.length} htf=${htf.length} daily=${daily.length}`);
 
   const result = await runTripleTypeBacktest({
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     capital: CAPITAL,
     enableFees: true,
     enableSlippage: true,
@@ -255,7 +255,7 @@ async function main() {
     targetMet: allRows.length >= 300,
     perSymbol,
     recipe: {
-      strategy: "AF_SMC",
+      strategy: "SMART_MONEY_CONCEPTS",
       entryTf: "4h",
       trendTf: "1w",
       period: "12m (or --days)",

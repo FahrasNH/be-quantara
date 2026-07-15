@@ -13,7 +13,7 @@ const TIER_CONFIG = {
   FOUNDRY: {
     label: "Foundry",
     price: 9,
-    strategies: ["AF_SMC"],
+    strategies: ["SMART_MONEY_CONCEPTS"],
     maxPositions: 1,
     // Multi-Strategy per Coin: equal-weight capital + race-to-confirm
     // (max 1 open position per symbol; strategies compete for the slot).
@@ -35,7 +35,7 @@ const TIER_CONFIG = {
   FORGE: {
     label: "Forge",
     price: 24,
-    strategies: ["AF_SMC", "TS_TF"],
+    strategies: ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING"],
     maxPositions: 1,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
@@ -52,7 +52,7 @@ const TIER_CONFIG = {
   MINT: {
     label: "Mint",
     price: 54,
-    strategies: ["AF_SMC", "TS_TF", "MD_MR"],
+    strategies: ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION"],
     maxPositions: 1,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
@@ -68,7 +68,7 @@ const TIER_CONFIG = {
   VAULT: {
     label: "Vault",
     price: 99,
-    strategies: ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"],
+    strategies: ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
     maxPositions: 1,
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
     // Race-to-confirm: max 1 open position per symbol regardless of strategy count.

@@ -213,7 +213,7 @@ class BotEngine extends EventEmitter {
       // "partial" → partial close +1R/+2R + SL geser ke +0.3R/+1R, sisa dibiarkan
       //             lari ke TP penuh (~2.5–2.85R). Membiarkan winner lari sambil
       //             mengunci sebagian profit → ekspektasi net-of-fee membaik di
-      //             strategi tren (TS_TF). Knob per-strategi via strat.tpMode.
+      //             strategi tren (TREND_FOLLOWING). Knob per-strategi via strat.tpMode.
       tpMode: strat.tpMode || "full",
 
       // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
@@ -1105,7 +1105,7 @@ class BotEngine extends EventEmitter {
         atrPeriod: this.config.atrPeriod,
       });
 
-      // MD_MR ADX regime gate (MD-SUB-01) reads indicators.adx on the entry TF.
+      // MEAN_REVERSION ADX regime gate (MD-SUB-01) reads indicators.adx on the entry TF.
       if (isMeanReversionKey(this.config.strategyKey) || isMeanReversionKey(this.config.signalType)) {
         indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
       }
@@ -1207,8 +1207,8 @@ class BotEngine extends EventEmitter {
             this._log("info", `⏸ Belum entry — ${gate.reason}`);
           }
         } else {
-          // BS_BR punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
-          if (this.state.htfTrend === "SIDEWAYS" && normalizeStrategyKey(this.config.signalType) !== "BS_BR") {
+          // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
+          if (this.state.htfTrend === "SIDEWAYS" && normalizeStrategyKey(this.config.signalType) !== "BREAKOUT_RETEST") {
             // ── STEP 2a: SIDEWAYS — per-strategi (A diam, B breakout, C retest) ───
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
@@ -1304,9 +1304,9 @@ class BotEngine extends EventEmitter {
             }
 
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
-            // BS_BR: skip filter HTF — breakout/retest valid di konsolidasi
+            // BREAKOUT_RETEST: skip filter HTF — breakout/retest valid di konsolidasi
             let filteredSignal = mrSignal;
-            if (mrSignal && normalizeStrategyKey(this.config.signalType) !== "BS_BR") {
+            if (mrSignal && normalizeStrategyKey(this.config.signalType) !== "BREAKOUT_RETEST") {
               if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
                 // FAIL-CLOSED: HTF dikonfigurasi tapi trend tak bisa ditentukan
                 // (fetch gagal). Sebelumnya fail-open → 10/14 loss dry-run 11-12 Jun
@@ -1338,7 +1338,7 @@ class BotEngine extends EventEmitter {
             // Sprint 8: use AdaptiveFusionUmbrella (SMC + Wyckoff + VSA voting).
             if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
               const { strategyRegistry } = require("../../../core/strategy-engine/index");
-              let afInstance = strategyRegistry.get("AF_SMC");
+              let afInstance = strategyRegistry.get("SMART_MONEY_CONCEPTS");
               if (!afInstance || typeof afInstance.detectSignalMulti !== "function") {
                 const AdaptiveFusionUmbrella = require("../../../core/strategy-engine/umbrellas/AdaptiveFusionUmbrella");
                 afInstance = new AdaptiveFusionUmbrella();
@@ -1471,7 +1471,7 @@ class BotEngine extends EventEmitter {
                     `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}${confNote}`
                   );
                 }
-              } else if (normalizeStrategyKey(this.config.signalType) === "BS_BR") {
+              } else if (normalizeStrategyKey(this.config.signalType) === "BREAKOUT_RETEST") {
                 const brInstance = getBreakoutRetestInstance();
                 const brMeta = getBreakoutRetestMeta() || {};
                 const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal, {
@@ -2230,7 +2230,7 @@ class BotEngine extends EventEmitter {
     let attributionLabel = this.config.strategyLabel;
     try {
       const sk = normalizeStrategyKey(String(this.config.strategyKey || this.config.signalType || "").toUpperCase());
-      if (sk === "TS_TF") {
+      if (sk === "TREND_FOLLOWING") {
         const tfMeta = getTrendFollowingInstance()?.getLastSignalMeta?.();
         if (tfMeta?.winningComponent) {
           attributionKey = tfMeta.winningComponent;
@@ -2241,20 +2241,20 @@ class BotEngine extends EventEmitter {
             indicatorSnapshot.signalComponents = tfMeta.signalComponents || null;
             indicatorSnapshot.tsRace = tfMeta.tsRace || null;
             // Sprint 15: per-racer ML metadata → persisted trade.indicators
-            if (tfMeta.winningComponent === "TS_VP") {
+            if (tfMeta.winningComponent === "AUCTION_MARKET_THEORY") {
               indicatorSnapshot.vpVwapLevel = tfMeta.vpVwapLevel ?? null;
               indicatorSnapshot.vpVahLevel = tfMeta.vpVahLevel ?? null;
               indicatorSnapshot.vpValLevel = tfMeta.vpValLevel ?? null;
               indicatorSnapshot.vpPocLevel = tfMeta.vpPocLevel ?? null;
               indicatorSnapshot.vpTriggerType = tfMeta.vpTriggerType ?? null;
-            } else if (tfMeta.winningComponent === "TS_TF") {
+            } else if (tfMeta.winningComponent === "TREND_FOLLOWING") {
               indicatorSnapshot.tfAdxStrength = tfMeta.tfAdxStrength ?? null;
               indicatorSnapshot.tfDonchianPeriod = tfMeta.tfDonchianPeriod ?? null;
               indicatorSnapshot.tfBarsInTrend = tfMeta.tfBarsInTrend ?? null;
               indicatorSnapshot.tfVolRatio = tfMeta.tfVolRatio ?? null;
               indicatorSnapshot.tfHtfTrendConfirmed = tfMeta.tfHtfTrendConfirmed ?? null;
               indicatorSnapshot.tfEmaCrossover = tfMeta.tfEmaCrossover ?? null;
-            } else if (tfMeta.winningComponent === "TS_MS") {
+            } else if (tfMeta.winningComponent === "MARKET_STRUCTURE") {
               indicatorSnapshot.msSwingHighPrice = tfMeta.msSwingHighPrice ?? null;
               indicatorSnapshot.msSwingLowPrice = tfMeta.msSwingLowPrice ?? null;
               indicatorSnapshot.msPullbackDepthAtr = tfMeta.msPullbackDepthAtr ?? null;
@@ -2265,12 +2265,12 @@ class BotEngine extends EventEmitter {
           }
         }
       } else if (
-        sk === "AF_SMC" || sk === "AF_WYCKOFF" || sk === "AF_VSA"
+        sk === "SMART_MONEY_CONCEPTS" || sk === "WYCKOFF" || sk === "VOLUME_SPREAD_ANALYSIS"
       ) {
         const afMeta = (() => {
           try {
             const { strategyRegistry: reg } = require("../../../core/strategy-engine/index");
-            return reg.get("AF_SMC")?.getLastSignalMeta?.()
+            return reg.get("SMART_MONEY_CONCEPTS")?.getLastSignalMeta?.()
               || reg.get(sk)?.getLastSignalMeta?.()
               || null;
           } catch {
@@ -2286,7 +2286,7 @@ class BotEngine extends EventEmitter {
             indicatorSnapshot.signalComponents = afMeta.signalComponents || null;
             indicatorSnapshot.afRace = afMeta.afRace || null;
             if (afMeta.afVotes) indicatorSnapshot.afVotes = afMeta.afVotes;
-            if (afMeta.winningComponent === "AF_VSA") {
+            if (afMeta.winningComponent === "VOLUME_SPREAD_ANALYSIS") {
               indicatorSnapshot.vsaPatternType = afMeta.vsaPatternType ?? null;
               indicatorSnapshot.vsaSpread = afMeta.vsaSpread ?? null;
               indicatorSnapshot.vsaVolume = afMeta.vsaVolume ?? null;
@@ -2294,7 +2294,7 @@ class BotEngine extends EventEmitter {
               indicatorSnapshot.vsaAvgVolume = afMeta.vsaAvgVolume ?? null;
               indicatorSnapshot.vsaSwingProximity = afMeta.vsaSwingProximity ?? null;
               indicatorSnapshot.vsaReversal = afMeta.vsaReversal ?? null;
-            } else if (afMeta.winningComponent === "AF_WYCKOFF") {
+            } else if (afMeta.winningComponent === "WYCKOFF") {
               indicatorSnapshot.wyPatternType = afMeta.wyPatternType ?? null;
               indicatorSnapshot.wyAccumulationBars = afMeta.wyAccumulationBars ?? null;
               indicatorSnapshot.wyFakeBreakDepthAtr = afMeta.wyFakeBreakDepthAtr ?? null;
@@ -2306,13 +2306,13 @@ class BotEngine extends EventEmitter {
           }
         }
       } else if (
-        sk === "MD_MR" || sk === "MD_SD" || sk === "MD_SA"
+        sk === "MEAN_REVERSION" || sk === "SUPPLY_AND_DEMAND" || sk === "STATISTICAL_ARBITRAGE"
         || sk === "MEAN_DRIFT"
       ) {
         const mdMeta = (() => {
           try {
             const { strategyRegistry: reg } = require("../../../core/strategy-engine/index");
-            return reg.get("MD_MR")?.getLastSignalMeta?.()
+            return reg.get("MEAN_REVERSION")?.getLastSignalMeta?.()
               || reg.get(sk)?.getLastSignalMeta?.()
               || null;
           } catch {
@@ -2320,13 +2320,14 @@ class BotEngine extends EventEmitter {
           }
         })();
         if (mdMeta) {
-          const winner = mdMeta.winningComponent || (sk.startsWith("MD_") ? sk : "MD_MR");
+          const mdComponents = new Set(["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"]);
+          const winner = mdMeta.winningComponent || (mdComponents.has(sk) ? sk : "MEAN_REVERSION");
           attributionKey = winner;
           attributionLabel = mdMeta.strategyLabel || attributionLabel;
           if (indicatorSnapshot) {
             indicatorSnapshot.winningComponent = winner;
             indicatorSnapshot.strategyLabel = attributionLabel;
-            if (winner === "MD_MR") {
+            if (winner === "MEAN_REVERSION") {
               indicatorSnapshot.mrRsiValue = mdMeta.mrRsiValue ?? null;
               indicatorSnapshot.mrBbMidLevel = mdMeta.mrBbMidLevel ?? null;
               indicatorSnapshot.mrBbUpperLevel = mdMeta.mrBbUpperLevel ?? null;
@@ -2334,7 +2335,7 @@ class BotEngine extends EventEmitter {
               indicatorSnapshot.mrVwapLevel = mdMeta.mrVwapLevel ?? null;
               indicatorSnapshot.mrVwapDeviation = mdMeta.mrVwapDeviation ?? null;
               indicatorSnapshot.mrAdxRegime = mdMeta.mrAdxRegime ?? null;
-            } else if (winner === "MD_SD") {
+            } else if (winner === "SUPPLY_AND_DEMAND") {
               indicatorSnapshot.sdZoneType = mdMeta.sdZoneType ?? null;
               indicatorSnapshot.sdZoneLevel = mdMeta.sdZoneLevel ?? null;
               indicatorSnapshot.sdZoneSizeAtr = mdMeta.sdZoneSizeAtr ?? null;
@@ -2342,7 +2343,7 @@ class BotEngine extends EventEmitter {
               indicatorSnapshot.sdVolumeConfirmation = mdMeta.sdVolumeConfirmation ?? null;
               indicatorSnapshot.sdTimeToRetestBars = mdMeta.sdTimeToRetestBars ?? null;
               indicatorSnapshot.sdConfluence = mdMeta.sdConfluence ?? null;
-            } else if (winner === "MD_SA") {
+            } else if (winner === "STATISTICAL_ARBITRAGE") {
               indicatorSnapshot.saZScore = mdMeta.saZScore ?? null;
               indicatorSnapshot.saMaValue = mdMeta.saMaValue ?? null;
               indicatorSnapshot.saStdDev = mdMeta.saStdDev ?? null;
@@ -2354,7 +2355,7 @@ class BotEngine extends EventEmitter {
           }
         }
       } else if (
-        sk === "BS_BR" || sk === "BS_ICT" || sk === "BS_LS" || sk === "BREAKOUT_STORM"
+        sk === "BREAKOUT_RETEST" || sk === "ICT_STYLE_TRADING" || sk === "LIQUIDATION_SQUEEZE" || sk === "BREAKOUT_STORM"
       ) {
         const bsMeta = (() => {
           try {
@@ -2367,15 +2368,16 @@ class BotEngine extends EventEmitter {
           }
         })();
         if (bsMeta) {
-          const winner = bsMeta.winningComponent || (sk.startsWith("BS_") ? sk : "BS_BR");
+          const bsComponents = new Set(["BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"]);
+          const winner = bsMeta.winningComponent || (bsComponents.has(sk) ? sk : "BREAKOUT_RETEST");
           attributionKey = winner;
           attributionLabel = bsMeta.strategyLabel || attributionLabel;
           if (indicatorSnapshot) {
             indicatorSnapshot.winningComponent = winner;
             indicatorSnapshot.strategyLabel = attributionLabel;
-            if (winner === "BS_BR") {
+            if (winner === "BREAKOUT_RETEST") {
               applyBsBrSnapshotFields(indicatorSnapshot, bsMeta);
-            } else if (winner === "BS_ICT") {
+            } else if (winner === "ICT_STYLE_TRADING") {
               indicatorSnapshot.ictKillZoneHour = bsMeta.ictKillZoneHour ?? null;
               indicatorSnapshot.ictKillZoneLevel = bsMeta.ictKillZoneLevel ?? null;
               indicatorSnapshot.ictRaidType = bsMeta.ictRaidType ?? null;
@@ -2383,7 +2385,7 @@ class BotEngine extends EventEmitter {
               indicatorSnapshot.ictVolumeRatio = bsMeta.ictVolumeRatio ?? null;
               indicatorSnapshot.ictReversal = bsMeta.ictReversal ?? null;
               indicatorSnapshot.ictMssPct = bsMeta.ictMssPct ?? null;
-            } else if (winner === "BS_LS") {
+            } else if (winner === "LIQUIDATION_SQUEEZE") {
               indicatorSnapshot.lsOiValue = bsMeta.lsOiValue ?? null;
               indicatorSnapshot.lsOiPercentile = bsMeta.lsOiPercentile ?? null;
               indicatorSnapshot.lsBbWidth = bsMeta.lsBbWidth ?? null;
@@ -2731,7 +2733,7 @@ class BotEngine extends EventEmitter {
             dryRun:     false,
             orderId:    order?.orderId,
             indicators: enrichedSnapshot,
-            // Persist winning-racer canonical key (AF_WYCKOFF / TS_MS / …), not umbrella.
+            // Persist winning-racer canonical key (WYCKOFF / MARKET_STRUCTURE / …), not umbrella.
             strategyName: attributionKey ?? this.config.strategyKey ?? null,
           });
           onEngineTradeOpen(pos.dbId, enrichedSnapshot, {

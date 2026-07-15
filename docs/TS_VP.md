@@ -1,9 +1,9 @@
-# TS_VP — Entry Triggers (AS-IS)
+# AUCTION_MARKET_THEORY — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a TS_VP entry and the signal labels emitted on fill.  
-**Strategy key**: `TS_VP` (`VolumeProfileStrategy`, v2.0) — label: **Auction Market Theory**  
+**Scope**: What triggers a AUCTION_MARKET_THEORY entry and the signal labels emitted on fill.  
+**Strategy key**: `AUCTION_MARKET_THEORY` (`VolumeProfileStrategy`, v2.0) — label: **Auction Market Theory**  
 **Engine SSOT**: `volumeProfileComponent.js` → `evaluateVolumeProfileEntry`  
-**Config SSOT**: `strategyDefaults.js` → `TS_VP` (inherits `TREND_FOLLOWING`) + component DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `AUCTION_MARKET_THEORY` (inherits `TREND_FOLLOWING`) + component DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`TS_VP`** preset (= Trend Following geometry); AMT-specific knobs dari **component DEFAULTS**.
+Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`AUCTION_MARKET_THEORY`** preset (= Trend Following geometry); AMT-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -40,7 +40,7 @@ Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`TS_VP`** preset (
 
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
-| `tsCombinationMode` | `"race"` | TS_TF / TS_MS / TS_VP race independently |
+| `tsCombinationMode` | `"race"` | TREND_FOLLOWING / MARKET_STRUCTURE / AUCTION_MARKET_THEORY race independently |
 | `tsUseVwapPrecision` | `false` | Precision/gate path OFF in factory reset |
 
 ### Per trade type overrides
@@ -51,7 +51,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-TS_VP trades **session auction imbalances** — price reclaiming or rejecting VWAP and value-area edges.
+AUCTION_MARKET_THEORY trades **session auction imbalances** — price reclaiming or rejecting VWAP and value-area edges.
 
 ```
 Session VWAP/VA Compute → Trigger at VWAP or VA edge → signal
@@ -119,8 +119,8 @@ Unmapped `reason` strings become `titleCaseSnake(raw)` — e.g. `Awaiting Amt Tr
 
 ## AS-IS quirks
 
-- **FORGE umbrella**: TS_VP wins stamp `winningComponent: "TS_VP"`.
-- **Single label per fill**: unlike TS_TF checklist, each trade gets one trigger label.
+- **FORGE umbrella**: AUCTION_MARKET_THEORY wins stamp `winningComponent: "AUCTION_MARKET_THEORY"`.
+- **Single label per fill**: unlike TREND_FOLLOWING checklist, each trade gets one trigger label.
 - **Session bar floors**: Swing uses UTC-week (`minSessionBarsSwing: 6`) because 4h bars have ≤6 per UTC-day.
 
 ---

@@ -1,5 +1,5 @@
 /**
- * Liquidation / Squeeze Trading (BS_LS) — BREAKOUT_STORM race participant.
+ * Liquidation / Squeeze Trading (LIQUIDATION_SQUEEZE) — BREAKOUT_STORM race participant.
  *
  * Primary signals: OI change % + funding extremes, combined with price
  * displacement (liquidation-style wick through recent highs/lows) so the
@@ -256,7 +256,7 @@ function evaluateLiquidationSqueezeEntry({
     funding,
     oiChange,
     dataAvailable,
-    winningComponent: "BS_LS",
+    winningComponent: "LIQUIDATION_SQUEEZE",
     strategyLabel: "Liquidation/Squeeze Trading",
   };
 }

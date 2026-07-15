@@ -1,5 +1,5 @@
 /**
- * IctStyleStrategy.js — BS_ICT (ICT-style trading)
+ * IctStyleStrategy.js — ICT_STYLE_TRADING (ICT-style trading)
  * BREAKOUT_STORM race participant #1.
  */
 
@@ -11,7 +11,7 @@ const { evaluateIctStyleEntry, DEFAULTS } = require("../bs/ictKillZoneRaidEntry"
 class IctStyleStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "BS_ICT",
+      name: "ICT_STYLE_TRADING",
       label: "ICT-style trading",
       description:
         "BS race participant (PDF ICT): Kill Zone UTC + liquidity raid reversal " +
@@ -28,7 +28,7 @@ class IctStyleStrategy extends StrategyBase {
     let score = 55;
     if (volatility > 0.4) score += 15;
     return [{
-      key: "BS_ICT",
+      key: "ICT_STYLE_TRADING",
       label: this.config.label,
       score: Math.max(0, Math.min(100, score)),
       reason: "ict_affinity",
@@ -71,8 +71,8 @@ class IctStyleStrategy extends StrategyBase {
       ictMssPct: null, // MSS % not computed in current ICT raid subset
     };
     this._lastSignalMeta = {
-      component: "BS_ICT",
-      winningComponent: result.signal ? "BS_ICT" : null,
+      component: "ICT_STYLE_TRADING",
+      winningComponent: result.signal ? "ICT_STYLE_TRADING" : null,
       strategyLabel: "ICT-style trading",
       componentConfidence: result.signal ? Math.round(result.confidence * 100) : 0,
       confidence: result.confidence,

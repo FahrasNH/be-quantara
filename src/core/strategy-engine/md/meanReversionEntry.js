@@ -1,5 +1,5 @@
 /**
- * Mean Reversion (MD_MR) — standalone entry for MEAN_DRIFT.
+ * Mean Reversion (MEAN_REVERSION) — standalone entry for MEAN_DRIFT.
  *
  * Pipeline: Component A (BB+RSI+VWAP) → ADX regime gate → OB/FVG precision.
  * Extracted from MeanReversionStrategy (Sprint 15 structure refactor).
@@ -64,7 +64,7 @@ function resolveAdx(indicators, lastIdx, config, adxCacheRef) {
 }
 
 /**
- * Main MD_MR entry evaluation at lastIdx.
+ * Main MEAN_REVERSION entry evaluation at lastIdx.
  *
  * @returns {{ signal: 'LONG'|'SHORT'|null, meta: object|null, bbLevels: object|null }}
  */
@@ -217,7 +217,7 @@ function evaluateMeanReversionEntry({
 
   const meta = {
     component,
-    winningComponent: "MD_MR",
+    winningComponent: "MEAN_REVERSION",
     strategyLabel: "Mean Reversion",
     componentConfidence: confidence,
     marketCond: "MEAN_REVERT",

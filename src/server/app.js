@@ -847,7 +847,7 @@ async function _resumeOneBotAttempt(bot, prisma) {
     const pc = pairClassifier.classify(bot.symbol);
     if (pc.tier === "VOLATILE") {
       const filtered = strategies.filter((s) => !pc.blockedStrategies.includes(s));
-      const volStrategies = filtered.length > 0 ? filtered : ["MD_MR"];
+      const volStrategies = filtered.length > 0 ? filtered : ["MEAN_REVERSION"];
       if (JSON.stringify(volStrategies) !== JSON.stringify(strategies)) {
         strategies = volStrategies;
         await prisma.bot.update({

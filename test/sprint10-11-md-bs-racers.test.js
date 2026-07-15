@@ -1,5 +1,5 @@
 /**
- * Sprint 10/11 — MD_SD, MD_SA, BS_ICT, BS_LS unit tests.
+ * Sprint 10/11 — SUPPLY_AND_DEMAND, STATISTICAL_ARBITRAGE, ICT_STYLE_TRADING, LIQUIDATION_SQUEEZE unit tests.
  */
 
 "use strict";
@@ -50,36 +50,36 @@ function flatSeries(n, v) {
 console.log("\n═══ Sprint 10/11 catalog + race pools ═══");
 
 test("TIER_COMPONENT_MAP MINT/VAULT race participants", () => {
-  assert.deepStrictEqual(TIER_COMPONENT_MAP.MINT.active, ["MD_MR", "MD_SD", "MD_SA"]);
-  // Sprint 14: BS_BR halted from default VAULT race pool
-  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.active, ["BS_ICT", "BS_LS"]);
-  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.halted, ["BS_BR"]);
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.MINT.active, ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"]);
+  // Sprint 14: BREAKOUT_RETEST halted from default VAULT race pool
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.active, ["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"]);
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.VAULT.halted, ["BREAKOUT_RETEST"]);
   assert.strictEqual(TIER_COMPONENT_MAP.MINT.combination.mode, "race");
   assert.strictEqual(TIER_COMPONENT_MAP.VAULT.combination.mode, "race");
 });
 
 test("catalog display names locked", () => {
-  assert.strictEqual(STRATEGY_CATALOG.MD_SD.label, "Supply and Demand");
-  assert.strictEqual(STRATEGY_CATALOG.MD_SA.label, "Statistical Arbitrage");
-  assert.strictEqual(STRATEGY_CATALOG.BS_ICT.label, "ICT-style trading");
-  assert.strictEqual(STRATEGY_CATALOG.BS_LS.label, "Liquidation/Squeeze Trading");
-  for (const k of ["MD_SD", "MD_SA", "BS_ICT", "BS_LS"]) {
+  assert.strictEqual(STRATEGY_CATALOG.SUPPLY_AND_DEMAND.label, "Supply and Demand");
+  assert.strictEqual(STRATEGY_CATALOG.STATISTICAL_ARBITRAGE.label, "Statistical Arbitrage");
+  assert.strictEqual(STRATEGY_CATALOG.ICT_STYLE_TRADING.label, "ICT-style trading");
+  assert.strictEqual(STRATEGY_CATALOG.LIQUIDATION_SQUEEZE.label, "Liquidation/Squeeze Trading");
+  for (const k of ["SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"]) {
     assert.ok(LIVE_COMPONENT_KEYS.includes(k), k);
   }
 });
 
 test("registry resolves MD/BS racers to umbrellas", () => {
-  const md = strategyRegistry.get("MD_SD");
-  const bs = strategyRegistry.get("BS_ICT");
+  const md = strategyRegistry.get("SUPPLY_AND_DEMAND");
+  const bs = strategyRegistry.get("ICT_STYLE_TRADING");
   assert.ok(md);
   assert.ok(bs);
-  assert.strictEqual(strategyRegistry.get("MD_SA"), md);
-  assert.strictEqual(strategyRegistry.get("BS_LS"), bs);
-  assert.strictEqual(strategyRegistry.get("MD_MR"), md);
-  assert.strictEqual(strategyRegistry.get("BS_BR"), bs);
+  assert.strictEqual(strategyRegistry.get("STATISTICAL_ARBITRAGE"), md);
+  assert.strictEqual(strategyRegistry.get("LIQUIDATION_SQUEEZE"), bs);
+  assert.strictEqual(strategyRegistry.get("MEAN_REVERSION"), md);
+  assert.strictEqual(strategyRegistry.get("BREAKOUT_RETEST"), bs);
 });
 
-console.log("\n═══ MD_SA Statistical Arbitrage ═══");
+console.log("\n═══ STATISTICAL_ARBITRAGE Statistical Arbitrage ═══");
 
 test("z-score LONG/SHORT symmetric", () => {
   const n = 60;
@@ -126,7 +126,7 @@ test("residual z-score vs benchmark", () => {
   assert.ok(r.z < 0);
 });
 
-console.log("\n═══ BS_ICT Kill Zone + Raid ═══");
+console.log("\n═══ ICT_STYLE_TRADING Kill Zone + Raid ═══");
 
 test("isKillZone UTC london_open / outside", () => {
   // 2026-07-13 07:30 UTC
@@ -191,7 +191,7 @@ test("ICT entry outside kill zone still soft-allows", () => {
   assert.ok(r.confidence < 0.7);
 });
 
-console.log("\n═══ BS_LS Liquidation/Squeeze ═══");
+console.log("\n═══ LIQUIDATION_SQUEEZE Liquidation/Squeeze ═══");
 
 test("OI change percent", () => {
   const hist = Array(25).fill(1000);
@@ -257,7 +257,7 @@ test("liquidation wick LONG/SHORT + fail-open without OI", () => {
   assert.strictEqual(shortW.direction, "SHORT");
 });
 
-console.log("\n═══ MD_SD Supply and Demand (smoke) ═══");
+console.log("\n═══ SUPPLY_AND_DEMAND Supply and Demand (smoke) ═══");
 
 test("SD entry returns structured result without crash on flat data", () => {
   const n = 50;
@@ -277,7 +277,7 @@ test("SD entry returns structured result without crash on flat data", () => {
 
 console.log("\n═══ Umbrella race attribution ═══");
 
-test("MeanDriftUmbrella single-racer isolation MD_SA", () => {
+test("MeanDriftUmbrella single-racer isolation STATISTICAL_ARBITRAGE", () => {
   const umb = new MeanDriftUmbrella();
   const n = 60;
   const closes = flatSeries(n, 100);
@@ -294,17 +294,17 @@ test("MeanDriftUmbrella single-racer isolation MD_SA", () => {
     vwap: flatSeries(n, 100),
   };
   const signal = umb.detectSignal(indicators, n - 1, {
-    mdActiveRacers: ["MD_SA"],
-    selectedComponents: ["MD_SA"],
+    mdActiveRacers: ["STATISTICAL_ARBITRAGE"],
+    selectedComponents: ["STATISTICAL_ARBITRAGE"],
   });
   const meta = umb.getLastSignalMeta();
   if (signal) {
-    assert.strictEqual(meta.winningComponent, "MD_SA");
+    assert.strictEqual(meta.winningComponent, "STATISTICAL_ARBITRAGE");
     assert.strictEqual(meta.strategyLabel, "Statistical Arbitrage");
   }
 });
 
-test("BreakoutStormUmbrella BS_ICT attribution on raid", () => {
+test("BreakoutStormUmbrella ICT_STYLE_TRADING attribution on raid", () => {
   const umb = new BreakoutStormUmbrella();
   const lookback = 20;
   const n = lookback + 5;
@@ -329,31 +329,31 @@ test("BreakoutStormUmbrella BS_ICT attribution on raid", () => {
     timestamps,
   };
   const signal = umb.detectSignal(indicators, last, {
-    bsActiveRacers: ["BS_ICT"],
-    selectedComponents: ["BS_ICT"],
+    bsActiveRacers: ["ICT_STYLE_TRADING"],
+    selectedComponents: ["ICT_STYLE_TRADING"],
   });
   const meta = umb.getLastSignalMeta();
   assert.strictEqual(signal, "SHORT");
-  assert.strictEqual(meta.winningComponent, "BS_ICT");
+  assert.strictEqual(meta.winningComponent, "ICT_STYLE_TRADING");
   assert.strictEqual(meta.strategyLabel, "ICT-style trading");
 });
 
 console.log("\n═══ Reason formatters ═══");
 
 test("formatters for new keys non-empty", () => {
-  assert.ok(formatSupplyDemandReasons({ winningComponent: "MD_SD", zoneType: "demand_ob" }).length > 0);
+  assert.ok(formatSupplyDemandReasons({ winningComponent: "SUPPLY_AND_DEMAND", zoneType: "demand_ob" }).length > 0);
   assert.ok(formatIctStyleReasons({
-    winningComponent: "BS_ICT",
+    winningComponent: "ICT_STYLE_TRADING",
     killZone: { active: true, zone: "ny_open" },
     raid: { detected: true, direction: "SHORT" },
   }).length > 0);
   assert.ok(formatLiquidationSqueezeReasons({
-    winningComponent: "BS_LS",
+    winningComponent: "LIQUIDATION_SQUEEZE",
     dataAvailable: false,
     wick: { detected: true },
   }).length > 0);
-  assert.ok(resolveEntryReasons("MD_SA", { winningComponent: "MD_SA", zScore: -2.1, saMode: "rolling_mean" }).includes("Z-Score Extreme"));
-  assert.ok(resolveEntryReasons("MD_SA", { winningComponent: "MD_SA", zScore: -2.1, saMode: "rolling_mean" }).includes("Std Threshold"));
+  assert.ok(resolveEntryReasons("STATISTICAL_ARBITRAGE", { winningComponent: "STATISTICAL_ARBITRAGE", zScore: -2.1, saMode: "rolling_mean" }).includes("Z-Score Extreme"));
+  assert.ok(resolveEntryReasons("STATISTICAL_ARBITRAGE", { winningComponent: "STATISTICAL_ARBITRAGE", zScore: -2.1, saMode: "rolling_mean" }).includes("Std Threshold"));
 });
 
 console.log("\nAll Sprint 10/11 strategy tests passed.\n");

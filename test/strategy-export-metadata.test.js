@@ -50,18 +50,18 @@ const ctx = {
 };
 
 const EXPECTED_COUNTS = {
-  AF_SMC: 12,
-  BS_BR: 11,
-  TS_VP: 5,
-  TS_TF: 6,
-  TS_MS: 6,
-  MD_MR: 7,
-  MD_SD: 7,
-  MD_SA: 7,
-  AF_WYCKOFF: 7,
-  AF_VSA: 7,
-  BS_ICT: 7,
-  BS_LS: 7,
+  SMART_MONEY_CONCEPTS: 12,
+  BREAKOUT_RETEST: 11,
+  AUCTION_MARKET_THEORY: 5,
+  TREND_FOLLOWING: 6,
+  MARKET_STRUCTURE: 6,
+  MEAN_REVERSION: 7,
+  SUPPLY_AND_DEMAND: 7,
+  STATISTICAL_ARBITRAGE: 7,
+  WYCKOFF: 7,
+  VOLUME_SPREAD_ANALYSIS: 7,
+  ICT_STYLE_TRADING: 7,
+  LIQUIDATION_SQUEEZE: 7,
 };
 
 describe("ML_FIELD_SETS contracts", () => {
@@ -83,7 +83,7 @@ describe("ML_FIELD_SETS contracts", () => {
   });
 });
 
-describe("BS_BR metadata verify (already implemented)", () => {
+describe("BREAKOUT_RETEST metadata verify (already implemented)", () => {
   test("extractBsBrEnrichment maps 8 strategy-native fields from detectSignal meta", () => {
     const enrich = extractBsBrEnrichment({
       bbSqueezeWidthAtr: 0.42,
@@ -130,14 +130,14 @@ describe("BS_BR metadata verify (already implemented)", () => {
     assert.ok(beSrc.includes("applyBsBrSnapshotFields"), "BotEngine must call applyBsBrSnapshotFields");
   });
 
-  test("mapBacktestTrade + projectMlFields expose all 11 BS_BR ML columns", () => {
+  test("mapBacktestTrade + projectMlFields expose all 11 BREAKOUT_RETEST ML columns", () => {
     const row = mapBacktestTrade({
       side: "LONG",
       entry: 100,
       exit: 102,
       reason: "TP",
-      strategyKey: "BS_BR",
-      component: "BS_BR",
+      strategyKey: "BREAKOUT_RETEST",
+      component: "BREAKOUT_RETEST",
       openTime: "2024-01-01T08:00:00Z",
       closeTime: "2024-01-01T12:00:00Z",
       bbSqueezeWidthAtr: 0.4,
@@ -152,23 +152,23 @@ describe("BS_BR metadata verify (already implemented)", () => {
       bbWidth: 0.012,
     }, { ...ctx, strategy: "Breakout Trading" }, 0);
 
-    for (const k of ML_FIELD_SETS.BS_BR) {
-      assert.ok(k in row, `missing BS_BR field on CSV row: ${k}`);
-      assert.notStrictEqual(row[k], "N/A", `BS_BR ${k} should be populated`);
+    for (const k of ML_FIELD_SETS.BREAKOUT_RETEST) {
+      assert.ok(k in row, `missing BREAKOUT_RETEST field on CSV row: ${k}`);
+      assert.notStrictEqual(row[k], "N/A", `BREAKOUT_RETEST ${k} should be populated`);
     }
     expect(row.holdHours).toBe(4);
-    const ml = projectMlFields(row, "BS_BR");
-    expect(Object.keys(ml).sort()).toEqual([...ML_FIELD_SETS.BS_BR].sort());
+    const ml = projectMlFields(row, "BREAKOUT_RETEST");
+    expect(Object.keys(ml).sort()).toEqual([...ML_FIELD_SETS.BREAKOUT_RETEST].sort());
   });
 });
 
-describe("AF_SMC metadata verify (already implemented)", () => {
+describe("SMART_MONEY_CONCEPTS metadata verify (already implemented)", () => {
   test("getLastSequenceMeta returns null before first detect", () => {
     const smc = new SmartMoneyConceptsStrategy();
     expect(smc.getLastSequenceMeta()).toBeNull();
   });
 
-  test("buildSmcEntryFeatures returns 12 AF_SMC ML keys (+ shared funding/vol)", () => {
+  test("buildSmcEntryFeatures returns 12 SMART_MONEY_CONCEPTS ML keys (+ shared funding/vol)", () => {
     const n = 30;
     const closes = Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 3));
     const feats = buildSmcEntryFeatures(
@@ -197,20 +197,20 @@ describe("AF_SMC metadata verify (already implemented)", () => {
       },
       { atr: 2, price: closes[n - 1], timestamp: Date.UTC(2026, 6, 13, 14, 0, 0), fundingRate: 0.0002 },
     );
-    for (const k of ML_FIELD_SETS.AF_SMC) {
+    for (const k of ML_FIELD_SETS.SMART_MONEY_CONCEPTS) {
       assert.ok(k in feats || k === "hourUtc", `feature key ${k}`);
     }
     expect(feats.hourUtc).toBe(14);
   });
 
-  test("mapBacktestTrade + projectMlFields expose all 12 AF_SMC ML columns", () => {
+  test("mapBacktestTrade + projectMlFields expose all 12 SMART_MONEY_CONCEPTS ML columns", () => {
     const row = mapBacktestTrade({
       side: "LONG",
       entry: 100,
       exit: 101,
       reason: "TP",
-      strategyKey: "AF_SMC",
-      winningComponent: "AF_SMC",
+      strategyKey: "SMART_MONEY_CONCEPTS",
+      winningComponent: "SMART_MONEY_CONCEPTS",
       openTime: "2024-06-01T10:00:00Z",
       closeTime: "2024-06-01T11:00:00Z",
       sweepStrength: 1.2,
@@ -226,22 +226,22 @@ describe("AF_SMC metadata verify (already implemented)", () => {
       confObConfluence: true,
     }, { ...ctx, strategy: "Smart Money Concepts" }, 0);
 
-    for (const k of ML_FIELD_SETS.AF_SMC) {
-      assert.ok(k in row, `missing AF_SMC field on CSV row: ${k}`);
-      assert.notStrictEqual(row[k], "N/A", `AF_SMC ${k} should be populated`);
+    for (const k of ML_FIELD_SETS.SMART_MONEY_CONCEPTS) {
+      assert.ok(k in row, `missing SMART_MONEY_CONCEPTS field on CSV row: ${k}`);
+      assert.notStrictEqual(row[k], "N/A", `SMART_MONEY_CONCEPTS ${k} should be populated`);
     }
     expect(row.hourUtc).toBe(10);
   });
 
-  test("SMC_ML_CSV_COLUMNS covers AF_SMC forensic keys used by expand scripts", () => {
+  test("SMC_ML_CSV_COLUMNS covers SMART_MONEY_CONCEPTS forensic keys used by expand scripts", () => {
     const smcKeys = new Set(SMC_ML_CSV_COLUMNS.map(([k]) => k));
-    for (const k of ML_FIELD_SETS.AF_SMC) {
+    for (const k of ML_FIELD_SETS.SMART_MONEY_CONCEPTS) {
       assert.ok(smcKeys.has(k), `SMC_ML_CSV_COLUMNS missing ${k}`);
     }
   });
 });
 
-describe("TS_VP extract & wire metadata", () => {
+describe("AUCTION_MARKET_THEORY extract & wire metadata", () => {
   test("extractTsVpEnrichment flattens nested meta + triggerType", () => {
     const enrich = extractTsVpEnrichment({
       reason: "val_bounce",
@@ -278,24 +278,24 @@ describe("TS_VP extract & wire metadata", () => {
     const sig = strat.detectSignal(indicators, n - 1, {});
     const meta = strat.getLastSignalMeta();
     expect(meta).toBeDefined();
-    expect(meta.component).toBe("TS_VP");
-    for (const k of ML_FIELD_SETS.TS_VP) {
+    expect(meta.component).toBe("AUCTION_MARKET_THEORY");
+    for (const k of ML_FIELD_SETS.AUCTION_MARKET_THEORY) {
       assert.ok(k in meta, `getLastSignalMeta missing ${k}`);
     }
     if (sig) {
-      expect(meta.winningComponent).toBe("TS_VP");
+      expect(meta.winningComponent).toBe("AUCTION_MARKET_THEORY");
       expect(meta.vpTriggerType).toBeTruthy();
     }
   });
 
-  test("mapBacktestTrade + projectMlFields expose all 5 TS_VP columns", () => {
+  test("mapBacktestTrade + projectMlFields expose all 5 AUCTION_MARKET_THEORY columns", () => {
     const row = mapBacktestTrade({
       side: "LONG",
       entry: 100,
       exit: 101,
       reason: "TP",
-      strategyKey: "TS_VP",
-      winningComponent: "TS_VP",
+      strategyKey: "AUCTION_MARKET_THEORY",
+      winningComponent: "AUCTION_MARKET_THEORY",
       vpVwapLevel: 100.1,
       vpVahLevel: 101.5,
       vpValLevel: 99.2,
@@ -303,21 +303,21 @@ describe("TS_VP extract & wire metadata", () => {
       vpTriggerType: "VWAP_RECLAIM",
     }, { ...ctx, strategy: "Auction Market Theory" }, 0);
 
-    for (const k of ML_FIELD_SETS.TS_VP) {
-      assert.ok(k in row, `missing TS_VP field: ${k}`);
-      assert.notStrictEqual(row[k], "N/A", `TS_VP ${k} should be populated`);
+    for (const k of ML_FIELD_SETS.AUCTION_MARKET_THEORY) {
+      assert.ok(k in row, `missing AUCTION_MARKET_THEORY field: ${k}`);
+      assert.notStrictEqual(row[k], "N/A", `AUCTION_MARKET_THEORY ${k} should be populated`);
     }
   });
 });
 
-describe("TS_TF extract & wire metadata", () => {
+describe("TREND_FOLLOWING extract & wire metadata", () => {
   test("getLastSignalMeta returns 6 tf* fields", () => {
     const strat = new TrendFollowingStrategy();
     const meta = strat.getLastSignalMeta();
-    for (const k of ML_FIELD_SETS.TS_TF) {
+    for (const k of ML_FIELD_SETS.TREND_FOLLOWING) {
       assert.ok(k in meta, `missing ${k}`);
     }
-    expect(meta.winningComponent).toBe("TS_TF");
+    expect(meta.winningComponent).toBe("TREND_FOLLOWING");
   });
 
   test("extractTsTfEnrichment + projectMlFields", () => {
@@ -334,20 +334,20 @@ describe("TS_TF extract & wire metadata", () => {
 
     const row = mapBacktestTrade({
       side: "LONG", entry: 100, exit: 101, reason: "TP",
-      winningComponent: "TS_TF",
+      winningComponent: "TREND_FOLLOWING",
       ...enrich,
     }, { ...ctx, strategy: "Trend Following" }, 0);
-    for (const k of ML_FIELD_SETS.TS_TF) {
+    for (const k of ML_FIELD_SETS.TREND_FOLLOWING) {
       assert.notStrictEqual(row[k], "N/A", k);
     }
   });
 });
 
-describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
-  test("TS_MS extract", () => {
+describe("MARKET_STRUCTURE / MD_* / BS_* / AF_* extract helpers", () => {
+  test("MARKET_STRUCTURE extract", () => {
     const e = extractTsMsEnrichment({
       signal: "LONG",
-      winningComponent: "TS_MS",
+      winningComponent: "MARKET_STRUCTURE",
       reason: "dow_hl_pullback_bounce",
       atr: 2,
       meta: {
@@ -364,7 +364,7 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.msPullbackConfirmed).toBe(true);
   });
 
-  test("MD_MR extract", () => {
+  test("MEAN_REVERSION extract", () => {
     const e = extractMdMrEnrichment({
       mrRsiValue: 28,
       mrBbMidLevel: 100,
@@ -378,7 +378,7 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.mrAdxRegime).toBe("BALANCE");
   });
 
-  test("MD_SD extract", () => {
+  test("SUPPLY_AND_DEMAND extract", () => {
     const e = extractMdSdEnrichment({
       zoneType: "demand_ob",
       nearestZone: { low: 98, high: 100, zoneKind: "demand_ob", barsSince: 5 },
@@ -393,7 +393,7 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.sdConfluence).toBe(true);
   });
 
-  test("MD_SA extract", () => {
+  test("STATISTICAL_ARBITRAGE extract", () => {
     const e = extractMdSaEnrichment({
       zScore: -2.5,
       mean: 100,
@@ -406,19 +406,19 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.saMaValue).toBe(100);
   });
 
-  test("BS_ICT extract", () => {
+  test("ICT_STYLE_TRADING extract", () => {
     const e = extractBsIctEnrichment({
       reason: "ict_raid_low_reversal_london",
       killZone: { minuteOfDay: 8 * 60, active: true },
       raid: { detected: true, direction: "LONG", level: 95, volOk: true },
-      winningComponent: "BS_ICT",
+      winningComponent: "ICT_STYLE_TRADING",
     });
     expect(e.ictKillZoneHour).toBe(8);
     expect(e.ictRaidType).toBe("RAID_LOW");
     expect(e.ictReversal).toBe(true);
   });
 
-  test("BS_LS extract", () => {
+  test("LIQUIDATION_SQUEEZE extract", () => {
     const e = extractBsLsEnrichment({
       oiChange: 1.5,
       wick: { level: 101, depthAtr: 0.8 },
@@ -429,7 +429,7 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.lsWickDepthAtr).toBe(0.8);
   });
 
-  test("AF_VSA extract", () => {
+  test("VOLUME_SPREAD_ANALYSIS extract", () => {
     const e = extractAfVsaEnrichment({
       reason: "vsa_stopping_volume_low",
       meta: {
@@ -443,7 +443,7 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.vsaSpread).toBe(12);
   });
 
-  test("AF_WYCKOFF extract", () => {
+  test("WYCKOFF extract", () => {
     const e = extractAfWyckoffEnrichment({
       reason: "wyckoff_spring_reclaim",
       meta: {
@@ -461,33 +461,33 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
 
 describe("normalizeMlStrategyKey + resolveTradeMlStrategyKey", () => {
   test("legacy long names map to ML_* keys", () => {
-    expect(normalizeMlStrategyKey("ICT-style trading")).toBe("BS_ICT");
-    expect(normalizeMlStrategyKey("Supply and Demand")).toBe("MD_SD");
-    expect(normalizeMlStrategyKey("Statistical Arbitrage")).toBe("MD_SA");
-    expect(normalizeMlStrategyKey("Trend Following")).toBe("TS_TF");
-    expect(normalizeMlStrategyKey("Liquidation Squeeze")).toBe("BS_LS");
-    expect(normalizeMlStrategyKey("Volume Spread Analysis")).toBe("AF_VSA");
+    expect(normalizeMlStrategyKey("ICT-style trading")).toBe("ICT_STYLE_TRADING");
+    expect(normalizeMlStrategyKey("Supply and Demand")).toBe("SUPPLY_AND_DEMAND");
+    expect(normalizeMlStrategyKey("Statistical Arbitrage")).toBe("STATISTICAL_ARBITRAGE");
+    expect(normalizeMlStrategyKey("Trend Following")).toBe("TREND_FOLLOWING");
+    expect(normalizeMlStrategyKey("Liquidation Squeeze")).toBe("LIQUIDATION_SQUEEZE");
+    expect(normalizeMlStrategyKey("Volume Spread Analysis")).toBe("VOLUME_SPREAD_ANALYSIS");
   });
 
   test("resolve order: winningComponent → component → strategyKey → strategy", () => {
     expect(resolveTradeMlStrategyKey({
-      winningComponent: "BS_ICT",
+      winningComponent: "ICT_STYLE_TRADING",
       component: "Scalping",
-      strategyKey: "BS_BR",
+      strategyKey: "BREAKOUT_RETEST",
       strategy: "Breakout Storm",
-    })).toBe("BS_ICT");
+    })).toBe("ICT_STYLE_TRADING");
     expect(resolveTradeMlStrategyKey({
-      component: "MD_SD",
-      strategyKey: "MD_MR",
+      component: "SUPPLY_AND_DEMAND",
+      strategyKey: "MEAN_REVERSION",
       strategy: "Mean Drift",
-    })).toBe("MD_SD");
+    })).toBe("SUPPLY_AND_DEMAND");
     expect(resolveTradeMlStrategyKey({
-      strategyKey: "TS_TF",
+      strategyKey: "TREND_FOLLOWING",
       strategy: "Trend Following",
-    })).toBe("TS_TF");
+    })).toBe("TREND_FOLLOWING");
     expect(resolveTradeMlStrategyKey({
       strategy: "ICT-style trading",
-    })).toBe("BS_ICT");
+    })).toBe("ICT_STYLE_TRADING");
   });
 });
 
@@ -510,36 +510,36 @@ describe("Dynamic ML multi-sheet XLSX", () => {
   test("N trades across 3 strategies → 1 core + 3 ML sheets, no cross-strategy leakage", () => {
     const XLSX = require("xlsx");
     const trades = [
-      mkTrade("TS_TF", {
+      mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
         tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
-        mrRsiValue: 99, // should NOT appear on ML_TS_TF
+        mrRsiValue: 99, // should NOT appear on ML_TREND_FOLLOWING
       }),
-      mkTrade("MD_MR", {
+      mkTrade("MEAN_REVERSION", {
         mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98,
         mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE",
-        tfAdxStrength: 99, // should NOT appear on ML_MD_MR
+        tfAdxStrength: 99, // should NOT appear on ML_MEAN_REVERSION
       }),
-      mkTrade("BS_ICT", {
+      mkTrade("ICT_STYLE_TRADING", {
         ictKillZoneHour: 8, ictKillZoneLevel: 95, ictRaidType: "RAID_LOW",
         ictRaidDepthAtr: 0.5, ictVolumeRatio: 1.2, ictReversal: true, ictMssPct: 0.4,
       }),
     ];
     const buf = buildDynamicMultiSheetXlsx(trades, null);
     const wb = XLSX.read(buf, { type: "buffer" });
-    expect(wb.SheetNames).toEqual(["User Export", "ML_TS_TF", "ML_MD_MR", "ML_BS_ICT"]);
+    expect(wb.SheetNames).toEqual(["User Export", "ML_TREND_FOLLOWING", "ML_MEAN_REVERSION", "ML_ICT_STYLE_TRADING"]);
 
-    const tfSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_TS_TF, { header: 1 });
+    const tfSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_TREND_FOLLOWING, { header: 1 });
     expect(tfSheet.length).toBe(2); // header + 1 trade
     expect(tfSheet[0]).not.toContain("mrRsiValue");
     expect(tfSheet[0]).toContain("tfAdxStrength");
 
-    const mrSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_MD_MR, { header: 1 });
+    const mrSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_MEAN_REVERSION, { header: 1 });
     expect(mrSheet.length).toBe(2);
     expect(mrSheet[0]).not.toContain("tfAdxStrength");
     expect(mrSheet[0]).toContain("mrRsiValue");
 
-    const ictSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_BS_ICT, { header: 1 });
+    const ictSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_ICT_STYLE_TRADING, { header: 1 });
     expect(ictSheet.length).toBe(2);
     expect(ictSheet[0]).toContain("ictKillZoneHour");
   });
@@ -547,12 +547,12 @@ describe("Dynamic ML multi-sheet XLSX", () => {
   test("coreOnly → User Export sheet only", () => {
     const XLSX = require("xlsx");
     const trades = [
-      mkTrade("TS_TF", {
+      mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
         tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
       }),
     ];
-    const buf = buildDynamicMultiSheetXlsx(trades, ["TS_TF"], { coreOnly: true });
+    const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING"], { coreOnly: true });
     const wb = XLSX.read(buf, { type: "buffer" });
     expect(wb.SheetNames).toEqual(["User Export"]);
   });
@@ -560,62 +560,62 @@ describe("Dynamic ML multi-sheet XLSX", () => {
   test("single strategy → 2 sheets (User Export + ML_*)", () => {
     const XLSX = require("xlsx");
     const trades = [
-      mkTrade("TS_TF", {
+      mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
         tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
       }),
     ];
-    const buf = buildDynamicMultiSheetXlsx(trades, ["TS_TF"]);
+    const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING"]);
     const wb = XLSX.read(buf, { type: "buffer" });
-    expect(wb.SheetNames).toEqual(["User Export", "ML_TS_TF"]);
+    expect(wb.SheetNames).toEqual(["User Export", "ML_TREND_FOLLOWING"]);
   });
 
-  test("subset TS_TF + MD_MR → 3 sheets", () => {
+  test("subset TREND_FOLLOWING + MEAN_REVERSION → 3 sheets", () => {
     const XLSX = require("xlsx");
     const trades = [
-      mkTrade("TS_TF", {
+      mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
         tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: false,
       }),
-      mkTrade("MD_MR", {
+      mkTrade("MEAN_REVERSION", {
         mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98,
         mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE",
       }),
     ];
-    const buf = buildDynamicMultiSheetXlsx(trades, ["TS_TF", "MD_MR"]);
+    const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING", "MEAN_REVERSION"]);
     const wb = XLSX.read(buf, { type: "buffer" });
     expect(wb.SheetNames.length).toBe(3);
     expect(wb.SheetNames).toContain("User Export");
-    expect(wb.SheetNames).toContain("ML_TS_TF");
-    expect(wb.SheetNames).toContain("ML_MD_MR");
+    expect(wb.SheetNames).toContain("ML_TREND_FOLLOWING");
+    expect(wb.SheetNames).toContain("ML_MEAN_REVERSION");
   });
 
   test("skips empty strategy sheets; aliases normalize", () => {
-    expect(normalizeMlStrategyKey("TREND_FOLLOWING")).toBe("TS_TF");
-    expect(normalizeMlStrategyKey("MEAN_REVERSION")).toBe("MD_MR");
+    expect(normalizeMlStrategyKey("TREND_FOLLOWING")).toBe("TREND_FOLLOWING");
+    expect(normalizeMlStrategyKey("MEAN_REVERSION")).toBe("MEAN_REVERSION");
     const XLSX = require("xlsx");
-    const trades = [mkTrade("AF_SMC", { sweepStrength: 1, fvgSizeAtr: 0.2, obDistanceAtr: 0.1, displacementPct: 1, htfAdx: 25, confSweepStrength: 1, confFvgSize: 0.2, confDisplacementPct: 1, confHtfAlignment: 5, confMitigationDepth: 0.2, confObConfluence: false })];
-    const buf = buildDynamicMultiSheetXlsx(trades, ["AF_SMC", "TS_TF"]);
+    const trades = [mkTrade("SMART_MONEY_CONCEPTS", { sweepStrength: 1, fvgSizeAtr: 0.2, obDistanceAtr: 0.1, displacementPct: 1, htfAdx: 25, confSweepStrength: 1, confFvgSize: 0.2, confDisplacementPct: 1, confHtfAlignment: 5, confMitigationDepth: 0.2, confObConfluence: false })];
+    const buf = buildDynamicMultiSheetXlsx(trades, ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING"]);
     const wb = XLSX.read(buf, { type: "buffer" });
-    // TS_TF has no trades → skipped
-    expect(wb.SheetNames).toEqual(["User Export", "ML_AF_SMC"]);
+    // TREND_FOLLOWING has no trades → skipped
+    expect(wb.SheetNames).toEqual(["User Export", "ML_SMART_MONEY_CONCEPTS"]);
   });
 
   test("all 12 strategies with one trade each → 13 sheets", () => {
     const XLSX = require("xlsx");
     const samples = {
-      AF_SMC: { sweepStrength: 1, fvgSizeAtr: 0.2, obDistanceAtr: 0.1, displacementPct: 1, htfAdx: 25, confSweepStrength: 1, confFvgSize: 0.2, confDisplacementPct: 1, confHtfAlignment: 5, confMitigationDepth: 0.2, confObConfluence: true },
-      BS_BR: { bbSqueezeWidthAtr: 0.4, breakoutVolumeRatio: 1.5, retestDepthAtr: 0.2, rejectionWickPct: 0.5, consolidationBars: 8, breakoutCandleAtr: 0.9, fundingRateAtEntry: 0.0001, fundingForecast24h: 0.0002, volumeRatio: 1.5, bbWidth: 0.01 },
-      TS_TF: { tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5, tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true },
-      TS_MS: { msSwingHighPrice: 110, msSwingLowPrice: 100, msPullbackDepthAtr: 0.5, msHhPattern: true, msLlPattern: false, msPullbackConfirmed: true },
-      TS_VP: { vpVwapLevel: 100, vpVahLevel: 101, vpValLevel: 99, vpPocLevel: 100, vpTriggerType: "VWAP_RECLAIM" },
-      MD_MR: { mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98, mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE" },
-      MD_SD: { sdZoneType: "DEMAND", sdZoneLevel: 99, sdZoneSizeAtr: 1, sdRetestDepthAtr: 0.2, sdVolumeConfirmation: true, sdTimeToRetestBars: 3, sdConfluence: true },
-      MD_SA: { saZScore: -2.5, saMaValue: 100, saStdDev: 2, saUpperBand: 104, saLowerBand: 96, saBandTouch: "LOWER", saMeanRevertBars: 4 },
-      AF_WYCKOFF: { wyPatternType: "SPRING", wyAccumulationBars: 40, wyFakeBreakDepthAtr: 0.4, wyReclameBars: 3, wyVolumeRatio: 1.8, wySosOrSow: "SOS", wyLpsLevel: 92 },
-      AF_VSA: { vsaPatternType: "STOPPING_VOLUME", vsaSpread: 12, vsaVolume: 5000, vsaAvgSpread: 8, vsaAvgVolume: 3000, vsaSwingProximity: 0.3, vsaReversal: true },
-      BS_ICT: { ictKillZoneHour: 8, ictKillZoneLevel: 95, ictRaidType: "RAID_LOW", ictRaidDepthAtr: 0.5, ictVolumeRatio: 1.2, ictReversal: true, ictMssPct: 0.4 },
-      BS_LS: { lsOiValue: 1e6, lsOiPercentile: 95, lsBbWidth: 0.02, lsBbWidthPercentile: 10, lsLiquidationLevel: 101, lsWickDepthAtr: 0.8, lsOiForecast24h: 1.5 },
+      SMART_MONEY_CONCEPTS: { sweepStrength: 1, fvgSizeAtr: 0.2, obDistanceAtr: 0.1, displacementPct: 1, htfAdx: 25, confSweepStrength: 1, confFvgSize: 0.2, confDisplacementPct: 1, confHtfAlignment: 5, confMitigationDepth: 0.2, confObConfluence: true },
+      BREAKOUT_RETEST: { bbSqueezeWidthAtr: 0.4, breakoutVolumeRatio: 1.5, retestDepthAtr: 0.2, rejectionWickPct: 0.5, consolidationBars: 8, breakoutCandleAtr: 0.9, fundingRateAtEntry: 0.0001, fundingForecast24h: 0.0002, volumeRatio: 1.5, bbWidth: 0.01 },
+      TREND_FOLLOWING: { tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5, tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true },
+      MARKET_STRUCTURE: { msSwingHighPrice: 110, msSwingLowPrice: 100, msPullbackDepthAtr: 0.5, msHhPattern: true, msLlPattern: false, msPullbackConfirmed: true },
+      AUCTION_MARKET_THEORY: { vpVwapLevel: 100, vpVahLevel: 101, vpValLevel: 99, vpPocLevel: 100, vpTriggerType: "VWAP_RECLAIM" },
+      MEAN_REVERSION: { mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98, mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE" },
+      SUPPLY_AND_DEMAND: { sdZoneType: "DEMAND", sdZoneLevel: 99, sdZoneSizeAtr: 1, sdRetestDepthAtr: 0.2, sdVolumeConfirmation: true, sdTimeToRetestBars: 3, sdConfluence: true },
+      STATISTICAL_ARBITRAGE: { saZScore: -2.5, saMaValue: 100, saStdDev: 2, saUpperBand: 104, saLowerBand: 96, saBandTouch: "LOWER", saMeanRevertBars: 4 },
+      WYCKOFF: { wyPatternType: "SPRING", wyAccumulationBars: 40, wyFakeBreakDepthAtr: 0.4, wyReclameBars: 3, wyVolumeRatio: 1.8, wySosOrSow: "SOS", wyLpsLevel: 92 },
+      VOLUME_SPREAD_ANALYSIS: { vsaPatternType: "STOPPING_VOLUME", vsaSpread: 12, vsaVolume: 5000, vsaAvgSpread: 8, vsaAvgVolume: 3000, vsaSwingProximity: 0.3, vsaReversal: true },
+      ICT_STYLE_TRADING: { ictKillZoneHour: 8, ictKillZoneLevel: 95, ictRaidType: "RAID_LOW", ictRaidDepthAtr: 0.5, ictVolumeRatio: 1.2, ictReversal: true, ictMssPct: 0.4 },
+      LIQUIDATION_SQUEEZE: { lsOiValue: 1e6, lsOiPercentile: 95, lsBbWidth: 0.02, lsBbWidthPercentile: 10, lsLiquidationLevel: 101, lsWickDepthAtr: 0.8, lsOiForecast24h: 1.5 },
     };
     const trades = Object.entries(samples).map(([k, extra]) => mkTrade(k, extra));
     const t0 = Date.now();

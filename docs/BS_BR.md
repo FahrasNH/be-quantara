@@ -1,9 +1,9 @@
-# BS_BR — Entry Triggers (AS-IS)
+# BREAKOUT_RETEST — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a BS_BR entry and the signal labels emitted on fill.  
-**Strategy key**: `BS_BR` (`BreakoutTradingStrategy`) — Breakout Storm racer #0  
+**Scope**: What triggers a BREAKOUT_RETEST entry and the signal labels emitted on fill.  
+**Strategy key**: `BREAKOUT_RETEST` (`BreakoutTradingStrategy`) — Breakout Storm racer #0  
 **Engine SSOT**: `BreakoutTradingStrategy.js` → `detectSignal`  
-**Config SSOT**: `strategyDefaults.js` → `BREAKOUT_RETEST` / `BS_BR` (+ ctor `BreakoutTradingStrategy.js`)  
+**Config SSOT**: `strategyDefaults.js` → `BREAKOUT_RETEST` / `BREAKOUT_RETEST` (+ ctor `BreakoutTradingStrategy.js`)  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -63,7 +63,7 @@ Tidak ada — `typeOverrides: {}`. Semua type trade memakai sequence & threshold
 
 ## What triggers an entry
 
-BS_BR is a **four-phase sequential** breakout system: consolidation → breakout → displacement wait → true retest entry.
+BREAKOUT_RETEST is a **four-phase sequential** breakout system: consolidation → breakout → displacement wait → true retest entry.
 
 ```
 S&R Levels → BB Squeeze / Vol Floor → Breakout + Volume → Displacement Wait → Retest Confirm → signal
@@ -118,7 +118,7 @@ Normal fills set `bbSqueeze`, `rangeBreakout`, `retestConfirmation` on `_lastSig
 
 **Variance is very low** — all four phases are hard prerequisites. Direction is not in signal labels.
 
-**Formatter fallback**: If flags missing but `winningComponent === "BS_BR"`, returns all four labels anyway.
+**Formatter fallback**: If flags missing but `winningComponent === "BREAKOUT_RETEST"`, returns all four labels anyway.
 
 ### Typical examples
 
@@ -132,7 +132,7 @@ Normal fills set `bbSqueeze`, `rangeBreakout`, `retestConfirmation` on `_lastSig
 
 ## AS-IS quirks
 
-- **VAULT umbrella**: BS_BR wins stamp `winningComponent: "BS_BR"`. BS_ICT / BS_LS use their own label vocabularies.
+- **VAULT umbrella**: BREAKOUT_RETEST wins stamp `winningComponent: "BREAKOUT_RETEST"`. ICT_STYLE_TRADING / LIQUIDATION_SQUEEZE use their own label vocabularies.
 - **strategyDefaults vs ctor drift**: `maxTradesPerDay` 5 (defaults) vs 2 (engine); SL/TP multipliers differ unless explicitly overridden.
 - **Direction omitted**: LONG vs SHORT is not reflected in signal labels.
 

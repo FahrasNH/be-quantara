@@ -64,10 +64,10 @@ function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
 }
 
 // Strategy-key checks normalize ingress aliases via ACL — FE may send Gen2 component keys.
-const MR_COMPONENTS = new Set(["MD_MR", "MD_SD", "MD_SA"]);
-const BR_COMPONENTS = new Set(["BS_BR", "BS_ICT", "BS_LS"]);
-const TF_COMPONENTS = new Set(["TS_TF", "TS_MS", "TS_VP"]);
-const SMC_COMPONENTS = new Set(["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+const MR_COMPONENTS = new Set(["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"]);
+const BR_COMPONENTS = new Set(["BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"]);
+const TF_COMPONENTS = new Set(["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"]);
+const SMC_COMPONENTS = new Set(["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"]);
 
 const isMRKey = (k) => {
   const n = normalizeStrategyKey(String(k || "").toUpperCase());
@@ -108,8 +108,8 @@ function resolveMdCombination(cfg = {}) {
   const upper = mdComps.map((c) => String(c).toUpperCase());
   const selectedComponents = upper.length
     ? upper.map((c) => {
-      if (c === "SUPPLY_AND_DEMAND") return "MD_SD";
-      if (c === "STATISTICAL_ARBITRAGE") return "MD_SA";
+      if (c === "SUPPLY_AND_DEMAND") return "SUPPLY_AND_DEMAND";
+      if (c === "STATISTICAL_ARBITRAGE") return "STATISTICAL_ARBITRAGE";
       return normalizeStrategyKey(c);
     }).filter((c) => MR_COMPONENTS.has(c))
     : null;
@@ -132,9 +132,9 @@ function resolveBsCombination(cfg = {}) {
   const upper = bsComps.map((c) => String(c).toUpperCase());
   const selectedComponents = upper.length
     ? upper.map((c) => {
-      if (c === "BREAKOUT_TRADING") return "BS_BR";
-      if (c === "ICT") return "BS_ICT";
-      if (c === "LIQUIDATION_SQUEEZE") return "BS_LS";
+      if (c === "BREAKOUT_TRADING") return "BREAKOUT_RETEST";
+      if (c === "ICT") return "ICT_STYLE_TRADING";
+      if (c === "LIQUIDATION_SQUEEZE") return "LIQUIDATION_SQUEEZE";
       return normalizeStrategyKey(c);
     }).filter((c) => BR_COMPONENTS.has(c))
     : null;
@@ -145,7 +145,7 @@ function resolveBsCombination(cfg = {}) {
   };
 }
 
-/** Sprint 14: BS_BR enrichment for CSV / WinPredictor (from getLastSignalMeta). */
+/** Sprint 14: BREAKOUT_RETEST enrichment for CSV / WinPredictor (from getLastSignalMeta). */
 function extractBsBrEnrichment(meta) {
   if (!meta) return {};
   return {
@@ -311,7 +311,7 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
 /**
  * Resolve TS combination mode + racer set from Advance selectedComponents.
  *
- * Sprint 12 default: race-to-confirm (independent TS_TF / TS_MS / TS_VP).
+ * Sprint 12 default: race-to-confirm (independent TREND_FOLLOWING / MARKET_STRUCTURE / AUCTION_MARKET_THEORY).
  * Gate flags only apply when tsCombinationMode is "gate" or "hybrid".
  */
 function resolveTsCombination(cfg = {}) {
@@ -327,13 +327,13 @@ function resolveTsCombination(cfg = {}) {
   let tsUseStructureGate = cfg.tsUseStructureGate;
   let tsUseVwapPrecision = cfg.tsUseVwapPrecision;
   if (upper.length) {
-    const onlyTrigger = upper.every((c) => c === "TS_TF");
+    const onlyTrigger = upper.every((c) => c === "TREND_FOLLOWING");
     if (onlyTrigger) {
       tsUseStructureGate = false;
       tsUseVwapPrecision = false;
     } else if (mode === "gate" || mode === "layering" || mode === "hybrid") {
-      tsUseStructureGate = upper.includes("TS_MS");
-      tsUseVwapPrecision = upper.includes("TS_VP");
+      tsUseStructureGate = upper.includes("MARKET_STRUCTURE");
+      tsUseVwapPrecision = upper.includes("AUCTION_MARKET_THEORY");
     }
   }
 
@@ -449,7 +449,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
-  // AF_SMC entry-TF ADX (chop gate) + MD_MR ADX regime gate (MD-SUB-01):
+  // SMART_MONEY_CONCEPTS entry-TF ADX (chop gate) + MEAN_REVERSION ADX regime gate (MD-SUB-01):
   // calcIndicators does not populate adx — attach it for strategies that need it.
   if (isSmcKey(strategyKey) || isMRKey(strategyKey)) {
     indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
@@ -549,7 +549,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
 
   // (see checkPartialMilestones in runRealBacktest). Previously this multi-position
-  // engine — the one AF_SMC/triple-type backtests actually use — had NO partial-TP
+  // engine — the one SMART_MONEY_CONCEPTS/triple-type backtests actually use — had NO partial-TP
   // path at all: "Is Partial" was always false regardless of the FE tpMode toggle.
   const tpModeCfg = cfg.tpMode ?? "full";
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
@@ -1263,9 +1263,9 @@ function _computeTripleStats(trades, startCapital) {
   };
 }
 
-// AF_SMC ingress normalizes to ADAPTIVE_FUSION for Grok prompt/validation.
+// SMART_MONEY_CONCEPTS ingress normalizes to ADAPTIVE_FUSION for Grok prompt/validation.
 const GROK_KEY_ALIAS = {
-  AF_SMC: "ADAPTIVE_FUSION",
+  SMART_MONEY_CONCEPTS: "ADAPTIVE_FUSION",
 };
 
 /**
@@ -1549,7 +1549,7 @@ async function _applyRagGate(trades, ctx = {}) {
 }
 
 /**
- * Run AF_SMC triple-timeframe backtest:
+ * Run SMART_MONEY_CONCEPTS triple-timeframe backtest:
  * Each trade type (Scalping/Intraday/Swing) runs on its own candle set independently.
  * Results are merged and sorted by open time.
  *
@@ -1568,7 +1568,7 @@ async function _applyRagGate(trades, ctx = {}) {
  * @param {Function}[opts.onGrokProgress]
  */
 async function runTripleTypeBacktest(opts = {}) {
-  const { strategyKey = "AF_SMC", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
+  const { strategyKey = "SMART_MONEY_CONCEPTS", capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
 
   const validation = strategyRegistry.validate(strategyKey);
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
@@ -1809,7 +1809,7 @@ async function runRealBacktest(opts = {}) {
 /**
  * Single-position engine (strategy.detectSignal contract — SL/TP only, no fusion
  * voting). Used by runRealBacktest's non-AF single-TF path, and by
- * runMultiTypeBacktest below (TS_TF/MD_MR running as a subset of AF's own
+ * runMultiTypeBacktest below (TREND_FOLLOWING/MEAN_REVERSION running as a subset of AF's own
  * Scalping/Intraday/Swing "types" — one call per type — so a failing type
  * degrades to 0 trades instead of killing the whole backtest, mirroring AF's
  * triple-TF resilience without AF's detectSignalMulti fusion logic).
@@ -1855,7 +1855,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
-  // MD_MR entry-TF ADX regime gate (MD-SUB-01)
+  // MEAN_REVERSION entry-TF ADX regime gate (MD-SUB-01)
   const isMeanReversion = isMRKey(strategyKey);
   if (isMeanReversion) {
     indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
@@ -1867,7 +1867,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   let htfIndicators = null;
 
   // tfHtfLayerEnabled gates the whole TF Layer-1 path (injection + ADX gate) so
-  // A/B harnesses can run a true control; default ON per TS_TF config defaults.
+  // A/B harnesses can run a true control; default ON per TREND_FOLLOWING config defaults.
   const tfHtfLayer = isTFKey(strategyKey) && cfg.tfHtfLayerEnabled !== false;
   const needsHTF = isMeanReversion || tfHtfLayer;
   if (needsHTF && htfCandles?.length >= 30) {
@@ -1905,7 +1905,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
   }
 
-  // Session VWAP (TS_VP) needs timestamps even when HTF layer is off.
+  // Session VWAP (AUCTION_MARKET_THEORY) needs timestamps even when HTF layer is off.
   if (!indicators.timestamps) {
     indicators.timestamps = entryCandles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
   }
@@ -1997,7 +1997,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   };
 
   // SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones).
-  // BS_BR Sprint 14 QA: prefer full TP; if partial forced, first take ≤33%.
+  // BREAKOUT_RETEST Sprint 14 QA: prefer full TP; if partial forced, first take ≤33%.
   const brPartialCap = isBRKey(strategyKey);
   const tpModeCfg = cfg.tpMode ?? "full";
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
@@ -2005,7 +2005,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const slPlusPartial2Pct = cfg.slPlusPartial2Pct ?? 0.275;
   // Ladder trigger R-multiples, per-leg tunable via typeOverrides (cfg here is
   // the per-type merged config). Mirrors the multi-position engine — the knob
-  // was added there first and this single-position engine (the one TS_TF/MD_MR
+  // was added there first and this single-position engine (the one TREND_FOLLOWING/MEAN_REVERSION
   // actually run through) kept the hardcoded 1.0/2.0, silently ignoring it.
   const slPlusM1R = cfg.slPlusM1R ?? 1.0;
   const slPlusM2R = cfg.slPlusM2R ?? 2.0;
@@ -2205,7 +2205,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       dailyStartCapital = capital;
       // Daily reset: live BotEngine's maxConsecLoss means "stop trading HARI INI"
       // (state resets each day). Without this reset the single-position engine
-      // blocked a strategy FOREVER after one bad streak — e.g. BS_BR stopped
+      // blocked a strategy FOREVER after one bad streak — e.g. BREAKOUT_RETEST stopped
       // trading after 3 straight SLs in week 1 of a 12-month run.
       consecLoss = 0;
     }
@@ -2221,7 +2221,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
 
       // typeOverrides[component].maxHoldHours (was Scalping-only/scalpingMaxHoldHours;
-      // TS_TF forensics showed >=24h-underwater positions accounted for -76.8 of the
+      // TREND_FOLLOWING forensics showed >=24h-underwater positions accounted for -76.8 of the
       // -230.8 net loss on the Intraday/Swing legs — a hung thesis is a dead thesis).
       // Exit at market price if time exceeded to prevent slot-blocking.
       let hitTimeStop = false;
@@ -2359,13 +2359,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       bsCombinationMode: bsCombo.bsCombinationMode,
       bsActiveRacers: bsCombo.bsActiveRacers || cfg.bsActiveRacers,
       afEnabledComponents: cfg.afEnabledComponents || cfg.selectedComponents,
-      // BS_LS optional exchange overlays (fail-open when absent)
+      // LIQUIDATION_SQUEEZE optional exchange overlays (fail-open when absent)
       funding: cfg.funding ?? indicators.funding?.[i] ?? null,
       fundingRate: cfg.fundingRate ?? indicators.fundingRate?.[i] ?? null,
       oiHistory: cfg.oiHistory || indicators.oiHistory || null,
       timestamps: indicators.timestamps,
 
-      // 2026-07-08: these three were dead knobs on TS_TF — the strategy class
+      // 2026-07-08: these three were dead knobs on TREND_FOLLOWING — the strategy class
       // is a server-startup SINGLETON (new TrendSurgeUmbrella(), no per-request
       // config), so its internal `this.config.adxMinStrength`/`minVolRatio`
       // reads were frozen at the constructor defaults (25 / whatever ships)
@@ -2419,8 +2419,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const adjustedRiskPerTrade = regimeResult.riskPerTrade;
 
     // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
-    // MD_MR (counter-trend) is exempt from directional block — has its own
-    // regime filter (step 2c in live BotEngine). BS_BR exempt (consolidation
+    // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
+    // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
     // reversal valid). Other trend-following strategies require HTF alignment.
     const isMR = isMRKey(strategyKey);
     const isBR = isBRKey(strategyKey);
@@ -2429,7 +2429,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     }
 
-    // ── 5b. MD_MR regime gate (mirror step 2c in live BotEngine) ──
+    // ── 5b. MEAN_REVERSION regime gate (mirror step 2c in live BotEngine) ──
     // MR counter-trend entries need regime check: block SHORT in strong bull,
     // LONG in strong bear, and all entries during ATR spike (wide spreads).
     if (isMR && htfIndicators && htfPtr) {
@@ -2619,25 +2619,25 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 }
 
 /**
- * Run a single-signal strategy (TS_TF, MD_MR) across a SUBSET of AF_SMC's own
+ * Run a single-signal strategy (TREND_FOLLOWING, MEAN_REVERSION) across a SUBSET of SMART_MONEY_CONCEPTS's own
  * Scalping/Intraday/Swing timeframe definitions — same TF pairs (5m/1h, 15m/4h,
  * 4h/1w), same candle-fetch resilience, but using the single-position engine
  * (strategy.detectSignal contract) instead of AF's detectSignalMulti fusion.
  *
- * WHY: TS_TF's canonical single-TF entry is 5m, and on exchanges with shallow
+ * WHY: TREND_FOLLOWING's canonical single-TF entry is 5m, and on exchanges with shallow
  * 5m history (e.g. Bitget) that ONE fetch failing killed the whole backtest —
  * unlike AF, whose triple-TF split lets a failing Scalping(5m) leg degrade to
- * 0 trades while Intraday/Swing still run. Routing TS_TF through Intraday(15m)+
- * Swing(4h) — never touching 5m — and MD_MR through Scalping(5m)+Intraday(15m)
- * gives them the same per-type resilience, and TS_TF sidesteps the fragile TF
+ * 0 trades while Intraday/Swing still run. Routing TREND_FOLLOWING through Intraday(15m)+
+ * Swing(4h) — never touching 5m — and MEAN_REVERSION through Scalping(5m)+Intraday(15m)
+ * gives them the same per-type resilience, and TREND_FOLLOWING sidesteps the fragile TF
  * entirely. Each type is independent: a failing/empty fetch for one type just
  * skips it (0 trades), the other type's result still renders.
  *
  * @param {Object}   opts        - same shape as runTripleTypeBacktest
  * @param {string[]} typeOrder   - subset of ["Scalping","Intraday","Swing"]
  */
-// AF-SCALP-22: TS_TF geometry key TRANSLATION. The FE sends the legacy knob
-// names (atrMult / riskReward — FE backtestStrategies TS_TF defaults
+// AF-SCALP-22: TREND_FOLLOWING geometry key TRANSLATION. The FE sends the legacy knob
+// names (atrMult / riskReward — FE backtestStrategies TREND_FOLLOWING defaults
 // 1.3 / 1.92) and the BE legacy config uses atrMultiplier / riskReward, but the
 // engine's SL/TP override chain only reads slAtrMult / tpAtrMult. AF-SCALP-21
 // made the chain live inside TrendFollowingStrategy, yet post-deploy CSVs
@@ -2675,7 +2675,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   // Capital is shared across types (concurrent risk), mirroring runTripleTypeBacktest's
   // documented model: riskPerTrade is the COMBINED cap across all concurrent types.
 
-  // equally — TS_TF combined 0.03 → 1%/2%, MD_MR combined 0.015 → 0.5%/1%.
+  // equally — TREND_FOLLOWING combined 0.03 → 1%/2%, MEAN_REVERSION combined 0.015 → 0.5%/1%.
 
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
@@ -2697,7 +2697,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
       higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
-      // AMT / TS_VP: Swing → utc_week session; Intraday → utc_day (volumeProfileComponent)
+      // AMT / AUCTION_MARKET_THEORY: Swing → utc_week session; Intraday → utc_day (volumeProfileComponent)
       tradeType,
       entryTf: tradeType === "Swing" ? "4h"
         : tradeType === "Intraday" ? "15m"

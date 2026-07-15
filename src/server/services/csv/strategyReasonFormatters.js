@@ -6,19 +6,19 @@
  * the winning racer on each bar. Dispatchers MUST use winningComponent when
  * present (not the umbrella key alone):
  *
- *   Adaptive Fusion (FOUNDRY): AF_SMC | AF_WYCKOFF | AF_VSA
- *   Trend Surge     (FORGE):   TS_TF  | TS_MS      | TS_VP
- *   Mean Drift      (MINT):    MD_MR  | MD_SD      | MD_SA
- *   Breakout Storm  (VAULT):   BS_BR  | BS_ICT     | BS_LS
+ *   Adaptive Fusion (FOUNDRY): SMART_MONEY_CONCEPTS | WYCKOFF | VOLUME_SPREAD_ANALYSIS
+ *   Trend Surge     (FORGE):   TREND_FOLLOWING  | MARKET_STRUCTURE      | AUCTION_MARKET_THEORY
+ *   Mean Drift      (MINT):    MEAN_REVERSION  | SUPPLY_AND_DEMAND      | STATISTICAL_ARBITRAGE
+ *   Breakout Storm  (VAULT):   BREAKOUT_RETEST  | ICT_STYLE_TRADING     | LIQUIDATION_SQUEEZE
  *
  * Legacy ingress aliases normalised via strategyKeyNormalizer ACL.
  *
  * ── Hard-gate caveats (low inter-trade variance) ────────────────────────────
- * AF_SMC: Sweep → CHoCH → FVG are hard prerequisites in _detectSMCSequence.
+ * SMART_MONEY_CONCEPTS: Sweep → CHoCH → FVG are hard prerequisites in _detectSMCSequence.
  *   Nearly every trade will show the same labels; only FVG direction and
  *   obConfluence ("Fresh Order Block") typically vary.
- * AF_WYCKOFF: Multi-item entry checklist — passed trades share the same layers.
- * TS_TF: HTF + ADX + Donchian + EMA9 retest + volume are all required — labels
+ * WYCKOFF: Multi-item entry checklist — passed trades share the same layers.
+ * TREND_FOLLOWING: HTF + ADX + Donchian + EMA9 retest + volume are all required — labels
  *   are nearly identical across fills. Treat as checklist confirmation, not a
  *   unique per-trade narrative.
  */
@@ -42,18 +42,18 @@ const EXIT_REASON_LABELS = {
 };
 
 const LEGACY_KEY_MAP = {
-  SMC: "AF_SMC",
-  WYCKOFF: "AF_WYCKOFF",
-  VSA: "AF_VSA",
-  MARKET_STRUCTURE: "TS_MS",
-  DOW_THEORY: "TS_MS",
-  VOLUME_PROFILE: "TS_VP",
-  AMT: "TS_VP",
-  BREAKOUT: "BS_BR",
-  ADAPTIVE_FUSION: "AF_SMC",
-  TREND_SURGE: "TS_TF",
-  MEAN_DRIFT: "MD_MR",
-  BREAKOUT_STORM: "BS_BR",
+  SMC: "SMART_MONEY_CONCEPTS",
+  WYCKOFF: "WYCKOFF",
+  VSA: "VOLUME_SPREAD_ANALYSIS",
+  MARKET_STRUCTURE: "MARKET_STRUCTURE",
+  DOW_THEORY: "MARKET_STRUCTURE",
+  VOLUME_PROFILE: "AUCTION_MARKET_THEORY",
+  AMT: "AUCTION_MARKET_THEORY",
+  BREAKOUT: "BREAKOUT_RETEST",
+  ADAPTIVE_FUSION: "SMART_MONEY_CONCEPTS",
+  TREND_SURGE: "TREND_FOLLOWING",
+  MEAN_DRIFT: "MEAN_REVERSION",
+  BREAKOUT_STORM: "BREAKOUT_RETEST",
 };
 
 function titleCaseSnake(raw) {
@@ -88,7 +88,7 @@ function formatExitReason(raw) {
   return titleCaseSnake(key);
 }
 
-// ─── 1. AF_SMC ───────────────────────────────────────────────────────────────
+// ─── 1. SMART_MONEY_CONCEPTS ───────────────────────────────────────────────────────────────
 // Hard-gate: sweepIdx/chochIdx/fvg are prerequisites — labels repeat across trades.
 
 function formatSmcReasons(meta) {
@@ -115,7 +115,7 @@ function formatSmcReasons(meta) {
   return reasons.join(", ");
 }
 
-// ─── 2. AF_WYCKOFF ───────────────────────────────────────────────────────────
+// ─── 2. WYCKOFF ───────────────────────────────────────────────────────────
 // Hard-gate checklist — low variance across fills.
 
 const WYCKOFF_REASON_MAP = {
@@ -158,7 +158,7 @@ function formatWyckoffReasons(meta) {
   return [...new Set(reasons)].join(", ");
 }
 
-// ─── 3. AF_VSA ───────────────────────────────────────────────────────────────
+// ─── 3. VOLUME_SPREAD_ANALYSIS ───────────────────────────────────────────────────────────────
 
 const VSA_REASON_MAP = {
   vsa_stopping_volume_low: "Stopping Volume",
@@ -185,7 +185,7 @@ function formatVsaReasons(meta) {
   return reasons.join(", ");
 }
 
-// ─── 4. TS_TF ────────────────────────────────────────────────────────────────
+// ─── 4. TREND_FOLLOWING ────────────────────────────────────────────────────────────────
 // Hard-gate 3-layer checklist — very low variance.
 
 function formatTrendFollowingReasons(meta) {
@@ -203,7 +203,7 @@ function formatTrendFollowingReasons(meta) {
   if (flags.volumeConfirmed) reasons.push("Volume Confirmation");
 
   // Signal fired ⇒ all hard gates passed even if flags were not snapshotted.
-  if (reasons.length === 0 && (meta.winningComponent === "TS_TF" || meta.component === "TS_TF")) {
+  if (reasons.length === 0 && (meta.winningComponent === "TREND_FOLLOWING" || meta.component === "TREND_FOLLOWING")) {
     if (meta.htfTrendConfirmed) reasons.push("HTF Aligned");
     if (meta.adxStrength != null) reasons.push("ADX Strength");
     if (meta.donchianBroken) reasons.push("Donchian Break");
@@ -211,7 +211,7 @@ function formatTrendFollowingReasons(meta) {
   return reasons.join(", ");
 }
 
-// ─── 5. TS_MS ────────────────────────────────────────────────────────────────
+// ─── 5. MARKET_STRUCTURE ────────────────────────────────────────────────────────────────
 
 function formatMarketStructureReasons(meta) {
   if (!meta) return "";
@@ -252,7 +252,7 @@ function formatMarketStructureReasons(meta) {
   return [...new Set(labels)].join(", ");
 }
 
-// ─── 6. TS_VP ────────────────────────────────────────────────────────────────
+// ─── 6. AUCTION_MARKET_THEORY ────────────────────────────────────────────────────────────────
 
 const VP_REASON_MAP = {
   vwap_reclaim: "VWAP Reclaim",
@@ -271,7 +271,7 @@ function formatVolumeProfileReasons(meta) {
   return titleCaseSnake(raw);
 }
 
-// ─── 7. MD_MR ────────────────────────────────────────────────────────────────
+// ─── 7. MEAN_REVERSION ────────────────────────────────────────────────────────────────
 
 function formatMeanReversionReasons(meta) {
   if (!meta) return "";
@@ -315,7 +315,7 @@ function formatMeanReversionReasons(meta) {
   return labels.join(", ");
 }
 
-// ─── 8. BS_BR ────────────────────────────────────────────────────────────────
+// ─── 8. BREAKOUT_RETEST ────────────────────────────────────────────────────────────────
 // Hard-gate 3-phase sequential — very low variance.
 
 function formatBreakoutReasons(meta) {
@@ -338,13 +338,13 @@ function formatBreakoutReasons(meta) {
     reasons.push("Retest Confirm");
   }
   // Signal path always completes core phases when meta is set on fill.
-  if (reasons.length === 0 && (meta.winningComponent === "BS_BR" || meta.component === "BS_BR")) {
+  if (reasons.length === 0 && (meta.winningComponent === "BREAKOUT_RETEST" || meta.component === "BREAKOUT_RETEST")) {
     return "BB Squeeze, Range Break, Volume Spike, Retest Confirm";
   }
   return reasons.join(", ");
 }
 
-// ─── 9. MD_SD ────────────────────────────────────────────────────────────────
+// ─── 9. SUPPLY_AND_DEMAND ────────────────────────────────────────────────────────────────
 
 function formatSupplyDemandReasons(meta) {
   if (!meta) return "";
@@ -356,13 +356,13 @@ function formatSupplyDemandReasons(meta) {
   if (/fvg/i.test(zt) || /fvg/i.test(reason) || /ob/i.test(zt) || /order.?block/i.test(reason)) {
     labels.push("OB/FVG Structure");
   }
-  if (labels.length === 0 && (meta.winningComponent === "MD_SD" || meta.component === "MD_SD")) {
+  if (labels.length === 0 && (meta.winningComponent === "SUPPLY_AND_DEMAND" || meta.component === "SUPPLY_AND_DEMAND")) {
     return "Demand Retest, Supply Retest, OB/FVG Structure";
   }
   return [...new Set(labels)].join(", ");
 }
 
-// ─── 10. MD_SA ───────────────────────────────────────────────────────────────
+// ─── 10. STATISTICAL_ARBITRAGE ───────────────────────────────────────────────────────────────
 
 function formatStatisticalArbitrageReasons(meta) {
   if (!meta) return "";
@@ -379,14 +379,14 @@ function formatStatisticalArbitrageReasons(meta) {
   if (meta.stdThreshold != null || /std/i.test(meta.reason || "") || meta.saMode) {
     labels.push("Std Threshold");
   }
-  if (labels.length === 0 && (meta.winningComponent === "MD_SA" || meta.component === "MD_SA")) {
+  if (labels.length === 0 && (meta.winningComponent === "STATISTICAL_ARBITRAGE" || meta.component === "STATISTICAL_ARBITRAGE")) {
     return "Z-Score Extreme, Mean Dev Band, Std Threshold";
   }
   if (labels.length === 0 && meta.reason) return titleCaseSnake(meta.reason);
   return [...new Set(labels)].join(", ");
 }
 
-// ─── 11. BS_ICT ──────────────────────────────────────────────────────────────
+// ─── 11. ICT_STYLE_TRADING ──────────────────────────────────────────────────────────────
 
 function formatIctStyleReasons(meta) {
   if (!meta) return "";
@@ -406,13 +406,13 @@ function formatIctStyleReasons(meta) {
   }
   if (meta.mss || /mss|market.?structure.?shift/i.test(reason)) labels.push("MSS");
   if (meta.ote || /ote|optimal.?trade/i.test(reason)) labels.push("OTE");
-  if (labels.length === 0 && (meta.winningComponent === "BS_ICT" || meta.component === "BS_ICT")) {
+  if (labels.length === 0 && (meta.winningComponent === "ICT_STYLE_TRADING" || meta.component === "ICT_STYLE_TRADING")) {
     return "Kill Zone, Liquidity Raid, MSS, OTE";
   }
   return labels.join(", ");
 }
 
-// ─── 12. BS_LS ───────────────────────────────────────────────────────────────
+// ─── 12. LIQUIDATION_SQUEEZE ───────────────────────────────────────────────────────────────
 
 function formatLiquidationSqueezeReasons(meta) {
   if (!meta) return "";
@@ -435,7 +435,7 @@ function formatLiquidationSqueezeReasons(meta) {
   if (meta.dataAvailable === false) {
     labels.push("OI/Funding Proxy");
   }
-  if (labels.length === 0 && (meta.winningComponent === "BS_LS" || meta.component === "BS_LS")) {
+  if (labels.length === 0 && (meta.winningComponent === "LIQUIDATION_SQUEEZE" || meta.component === "LIQUIDATION_SQUEEZE")) {
     return "Liquidation Wick, Squeeze, OI/Funding Proxy";
   }
   return [...new Set(labels)].join(", ");
@@ -459,29 +459,29 @@ function resolveEntryReasons(strategyKey, meta) {
   const key = normalizeStrategyKey(fromMeta || strategyKey);
 
   switch (key) {
-    case "AF_SMC":
+    case "SMART_MONEY_CONCEPTS":
       return formatSmcReasons(meta);
-    case "AF_WYCKOFF":
+    case "WYCKOFF":
       return formatWyckoffReasons(meta);
-    case "AF_VSA":
+    case "VOLUME_SPREAD_ANALYSIS":
       return formatVsaReasons(meta);
-    case "TS_TF":
+    case "TREND_FOLLOWING":
       return formatTrendFollowingReasons(meta);
-    case "TS_MS":
+    case "MARKET_STRUCTURE":
       return formatMarketStructureReasons(meta);
-    case "TS_VP":
+    case "AUCTION_MARKET_THEORY":
       return formatVolumeProfileReasons(meta);
-    case "MD_MR":
+    case "MEAN_REVERSION":
       return formatMeanReversionReasons(meta);
-    case "MD_SD":
+    case "SUPPLY_AND_DEMAND":
       return formatSupplyDemandReasons(meta);
-    case "MD_SA":
+    case "STATISTICAL_ARBITRAGE":
       return formatStatisticalArbitrageReasons(meta);
-    case "BS_BR":
+    case "BREAKOUT_RETEST":
       return formatBreakoutReasons(meta);
-    case "BS_ICT":
+    case "ICT_STYLE_TRADING":
       return formatIctStyleReasons(meta);
-    case "BS_LS":
+    case "LIQUIDATION_SQUEEZE":
       return formatLiquidationSqueezeReasons(meta);
     default:
       if (meta?.sequenceMeta) return formatSmcReasons(meta);

@@ -1,5 +1,5 @@
 /**
- * TrendFollowingStrategy.js — TS_TF thin orchestrator
+ * TrendFollowingStrategy.js — TREND_FOLLOWING thin orchestrator
  *
  * Entry logic lives in ts/trendFollowingEntry.js (Sprint 15 structure refactor).
  */
@@ -302,8 +302,8 @@ class TrendFollowingStrategy extends StrategyBase {
     };
 
     return {
-      component: "TS_TF",
-      winningComponent: "TS_TF",
+      component: "TREND_FOLLOWING",
+      winningComponent: "TREND_FOLLOWING",
       strategyLabel: "Trend Following",
       marketCond: this._trendState.htfTrendConfirmed ? "STRONG_TREND" : "NORMAL",
       direction: this._trendState.htfTrendDirection,

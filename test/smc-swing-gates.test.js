@@ -88,7 +88,7 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig hon
   // fast-fail assertions below apply ONLY when the fast-fail SSOT is present.
   const ov = STRATEGIES.ADAPTIVE_FUSION?.typeOverrides?.Swing
     ?? STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
-    ?? STRATEGIES.AF_SMC?.typeOverrides?.Swing
+    ?? STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
     ?? null;
   if (ov && ov.slAtrMult != null) {
     assert.equal(ov.slAtrMult, 1.8);

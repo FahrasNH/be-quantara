@@ -6,8 +6,8 @@
 >
 > **Changelog (DOC-SSOT-03, 13 Jul 2026):** All four umbrellas use **race-to-confirm**
 > (Sprint 12 AF/TS; Sprint 10 MD; Sprint 11 BS). Live keys:
-> `AF_SMC/WYCKOFF/VSA`, `TS_TF/MS/VP`, `MD_MR/SD/SA`, `BS_BR/ICT/LS`.
-> `maxPositionsPerSymbol = 1` for every tier. ADX is a **risk overlay inside MD_MR**,
+> `SMART_MONEY_CONCEPTS/WYCKOFF/VSA`, `TREND_FOLLOWING/MS/VP`, `MEAN_REVERSION/SD/SA`, `BREAKOUT_RETEST/ICT/LS`.
+> `maxPositionsPerSymbol = 1` for every tier. ADX is a **risk overlay inside MEAN_REVERSION**,
 > not a catalog racer. SSOT: `src/config/strategies.js`, `src/core/risk-engine/tierConfig.js`,
 > FE `tierStrategyMap.js`.
 >
@@ -72,8 +72,8 @@ Legacy `src/services/*` and `src/server/services/*` paths remain as **shims** po
 
 MD and BS umbrellas race **all three** components by default (`mdCombinationMode` / `bsCombinationMode` = `race`):
 
-- Mean Drift: `MD_MR`, `MD_SD`, `MD_SA`
-- Breakout Storm: `BS_BR` (halted in live default), `BS_ICT`, `BS_LS`
+- Mean Drift: `MEAN_REVERSION`, `SUPPLY_AND_DEMAND`, `STATISTICAL_ARBITRAGE`
+- Breakout Storm: `BREAKOUT_RETEST` (halted in live default), `ICT_STYLE_TRADING`, `LIQUIDATION_SQUEEZE`
 
 `GROK_AI_TRADING` remains experimental (VAULT / open mode), registered but not in tier race pools.
 
@@ -96,13 +96,13 @@ Legacy Gen1 / descriptor keys remain as migrate-only aliases in `STRATEGY_MIGRAT
 
 | Gen1 / umbrella label (docs & history) | Gen2 primary engine key | Live race components | Display name |
 |----------------------------------------|-------------------------|----------------------|--------------|
-| `ADAPTIVE_FUSION` (umbrella) | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | Adaptive Fusion |
-| `TREND_SURGE` / `TREND_MOMENTUM` / `TREND_FOLLOWING` / `TM` | `TS_TF` | `TS_TF`, `TS_MS`, `TS_VP` | Trend Surge |
-| `MEAN_DRIFT` / `MEAN_REVERSION` / `MR` | `MD_MR` | `MD_MR`, `MD_SD`, `MD_SA` | Mean Drift |
-| `BREAKOUT_STORM` / `BREAKOUT_RETEST` / `BR` | `BS_BR` | `BS_BR`, `BS_ICT`, `BS_LS` | Breakout Storm |
+| `ADAPTIVE_FUSION` (umbrella) | `SMART_MONEY_CONCEPTS` | `SMART_MONEY_CONCEPTS`, `WYCKOFF`, `VOLUME_SPREAD_ANALYSIS` | Adaptive Fusion |
+| `TREND_SURGE` / `TREND_MOMENTUM` / `TREND_FOLLOWING` / `TM` | `TREND_FOLLOWING` | `TREND_FOLLOWING`, `MARKET_STRUCTURE`, `AUCTION_MARKET_THEORY` | Trend Surge |
+| `MEAN_DRIFT` / `MEAN_REVERSION` / `MR` | `MEAN_REVERSION` | `MEAN_REVERSION`, `SUPPLY_AND_DEMAND`, `STATISTICAL_ARBITRAGE` | Mean Drift |
+| `BREAKOUT_STORM` / `BREAKOUT_RETEST` / `BR` | `BREAKOUT_RETEST` | `BREAKOUT_RETEST`, `ICT_STYLE_TRADING`, `LIQUIDATION_SQUEEZE` | Breakout Storm |
 
-Also still accepted as aliases → Gen2: `SMART_MONEY_CONCEPTS` / `SAC` → `AF_SMC`;
-`TF` → `TS_TF`; `MR` → `MD_MR`; `BR` → `BS_BR`.
+Also still accepted as aliases → Gen2: `SMART_MONEY_CONCEPTS` / `SAC` → `SMART_MONEY_CONCEPTS`;
+`TF` → `TREND_FOLLOWING`; `MR` → `MEAN_REVERSION`; `BR` → `BREAKOUT_RETEST`.
 
 `A` / `B` / `C` in `strategyDefaults.js` are **PDF trade-type presets**, not AF racers.
 
@@ -118,10 +118,10 @@ Entitlement still stores **legacy descriptor keys**; runtime normalizes them to 
 
 | Tier | Entitlement keys (`tierConfig.js`) | Package engines (FE `TIER_PACKAGE_STRATEGIES`) | Cumulative race components (`TIER_COMPONENT_MAP`) | maxPositions / symbol | maxConcurrentPositions | maxActiveBots |
 |------|------------------------------------|-----------------------------------------------|-------------------------------------------------|----------------------|------------------------|---------------|
-| **FOUNDRY** | `ADAPTIVE_FUSION` | `AF_SMC` | `AF_SMC`, `AF_WYCKOFF`, `AF_VSA` | **1** | 4 | 10 |
-| **FORGE** | + `TREND_FOLLOWING` | + `TS_TF` | AF pool + `TS_TF`, `TS_MS`, `TS_VP` | **1** | 8 | 25 |
-| **MINT** | + `MEAN_REVERSION` | + `MD_MR` | + `MD_MR`, `MD_SD`, `MD_SA` | **1** | 12 | 40 |
-| **VAULT** | + `BREAKOUT_RETEST` | + `BS_BR` | + `BS_BR`, `BS_ICT`, `BS_LS` | **1** | 16 | 50 |
+| **FOUNDRY** | `ADAPTIVE_FUSION` | `SMART_MONEY_CONCEPTS` | `SMART_MONEY_CONCEPTS`, `WYCKOFF`, `VOLUME_SPREAD_ANALYSIS` | **1** | 4 | 10 |
+| **FORGE** | + `TREND_FOLLOWING` | + `TREND_FOLLOWING` | AF pool + `TREND_FOLLOWING`, `MARKET_STRUCTURE`, `AUCTION_MARKET_THEORY` | **1** | 8 | 25 |
+| **MINT** | + `MEAN_REVERSION` | + `MEAN_REVERSION` | + `MEAN_REVERSION`, `SUPPLY_AND_DEMAND`, `STATISTICAL_ARBITRAGE` | **1** | 12 | 40 |
+| **VAULT** | + `BREAKOUT_RETEST` | + `BREAKOUT_RETEST` | + `BREAKOUT_RETEST`, `ICT_STYLE_TRADING`, `LIQUIDATION_SQUEEZE` | **1** | 16 | 50 |
 
 `GROK_AI_TRADING` is a VAULT experimental bonus — **not** in `tierConfig.strategies` race pools.
 Component lists: `TIER_COMPONENT_MAP` in `src/config/strategies.js` and
@@ -158,7 +158,7 @@ default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throt
 
 ---
 
-## 4. Strategy Config — Adaptive Fusion (AF_SMC)
+## 4. Strategy Config — Adaptive Fusion (SMART_MONEY_CONCEPTS)
 
 **Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/AdaptiveFusionUmbrella.js`
 
@@ -166,20 +166,20 @@ default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throt
 
 | Slot | Key | Role | Implementation |
 |------|-----|------|----------------|
-| A | `AF_SMC` | Smart Money Concepts (independent racer) | `SmartMoneyConceptsStrategy` |
-| B | `AF_WYCKOFF` | Wyckoff spring/upthrust (independent racer) | `WyckoffStrategy` → `af/wyckoffComponent.js` |
-| C | `AF_VSA` | Volume Spread Analysis (independent racer) | `VsaStrategy` → `af/vsaComponent.js` |
+| A | `SMART_MONEY_CONCEPTS` | Smart Money Concepts (independent racer) | `SmartMoneyConceptsStrategy` |
+| B | `WYCKOFF` | Wyckoff spring/upthrust (independent racer) | `WyckoffStrategy` → `af/wyckoffComponent.js` |
+| C | `VOLUME_SPREAD_ANALYSIS` | Volume Spread Analysis (independent racer) | `VsaStrategy` → `af/vsaComponent.js` |
 
 **ARCHITECTURE DECISION (Fahras, 10 Jul 2026):** Race-to-Confirm replaces Sprint 8 2/3 voting.
 
-- Umbrella `AF_SMC` is a **tier access bag** (FOUNDRY unlocks the pool), not a fusion mechanism.
+- Umbrella `SMART_MONEY_CONCEPTS` is a **tier access bag** (FOUNDRY unlocks the pool), not a fusion mechanism.
 - Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
-- Same-bar winner = highest confidence; ties break `AF_SMC` → `AF_WYCKOFF` → `AF_VSA`.
+- Same-bar winner = highest confidence; ties break `SMART_MONEY_CONCEPTS` → `WYCKOFF` → `VOLUME_SPREAD_ANALYSIS`.
 - Trade attribution label = **winning component only** (never joined "SMC + Wyckoff + VSA").
-- `trades.strategy_name` persists the **winning component canonical key** (`AF_WYCKOFF`, …),
+- `trades.strategy_name` persists the **winning component canonical key** (`WYCKOFF`, …),
   not the umbrella engine alone. Startup backfill prefers `indicators.winningComponent` /
   `firedByStrategy`; rows without that metadata only normalize Gen1/abbrev → engine key
-  (`ADAPTIVE_FUSION`/`AF` → `AF_SMC`) — per-racer identity for those rows is accepted lost.
+  (`ADAPTIVE_FUSION`/`AF` → `SMART_MONEY_CONCEPTS`) — per-racer identity for those rows is accepted lost.
 - Max 1 position/symbol still enforced by BotEngine / backtest engines.
 - Rollback: `afCombinationMode: "vote"` restores Sprint 8 2/3 (altcoin 3/3) voting;
   `afUseThreeComponentVoting: false` → SMC-only passthrough.
@@ -208,11 +208,11 @@ sweet-spot curves (fixes inverted conf→WR). Cost model meta on every BT result
 
 ### 4.2 Key audit (AF-CONFIG-AUDIT)
 
-Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`,
-`MD_MR`, `MD_SD`, `MD_SA`, `BS_BR`, `BS_ICT`, `BS_LS`.
+Canonical live keys: `SMART_MONEY_CONCEPTS`, `WYCKOFF`, `VOLUME_SPREAD_ANALYSIS`, `TREND_FOLLOWING`, `MARKET_STRUCTURE`, `AUCTION_MARKET_THEORY`,
+`MEAN_REVERSION`, `SUPPLY_AND_DEMAND`, `STATISTICAL_ARBITRAGE`, `BREAKOUT_RETEST`, `ICT_STYLE_TRADING`, `LIQUIDATION_SQUEEZE`.
 
-Legacy aliases (migrate, do not delete abruptly): `ADAPTIVE_FUSION` / `SMART_MONEY_CONCEPTS` → `AF_SMC`,
-`TREND_FOLLOWING` → `TS_TF`, `MEAN_REVERSION` → `MD_MR`, `BREAKOUT_RETEST` → `BS_BR`.
+Legacy aliases (migrate, do not delete abruptly): `ADAPTIVE_FUSION` / `SMART_MONEY_CONCEPTS` → `SMART_MONEY_CONCEPTS`,
+`TREND_FOLLOWING` → `TREND_FOLLOWING`, `MEAN_REVERSION` → `MEAN_REVERSION`, `BREAKOUT_RETEST` → `BREAKOUT_RETEST`.
 
 `A` / `B` / `C` in `strategyDefaults.js` are **PDF trade-type presets** (Scalping/Day/Swing),
 not Adaptive Fusion components — do not confuse with AF racers.
@@ -229,7 +229,7 @@ Pairwise signal correlation &lt; 0.5 among SMC/Wyckoff/VSA remains a **monitorin
 
 ---
 
-## 5. Strategy Config — Trend Surge (TS_TF)
+## 5. Strategy Config — Trend Surge (TREND_FOLLOWING)
 
 **Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/TrendSurgeUmbrella.js`
 
@@ -237,15 +237,15 @@ Pairwise signal correlation &lt; 0.5 among SMC/Wyckoff/VSA remains a **monitorin
 
 | Slot | Key | Role | Implementation |
 |------|-----|------|----------------|
-| A | `TS_TF` | Trend Following (independent racer) | `TrendFollowingStrategy` |
-| B | `TS_MS` | Dow Theory HH/HL pullback entries | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
-| C | `TS_VP` | Auction Market Theory (VWAP reclaim / VA edge) | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
+| A | `TREND_FOLLOWING` | Trend Following (independent racer) | `TrendFollowingStrategy` |
+| B | `MARKET_STRUCTURE` | Dow Theory HH/HL pullback entries | `MarketStructureStrategy` → `ts/marketStructureComponent.js` |
+| C | `AUCTION_MARKET_THEORY` | Auction Market Theory (VWAP reclaim / VA edge) | `VolumeProfileStrategy` → `ts/volumeProfileComponent.js` |
 
 **ARCHITECTURE DECISION (Fahras, 10 Jul 2026):** Race-to-Confirm replaces Sprint 9 gate/layering.
 
-- Umbrella `TS_TF` is a **tier access bag** (FORGE unlocks the pool), not a fusion mechanism.
+- Umbrella `TREND_FOLLOWING` is a **tier access bag** (FORGE unlocks the pool), not a fusion mechanism.
 - Active racers (from Advance `selectedComponents`, default all three) evaluate in parallel.
-- Same-bar winner = highest confidence; ties break `TS_TF` → `TS_MS` → `TS_VP`.
+- Same-bar winner = highest confidence; ties break `TREND_FOLLOWING` → `MARKET_STRUCTURE` → `AUCTION_MARKET_THEORY`.
 - Trade attribution label = **winning component only** (never joined "A + B + C").
 - Max 1 position/symbol still enforced by BotEngine / backtest engines.
 - Rollback: `tsCombinationMode: "gate"` restores A→B→C layering; `"hybrid"` keeps A required with B/C as confidence boosters only.
@@ -259,7 +259,7 @@ keys become the race pool; per-trade `strategyLabel` comes from the winning race
 
 ---
 
-## 6. Strategy Config — Mean Drift (MD_MR)
+## 6. Strategy Config — Mean Drift (MEAN_REVERSION)
 
 **Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/MeanDriftUmbrella.js`
 + racer implementations (`MeanReversionStrategy`, `SupplyDemandStrategy`, `StatisticalArbitrageStrategy`).
@@ -268,25 +268,25 @@ keys become the race pool; per-trade `strategyLabel` comes from the winning race
 
 | Slot | Key | Catalog label | Role | Implementation |
 |------|-----|---------------|------|----------------|
-| A | `MD_MR` | Mean Reversion | Independent racer | `MeanReversionStrategy` |
-| B | `MD_SD` | Supply and Demand | Independent racer | `SupplyDemandStrategy` |
-| C | `MD_SA` | Statistical Arbitrage | Independent racer | `StatisticalArbitrageStrategy` |
+| A | `MEAN_REVERSION` | Mean Reversion | Independent racer | `MeanReversionStrategy` |
+| B | `SUPPLY_AND_DEMAND` | Supply and Demand | Independent racer | `SupplyDemandStrategy` |
+| C | `STATISTICAL_ARBITRAGE` | Statistical Arbitrage | Independent racer | `StatisticalArbitrageStrategy` |
 
-**ARCHITECTURE DECISION (Sprint 10):** Race-to-Confirm replaces the earlier MD_MR-only
+**ARCHITECTURE DECISION (Sprint 10):** Race-to-Confirm replaces the earlier MEAN_REVERSION-only
 layered pipeline as the default umbrella mode.
 
-- Umbrella `MD_MR` is a **tier access bag** (MINT unlocks the pool), not a fusion mechanism.
+- Umbrella `MEAN_REVERSION` is a **tier access bag** (MINT unlocks the pool), not a fusion mechanism.
 - Active racers (from Advance `selectedComponents` / `mdActiveRacers`, default all three)
   evaluate in parallel on the same bar.
-- Same-bar winner = highest confidence; ties break `MD_MR` → `MD_SD` → `MD_SA`.
-- Trade attribution label = **winning component only** (`MD_SD`, `MD_SA`, …).
+- Same-bar winner = highest confidence; ties break `MEAN_REVERSION` → `SUPPLY_AND_DEMAND` → `STATISTICAL_ARBITRAGE`.
+- Trade attribution label = **winning component only** (`SUPPLY_AND_DEMAND`, `STATISTICAL_ARBITRAGE`, …).
 - Max 1 position/symbol enforced by BotEngine / backtest engines.
-- Rollback: `mdCombinationMode: "pipeline"` restores MD_MR-only with internal layers.
+- Rollback: `mdCombinationMode: "pipeline"` restores MEAN_REVERSION-only with internal layers.
 
-### 6.2 ADX overlay inside MD_MR (NOT a race participant)
+### 6.2 ADX overlay inside MEAN_REVERSION (NOT a race participant)
 
 The **ADX Trend Strength Filter** (`md/adxRegimeGate.js`) is a **universal risk overlay
-inside the MD_MR racer only** — it is **not** a selectable strategy, not in
+inside the MEAN_REVERSION racer only** — it is **not** a selectable strategy, not in
 `STRATEGY_CATALOG`, and not a race-pool member:
 
 | Regime | ADX(14) | Effect |
@@ -296,7 +296,7 @@ inside the MD_MR racer only** — it is **not** a selectable strategy, not in
 | `imbalance` | ≥ 25 | MR blocked |
 | Missing ADX | — | Fail-open (warmup) |
 
-**OB/FVG precision** (also MD_MR-internal): entry keeps A signal without confluence but
+**OB/FVG precision** (also MEAN_REVERSION-internal): entry keeps A signal without confluence but
 confidence drops; confluence within `0.5×ATR` boosts confidence; TP prefers unfilled FVG
 midpoint → BB middle → RR-based TP.
 
@@ -306,20 +306,20 @@ Config knobs: `mdAdxGateEnabled`, `mdObFvgEnabled`, `mdAdxBalanceMax`, `mdAdxImb
 HTF EMA regime filter (`htfRegimeFilter.meanReversionRegimeFilter`) remains complementary
 in BotEngine / backtest — separate from entry-TF ADX overlay.
 
-### 6.3 MD_SD / MD_SA racers (Sprint 10)
+### 6.3 SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE racers (Sprint 10)
 
-- **MD_SD (Supply and Demand):** zone-based demand/supply OB retest entries; attributed
+- **SUPPLY_AND_DEMAND (Supply and Demand):** zone-based demand/supply OB retest entries; attributed
   independently when it wins the race.
-- **MD_SA (Statistical Arbitrage):** z-score / rolling-mean reversion; attributed as
+- **STATISTICAL_ARBITRAGE (Statistical Arbitrage):** z-score / rolling-mean reversion; attributed as
   `Statistical Arbitrage` when it wins.
 
-Backtest: FE `COMPONENT_TO_ENGINE` maps `MD_SD`/`MD_SA` → `MD_MR` engine run with
+Backtest: FE `COMPONENT_TO_ENGINE` maps `SUPPLY_AND_DEMAND`/`STATISTICAL_ARBITRAGE` → `MEAN_REVERSION` engine run with
 `selectedComponents` narrowing the active race pool; CSV reasons via `formatSupplyDemandReasons`
 / statistical formatter in `strategyReasonFormatters.js`.
 
 ---
 
-## 7. Strategy Config — Breakout Storm (BS_BR)
+## 7. Strategy Config — Breakout Storm (BREAKOUT_RETEST)
 
 **Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/BreakoutStormUmbrella.js`
 + racer implementations (`BreakoutTradingStrategy`, `IctStyleStrategy`, `LiquidationSqueezeStrategy`).
@@ -328,22 +328,22 @@ Backtest: FE `COMPONENT_TO_ENGINE` maps `MD_SD`/`MD_SA` → `MD_MR` engine run w
 
 | Slot | Key | Catalog label | Role | Implementation |
 |------|-----|---------------|------|----------------|
-| A | `BS_BR` | Breakout Trading | Independent racer | `BreakoutTradingStrategy` v2.4 |
-| B | `BS_ICT` | ICT-style trading | Independent racer | `IctStyleStrategy` (kill zones, raids) |
-| C | `BS_LS` | Liquidation/Squeeze Trading | Independent racer | `LiquidationSqueezeStrategy` |
+| A | `BREAKOUT_RETEST` | Breakout Trading | Independent racer | `BreakoutTradingStrategy` v2.4 |
+| B | `ICT_STYLE_TRADING` | ICT-style trading | Independent racer | `IctStyleStrategy` (kill zones, raids) |
+| C | `LIQUIDATION_SQUEEZE` | Liquidation/Squeeze Trading | Independent racer | `LiquidationSqueezeStrategy` |
 
 **ARCHITECTURE DECISION (Sprint 11):** Race-to-Confirm among three independent racers.
 
-- Umbrella `BS_BR` is a **tier access bag** (VAULT unlocks the pool).
+- Umbrella `BREAKOUT_RETEST` is a **tier access bag** (VAULT unlocks the pool).
 - Active racers (from Advance `selectedComponents` / `bsActiveRacers`, default all three).
-- Same-bar winner = highest confidence; ties break `BS_BR` → `BS_ICT` → `BS_LS`.
+- Same-bar winner = highest confidence; ties break `BREAKOUT_RETEST` → `ICT_STYLE_TRADING` → `LIQUIDATION_SQUEEZE`.
 - Trade attribution = winning component only.
-- Rollback: `bsCombinationMode: "single"` → BS_BR-only (dedicated Breakout Trading backtest path).
+- Rollback: `bsCombinationMode: "single"` → BREAKOUT_RETEST-only (dedicated Breakout Trading backtest path).
 
-**BS_BR (Breakout Trading — PDF name):** BB-width squeeze → breakout + volume confirm → retest entry
+**BREAKOUT_RETEST (Breakout Trading — PDF name):** BB-width squeeze → breakout + volume confirm → retest entry
 (Consolidation Gate v2.4). **Sprint 14:** halted from live/tier package; Advance backtest-only.
-**BS_ICT:** ICT-style kill-zone / liquidity raid entries (PDF subset).
-**BS_LS:** liquidation wick + squeeze detection; OI/funding overlays when available (fail-open).
+**ICT_STYLE_TRADING:** ICT-style kill-zone / liquidity raid entries (PDF subset).
+**LIQUIDATION_SQUEEZE:** liquidation wick + squeeze detection; OI/funding overlays when available (fail-open).
 
 ### 7.2 Trading Strategy Recap.pdf alignment
 
@@ -354,28 +354,28 @@ Tier colors in PDF map to package unlock: **Foundry** (green) · **Forge** (purp
 
 | Key | PDF method | Recap status | Known gap vs PDF |
 |-----|------------|--------------|------------------|
-| `AF_SMC` | Smart Money Concepts | Partial | OI/CVD partial; runtime Scalping+Swing only (Intraday dropped AF-SCALP-19) |
-| `AF_WYCKOFF` | Wyckoff | Partial | Runtime adds Scalping; PDF Intraday+Swing |
-| `AF_VSA` | VSA | Partial | Same trade-type drift as AF umbrella |
-| `TS_TF` | Trend Following | Implemented | — |
-| `TS_MS` | Dow Theory | Partial | Position leg not supported |
-| `TS_VP` | Auction Market Theory | Partial | Market Profile partial; Swing wired on 4h |
-| `MD_MR` | Mean Reversion | Implemented | ADX/OB overlays are internal, not separate catalog methods |
-| `MD_SD` | Supply and Demand | Partial | OB/FVG zones vs classic base-rally schematic |
-| `MD_SA` | Statistical Arbitrage | Partial | v1 z-score/residual ≠ PDF cointegration/pairs (roadmap) |
-| `BS_BR` | Breakout Trading | Partial | Retest gate + **live halted**; backtest-only |
-| `BS_ICT` | ICT-style | Partial | Kill-zone/raid subset vs full OTE/MSS |
-| `BS_LS` | Liquidation/Squeeze | Partial | Proxy wick+OI/funding; no true liq feed/DOM |
+| `SMART_MONEY_CONCEPTS` | Smart Money Concepts | Partial | OI/CVD partial; runtime Scalping+Swing only (Intraday dropped AF-SCALP-19) |
+| `WYCKOFF` | Wyckoff | Partial | Runtime adds Scalping; PDF Intraday+Swing |
+| `VOLUME_SPREAD_ANALYSIS` | VSA | Partial | Same trade-type drift as AF umbrella |
+| `TREND_FOLLOWING` | Trend Following | Implemented | — |
+| `MARKET_STRUCTURE` | Dow Theory | Partial | Position leg not supported |
+| `AUCTION_MARKET_THEORY` | Auction Market Theory | Partial | Market Profile partial; Swing wired on 4h |
+| `MEAN_REVERSION` | Mean Reversion | Implemented | ADX/OB overlays are internal, not separate catalog methods |
+| `SUPPLY_AND_DEMAND` | Supply and Demand | Partial | OB/FVG zones vs classic base-rally schematic |
+| `STATISTICAL_ARBITRAGE` | Statistical Arbitrage | Partial | v1 z-score/residual ≠ PDF cointegration/pairs (roadmap) |
+| `BREAKOUT_RETEST` | Breakout Trading | Partial | Retest gate + **live halted**; backtest-only |
+| `ICT_STYLE_TRADING` | ICT-style | Partial | Kill-zone/raid subset vs full OTE/MSS |
+| `LIQUIDATION_SQUEEZE` | Liquidation/Squeeze | Partial | Proxy wick+OI/funding; no true liq feed/DOM |
 
 **Intentional PDF trade-type drifts** (runtime = `STRATEGY_SUPPORTED_TYPES`):
 
 | Keys | PDF | Runtime | Reason |
 |------|-----|---------|--------|
 | `AF_*` | Scalping, Intraday, Swing (SMC) / Intrad+Swing (Wyckoff/VSA) | Scalping, Swing | AF-SCALP-19: 5m Intraday fragility |
-| `TS_MS` | Swing, Position | Intraday, Swing | Position routing not implemented |
-| `TS_VP` | Intraday | Intraday, Swing | 4h UTC-week Swing session |
-| `MD_SD`, `MD_SA` | Intraday, Swing (SA also Algo) | Scalping, Intraday | v1 SA single-symbol; SD short-horizon focus |
-| `BS_BR` | Scalping→Swing | Scalping, Intraday, Swing | All types in backtest; live halted |
+| `MARKET_STRUCTURE` | Swing, Position | Intraday, Swing | Position routing not implemented |
+| `AUCTION_MARKET_THEORY` | Intraday | Intraday, Swing | 4h UTC-week Swing session |
+| `SUPPLY_AND_DEMAND`, `STATISTICAL_ARBITRAGE` | Intraday, Swing (SA also Algo) | Scalping, Intraday | v1 SA single-symbol; SD short-horizon focus |
+| `BREAKOUT_RETEST` | Scalping→Swing | Scalping, Intraday, Swing | All types in backtest; live halted |
 
 ---
 
@@ -692,7 +692,7 @@ uses client-side sample data in the meantime.
 #### Admin management — superAdminGuard (ADMIN-BE-07)
 
 `GET /admin/admins` (list), `POST /admin/admins` (create — bcrypt-hashes the
-password, seeds a default `AF_SMC` strategy — legacy alias `ADAPTIVE_FUSION` still accepted), `PATCH /admin/admins/:id`
+password, seeds a default `SMART_MONEY_CONCEPTS` strategy — legacy alias `ADAPTIVE_FUSION` still accepted), `PATCH /admin/admins/:id`
 (edit username/email), `PATCH /admin/admins/:id/role` (change role),
 `POST /admin/admins/:id/reset-password` (set new password + kill sessions), and
 `DELETE /admin/admins/:id`. Delete guards against removing **yourself** and the

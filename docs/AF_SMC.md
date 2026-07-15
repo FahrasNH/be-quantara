@@ -1,9 +1,9 @@
-# AF_SMC — Entry Triggers (AS-IS)
+# SMART_MONEY_CONCEPTS — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an AF_SMC entry and the signal labels emitted on fill.  
-**Strategy key**: `AF_SMC` (`SmartMoneyConceptsStrategy`, v3.0)  
+**Scope**: What triggers an SMART_MONEY_CONCEPTS entry and the signal labels emitted on fill.  
+**Strategy key**: `SMART_MONEY_CONCEPTS` (`SmartMoneyConceptsStrategy`, v3.0)  
 **Engine SSOT**: `SmartMoneyConceptsStrategy.js` → `_detectSMCSequence`  
-**Config SSOT**: `strategyDefaults.js` → `SMART_MONEY_CONCEPTS` / `AF_SMC` (+ engine ctor fallbacks)  
+**Config SSOT**: `strategyDefaults.js` → `SMART_MONEY_CONCEPTS` / `SMART_MONEY_CONCEPTS` (+ engine ctor fallbacks)  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -158,7 +158,7 @@ Because sweep, CHoCH, and FVG are **hard prerequisites** of the sequence engine,
 ## AS-IS quirks
 
 - **Mitigation label gap**: entry trigger is FVG mitigation, but the **Mitigation** label is usually missing because depth lives in `confidenceComponents`, not top-level meta.
-- **AF umbrella**: When AF_SMC wins the FOUNDRY race, Wyckoff/VSA wins use their own label vocabularies.
+- **AF umbrella**: When SMART_MONEY_CONCEPTS wins the FOUNDRY race, Wyckoff/VSA wins use their own label vocabularies.
 - **Legacy engine**: `smcUseSequenceEngine === false` produces fills with empty labels.
 
 ---

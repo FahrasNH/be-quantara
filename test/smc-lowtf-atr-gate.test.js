@@ -1,5 +1,5 @@
 /**
- * smc-lowtf-atr-gate.test.js — AF_SMC low-TF ATR-gate fix (2026-07-15)
+ * smc-lowtf-atr-gate.test.js — SMART_MONEY_CONCEPTS low-TF ATR-gate fix (2026-07-15)
  *
  * Regression guard for the tuning that unblocks the Scalping (5m) and Intraday
  * (15m) legs. Root cause: the ABSOLUTE atrMinMult floor (0.8 = 0.8% ATR/price)
@@ -10,11 +10,11 @@
  * The fix adds per-leg atrMinMult via typeOverrides (Scalping 0.15, Intraday
  * 0.4, Swing 0.8-unchanged) plus Intraday smcMinConfidenceB 60→55. This test
  * runs the REAL backtest engine (runTripleTypeBacktest — same code path the
- * product uses for AF_SMC) across two non-overlapping synthetic windows and
+ * product uses for SMART_MONEY_CONCEPTS) across two non-overlapping synthetic windows and
  * asserts:
  *   • Scalping & Intraday go from 0 entries (old absolute floor) to > 0.
  *   • Swing behaviour is bit-identical before vs after.
- *   • The AF_SMC config carries the exact tuned values.
+ *   • The SMART_MONEY_CONCEPTS config carries the exact tuned values.
  */
 "use strict";
 
@@ -91,7 +91,7 @@ const OLD_ABSOLUTE_CFG = { typeOverrides: {}, atrMinMult: 0.8, atrMaxMult: 5.0, 
 
 async function tradesByLeg(window, config) {
   const res = await runTripleTypeBacktest({
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     capital: 1000,
     enableFees: true,
     enableSlippage: false,
@@ -106,15 +106,15 @@ async function tradesByLeg(window, config) {
   return out;
 }
 
-test("CONFIG: AF_SMC carries the tuned per-leg atrMinMult + Intraday confB", () => {
-  const ov = STRATEGIES.AF_SMC.typeOverrides;
+test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intraday confB", () => {
+  const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides;
   assert.equal(ov.Scalping.atrMinMult, 0.15, "Scalping atrMinMult must be 0.15");
   assert.equal(ov.Intraday.atrMinMult, 0.4, "Intraday atrMinMult must be 0.4");
   assert.equal(ov.Swing.atrMinMult, 0.8, "Swing atrMinMult must stay 0.8");
   assert.equal(ov.Intraday.smcMinConfidenceB, 55, "Intraday confB must be restored to 55");
   // Top-level floor (what LIVE gating reads) is untouched at 0.8 → live unchanged.
-  assert.equal(STRATEGIES.AF_SMC.atrMinMult, 0.8, "top-level atrMinMult (live) must stay 0.8");
-  assert.equal(STRATEGIES.AF_SMC.smcMinConfidenceB, 60, "top-level confB (live) must stay 60");
+  assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.atrMinMult, 0.8, "top-level atrMinMult (live) must stay 0.8");
+  assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.smcMinConfidenceB, 60, "top-level confB (live) must stay 60");
 });
 
 test("ENGINE: low-TF legs unblocked out-of-sample; Swing invariant", async () => {
