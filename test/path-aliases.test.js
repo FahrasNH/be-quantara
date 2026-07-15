@@ -21,7 +21,11 @@ assert.ok(env && typeof env.validate === "function", "config/env via #config");
 const prismaPath = require.resolve("#infra/db/prismaClient.js");
 assert.ok(prismaPath.includes("infrastructure"), "#infra maps to infrastructure/");
 
-console.log("  ✓ parent process resolves #shared/#config/#infra");
+const execEng = require("#core/execution-engine/index.js");
+assert.ok(typeof execEng.evaluateSlTpHit === "function", "#core/execution-engine resolves");
+assert.ok(typeof execEng.estimateRoundTripFee === "function", "estimateRoundTripFee exported");
+
+console.log("  ✓ parent process resolves #shared/#config/#infra/#core");
 
 const childScript = path.join(__dirname, "fixtures", "alias-fork-child.js");
 const child = fork(childScript, [], {

@@ -21,53 +21,19 @@ const notifier = require("../../../infrastructure/notifications/TelegramNotifier
 const GrokTradingService = require("../../research/services/GrokTradingService");
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const { onEngineTradeOpen, onEngineTradeClose } = require("../../ml/services/BotEngineMlHook");
-
-const GROK_CONFIRM_STRATEGIES = new Set([
-  "ADAPTIVE_FUSION",
-  "TREND_FOLLOWING",
-  "MEAN_REVERSION",
-  "MD_MR",
-  "BREAKOUT_RETEST",
-]);
-
-const MR_STRATEGY_KEYS = new Set(["MEAN_REVERSION", "MD_MR", "MR"]);
-function isMeanReversionKey(key) {
-  return MR_STRATEGY_KEYS.has(String(key || "").toUpperCase());
-}
-
-// ── Price formatter for logs ─────────────────────────────────────────────────
-// Desimal menyesuaikan besaran harga agar koin murah (XPL @ $0.094) tidak tampil
-// ambigu "$0.09" di log. Ini HANYA untuk tampilan log — harga order yang dikirim
-// ke exchange diformat ke tick-size oleh masing-masing client (_fmtPrice).
-// ADAPTIVE_FUSION → "Adaptive Fusion". Dipakai di semua log yang tampil di UI —
-// snake_case strategy key tidak boleh muncul di panel log (selalu Title Case).
-function stratLabel(key) {
-  if (!key) return "—";
-  return String(key).toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-}
-
-// Holding duration of a position → "22H 6M" (or "6M" under an hour).
-function fmtHoldingMs(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const totalMin = Math.floor(ms / 60_000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return h > 0 ? `${h}H ${m}M` : `${m}M`;
-}
-
-function fmtPx(price) {
-  const n = Number(price);
-  if (!Number.isFinite(n)) return String(price);
-  const abs = Math.abs(n);
-  let max;
-  if (abs >= 1)        max = 2;
-  else if (abs >= 0.1) max = 4;
-  else if (abs >= 0.01) max = 5;
-  else if (abs >= 0.001) max = 6;
-  else if (abs > 0)    max = 8;
-  else                 max = 2;
-  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: max });
-}
+// Phase 2g — pure execution helpers (core/execution-engine + risk-engine)
+const {
+  stratLabel,
+  fmtHoldingMs,
+  fmtPx,
+  GROK_CONFIRM_STRATEGIES,
+  isMeanReversionKey,
+  evaluateSlTpHit,
+  estimateRoundTripFee,
+  filterOrphanTradesForEngine,
+  positionFromDbTrade,
+} = require("../../../core/execution-engine");
+const { checkEntryRiskGates, checkAtrRangeGate } = require("../../../core/risk-engine/entryRiskGates");
 
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
 // Lazy-import Prisma (singleton bersama) agar tidak circular dengan db module
@@ -1050,59 +1016,23 @@ class BotEngine extends EventEmitter {
    * Returns { ok: true } atau { ok: false, reason: string }
    */
   _checkRiskGates(atr, price) {
-    // 1. Cooldown setelah loss
-    if (this.state.cooldownUntil && Date.now() < this.state.cooldownUntil) {
-      const remaining = Math.ceil((this.state.cooldownUntil - Date.now()) / 60000);
-      return { ok: false, reason: `Cooldown aktif — tunggu ${remaining} menit lagi` };
-    }
+    // Order matters (preserved from pre-2g BotEngine):
+    //   per-bot gates → account coordinator (#5) → ATR range.
+    const gate = checkEntryRiskGates({
+      state: this.state,
+      config: this.config,
+      now: Date.now(),
+    });
+    if (!gate.ok) return gate;
 
-    // 2. Loss berturut-turut
-    if (this.state.consecLoss >= this.config.maxConsecLoss) {
-      return { ok: false, reason: `${this.state.consecLoss} loss berturut — stop trading hari ini` };
-    }
-
-    // 3. Max trades per hari
-    if (this.state.dailyTradeCount >= this.config.maxTradesPerDay) {
-      return { ok: false, reason: `Maks ${this.config.maxTradesPerDay} trade/hari sudah tercapai` };
-    }
-
-    // 4. Daily loss limit — sertakan FLOATING loss posisi terbuka (#8), bukan
-    //    hanya realized, agar drawdown mengambang besar tetap men-trigger stop.
-    const floatingLoss = this.state.openPositions.reduce((s, p) => {
-      const u = p.unrealizedPL || 0;
-      return u < 0 ? s + Math.abs(u) : s;
-    }, 0);
-    const effectiveDailyLoss = this.state.dailyLoss + floatingLoss;
-    const dailyBase    = this.state.dailyStartCapital || this.state.capital;
-    const dailyLossPct = dailyBase > 0 ? effectiveDailyLoss / dailyBase : 0;
-    if (dailyLossPct >= this.config.maxDailyLossPct) {
-      return {
-        ok: false,
-        reason: `Daily loss ${(dailyLossPct * 100).toFixed(2)}% (incl floating) melewati batas ${(this.config.maxDailyLossPct * 100)}%`,
-      };
-    }
-
-    // 4b. Daily loss AGREGAT akun lintas-bot (#5) — cegah Σ kerugian beberapa bot
-    //     menembus batas akun walau tiap bot masih dalam batasnya sendiri.
+    // 4b. Daily loss AGREGAT akun lintas-bot (#5)
     if (!this.config.dryRun && this.config.coordinator) {
       const acc = this.config.coordinator.canTradeAccount();
       if (!acc.ok) return { ok: false, reason: acc.reason };
     }
 
-    // 5. ATR range filter (previously 6 — SIDEWAYS dipindah ke _tick() per-strategi)
-    if (atr && price) {
-      const atrPct = (atr / price) * 100;
-      const minPct = this.config.atrMinMult; // % langsung — misal 0.3 = 0.3% dari harga
-      const maxPct = this.config.atrMaxMult; // % langsung — misal 3.0 = 3.0% dari harga
-      if (atrPct < minPct) {
-        return { ok: false, reason: `ATR terlalu kecil (${atrPct.toFixed(3)}%) — market terlalu sepi` };
-      }
-      if (atrPct > maxPct) {
-        return { ok: false, reason: `ATR terlalu besar (${atrPct.toFixed(3)}%) — volatilitas ekstrem` };
-      }
-    }
-
-    return { ok: true };
+    // 5. ATR range filter (SIDEWAYS dipindah ke _tick() per-strategi)
+    return checkAtrRangeGate(atr, price, this.config);
   }
 
   /** Panggil setelah trade ditutup untuk update counter risk */
@@ -3450,43 +3380,17 @@ class BotEngine extends EventEmitter {
   // ─────────────────────────────────────────────
 
   _filterOrphanTradesForThisEngine(orphans) {
-    if (!this.config.groupKey || !this.config.strategyKey) return orphans;
-    return orphans.filter((row) => {
-      let stratOfTrade = null;
-      try { stratOfTrade = row.indicators ? JSON.parse(row.indicators)?.strategy : null; } catch { /* ignore */ }
-      if (stratOfTrade === null) return !!this.config.isGroupLeader;
-      return stratOfTrade === this.config.strategyKey;
+    return filterOrphanTradesForEngine(orphans, {
+      groupKey: this.config.groupKey,
+      strategyKey: this.config.strategyKey,
+      isGroupLeader: this.config.isGroupLeader,
     });
   }
 
   _positionFromDbTrade(dbTrade, livePos = null) {
-    const size = dbTrade.size || 0;
-    const markPrice = livePos?.markPrice || dbTrade.entry_price;
-    const upnlFromExchange = livePos?.unrealizedPL ?? 0;
-    const upnlCalc = markPrice > 0 && dbTrade.entry_price > 0
-      ? (dbTrade.side === "LONG"
-        ? (markPrice - dbTrade.entry_price) * size
-        : (dbTrade.entry_price - markPrice) * size)
-      : 0;
-    return {
-      id:            dbTrade.order_id || `restored_${dbTrade.id}`,
-      dbId:          dbTrade.id,
-      side:          dbTrade.side,
-      entry:         dbTrade.entry_price,
-      sl:            dbTrade.sl,
-      tp:            dbTrade.tp,
-      size,
-      remainingSize: size,
-      openTime:      new Date(dbTrade.open_time).getTime(),
-      atr:           dbTrade.atr,
-      manualSLTP:    false,
-      unrealizedPL:  livePos ? (upnlFromExchange !== 0 ? upnlFromExchange : upnlCalc) : undefined,
-      markPrice:     livePos ? markPrice : undefined,
-      restoredFrom:  dbTrade.session_id,
-      R:             dbTrade.atr ? dbTrade.atr * (this.config.atrMultiplier || 1) : 0,
-      slCurrent:     dbTrade.sl,
-      m1: false, m2: false, m3: false,
-    };
+    return positionFromDbTrade(dbTrade, livePos, {
+      atrMultiplier: this.config.atrMultiplier || 1,
+    });
   }
 
   /**
@@ -3556,20 +3460,7 @@ class BotEngine extends EventEmitter {
 
   /** Evaluasi hit SL/TP — intrabar + fallback harga monitor (ticker/last). */
   _evaluateSlTpHit(pos, price, barHigh, barLow) {
-    const px = Number(price);
-    const hi = Number.isFinite(barHigh) ? barHigh : px;
-    const lo = Number.isFinite(barLow) ? barLow : px;
-    const sl = Number(pos.sl);
-    const tp = Number(pos.tp);
-    const hasSL = Number.isFinite(sl) && sl > 0;
-    const hasTP = Number.isFinite(tp) && tp > 0;
-    const hitSL = hasSL && (pos.side === "LONG"
-      ? (lo <= sl || px <= sl)
-      : (hi >= sl || px >= sl));
-    const hitTP = hasTP && (pos.side === "LONG"
-      ? (hi >= tp || px >= tp)
-      : (lo <= tp || px <= tp));
-    return { hitSL, hitTP, isTP: hitTP && !hitSL, sl, tp };
+    return evaluateSlTpHit(pos, price, barHigh, barLow);
   }
 
   /**
@@ -4030,15 +3921,11 @@ class BotEngine extends EventEmitter {
    * Inilah penyebab gap "Net PnL gross" vs balance riil: fee tak pernah dikurangi.
    */
   _estimateFee(entryPrice, exitPrice, size) {
-    const sz = Math.abs(size);
-    const takerRate = this.config.feeRate ?? 0.0006;
-    // FEE-02: entry pakai maker rate bila entryMode="maker" (limit post-only);
-    // exit (SL/TP) selalu market → taker. Memodelkan penghematan maker di sisi
-    // entry saja, sesuai realita eksekusi.
-    const entryRate = this.config.entryMode === "maker"
-      ? (this.config.makerFeeRate ?? 0.0002)
-      : takerRate;
-    return Math.abs(entryPrice) * sz * entryRate + Math.abs(exitPrice) * sz * takerRate;
+    return estimateRoundTripFee(entryPrice, exitPrice, size, {
+      feeRate: this.config.feeRate,
+      entryMode: this.config.entryMode,
+      makerFeeRate: this.config.makerFeeRate,
+    });
   }
 
   /**
