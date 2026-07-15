@@ -117,7 +117,7 @@ function buildConfig() {
   const swing = { ...(base.typeOverrides?.Swing || {}) };
   if (RELAX) {
     // Research-only denser sample — do NOT use for live promotion.
-    swing.sacMinConfidenceC = 55;
+    swing.smcMinConfidenceC = 55;
     swing.smcFundingGuard = false;
   }
   return {
@@ -128,7 +128,7 @@ function buildConfig() {
       Swing: swing,
     },
     ...swing,
-    sacMinConfidenceC: RELAX ? 55 : (base.sacMinConfidenceC ?? 65),
+    smcMinConfidenceC: RELAX ? 55 : (base.smcMinConfidenceC ?? 65),
     activeComponents: ["Swing"],
   };
 }

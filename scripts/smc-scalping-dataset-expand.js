@@ -115,8 +115,8 @@ function buildConfig() {
   const scalp = { ...(base.typeOverrides?.Scalping || {}) };
   if (RELAX) {
     // Research-only denser sample — do NOT use for live promotion.
-    scalp.sacMinConfidenceALong = 70;
-    scalp.sacMinConfidenceAShort = 65;
+    scalp.smcMinConfidenceALong = 70;
+    scalp.smcMinConfidenceAShort = 65;
     scalp.smcSessionFilter = false;
   }
   return {

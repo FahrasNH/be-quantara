@@ -209,8 +209,8 @@ test("SWING-RETEST: detectSignalMulti nulls Swing on breakout when retest requir
   };
 
   const blocked = smc.detectSignalMulti(ind, 39, {
-    sacUseSequenceEngine: true,
-    sacMinConfidenceC: 50,
+    smcUseSequenceEngine: true,
+    smcMinConfidenceC: 50,
     typeOverrides: { Swing: { smcRequireObRetest: true } },
     htfTrend: "BULLISH",
   });
@@ -229,8 +229,8 @@ test("SWING-RETEST: detectSignalMulti nulls Swing on breakout when retest requir
     },
   });
   const open = smc.detectSignalMulti(ind, 39, {
-    sacUseSequenceEngine: true,
-    sacMinConfidenceC: 50,
+    smcUseSequenceEngine: true,
+    smcMinConfidenceC: 50,
     typeOverrides: { Swing: { smcRequireObRetest: true } },
     htfTrend: "BULLISH",
   });

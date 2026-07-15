@@ -73,7 +73,7 @@ function buildBullishSequence() {
 
 test("SEQ-01: primitives — sweep, CHoCH, FVG all detectable in the built series", () => {
   const smc = new SmartMoneyConceptsStrategy();
-  const cfg = { sacSweepVolMult: 0.9, sacFvgMinGap: 0.0015 };
+  const cfg = { smcSweepVolMult: 0.9, smcFvgMinGap: 0.0015 };
   const s = buildBullishSequence();
   const N = s.closes.length - 1;
   // FVG must exist at the last (mitigation) bar
@@ -84,7 +84,7 @@ test("SEQ-01: primitives — sweep, CHoCH, FVG all detectable in the built serie
 test("SEQ-02: full bullish sequence fires LONG at mitigation bar", () => {
   const smc = new SmartMoneyConceptsStrategy();
   // sweep mult 1.8 → only the genuine sweep bar (vol 400) surges above baseline (100)
-  const cfg = { sacSweepVolMult: 1.8, sacFvgMinGap: 0.0015, sacDispVolMult: 1.6, sacDispRangePct: 0.008, sacSeqWindow: 60 };
+  const cfg = { smcSweepVolMult: 1.8, smcFvgMinGap: 0.0015, smcDispVolMult: 1.6, smcDispRangePct: 0.008, smcSeqWindow: 60 };
   const s = buildBullishSequence();
   const N = s.closes.length - 1;
   const r = smc._detectSMCSequence(s, N, cfg);
@@ -113,7 +113,7 @@ test("SEQ-04: causal rejection — FVG mitigation without a preceding sweep → 
   s.volumes[36] = 100;    // no volume surge
   const N = s.closes.length - 1;
   // sweep mult 1.8 → with bar 36 neutralised, no bar surges as a pre-CHoCH sweep
-  const r = smc._detectSMCSequence(s, N, { sacSweepVolMult: 1.8, sacFvgMinGap: 0.0015, sacDispVolMult: 1.6, sacDispRangePct: 0.008 });
+  const r = smc._detectSMCSequence(s, N, { smcSweepVolMult: 1.8, smcFvgMinGap: 0.0015, smcDispVolMult: 1.6, smcDispRangePct: 0.008 });
   assert.strictEqual(r.signal, null, "without a valid sweep the sequence must not fire");
 });
 
@@ -122,8 +122,8 @@ test("SEQ-05: detectSignalMulti uses sequence engine by default and fires the ac
   const s = buildBullishSequence();
   const N = s.closes.length - 1;
   const res = smc.detectSignalMulti(s, N, {
-    sacFvgMinGap: 0.0015, sacSweepVolMult: 0.9, sacDispVolMult: 1.6, sacDispRangePct: 0.008,
-    sacMinConfidenceA: 40, sacMinConfidenceB: 40, sacMinConfidenceC: 40,
+    smcFvgMinGap: 0.0015, smcSweepVolMult: 0.9, smcDispVolMult: 1.6, smcDispRangePct: 0.008,
+    smcMinConfidenceA: 40, smcMinConfidenceB: 40, smcMinConfidenceC: 40,
     htfTrend: "BULLISH",
   });
   assert.ok(res.Scalping === "LONG" || res.Intraday === "LONG" || res.Swing === "LONG",
@@ -135,8 +135,8 @@ test("SEQ-06: flag off → legacy single-bar path still works (no sequence)", ()
   const s = buildBullishSequence();
   const N = s.closes.length - 1;
   const res = smc.detectSignalMulti(s, N, {
-    sacUseSequenceEngine: false,
-    sacMinConfidenceA: 0, sacMinConfidenceB: 0, sacMinConfidenceC: 0,
+    smcUseSequenceEngine: false,
+    smcMinConfidenceA: 0, smcMinConfidenceB: 0, smcMinConfidenceC: 0,
   });
   // Legacy path returns an object with meta.confidence keys (behaviour preserved)
   assert.ok(res.meta && res.meta.confidence, "legacy path returns confidence meta");

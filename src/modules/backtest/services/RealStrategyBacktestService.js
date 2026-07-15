@@ -29,6 +29,7 @@ const path = require("path");
 const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX } = require("../../../core/analytics-engine/indicators");
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
+const { normalizeSmcParams } = require("../../../core/strategy-engine/smc/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
@@ -76,6 +77,16 @@ const isMRKey = (k) => MR_KEYS.has(String(k || "").toUpperCase());
 const isBRKey = (k) => BR_KEYS.has(String(k || "").toUpperCase());
 const isTFKey = (k) => TF_KEYS.has(String(k || "").toUpperCase());
 const isSmcKey = (k) => SMC_KEYS.has(String(k || "").toUpperCase());
+
+function mergeBacktestCfg(base, optsConfig, feeModel) {
+  return normalizeSmcParams({
+    ...base,
+    ...(optsConfig || {}),
+    makerFeeRate: optsConfig?.makerFeeRate ?? feeModel.makerFeeRate,
+    fundingRate8h: feeModel.fundingRate8h,
+    _feeModel: feeModel,
+  });
+}
 
 /**
  * Resolve MD race participants from Advance selectedComponents.
@@ -854,8 +865,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
     // Detect multi-component signals (AF v3.0 / SMC v3.1)
     const multiSignal = strategy.detectSignalMulti(indicators, i, {
-      // BT-FIX: spread full strategy config so SAC knobs (sacMinConfidenceA/B/C,
-      // sacEnabledComponents, sacSweepVolMult, sacOBDispMult, …) actually reach
+      // BT-FIX: spread full strategy config so SMC knobs (smcMinConfidenceA/B/C,
+      // smcEnabledComponents, smcSweepVolMult, smcOBDispMult, …) actually reach
       // the detector. Previously only af* keys were forwarded, so detectSignalMulti
       // used its internal `?? 60` defaults and ignored our tuned gates → Scalping 0.
       ...cfg,
@@ -903,7 +914,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
           regimeDetection: cfg.regimeDetection,
           typeOverrides: cfg.typeOverrides,
           // gates OFF for diagnosis:
-          sacMinConfidenceA: 0, sacMinConfidenceB: 0, sacMinConfidenceC: 0,
+          smcMinConfidenceA: 0, smcMinConfidenceB: 0, smcMinConfidenceC: 0,
           afMinComponentConfidence: 0, afMinAggregateConfidence: 0,
         });
         for (const k of ["Scalping", "Intraday", "Swing"]) {
@@ -976,7 +987,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       }
 
       // AF-SWING-V3: confidence/RVOL/ATR-tiered position size (SWING_ENGINE_V3.md
-      // improvement 9). No-op (multiplier 1) unless typeOverrides.Swing.sacSwingV3Gate
+      // improvement 9). No-op (multiplier 1) unless typeOverrides.Swing.smcSwingV3Gate
       // is enabled — see SmartMoneyConceptsStrategy._evaluateSwingV3Gate.
       const swingV3Mult = componentId === "Swing" ? (multiSignal.meta?.swingV3?.sizeMultiplier ?? 1) : 1;
       const adjustedRiskPerTrade = regimeResult.riskPerTrade * swingV3Mult;
@@ -1567,13 +1578,7 @@ async function runTripleTypeBacktest(opts = {}) {
 
   const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = {
-    ...base,
-    ...(opts.config || {}),
-    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
-    fundingRate8h: feeModel.fundingRate8h,
-    _feeModel: feeModel,
-  };
+  const cfg = mergeBacktestCfg(base, opts.config, feeModel);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
@@ -1788,13 +1793,7 @@ async function runRealBacktest(opts = {}) {
   // Canonical live config (legacyStrategies) merged with caller overrides.
   const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = {
-    ...base,
-    ...(opts.config || {}),
-    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
-    fundingRate8h: feeModel.fundingRate8h,
-    _feeModel: feeModel,
-  };
+  const cfg = mergeBacktestCfg(base, opts.config, feeModel);
 
   const feeRate = feeModel.feeRate;
   const slip = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
@@ -2664,13 +2663,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
 
   const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = STRATEGIES[strategyKey] || {};
-  const cfg = {
-    ...base,
-    ...(opts.config || {}),
-    makerFeeRate: opts.config?.makerFeeRate ?? feeModel.makerFeeRate,
-    fundingRate8h: feeModel.fundingRate8h,
-    _feeModel: feeModel,
-  };
+  const cfg = mergeBacktestCfg(base, opts.config, feeModel);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
