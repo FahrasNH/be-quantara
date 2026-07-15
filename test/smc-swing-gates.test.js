@@ -86,8 +86,7 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig hon
   // A Swing override may also exist purely for non-risk knobs (e.g. the low-TF
   // ATR-gate fix sets typeOverrides.Swing.atrMinMult only) — the legacy
   // fast-fail assertions below apply ONLY when the fast-fail SSOT is present.
-  const ov = STRATEGIES.ADAPTIVE_FUSION?.typeOverrides?.Swing
-    ?? STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
+  const ov = STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
     ?? STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
     ?? null;
   if (ov && ov.slAtrMult != null) {

@@ -73,7 +73,7 @@ class BotEngine extends EventEmitter {
 
     const exchangeType = (configOverrides.exchangeType || "bitget").toLowerCase();
     const ei   = getExchangeInfo(exchangeType);
-    // Strategi dari DB (configOverrides.strategyKey/strategy); getStrategy fallback ke "B"
+    // Strategi dari DB (configOverrides.strategyKey/strategy); getStrategy fallback ke SMART_MONEY_CONCEPTS
     const strat = getStrategy(configOverrides.strategyKey || configOverrides.strategy);
 
     // ── Resolve API credentials: DB key (dari Settings) > env var ──────────────
@@ -84,6 +84,11 @@ class BotEngine extends EventEmitter {
 
     // Hapus dari configOverrides agar tidak bocor ke this.config (keamanan)
     const { apiKey: _k, apiSecret: _s, passphrase: _p, exchangeType: _et, ...safeOverrides } = configOverrides;
+
+    const STRAT_UI_META = new Set(["trades", "winrate", "risk"]);
+    const stratKnobs = Object.fromEntries(
+      Object.entries(strat).filter(([k]) => !STRAT_UI_META.has(k)),
+    );
 
     // ── Sumber kebenaran config (prioritas: DB > strategy default) ────────────
     // process.env TIDAK digunakan untuk config bot — semua dari strategy atau DB.
@@ -220,6 +225,19 @@ class BotEngine extends EventEmitter {
       slPlusEnabled:     true,   // legacy; dikontrol oleh tpMode
       slPlusPartial1Pct: strat.slPlusPartial1Pct ?? 0.40,   // +1R → 40% partial, SL ke +0.3R
       slPlusPartial2Pct: strat.slPlusPartial2Pct ?? 0.275,  // +2R → 27.5% partial, SL ke +1R
+
+      // Per-strategy leg overrides + multi-leg component enablement (SSOT: strategyDefaults)
+      typeOverrides: strat.typeOverrides || {},
+      enabledComponents: strat.enabledComponents || strat.smcEnabledComponents || null,
+      afEnabledComponents: strat.afEnabledComponents || null,
+      afCombinationMode: strat.afCombinationMode,
+      afUseThreeComponentVoting: strat.afUseThreeComponentVoting,
+      tsCombinationMode: strat.tsCombinationMode,
+      mdCombinationMode: strat.mdCombinationMode,
+      bsCombinationMode: strat.bsCombinationMode,
+
+      // Full strategy SSOT knobs (smc*, typeOverrides, race flags, …)
+      ...stratKnobs,
 
       // ── DB overrides (SELALU override semua default di atas) ─────────────
       // apiKey/apiSecret/passphrase sudah dihapus dari safeOverrides (keamanan)
@@ -2981,8 +2999,9 @@ class BotEngine extends EventEmitter {
     const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
     const enabledComponents =
       this.config.afEnabledComponents ||
+      this.config.enabledComponents ||
       this.config.smcEnabledComponents ||
-      ["A", "B", "C"];
+      ["Scalping", "Intraday", "Swing"];
     const riskPerTrade = riskShareForType(
       componentId,
       enabledComponents,

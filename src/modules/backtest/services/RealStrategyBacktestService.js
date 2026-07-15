@@ -28,7 +28,7 @@ const fs = require("fs");
 const path = require("path");
 const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX } = require("../../../core/analytics-engine/indicators");
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
-const { STRATEGIES } = require("#config/strategyDefaults.js");
+const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefaults.js");
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
@@ -1575,7 +1575,7 @@ async function runTripleTypeBacktest(opts = {}) {
   const strategy = validation.strategy;
 
   const feeModel = resolveFeeModel({ ...opts, enableFees });
-  const base = STRATEGIES[strategyKey] || {};
+  const base = resolveStrategyDefaults(strategyKey);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
@@ -1790,7 +1790,7 @@ async function runRealBacktest(opts = {}) {
 
   // Canonical live config (legacyStrategies) merged with caller overrides.
   const feeModel = resolveFeeModel({ ...opts, enableFees });
-  const base = STRATEGIES[strategyKey] || {};
+  const base = resolveStrategyDefaults(strategyKey);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
 
   const feeRate = feeModel.feeRate;
@@ -2664,7 +2664,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const strategy = validation.strategy;
 
   const feeModel = resolveFeeModel({ ...opts, enableFees });
-  const base = STRATEGIES[strategyKey] || {};
+  const base = resolveStrategyDefaults(strategyKey);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
