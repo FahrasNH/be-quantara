@@ -17,7 +17,9 @@ const fs      = require("fs");
 const { _pool: pool } = require("../db/database");
 
 const BACKUP_DIR     = process.env.BACKUP_DIR     || "/opt/quantara-backups";
-const RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || "30", 10);
+// DEFAULT 7 days (was 30) — aggressive retention to prevent disk bloat on limited VPS.
+// Override via BACKUP_RETENTION_DAYS env if needed (e.g. production data pipeline).
+const RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || "7", 10);
 const INTERVAL_MS    = parseInt(process.env.BACKUP_INTERVAL_MS    || String(24 * 60 * 60 * 1000), 10); // 24j
 const ENABLED        = process.env.BACKUP_ENABLED !== "false";
 
@@ -85,23 +87,52 @@ function pgDump(filepath) {
 }
 
 // ── Cleanup backup lama ──────────────────────────────────────────────────────
+// Aggressive cleanup — silently skipping here caused 72GB bloat. Now with logging
+// so ops can debug. Skips "latest" symlinks; purges everything older than cutoff.
 
 function cleanup() {
+  const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let deleted = 0, errors = [];
+
   try {
     const files = fs.readdirSync(BACKUP_DIR);
-    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    let deleted = 0;
+    log(`[Cleanup] scanning ${files.length} files (retention=${RETENTION_DAYS}d)`);
+
     for (const f of files) {
-      if (f === "latest.sql.gz" || f.startsWith("trades_latest") || f.startsWith("sessions_latest")) continue;
-      const fp = path.join(BACKUP_DIR, f);
-      const stat = fs.statSync(fp);
-      if (stat.mtimeMs < cutoff) {
-        fs.unlinkSync(fp);
-        deleted++;
+      // Skip "latest" symlinks (point to current backup, re-created each run)
+      if (f === "latest.sql.gz" || f.startsWith("trades_latest") || f.startsWith("sessions_latest")) {
+        continue;
+      }
+
+      try {
+        const fp = path.join(BACKUP_DIR, f);
+        const stat = fs.statSync(fp);
+
+        if (stat.mtimeMs < cutoff) {
+          const ageHours = Math.round((Date.now() - stat.mtimeMs) / (60 * 60 * 1000));
+          fs.unlinkSync(fp);
+          deleted++;
+          log(`[Cleanup] deleted ${f} (${ageHours}h old)`);
+        }
+      } catch (err) {
+        errors.push(`${f}: ${err.message}`);
       }
     }
-    if (deleted > 0) log(`Cleanup: ${deleted} file lama dihapus (> ${RETENTION_DAYS} hari)`);
-  } catch { /* best effort */ }
+
+    if (deleted > 0) {
+      log(`[Cleanup] ✓ ${deleted} files deleted (> ${RETENTION_DAYS}d old)`);
+    } else {
+      log(`[Cleanup] ℹ no old files to delete (all within ${RETENTION_DAYS}d)`);
+    }
+
+    if (errors.length > 0) {
+      log(`[Cleanup] ⚠ ${errors.length} file(s) failed to delete: ${errors.join("; ")}`);
+    }
+  } catch (err) {
+    log(`[Cleanup] ✗ ERROR: ${err.message}`);
+    // Not silent — ops needs to know cleanup broke so they can investigate disk bloat
+    throw err;
+  }
 }
 
 // ── Backup utama ──────────────────────────────────────────────────────────────
@@ -153,12 +184,17 @@ async function runBackup() {
       log(`  pg_dump       : skip (pg_dump tidak tersedia — CSV tetap ada)`);
     }
 
-    // 4. Cleanup
-    cleanup();
-
     log(`Backup selesai ✅`);
   } catch (err) {
     log(`ERROR: ${err.message}`);
+  } finally {
+    // ALWAYS cleanup, even if backup failed — prevents disk bloat from silently breaking cleanup.
+    // This was root cause of 72GB bloat: cleanup() was skipped on error, files accumulated forever.
+    try {
+      cleanup();
+    } catch (err) {
+      log(`[Cleanup] FATAL: ${err.message}`);
+    }
   }
 }
 
