@@ -55,6 +55,18 @@ const smc = STRATEGIES.SMART_MONEY_CONCEPTS;
 assert.equal(smc.enabledComponents?.join(","), "Scalping,Intraday,Swing");
 assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceB, 55);
 assert.ok(smc.smcUseSequenceEngine === true);
+
+const UMBRELLA_KEYS = ["ADAPTIVE_FUSION", "TREND_SURGE", "MEAN_DRIFT", "BREAKOUT_STORM"];
+for (const key of UMBRELLA_KEYS) {
+  const cfg = STRATEGIES[key];
+  assert.ok(cfg, `${key} umbrella must exist`);
+  assert.ok(!cfg.typeOverrides, `${key} umbrella must not have typeOverrides`);
+  assert.ok(!cfg.enabledComponents, `${key} umbrella must not have enabledComponents`);
+  for (const prop of Object.keys(cfg)) {
+    assert.ok(!prop.startsWith("smc"), `${key} umbrella must not have ${prop}`);
+    assert.ok(!["emaFast", "atrPeriod", "riskReward"].includes(prop), `${key} umbrella must not have shared geometry ${prop}`);
+  }
+}
 assert.ok(!STRATEGIES.ADAPTIVE_FUSION.smcUseSequenceEngine, "ADAPTIVE_FUSION umbrella has no smc*");
 
 assert.equal(normalizeStrategyKey("DAY_TRADING"), "TREND_FOLLOWING");

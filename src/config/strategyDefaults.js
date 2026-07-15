@@ -133,6 +133,10 @@ const STRATEGIES = {
     },
 
     adxMinStrength:    25,
+    donchianPeriod:    20,
+    htfRatio:          12,
+    mtfRatio:          3,
+    minVolRatio:       1.0,
     tfHtfLayerEnabled: true,
 
     tsCombinationMode: "race",
@@ -196,6 +200,28 @@ const STRATEGIES = {
     enabledComponents: ["Scalping", "Intraday", "Swing"],
     typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
 
+    bbPeriod:     20,
+    minVolRatio:  0.7,
+    bbStdDevA:    1.5,
+    rsiOversoldA: 28,
+    rsiOverboughtA: 72,
+    bbStdDevB:    2.0,
+    rsiOversoldB: 32,
+    rsiOverboughtB: 68,
+    mdAdxGateEnabled: true,
+    mdObFvgEnabled:   true,
+    mdAdxPeriod:      14,
+    mdAdxBalanceMax:  20,
+    mdAdxImbalanceMin: 25,
+    mdAdxTransitionConfidenceMult: 0.75,
+    mdConfluenceAtrMult: 0.5,
+    mdNoConfluenceConfidenceMult: 0.7,
+    mdWithConfluenceConfidenceBoost: 1.1,
+    mdFvgScanBars:    30,
+    mdFvgMinGapPct:   0.002,
+    mdObLookback:     20,
+    mdObDispMult:     1.5,
+
     trades:        "5-15 trade/minggu",
     winrate:       "~55-60%",
     risk:          "Rendah",
@@ -251,6 +277,27 @@ const STRATEGIES = {
 
     enabledComponents: ["Scalping", "Intraday", "Swing"],
     typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
+    lookbackBars:          20,
+    volumeMultiplier:      1.5,
+    maxVolumeRatio:        3.55,
+    retestWindow:          96,
+    minRetestBars:         16,
+    minRejectionWickRatio: 0.5,
+    minRetestDepthAtr:     0.17,
+    maxRetestDepthAtr:     0.72,
+    minDisplacementAtr:    0.30,
+    blockedMarketConds:    ["COILED_BREAKOUT", "SQUEEZE_BREAKOUT", "DRY_SQUEEZE"],
+    bbPeriod:              20,
+    bbStdDev:              2.0,
+    squeezeLookback:       10,
+    squeezeThreshold:      0.75,
+    minBbWidthPct:         0.0076,
+    minAtrPct:             0.25,
+    requireConsolidation:  true,
+    preferredTpMode:       "full",
+    minSlAtrFloor:         1.5,
+    maxPlannedRR:          2.5,
 
     trades:        "2-7 trade/hari",
     winrate:       "~51-56%",
@@ -312,26 +359,6 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // ADAPTIVE_FUSION — umbrella-only (FOUNDRY tier)
-  // Race flags + component pool. No smc* / leg trading geometry here.
-  // ─────────────────────────────────────────────
-  ADAPTIVE_FUSION: {
-    name:          "ADAPTIVE_FUSION",
-    label:         "Adaptive Fusion",
-    description:   "Umbrella: SMART_MONEY_CONCEPTS + Wyckoff + VSA race-to-confirm.",
-
-    afCombinationMode: "race",
-    afUseThreeComponentVoting: true,
-    afMinVotes:        2,
-    afRejectOnDissent: true,
-    afEnabledComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
-
-    trades:  "~3–8 trade/hari (1h eval)",
-    winrate: "Target 52–60%",
-    risk:    "Rendah-Sedang",
-  },
-
-  // ─────────────────────────────────────────────
   // SMART_MONEY_CONCEPTS — SMC v3.0 engine (all smc* SSOT)
   // ─────────────────────────────────────────────
   SMART_MONEY_CONCEPTS: {
@@ -378,6 +405,16 @@ const STRATEGIES = {
 };
 
 // ─── Umbrella aliases (race flags only — no smc* / leg geometry) ─────────────
+STRATEGIES.ADAPTIVE_FUSION = {
+  name: "ADAPTIVE_FUSION",
+  label: "Adaptive Fusion",
+  description: "Umbrella: SMART_MONEY_CONCEPTS + Wyckoff + VSA race-to-confirm.",
+  afCombinationMode: "race",
+  afUseThreeComponentVoting: true,
+  afMinVotes: 2,
+  afRejectOnDissent: true,
+  afEnabledComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
+};
 STRATEGIES.TREND_SURGE = {
   name: "TREND_SURGE",
   label: "Trend Surge",
