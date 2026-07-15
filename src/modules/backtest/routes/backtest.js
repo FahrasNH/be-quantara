@@ -531,11 +531,12 @@ module.exports = function createBacktestRouter(context) {
   /**
    * POST /api/v1/backtest/export-csv
    * Export CSV single atau multi-run.
-   * Body: { ids, mode?, format?: 'csv'|'xlsx', strategies?: string[] }
+   * Body: { ids, mode?, format?: 'csv'|'xlsx', strategies?: string[], coreOnly?: boolean }
    * format=xlsx → Dynamic ML multi-sheet workbook (Sprint 15).
+   * coreOnly=true → User Export sheet only (no ML_* sheets).
    */
   router.post("/export-csv", asyncHandler(async (req, res) => {
-    const { ids, mode = "trades", format = "csv", strategies } = req.body;
+    const { ids, mode = "trades", format = "csv", strategies, coreOnly = false } = req.body;
     if (!ids?.length) {
       return res.status(400).json({ ok: false, error: "ids diperlukan" });
     }
@@ -552,14 +553,16 @@ module.exports = function createBacktestRouter(context) {
             ? strategies.split(",").map((s) => s.trim()).filter(Boolean)
             : null),
         adminFormat: true,
+        coreOnly: Boolean(coreOnly),
       });
+      const suffix = coreOnly ? "core" : "ml";
       res.setHeader(
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="quantara_backtest_ml_${Date.now()}.xlsx"`
+        `attachment; filename="quantara_backtest_${suffix}_${Date.now()}.xlsx"`
       );
       return res.send(buf);
     }
@@ -588,6 +591,8 @@ module.exports = function createBacktestRouter(context) {
     const strategies = req.query.strategies
       ? String(req.query.strategies).split(",").map((s) => s.trim()).filter(Boolean)
       : null;
+    const coreOnly = String(req.query.coreOnly || "").toLowerCase() === "true"
+      || req.query.coreOnly === "1";
 
     if (format === "csv") {
       const csv = BacktestCsvService.exportBacktests([record], "trades");
@@ -602,14 +607,16 @@ module.exports = function createBacktestRouter(context) {
     const buf = BacktestCsvService.exportBacktestsXlsx([record], {
       strategies,
       adminFormat: true,
+      coreOnly,
     });
+    const suffix = coreOnly ? "core" : "ml";
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="quantara_backtest_${id}_ml_${Date.now()}.xlsx"`
+      `attachment; filename="quantara_backtest_${id}_${suffix}_${Date.now()}.xlsx"`
     );
     res.send(buf);
   }));
