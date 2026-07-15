@@ -53,6 +53,23 @@ class IctStyleStrategy extends StrategyBase {
       lastIdx,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
+    const kz = result.killZone || {};
+    const raid = result.raid || {};
+    const reason = String(result.reason || raid.reason || "");
+    let raidType = "NO_RAID";
+    if (reason.includes("raid_high") || raid.direction === "SHORT") raidType = "RAID_HIGH";
+    else if (reason.includes("raid_low") || raid.direction === "LONG") raidType = "RAID_LOW";
+    const hourUtc = kz.minuteOfDay != null ? Math.floor(kz.minuteOfDay / 60) : null;
+    // Sprint 15: flat ict* ML fields
+    const ictFields = {
+      ictKillZoneHour: hourUtc,
+      ictKillZoneLevel: raid.level ?? null,
+      ictRaidType: result.signal ? raidType : (raid.detected ? raidType : "NO_RAID"),
+      ictRaidDepthAtr: null, // needs ATR at wire-time; BotEngine/backtest may fill
+      ictVolumeRatio: raid.volOk === false ? 0.5 : (raid.volOk ? 1.2 : null),
+      ictReversal: Boolean(result.signal && reason.includes("reversal")),
+      ictMssPct: null, // MSS % not computed in current ICT raid subset
+    };
     this._lastSignalMeta = {
       component: "BS_ICT",
       winningComponent: result.signal ? "BS_ICT" : null,
@@ -62,6 +79,7 @@ class IctStyleStrategy extends StrategyBase {
       reason: result.reason,
       killZone: result.killZone,
       raid: result.raid,
+      ...ictFields,
     };
     return result.signal || null;
   }

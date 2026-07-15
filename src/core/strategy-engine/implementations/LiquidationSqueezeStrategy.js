@@ -63,6 +63,17 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       exchangeData,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
+    const wick = result.wick || {};
+    // Sprint 15: flat ls* ML fields (OI percentile / BB squeeze when feed available)
+    const lsFields = {
+      lsOiValue: result.oiValue ?? exchangeData.oiHistory?.slice?.(-1)?.[0] ?? null,
+      lsOiPercentile: result.oiPercentile ?? null,
+      lsBbWidth: result.bbWidth ?? null,
+      lsBbWidthPercentile: result.bbWidthPercentile ?? null,
+      lsLiquidationLevel: wick.level ?? wick.extreme ?? null,
+      lsWickDepthAtr: wick.depthAtr ?? wick.wickAtr ?? null,
+      lsOiForecast24h: result.oiChange ?? null,
+    };
     this._lastSignalMeta = {
       component: "BS_LS",
       winningComponent: result.signal ? "BS_LS" : null,
@@ -74,6 +85,7 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       oiChange: result.oiChange,
       dataAvailable: result.dataAvailable,
       wick: result.wick,
+      ...lsFields,
     };
     return result.signal || null;
   }

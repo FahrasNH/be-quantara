@@ -54,6 +54,29 @@ class SupplyDemandStrategy extends StrategyBase {
       lastIdx,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
+    const atr = indicators.atr?.[lastIdx];
+    const zone = result.nearestZone || {};
+    const low = zone.low ?? zone.bottom ?? null;
+    const high = zone.high ?? zone.top ?? null;
+    const mid = low != null && high != null ? (low + high) / 2 : null;
+    let zoneType = result.zoneType || null;
+    if (zoneType && String(zoneType).includes("demand")) zoneType = "DEMAND";
+    else if (zoneType && String(zoneType).includes("supply")) zoneType = "SUPPLY";
+    const price = indicators.closes?.[lastIdx];
+    // Sprint 15: flat sd* ML fields
+    const sdFields = {
+      sdZoneType: zoneType,
+      sdZoneLevel: mid,
+      sdZoneSizeAtr: low != null && high != null && atr > 0 ? (high - low) / atr : null,
+      sdRetestDepthAtr: mid != null && atr > 0 && price != null
+        ? Math.abs(price - mid) / atr
+        : null,
+      sdVolumeConfirmation: Boolean(result.hasVolConfirm),
+      sdTimeToRetestBars: zone.barsSince ?? zone.ageBars ?? null,
+      sdConfluence: Boolean(
+        zone.zoneKind && (String(zone.zoneKind).includes("ob") || String(zone.zoneKind).includes("fvg"))
+      ),
+    };
     this._lastSignalMeta = {
       component: "MD_SD",
       winningComponent: result.signal ? "MD_SD" : null,
@@ -65,6 +88,10 @@ class SupplyDemandStrategy extends StrategyBase {
       nearestZone: result.nearestZone,
       tpOverride: result.takeProfit,
       tpSource: result.tpSource,
+      hasVolConfirm: result.hasVolConfirm,
+      atr,
+      price,
+      ...sdFields,
     };
     return result.signal || null;
   }

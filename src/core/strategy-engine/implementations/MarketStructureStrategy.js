@@ -69,17 +69,33 @@ class MarketStructureStrategy extends StrategyBase {
     const lows = indicators.lowsHTF || indicators.lows || [];
     const closes = indicators.closesHTF || indicators.closes || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
-    const atr = indicators.atrHTF?.[idx] ?? indicators.atr?.[lastIdx] ?? null;
+    const atrVal = indicators.atrHTF?.[idx] ?? indicators.atr?.[lastIdx] ?? null;
     const result = evaluateMarketStructureEntry(highs, lows, closes, idx, {
       ...structureConfigFrom(config),
-      atr,
+      atr: atrVal,
       opens: indicators.opensHTF || indicators.opens || [],
     });
+    const nested = result.meta || {};
+    const lastSH = nested.lastSwingHigh;
+    const lastSL = nested.lastSwingLow;
+    const atrSafe = atrVal != null && Number.isFinite(atrVal) && atrVal > 0 ? atrVal : null;
+    const dist = nested.dist != null ? nested.dist : null;
+    // Sprint 15: flat ms* ML fields
+    const msFields = {
+      msSwingHighPrice: lastSH?.price ?? null,
+      msSwingLowPrice: lastSL?.price ?? null,
+      msPullbackDepthAtr: dist != null && atrSafe ? dist / atrSafe : null,
+      msHhPattern: (nested.hh ?? 0) >= 1 || nested.structure === "uptrend",
+      msLlPattern: (nested.ll ?? 0) >= 1 || nested.structure === "downtrend",
+      msPullbackConfirmed: Boolean(result.signal),
+    };
     this._lastSignalMeta = {
       component: "TS_MS",
       winningComponent: result.signal ? "TS_MS" : null,
       strategyLabel: "Dow Theory",
+      atr: atrSafe,
       ...result,
+      ...msFields,
     };
     return result.signal || null;
   }

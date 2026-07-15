@@ -530,10 +530,12 @@ module.exports = function createBacktestRouter(context) {
 
   /**
    * POST /api/v1/backtest/export-csv
-   * Export CSV single atau multi-run
+   * Export CSV single atau multi-run.
+   * Body: { ids, mode?, format?: 'csv'|'xlsx', strategies?: string[] }
+   * format=xlsx → Dynamic ML multi-sheet workbook (Sprint 15).
    */
   router.post("/export-csv", asyncHandler(async (req, res) => {
-    const { ids, mode = "trades" } = req.body;
+    const { ids, mode = "trades", format = "csv", strategies } = req.body;
     if (!ids?.length) {
       return res.status(400).json({ ok: false, error: "ids diperlukan" });
     }
@@ -541,10 +543,75 @@ module.exports = function createBacktestRouter(context) {
     if (!records.length) {
       return res.status(404).json({ ok: false, error: "Tidak ada record ditemukan" });
     }
+
+    if (String(format).toLowerCase() === "xlsx") {
+      const buf = BacktestCsvService.exportBacktestsXlsx(records, {
+        strategies: Array.isArray(strategies)
+          ? strategies
+          : (typeof strategies === "string"
+            ? strategies.split(",").map((s) => s.trim()).filter(Boolean)
+            : null),
+        adminFormat: true,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="quantara_backtest_ml_${Date.now()}.xlsx"`
+      );
+      return res.send(buf);
+    }
+
     const csv = BacktestCsvService.exportBacktests(records, mode);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="quantara_backtest_trades_${Date.now()}.csv"`);
     res.send(csv);
+  }));
+
+  /**
+   * GET /api/v1/backtest/:id/export
+   * Dynamic ML XLSX (or CSV) for a single backtest run.
+   * Query: format=xlsx|csv, strategies=AF_SMC,TS_TF
+   */
+  router.get("/:id/export", asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ ok: false, error: "ID tidak valid" });
+    }
+    const record = await BacktestHistoryService.getById(id);
+    if (!record) {
+      return res.status(404).json({ ok: false, error: "Backtest tidak ditemukan" });
+    }
+    const format = String(req.query.format || "xlsx").toLowerCase();
+    const strategies = req.query.strategies
+      ? String(req.query.strategies).split(",").map((s) => s.trim()).filter(Boolean)
+      : null;
+
+    if (format === "csv") {
+      const csv = BacktestCsvService.exportBacktests([record], "trades");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="quantara_backtest_${id}_${Date.now()}.csv"`
+      );
+      return res.send(csv);
+    }
+
+    const buf = BacktestCsvService.exportBacktestsXlsx([record], {
+      strategies,
+      adminFormat: true,
+    });
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="quantara_backtest_${id}_ml_${Date.now()}.xlsx"`
+    );
+    res.send(buf);
   }));
 
   /**

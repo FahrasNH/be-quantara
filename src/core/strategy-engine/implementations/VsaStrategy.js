@@ -63,12 +63,33 @@ class VsaStrategy extends StrategyBase {
       null,
       { ...DEFAULTS, ...config.vsa, ...config },
     );
+    const nested = result.meta || {};
+    const spreadType = nested.spreadType || {};
+    const reason = String(result.reason || "");
+    let patternType = null;
+    if (reason.includes("stopping_volume")) patternType = "STOPPING_VOLUME";
+    else if (reason.includes("no_demand")) patternType = "NO_DEMAND";
+    else if (reason.includes("no_supply")) patternType = "NO_SUPPLY";
+    const nearSwing = nested.nearSwing || {};
+    // Sprint 15: flat vsa* ML fields
+    const vsaFields = {
+      vsaPatternType: patternType,
+      vsaSpread: spreadType.spread ?? null,
+      vsaVolume: nested.volume ?? null,
+      vsaAvgSpread: spreadType.avgSpread ?? null,
+      vsaAvgVolume: nested.avgVolume ?? nested.volSMA ?? null,
+      vsaSwingProximity: nearSwing.distancePct ?? nearSwing.proximity ?? null,
+      vsaReversal: patternType === "STOPPING_VOLUME" || reason.includes("stopping_volume"),
+    };
     this._lastSignalMeta = {
       component: "AF_VSA",
+      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "AF_VSA" : null,
+      strategyLabel: "Volume Spread Analysis (VSA)",
       vote: result.vote,
       confidence: result.confidence,
       reason: result.reason,
       meta: result.meta || null,
+      ...vsaFields,
     };
     return result;
   }
