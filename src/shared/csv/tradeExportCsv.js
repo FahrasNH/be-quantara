@@ -121,13 +121,61 @@ function buildPerformanceSummaryCsv(data) {
   return ["Metric,Value", ...rows].join("\n");
 }
 
+/**
+ * Per-strategy ML columns for Dynamic ML multi-sheet export (Sprint 15).
+ * Keys must match trade object fields populated by strategy enrichment.
+ * Incomplete strategies stay empty until their metadata extract tasks land.
+ */
+const ML_FIELD_SETS = Object.freeze({
+  AF_SMC: Object.freeze([
+    "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct",
+    "htfAdx", "hourUtc", "confSweepStrength", "confFvgSize",
+    "confDisplacementPct", "confHtfAlignment", "confMitigationDepth", "confObConfluence",
+  ]),
+  BS_BR: Object.freeze([
+    "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr", "rejectionWickPct",
+    "consolidationBars", "breakoutCandleAtr", "fundingRateAtEntry", "fundingForecast24h",
+    "holdHours", "volumeRatio", "bbWidth",
+  ]),
+  TS_VP: Object.freeze([
+    "vpVwapLevel", "vpVahLevel", "vpValLevel", "vpPocLevel", "vpTriggerType",
+  ]),
+  TS_TF: Object.freeze([]),
+  TS_MS: Object.freeze([]),
+  MD_MR: Object.freeze([]),
+  MD_SD: Object.freeze([]),
+  MD_SA: Object.freeze([]),
+  AF_WYCKOFF: Object.freeze([]),
+  AF_VSA: Object.freeze([]),
+  BS_ICT: Object.freeze([]),
+  BS_LS: Object.freeze([]),
+});
+
+/**
+ * Project a trade onto ML columns for a strategy (future ML_* sheet rows).
+ * @param {object} trade
+ * @param {string} strategyKey
+ * @returns {Record<string, unknown>}
+ */
+function projectMlFields(trade, strategyKey) {
+  const key = String(strategyKey || "").trim().toUpperCase();
+  const fields = ML_FIELD_SETS[key] || [];
+  const out = {};
+  for (const f of fields) {
+    out[f] = trade?.[f] ?? null;
+  }
+  return out;
+}
+
 module.exports = {
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
   TRADE_EXPORT_COLUMN_KEYS,
   DROPPED_ML_CSV_COLUMN_KEYS,
+  ML_FIELD_SETS,
   escapeCsv,
   toCsv,
   pickExportColumns,
   buildPerformanceSummaryCsv,
+  projectMlFields,
 };
