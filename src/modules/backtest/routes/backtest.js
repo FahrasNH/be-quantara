@@ -14,23 +14,15 @@ const OptimizationAnalysisService = require("../../analytics/services/Optimizati
 const db = require("../../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../../scripts/lib/simulator");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
+const { normalizeStrategyKey, ingressNormalizeStrategyKey, STRATEGY_ABBREV } = require("../../../config/strategyKeyNormalizer");
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../../research/services/GrokConfirmBatchProcessor");
 const GrokBacktestJobService = require("../../research/services/GrokBacktestJobService");
 const BacktestJobService = require("../services/BacktestJobService");
 const cfg = require("../../../config/env");
 
-// Gen2 canonical engines for picker/list APIs (legacy aliases accepted elsewhere via normalize).
+// Gen2 canonical engines for picker/list APIs (legacy aliases accepted at ingress via normalize).
 const USER_STRATEGY_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
-// GROK_CONFIRM accepts Gen2 engines + legacy Gen1 aliases + SMART_MONEY_CONCEPTS.
-const GROK_CONFIRM_STRATEGIES = new Set([
-  ...USER_STRATEGY_KEYS,
-  "ADAPTIVE_FUSION",
-  "SMART_MONEY_CONCEPTS",
-  "TREND_FOLLOWING",
-  "MEAN_REVERSION",
-  "BREAKOUT_RETEST",
-]);
 const GROK_CONFIRM_MAX_SIGNALS = 500;
 
 function validateGrokConfirmPayload(body) {
@@ -43,8 +35,11 @@ function validateGrokConfirmPayload(body) {
     tpRejectAction,
   } = body ?? {};
 
-  const strategyKey = String(strategyKeyRaw || "").toUpperCase();
-  if (!GROK_CONFIRM_STRATEGIES.has(strategyKey)) {
+  const strategyKey = ingressNormalizeStrategyKey(
+    String(strategyKeyRaw || "").toUpperCase(),
+    { source: "backtest.grokConfirm" }
+  );
+  if (!USER_STRATEGY_KEYS.includes(strategyKey)) {
     return {
       error: {
         status: 400,
@@ -87,18 +82,6 @@ function validateGrokConfirmPayload(body) {
     tpRejectAction,
   };
 }
-const STRATEGY_ABBREV = {
-  AF_SMC: "AF",
-  TS_TF: "TS",
-  MD_MR: "MD",
-  BS_BR: "BS",
-  // Legacy abbrev kept for historical archive rows
-  ADAPTIVE_FUSION: "AF",
-  TREND_FOLLOWING: "TS",
-  MEAN_REVERSION: "MD",
-  BREAKOUT_RETEST: "BS",
-};
-
 function buildStrategyList() {
   return USER_STRATEGY_KEYS.map(key => {
     const s = STRATEGIES[key];
@@ -154,7 +137,8 @@ function normalizeMetrics(stats) {
 
 /** Phase 3 — simplified server-side backtest using shared simulator.js */
 function runSimpleServerBacktest(candles, strategyKey, parameters = {}, options = {}) {
-  const strat = STRATEGIES[strategyKey] || STRATEGIES.MEAN_REVERSION;
+  const canonical = normalizeStrategyKey(strategyKey) || "MD_MR";
+  const strat = STRATEGIES[canonical] || STRATEGIES.MD_MR;
   const atrMult = (parameters.atrMult ?? strat.atrMultiplier ?? 1.4) * (parameters.slMultiplier ?? 1);
   const riskReward = parameters.riskReward ?? strat.riskReward ?? 2;
   const capital0 = parameters.capital ?? 500;
@@ -1221,7 +1205,7 @@ module.exports = function createBacktestRouter(context) {
    * Bukan replika BotEngine penuh; untuk validasi silang & future migration.
    */
   router.post("/run-server", asyncHandler(async (req, res) => {
-    const { candles, strategyKey = "MEAN_REVERSION", parameters = {}, options = {} } = req.body;
+    const { candles, strategyKey = "MD_MR", parameters = {}, options = {} } = req.body;
     if (!Array.isArray(candles) || candles.length < 50) {
       return res.status(400).json({ ok: false, error: "Minimal 50 candles diperlukan" });
     }

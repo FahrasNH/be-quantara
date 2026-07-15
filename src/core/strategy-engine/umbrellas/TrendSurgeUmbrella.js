@@ -17,6 +17,7 @@ const UmbrellaStrategy         = require("../base/UmbrellaStrategy");
 const TrendFollowingStrategy   = require("../implementations/TrendFollowingStrategy");
 const MarketStructureStrategy  = require("../implementations/MarketStructureStrategy");
 const VolumeProfileStrategy    = require("../implementations/VolumeProfileStrategy");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 const RACER_PRIORITY = ["TS_TF", "TS_MS", "TS_VP"];
 const RACER_LABELS = {
@@ -60,8 +61,8 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
     }
     const active = new Set();
     for (const c of raw) {
-      const k = String(c || "").toUpperCase();
-      if (k === "TS_TF" || k === "TREND_FOLLOWING" || k === "TF") active.add("TS_TF");
+      const k = normalizeStrategyKey(String(c || "").toUpperCase());
+      if (k === "TS_TF") active.add("TS_TF");
       else if (k === "TS_MS" || k === "DOW_THEORY" || k === "MARKET_STRUCTURE") active.add("TS_MS");
       else if (k === "TS_VP" || k === "AMT" || k === "AUCTION_MARKET_THEORY" || k === "VOLUME_PROFILE") {
         active.add("TS_VP");

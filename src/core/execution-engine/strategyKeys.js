@@ -1,19 +1,21 @@
 /**
  * Strategy-key sets / predicates shared by BotEngine execution paths.
+ * Gen2 canonical keys only — Gen1 resolves at ACL ingress.
  */
+const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
 
 const GROK_CONFIRM_STRATEGIES = new Set([
+  "AF_SMC",
   "ADAPTIVE_FUSION",
-  "TREND_FOLLOWING",
-  "MEAN_REVERSION",
+  "TS_TF",
   "MD_MR",
-  "BREAKOUT_RETEST",
+  "BS_BR",
 ]);
 
-const MR_STRATEGY_KEYS = new Set(["MEAN_REVERSION", "MD_MR", "MR"]);
+const MR_STRATEGY_KEYS = new Set(["MD_MR"]);
 
 function isMeanReversionKey(key) {
-  return MR_STRATEGY_KEYS.has(String(key || "").toUpperCase());
+  return MR_STRATEGY_KEYS.has(normalizeStrategyKey(String(key || "").toUpperCase()));
 }
 
 module.exports = {

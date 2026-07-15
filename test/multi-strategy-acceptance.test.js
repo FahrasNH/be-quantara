@@ -79,17 +79,17 @@ console.log("\n📋 Multi-Strategy Acceptance Tests (TC-001..TC-008)\n");
 
 // ── TC-006: BR tidak bisa live (strategyGuard + entitlement) ────────────────
 {
-  t("TC-006: BR ada di DRY_RUN_ONLY_STRATEGIES", DRY_RUN_ONLY_STRATEGIES.has("BREAKOUT_RETEST"));
-  t("TC-006: isStrategyLiveReady(BR) = false", isStrategyLiveReady("BREAKOUT_RETEST") === false);
+  t("TC-006: BS_BR ada di DRY_RUN_ONLY_STRATEGIES", DRY_RUN_ONLY_STRATEGIES.has("BS_BR"));
+  t("TC-006: isStrategyLiveReady(BS_BR) = false", isStrategyLiveReady("BS_BR") === false);
 
-  const live = runGuard({ strategyKey: "BREAKOUT_RETEST", dryRun: false });
-  t("TC-006: strategyGuard blokir BR live (403)", live.statusCode === 403 && !live.nexted);
+  const live = runGuard({ strategyKey: "BS_BR", dryRun: false });
+  t("TC-006: strategyGuard blokir BS_BR live (403)", live.statusCode === 403 && !live.nexted);
 
-  const dry = runGuard({ strategyKey: "BREAKOUT_RETEST", dryRun: true });
-  t("TC-006: strategyGuard izinkan BR dry-run", dry.nexted === true);
+  const dry = runGuard({ strategyKey: "BS_BR", dryRun: true });
+  t("TC-006: strategyGuard izinkan BS_BR dry-run", dry.nexted === true);
 
-  const liveSet = filterStrategiesByMode(["ADAPTIVE_FUSION", "BREAKOUT_RETEST"], "live");
-  t("TC-006: filter live mode exclude BR", !liveSet.includes("BREAKOUT_RETEST"));
+  const liveSet = filterStrategiesByMode(["AF_SMC", "BS_BR"], "live");
+  t("TC-006: filter live mode exclude BS_BR", !liveSet.includes("BS_BR"));
 }
 
 // ── TC-007: Tier downgrade → koordinator stop strategi tak diizinkan ────────

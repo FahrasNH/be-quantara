@@ -289,22 +289,22 @@ describe('[FIX-2] analyzeStrategyFit — strategy analysis logic', () => {
     lastClose: 2985, bbUpper: 3100, bbLower: 2990,
   };
 
-  it('trending market harus rekomendasikan TREND_FOLLOWING atau ADAPTIVE_FUSION', () => {
+  it('trending market harus rekomendasikan TS_TF atau AF_SMC', () => {
     const result = analyzeStrategyFit(TRENDING_MARKET, 'ADAPTIVE_FUSION');
     assert.strictEqual(result.ok, true);
-    assert.ok(['TREND_FOLLOWING', 'ADAPTIVE_FUSION'].includes(result.recommended));
+    assert.ok(['TS_TF', 'AF_SMC'].includes(result.recommended));
   });
 
-  it('ranging + BB oversold harus rekomendasikan MEAN_REVERSION', () => {
+  it('ranging + BB oversold harus rekomendasikan MD_MR', () => {
     const result = analyzeStrategyFit(RANGING_MARKET, 'ADAPTIVE_FUSION');
     assert.strictEqual(result.ok, true);
-    assert.strictEqual(result.recommended, 'MEAN_REVERSION');
+    assert.strictEqual(result.recommended, 'MD_MR');
   });
 
-  it('BREAKOUT_RETEST boleh muncul di strategyScores', () => {
-    const result = analyzeStrategyFit(TRENDING_MARKET, 'BREAKOUT_RETEST');
-    assert.ok('BREAKOUT_RETEST' in result.strategyScores);
-    assert.ok(!result.blockedStrategies.includes('BREAKOUT_RETEST'));
+  it('BS_BR boleh muncul di strategyScores', () => {
+    const result = analyzeStrategyFit(TRENDING_MARKET, 'BS_BR');
+    assert.ok('BS_BR' in result.strategyScores);
+    assert.ok(!result.blockedStrategies.includes('BS_BR'));
   });
 
   it('response harus mengandung semua required fields', () => {
@@ -318,7 +318,7 @@ describe('[FIX-2] analyzeStrategyFit — strategy analysis logic', () => {
   });
 
   it('switchRecommended harus false jika currentStrategy sudah optimal', () => {
-    const result = analyzeStrategyFit(RANGING_MARKET, 'MEAN_REVERSION');
+    const result = analyzeStrategyFit(RANGING_MARKET, 'MD_MR');
     assert.strictEqual(result.switchRecommended, false);
   });
 });

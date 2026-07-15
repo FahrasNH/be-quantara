@@ -6,6 +6,8 @@
  * here — ML datasets use SMC_ML_CSV_COLUMNS / dedicated expand scripts.
  */
 
+const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
+
 /** Kolom user-facing (history.js GET /trades?format=csv) */
 const TRADE_EXPORT_COLUMNS = [
   ["id",           "ID"],
@@ -178,25 +180,20 @@ const ML_FIELD_SETS = Object.freeze({
 });
 
 const ML_STRATEGY_ALIASES = Object.freeze({
-  TREND_FOLLOWING: "TS_TF",
   "TREND FOLLOWING": "TS_TF",
   MARKET_STRUCTURE: "TS_MS",
   "MARKET STRUCTURE": "TS_MS",
   VOLUME_PROFILE: "TS_VP",
   "VOLUME PROFILE": "TS_VP",
-  MEAN_REVERSION: "MD_MR",
   "MEAN REVERSION": "MD_MR",
   SUPPLY_AND_DEMAND: "MD_SD",
   "SUPPLY AND DEMAND": "MD_SD",
   STATISTICAL_ARBITRAGE: "MD_SA",
   "STATISTICAL ARBITRAGE": "MD_SA",
-  BREAKOUT_RETEST: "BS_BR",
   "BREAKOUT RETEST": "BS_BR",
   BREAKOUT_TRADING: "BS_BR",
   "BREAKOUT TRADING": "BS_BR",
-  SMART_MONEY_CONCEPTS: "AF_SMC",
   "SMART MONEY CONCEPTS": "AF_SMC",
-  ADAPTIVE_FUSION: "AF_SMC",
   "ADAPTIVE FUSION": "AF_SMC",
   WYCKOFF: "AF_WYCKOFF",
   VSA: "AF_VSA",
@@ -213,6 +210,9 @@ const ML_STRATEGY_ALIASES = Object.freeze({
 function normalizeMlStrategyKey(key) {
   const raw = String(key || "").trim().toUpperCase();
   if (!raw) return "";
+  const acl = normalizeStrategyKey(raw);
+  if (ML_FIELD_SETS[acl]) return acl;
+  if (ML_STRATEGY_ALIASES[acl]) return ML_STRATEGY_ALIASES[acl];
   if (ML_FIELD_SETS[raw]) return raw;
   if (ML_STRATEGY_ALIASES[raw]) return ML_STRATEGY_ALIASES[raw];
   // "ICT-style trading" → ICT_STYLE_TRADING / ICT-STYLE TRADING

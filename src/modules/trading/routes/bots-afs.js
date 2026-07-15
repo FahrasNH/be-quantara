@@ -18,6 +18,7 @@ module.exports = function createBotsRouter(helpers) {
   const { assertStrategyAllowed, getStrategyEntitlements, getTierStrategies, getUserTier, shouldAutoEnableGrokConfirm, getGrokConfirmEntitlement } = require("../../users/services/entitlement");
   // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
   const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../../core/risk-engine/tierConfig");
+  const { ingressNormalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
   const db = require("../../../infrastructure/db/database");
   const envCfg = require("../../../config/env");
 
@@ -514,7 +515,10 @@ module.exports = function createBotsRouter(helpers) {
           });
         }
       } else {
-        const strategyKey = explicitStrategyKey || "ADAPTIVE_FUSION";
+        const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "AF_SMC", {
+          source: "bots-afs.create",
+          mode: "live",
+        });
         try {
           await assertStrategyAllowed(userId, strategyKey);
         } catch (e) {
@@ -615,7 +619,10 @@ module.exports = function createBotsRouter(helpers) {
         }
       } else {
         // Legacy: entitlement check untuk strategi tunggal yang dipilih.
-        const strategyKey = explicitStrategyKey || "ADAPTIVE_FUSION";
+        const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "AF_SMC", {
+          source: "bots-afs.create",
+          mode: "live",
+        });
         try {
           await assertStrategyAllowed(userId, strategyKey);
         } catch (e) {
@@ -660,7 +667,7 @@ module.exports = function createBotsRouter(helpers) {
           }
           // Filter out blocked strategies for multi mode
           strategies = strategies.filter(s => !pairClass.blockedStrategies.includes(s));
-          if (!strategies.length) strategies = ["MEAN_REVERSION"];
+          if (!strategies.length) strategies = ["MD_MR"];
         }
       }
 
@@ -724,7 +731,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // Sprint 14 HALT: never arm BS_BR / BREAKOUT_RETEST live, even when
+      // Sprint 14 HALT: never arm BS_BR live, even when
       // strategyKey is omitted from body (existing bot or multi-tier path).
       {
         const { isBsBrHaltedKey } = require("../../../config/strategies");
@@ -1068,8 +1075,12 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       // Entitlement check
+      const canonicalKey = ingressNormalizeStrategyKey(strategyKey, {
+        source: "bots-afs.strategy",
+        mode: "live",
+      });
       try {
-        await assertStrategyAllowed(userId, strategyKey);
+        await assertStrategyAllowed(userId, canonicalKey);
       } catch (e) {
         return res.status(e.status).json(e.body);
       }
@@ -1104,7 +1115,7 @@ module.exports = function createBotsRouter(helpers) {
       // Update strategy in DB
       const updated = await prisma.bot.update({
         where: { userId_symbol: { userId, symbol } },
-        data: { strategyKey },
+        data: { strategyKey: canonicalKey },
       });
 
       // Buang instance lama (stopped) agar start berikutnya membangun BotEngine
@@ -1138,7 +1149,7 @@ module.exports = function createBotsRouter(helpers) {
   router.patch(
     "/:symbol/config",
     validateSymbolParam,
-    strategyGuard, // memblok BREAKOUT_RETEST bila strategyKey dikirim
+    strategyGuard, // memblok BS_BR bila strategyKey dikirim
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -1181,12 +1192,16 @@ module.exports = function createBotsRouter(helpers) {
         if (typeof strategyKey !== "string" || !strategyKey) {
           return res.status(400).json({ ok: false, statusCode: 400, message: "strategyKey tidak valid" });
         }
+        const canonicalKey = ingressNormalizeStrategyKey(strategyKey, {
+          source: "bots-afs.config",
+          mode: "live",
+        });
         try {
-          await assertStrategyAllowed(userId, strategyKey);
+          await assertStrategyAllowed(userId, canonicalKey);
         } catch (e) {
           return res.status(e.status).json(e.body);
         }
-        data.strategyKey = strategyKey;
+        data.strategyKey = canonicalKey;
       }
 
       // Validasi capital bila dikirim

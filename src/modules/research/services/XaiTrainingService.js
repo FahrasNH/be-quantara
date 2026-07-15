@@ -15,6 +15,7 @@ const db = require("../../../infrastructure/db/database");
 const { getUserTier } = require("../../users/services/entitlement");
 const { getTierConfig } = require("../../../core/risk-engine/tierConfig");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 const SYSTEM_PROMPT = `You are a quant trading analyst for Quantara (a crypto futures bot platform).
 Your job is to analyze backtest/live-trade metrics and give SPECIFIC, strategy-aware parameter recommendations.
@@ -142,19 +143,8 @@ class XaiTrainingService {
    */
   static _strategyProfile(strategyKey) {
     if (!strategyKey) return null;
-    const k = String(strategyKey).toUpperCase();
-    const ALIAS = {
-      AF_SMC: "AF_SMC",
-      SMART_MONEY_CONCEPTS: "AF_SMC",
-      ADAPTIVE_FUSION: "AF_SMC",
-      TS_TF: "TS_TF",
-      TREND_FOLLOWING: "TS_TF",
-      MD_MR: "MD_MR",
-      MEAN_REVERSION: "MD_MR",
-      BS_BR: "BS_BR",
-      BREAKOUT_RETEST: "BS_BR",
-    };
-    return STRATEGY_TUNING_PROFILES[ALIAS[k]] ?? null;
+    const k = normalizeStrategyKey(String(strategyKey).toUpperCase());
+    return STRATEGY_TUNING_PROFILES[k] ?? null;
   }
 
   /**

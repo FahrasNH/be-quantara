@@ -7,7 +7,7 @@
  * dengan harga SL/TP aktual dan multiplier-nya (AC-04).
  *
  * slMultiplier/tpMultiplier diturunkan dari jarak SL/TP terhadap ATR agar akurat
- * lintas-strategi — termasuk saat ADAPTIVE_FUSION / BREAKOUT_RETEST meng-override
+ * lintas-strategi — termasuk saat ADAPTIVE_FUSION / BS_BR meng-override
  * jarak per-komponen (bukan sekadar atrMultiplier statis).
  * ─────────────────────────────────────────────────────────────────────────────
  */

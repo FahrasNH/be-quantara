@@ -100,7 +100,7 @@ module.exports = function createMetaSelectorRouter(wssOrRef = null) {
       // Parse available strategies from query param or fallback to common list
       const availableStrategies = strategies
         ? String(strategies).split(",").map(s => s.trim()).filter(Boolean)
-        : ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+        : ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
 
       // Indicators can be passed as JSON body or query params; default to empty (engine will use defaults)
       const indicators = req.body?.indicators || {};

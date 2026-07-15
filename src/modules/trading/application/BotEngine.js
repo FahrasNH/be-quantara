@@ -35,6 +35,7 @@ const {
 } = require("../../../core/execution-engine");
 const { checkEntryRiskGates, checkAtrRangeGate } = require("../../../core/risk-engine/entryRiskGates");
 const { applyBsBrSnapshotFields } = require("../../../shared/csv/strategyMlEnrichment");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
 // Lazy-import Prisma (singleton bersama) agar tidak circular dengan db module
@@ -212,7 +213,7 @@ class BotEngine extends EventEmitter {
       // "partial" → partial close +1R/+2R + SL geser ke +0.3R/+1R, sisa dibiarkan
       //             lari ke TP penuh (~2.5–2.85R). Membiarkan winner lari sambil
       //             mengunci sebagian profit → ekspektasi net-of-fee membaik di
-      //             strategi tren (TREND_FOLLOWING). Knob per-strategi via strat.tpMode.
+      //             strategi tren (TS_TF). Knob per-strategi via strat.tpMode.
       tpMode: strat.tpMode || "full",
 
       // ── SL+ (Trailing Partial Take Profit) — hanya aktif bila tpMode:"partial" ──
@@ -1206,8 +1207,8 @@ class BotEngine extends EventEmitter {
             this._log("info", `⏸ Belum entry — ${gate.reason}`);
           }
         } else {
-          // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
-          if (this.state.htfTrend === "SIDEWAYS" && this.config.signalType !== "BREAKOUT_RETEST") {
+          // BS_BR punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
+          if (this.state.htfTrend === "SIDEWAYS" && normalizeStrategyKey(this.config.signalType) !== "BS_BR") {
             // ── STEP 2a: SIDEWAYS — per-strategi (A diam, B breakout, C retest) ───
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
@@ -1303,9 +1304,9 @@ class BotEngine extends EventEmitter {
             }
 
             // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
-            // BREAKOUT_RETEST: skip filter HTF — breakout/retest valid di konsolidasi
+            // BS_BR: skip filter HTF — breakout/retest valid di konsolidasi
             let filteredSignal = mrSignal;
-            if (mrSignal && this.config.signalType !== "BREAKOUT_RETEST") {
+            if (mrSignal && normalizeStrategyKey(this.config.signalType) !== "BS_BR") {
               if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
                 // FAIL-CLOSED: HTF dikonfigurasi tapi trend tak bisa ditentukan
                 // (fetch gagal). Sebelumnya fail-open → 10/14 loss dry-run 11-12 Jun
@@ -1470,7 +1471,7 @@ class BotEngine extends EventEmitter {
                     `RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}${tpMultNote}${confNote}`
                   );
                 }
-              } else if (this.config.signalType === "BREAKOUT_RETEST") {
+              } else if (normalizeStrategyKey(this.config.signalType) === "BS_BR") {
                 const brInstance = getBreakoutRetestInstance();
                 const brMeta = getBreakoutRetestMeta() || {};
                 const riskCfg = brInstance.calculateRiskConfig(price, atr, filteredSignal, {
@@ -2228,8 +2229,8 @@ class BotEngine extends EventEmitter {
     let attributionKey = this.config.strategyKey;
     let attributionLabel = this.config.strategyLabel;
     try {
-      const sk = String(this.config.strategyKey || this.config.signalType || "").toUpperCase();
-      if (sk === "TS_TF" || sk === "TREND_FOLLOWING") {
+      const sk = normalizeStrategyKey(String(this.config.strategyKey || this.config.signalType || "").toUpperCase());
+      if (sk === "TS_TF") {
         const tfMeta = getTrendFollowingInstance()?.getLastSignalMeta?.();
         if (tfMeta?.winningComponent) {
           attributionKey = tfMeta.winningComponent;
@@ -2264,8 +2265,7 @@ class BotEngine extends EventEmitter {
           }
         }
       } else if (
-        sk === "AF_SMC" || sk === "ADAPTIVE_FUSION" || sk === "SMART_MONEY_CONCEPTS"
-        || sk === "AF_WYCKOFF" || sk === "AF_VSA"
+        sk === "AF_SMC" || sk === "AF_WYCKOFF" || sk === "AF_VSA"
       ) {
         const afMeta = (() => {
           try {
@@ -2306,7 +2306,7 @@ class BotEngine extends EventEmitter {
           }
         }
       } else if (
-        sk === "MD_MR" || sk === "MEAN_REVERSION" || sk === "MD_SD" || sk === "MD_SA"
+        sk === "MD_MR" || sk === "MD_SD" || sk === "MD_SA"
         || sk === "MEAN_DRIFT"
       ) {
         const mdMeta = (() => {
@@ -2354,8 +2354,7 @@ class BotEngine extends EventEmitter {
           }
         }
       } else if (
-        sk === "BS_BR" || sk === "BREAKOUT_RETEST" || sk === "BREAKOUT_TRADING"
-        || sk === "BS_ICT" || sk === "BS_LS" || sk === "BREAKOUT_STORM"
+        sk === "BS_BR" || sk === "BS_ICT" || sk === "BS_LS" || sk === "BREAKOUT_STORM"
       ) {
         const bsMeta = (() => {
           try {
@@ -2374,11 +2373,7 @@ class BotEngine extends EventEmitter {
           if (indicatorSnapshot) {
             indicatorSnapshot.winningComponent = winner;
             indicatorSnapshot.strategyLabel = attributionLabel;
-            if (
-              winner === "BS_BR"
-              || winner === "BREAKOUT_RETEST"
-              || winner === "BREAKOUT_TRADING"
-            ) {
+            if (winner === "BS_BR") {
               applyBsBrSnapshotFields(indicatorSnapshot, bsMeta);
             } else if (winner === "BS_ICT") {
               indicatorSnapshot.ictKillZoneHour = bsMeta.ictKillZoneHour ?? null;

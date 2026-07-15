@@ -7,10 +7,7 @@
  *                         TS_MS / TS_VP → TS umbrella instance
  *                         MD_SD / MD_SA → MD umbrella instance
  *                         BS_ICT / BS_LS → BS umbrella instance
- * Legacy aliases        : ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS → AF_SMC
- *                         TREND_FOLLOWING → TS_TF
- *                         MEAN_REVERSION → MD_MR
- *                         BREAKOUT_RETEST → BS_BR
+ * Legacy ingress aliases normalize via strategyKeyNormalizer ACL → AF_SMC / TS_TF / MD_MR / BS_BR.
  *
  * GROK_AI_TRADING — experimental VAULT bonus (LLM entry engine). Registered
  * but NOT part of any tier race pool. Prefer GrokConfirm overlay in production.
@@ -50,21 +47,15 @@ class StrategyRegistry {
     // Experimental — VAULT bonus; see config/strategies.js EXPERIMENTAL_STRATEGIES
     this.register("GROK_AI_TRADING", ga);
 
-    // ── Legacy + component aliases (same instances, no extra memory) ──────
-    this.strategies.set("ADAPTIVE_FUSION",      af);
-    this.strategies.set("SMART_MONEY_CONCEPTS", af);
-    // AF component keys resolve to the AF umbrella (race among live components).
-    this.strategies.set("AF_WYCKOFF",           af);
-    this.strategies.set("AF_VSA",               af);
-    this.strategies.set("TREND_FOLLOWING",      ts);
-    this.strategies.set("TS_MS",               ts);
-    this.strategies.set("TS_VP",               ts);
-    this.strategies.set("MEAN_REVERSION",       md);
-    this.strategies.set("MD_SD",                md);
-    this.strategies.set("MD_SA",                md);
-    this.strategies.set("BREAKOUT_RETEST",      bs);
-    this.strategies.set("BS_ICT",               bs);
-    this.strategies.set("BS_LS",                bs);
+    // ── Component keys → same umbrella instances (race pools) ─────────────
+    this.strategies.set("AF_WYCKOFF", af);
+    this.strategies.set("AF_VSA",     af);
+    this.strategies.set("TS_MS",      ts);
+    this.strategies.set("TS_VP",      ts);
+    this.strategies.set("MD_SD",      md);
+    this.strategies.set("MD_SA",      md);
+    this.strategies.set("BS_ICT",     bs);
+    this.strategies.set("BS_LS",      bs);
 
     this.defaultKey = "AF_SMC";
   }

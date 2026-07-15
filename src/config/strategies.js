@@ -2,6 +2,21 @@ const {
   STRATEGY_RECAP_CATALOG,
   LIVE_RECAP_KEYS,
 } = require("./strategyRecapCatalog");
+const {
+  STRATEGY_MIGRATION_MAP,
+  STRATEGY_ABBREV,
+  normalizeStrategyKey,
+  ingressNormalizeStrategyKey,
+  isLegacyAlias,
+  isGen1StrategyKey,
+  normalizeTradeTypeKey,
+  LEGACY_TRADE_TYPE_ALIASES,
+  GEN1_STRATEGY_LITERALS,
+  abbrevToEngine,
+  ABBREV_TO_ENGINE,
+  getGen1DeprecationStats,
+  resetGen1DeprecationStats,
+} = require("./strategyKeyNormalizer");
 
 /**
  * Quantara Strategy Configuration
@@ -17,11 +32,9 @@ const {
  *   MD_MR  · MD_SD     · MD_SA    (MINT  — Mean Drift pool)
  *   BS_BR  · BS_ICT    · BS_LS    (VAULT — Breakout Storm pool)
  *
- * ─── Legacy aliases (migrate → canonical; do NOT add new top-level presets) ──
- *   ADAPTIVE_FUSION / SMART_MONEY_CONCEPTS / SAC → AF_SMC
- *   TREND_FOLLOWING / TF / TM                     → TS_TF
- *   MEAN_REVERSION / MR                          → MD_MR
- *   BREAKOUT_RETEST / BR                         → BS_BR
+ * ─── Legacy aliases (migrate → canonical via strategyKeyNormalizer ACL) ─────
+ *   Umbrella keys (ADAPTIVE_FUSION, TREND_SURGE, MEAN_DRIFT, BREAKOUT_STORM)
+ *   and Gen1 ingress keys normalize to AF_SMC / TS_TF / MD_MR / BS_BR.
  *   A / B / C                                    → PDF trade-type presets (NOT AF)
  *     (strategyDefaults.js A/B/C = Aggressive Scalping / Day / Swing — unrelated
  *      to AF component slots; never treat as Adaptive Fusion keys)
@@ -81,22 +94,24 @@ const COMPONENT_STRATEGIES = {
  * Override per-run via config.bsBrHalted === false (backtest validation only).
  */
 const BS_BR_HALTED = true;
-const BS_BR_HALT_ALIASES = new Set([
-  "BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BR", "BREAKOUT_STORM",
-]);
+/** Gen2-only; ingress aliases resolved via normalizeStrategyKey. */
+const BS_BR_HALT_ALIASES = new Set(["BS_BR", "BREAKOUT_STORM"]);
 
 function isBsBrHaltedKey(key) {
   if (!BS_BR_HALTED) return false;
-  return BS_BR_HALT_ALIASES.has(String(key || "").toUpperCase());
+  const canonical = normalizeStrategyKey(String(key || "").toUpperCase());
+  return canonical === "BS_BR";
 }
 
-const BS_BR_ONLY_KEYS = new Set(["BS_BR", "BREAKOUT_RETEST", "BREAKOUT_TRADING", "BR"]);
+function isBsBrOnlyKey(key) {
+  return normalizeStrategyKey(String(key || "").toUpperCase()) === "BS_BR";
+}
 
 /** Dedicated BS_BR backtest — true BR engine, ignore live halt (strategyGuard still blocks live). */
 function applyDedicatedBsBrBacktestConfig(cfg = {}) {
   const comps = cfg.selectedComponents || cfg.bsActiveRacers || [];
   const bsOnly = Array.isArray(comps) && comps.length > 0
-    && comps.every((c) => BS_BR_ONLY_KEYS.has(String(c || "").toUpperCase()));
+    && comps.every((c) => isBsBrOnlyKey(c));
   if (!bsOnly) return cfg;
   return {
     ...cfg,
@@ -115,50 +130,7 @@ const EXPERIMENTAL_STRATEGIES = {
   GROK_AI_TRADING: "GROK_AI_TRADING", // VAULT bonus; LLM entry engine — use sparingly
 };
 
-// ─── Migration map: old key → new key ────────────────────────────────────────
-// Used by StrategyRegistry and Prisma migration script.
-// Primary Gen2 keys (AF_SMC, AF_WYCKOFF, …) are NOT listed — identity is implicit.
-// Legacy aliases redirect to primary keys. Components stay as-is via fallback.
-
-const STRATEGY_MIGRATION_MAP = {
-  ADAPTIVE_FUSION:      "AF_SMC",  // legacy: old umbrella preset name
-  SAC:                  "AF_SMC",  // legacy: old abbreviation
-  SMART_MONEY_CONCEPTS: "AF_SMC",  // legacy: descriptor preset
-  TREND_FOLLOWING:      "TS_TF",   // legacy: descriptor
-  TREND_SURGE:          "TS_TF",   // umbrella bag name → primary engine
-  TF:                   "TS_TF",   // legacy: abbreviation
-  TM:                   "TS_TF",   // legacy: Gen1 admin/conflict abbrev (pre-TS)
-  MEAN_REVERSION:       "MD_MR",
-  MEAN_DRIFT:           "MD_MR",   // umbrella bag name → primary engine
-  MR:                   "MD_MR",   // legacy: Gen1 abbrev
-  BREAKOUT_RETEST:      "BS_BR",
-  BREAKOUT_STORM:       "BS_BR",   // umbrella bag name → primary engine
-  BR:                   "BS_BR",   // legacy: Gen1 abbrev
-};
-
-// ─── Abbreviated labels (for UI display) ─────────────────────────────────────
-
-const STRATEGY_ABBREV = {
-  AF_SMC:               "AF",
-  AF_WYCKOFF:           "AF",
-  AF_VSA:               "AF",
-  TS_TF:                "TS",
-  TS_MS:                "TS",
-  TS_VP:                "TS",
-  MD_MR:                "MD",
-  MD_SD:                "MD",
-  MD_SA:                "MD",
-  BS_BR:                "BS",
-  BS_ICT:               "BS",
-  BS_LS:                "BS",
-  GROK_AI_TRADING:      "GA",
-  // Legacy backward compat
-  ADAPTIVE_FUSION:      "AF",
-  SMART_MONEY_CONCEPTS: "AF",
-  TREND_FOLLOWING:      "TS",
-  MEAN_REVERSION:       "MD",
-  BREAKOUT_RETEST:      "BS",
-};
+// Gen1→Gen2 mapping lives in strategyKeyNormalizer.js (ACL SSOT).
 
 // ─── Tier → component mapping ─────────────────────────────────────────────────
 
@@ -198,16 +170,6 @@ const TIER_COMPONENT_MAP = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Normalize a strategy key (resolve legacy → Gen2 canonical).
- * Components (AF_WYCKOFF, TS_MS, …) and already-canonical keys pass through.
- */
-function normalizeStrategyKey(key) {
-  if (key == null || key === "") return key;
-  const raw = String(key);
-  return STRATEGY_MIGRATION_MAP[raw] || STRATEGY_MIGRATION_MAP[raw.toUpperCase()] || raw;
-}
-
-/**
  * Get active component keys for a given tier.
  */
 function getActiveComponentsForTier(tier) {
@@ -227,14 +189,6 @@ function isActiveComponent(key) {
     "GROK_AI_TRADING", // experimental — see EXPERIMENTAL_STRATEGIES
   ];
   return liveKeys.includes(key);
-}
-
-/**
- * True if key is a deprecated alias that should migrate to a canonical key.
- */
-function isLegacyAlias(key) {
-  const k = String(key || "").toUpperCase();
-  return Boolean(STRATEGY_MIGRATION_MAP[k]);
 }
 
 /** Display metadata for live engines + race components (UI / filter catalog). */
@@ -326,7 +280,16 @@ module.exports = {
   LIVE_COMPONENT_KEYS,
   BS_BR_HALTED,
   BS_BR_HALT_ALIASES,
+  GEN1_STRATEGY_LITERALS,
+  LEGACY_TRADE_TYPE_ALIASES,
+  ABBREV_TO_ENGINE,
   normalizeStrategyKey,
+  ingressNormalizeStrategyKey,
+  normalizeTradeTypeKey,
+  isGen1StrategyKey,
+  abbrevToEngine,
+  getGen1DeprecationStats,
+  resetGen1DeprecationStats,
   getActiveComponentsForTier,
   isActiveComponent,
   isLegacyAlias,

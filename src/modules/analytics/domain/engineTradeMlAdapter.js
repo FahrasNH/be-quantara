@@ -9,6 +9,7 @@
  */
 
 const FeatureEngineer = require("../../ml/domain/FeatureEngineer");
+const { normalizeStrategyKey: aclNormalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 function safeParseJSON(v) {
   if (!v) return {};
@@ -111,19 +112,8 @@ function buildExitContextFromEngineRow(row) {
 }
 
 function normalizeStrategyKey(raw) {
-  if (!raw) return "ADAPTIVE_FUSION";
-  const u = String(raw).toUpperCase();
-  const map = {
-    AF_SMC: "ADAPTIVE_FUSION",
-    ADAPTIVE_FUSION: "ADAPTIVE_FUSION",
-    TS_TF: "TREND_FOLLOWING",
-    TREND_FOLLOWING: "TREND_FOLLOWING",
-    MD_MR: "MEAN_REVERSION",
-    MEAN_REVERSION: "MEAN_REVERSION",
-    BS_BR: "BREAKOUT_RETEST",
-    BREAKOUT_RETEST: "BREAKOUT_RETEST",
-  };
-  return map[u] ?? u;
+  if (!raw) return "AF_SMC";
+  return aclNormalizeStrategyKey(String(raw).toUpperCase());
 }
 
 /**
