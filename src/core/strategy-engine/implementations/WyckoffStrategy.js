@@ -21,7 +21,7 @@ const {
   evaluateWyckoffComponent,
   candlesFromIndicators,
   DEFAULTS,
-} = require("../af/wyckoffComponent");
+} = require("../af/wyckoffEntry");
 
 /** Strategy-level defaults layered on component DEFAULTS. */
 const STRATEGY_DEFAULTS = {

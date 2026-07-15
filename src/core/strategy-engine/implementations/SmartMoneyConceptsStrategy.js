@@ -23,7 +23,7 @@ const {
   resolveScalpingGateFlags,
   resolveSwingGateFlags,
   sweetSpotPts,
-} = require("../af/smcComponent");
+} = require("../af/smcEntry");
 const { normalizeSmcParams } = require("../af/smcParamCompat");
 
 const EPSILON = 1e-9;
@@ -1699,9 +1699,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const opens = indicators.opens;
     const htfTrend = config.htfTrend ?? null;
     const enabled  = config.smcEnabledComponents ?? ["A", "B", "C"];
-    const minConfA = config.smcMinConfidenceA ?? 60;
-    const minConfB = config.smcMinConfidenceB ?? 65;
-    const minConfC = config.smcMinConfidenceC ?? 65;
+    const minConfA = config.smcMinConfidenceScalping ?? config.smcMinConfidenceA ?? 60;
+    const minConfB = config.smcMinConfidenceIntraday ?? config.smcMinConfidenceB ?? 65;
+    const minConfC = config.smcMinConfidenceSwing ?? config.smcMinConfidenceC ?? 65;
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
 
@@ -1932,8 +1932,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // 12mo CSV forensics: conf>=75 flips Scalping from netPF 0.90 to 1.18; LONG
     // is the weaker side (PF 0.74 vs SHORT 1.01) — SHORT>=75/LONG>=80 measured
     // netPF 1.35 (n=28, WR 46.4%). rawA here is the side string ("LONG"/"SHORT").
-    const scalpMinConfLong = config.smcMinConfidenceALong ?? effMinConf.A;
-    const scalpMinConfShort = config.smcMinConfidenceAShort ?? effMinConf.A;
+    const scalpMinConfLong = config.smcMinConfidenceScalpingLong ?? config.smcMinConfidenceALong ?? effMinConf.A;
+    const scalpMinConfShort = config.smcMinConfidenceScalpingShort ?? config.smcMinConfidenceAShort ?? effMinConf.A;
     const effMinConfA = rawA === "LONG" ? scalpMinConfLong : scalpMinConfShort;
 
 

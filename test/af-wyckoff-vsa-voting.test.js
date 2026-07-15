@@ -20,14 +20,14 @@ const {
   detectSpring,
   detectUpthrust,
   evaluateWyckoffComponent,
-} = require("#core/strategy-engine/af/wyckoffComponent.js");
+} = require("#core/strategy-engine/af/wyckoffEntry.js");
 const {
   detectVSAPattern,
   detectEffortResultMismatch,
   evaluateVSAComponent,
   calculateCLV: vsaCLV,
   relativeVolume: vsaRelVol,
-} = require("#core/strategy-engine/af/vsaComponent.js");
+} = require("#core/strategy-engine/af/vsaEntry.js");
 const {
   resolveVoteThreshold,
   aggregateAfVotes,

@@ -13,7 +13,7 @@ const {
   evaluateMarketStructureGate,
   evaluateMarketStructureEntry,
   DEFAULTS,
-} = require("../ts/marketStructureComponent");
+} = require("../ts/marketStructureEntry");
 
 function structureConfigFrom(config = {}) {
   const src = { ...DEFAULTS, ...(config.marketStructure || {}), ...config };

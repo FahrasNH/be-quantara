@@ -31,7 +31,7 @@ const fs = require("fs");
 const path = require("path");
 const { runTripleTypeBacktest } = require("../src/server/services/RealStrategyBacktestService");
 const { toCsv, TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
-const { SMC_ML_CSV_COLUMNS } = require("../src/core/strategy-engine/af/smcComponent");
+const { SMC_ML_CSV_COLUMNS } = require("../src/core/strategy-engine/af/smcEntry");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 /** ML dataset CSV = CORE identity/PnL + SMC ML feature columns (not human report CSV). */
@@ -111,7 +111,7 @@ async function loadCandles(symbol, tf) {
 }
 
 function buildConfig() {
-  const base = { ...(STRATEGIES.AF_SMC || STRATEGIES.SMART_MONEY_CONCEPTS) };
+  const base = { ...(STRATEGIES.ADAPTIVE_FUSION || STRATEGIES.AF_SMC) };
   const scalp = { ...(base.typeOverrides?.Scalping || {}) };
   if (RELAX) {
     // Research-only denser sample — do NOT use for live promotion.

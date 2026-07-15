@@ -10,14 +10,14 @@ const {
   evaluateMarketStructureGate,
   evaluateMarketStructureComponent,
   evaluateMarketStructureEntry,
-} = require("#core/strategy-engine/ts/marketStructureComponent.js");
+} = require("#core/strategy-engine/ts/marketStructureEntry.js");
 const {
   calculateSessionVwap,
   buildVolumeProfile,
   evaluateVolumeProfilePrecision,
   evaluateVolumeProfileComponent,
   evaluateVolumeProfileEntry,
-} = require("#core/strategy-engine/ts/volumeProfileComponent.js");
+} = require("#core/strategy-engine/ts/volumeProfileEntry.js");
 const { getActiveComponentsForTier, isActiveComponent } = require("../src/config/strategies");
 const TrendSurgeUmbrella = require("#core/strategy-engine/umbrellas/TrendSurgeUmbrella.js");
 

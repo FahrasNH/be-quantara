@@ -13,7 +13,7 @@ const {
   evaluateVolumeProfilePrecision,
   evaluateVolumeProfileEntry,
   DEFAULTS,
-} = require("../ts/volumeProfileComponent");
+} = require("../ts/volumeProfileEntry");
 
 class VolumeProfileStrategy extends StrategyBase {
   constructor(config = {}) {

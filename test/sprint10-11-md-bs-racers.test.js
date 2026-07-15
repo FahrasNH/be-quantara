@@ -10,18 +10,18 @@ const {
   evaluateStatisticalArbitrageEntry,
   _rollingMeanStd,
   _residualZScore,
-} = require("#core/strategy-engine/md/statisticalArbitrage.js");
+} = require("#core/strategy-engine/md/statisticalArbitrageEntry.js");
 const {
   isKillZone,
   detectLiquidityRaid,
   evaluateIctStyleEntry,
-} = require("#core/strategy-engine/bs/ictKillZoneRaid.js");
+} = require("#core/strategy-engine/bs/ictKillZoneRaidEntry.js");
 const {
   calculateOIChangePercent,
   evaluateOIFundingGate,
   detectLiquidationWick,
   evaluateLiquidationSqueezeEntry,
-} = require("#core/strategy-engine/bs/liquidationSqueeze.js");
+} = require("#core/strategy-engine/bs/liquidationSqueezeEntry.js");
 const { TIER_COMPONENT_MAP, LIVE_COMPONENT_KEYS, STRATEGY_CATALOG } = require("../src/config/strategies");
 const MeanDriftUmbrella = require("#core/strategy-engine/umbrellas/MeanDriftUmbrella.js");
 const BreakoutStormUmbrella = require("#core/strategy-engine/umbrellas/BreakoutStormUmbrella.js");

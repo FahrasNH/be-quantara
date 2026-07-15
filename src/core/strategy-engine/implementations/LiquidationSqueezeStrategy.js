@@ -10,7 +10,7 @@ const {
   evaluateLiquidationSqueezeEntry,
   evaluateOIFundingGate,
   DEFAULTS,
-} = require("../bs/liquidationSqueeze");
+} = require("../bs/liquidationSqueezeEntry");
 
 class LiquidationSqueezeStrategy extends StrategyBase {
   constructor(config = {}) {
