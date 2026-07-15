@@ -8,6 +8,8 @@
 #   - 20260610140000_add_trade_export_fields (P3018: relation "trades" does not exist)
 #   - 20260625120000_add_payment_voucher_system (P3018 payment migration stuck)
 #   - 20260709060000_add_pgvector (42501: permission denied to create extension vector)
+#   - 20260715120000_migrate_gen1_strategy_keys (P3018/P3009: optional tables missing)
+#   - 20260715200000_migrate_abbrev_to_fullword_strategy_keys (same)
 
 set -euo pipefail
 
@@ -17,6 +19,8 @@ cd "${BE_DIR}"
 TRADE_EXPORT_MIG="20260610140000_add_trade_export_fields"
 PAYMENT_MIG="20260625120000_add_payment_voucher_system"
 PGVECTOR_MIG="20260709060000_add_pgvector"
+GEN1_STRATEGY_MIG="20260715120000_migrate_gen1_strategy_keys"
+ABBREV_STRATEGY_MIG="20260715200000_migrate_abbrev_to_fullword_strategy_keys"
 
 run_migrate() {
   npx prisma migrate deploy "$@"
@@ -38,6 +42,16 @@ recover_pgvector() {
   npx prisma migrate resolve --rolled-back "${PGVECTOR_MIG}" 2>/dev/null || true
 }
 
+recover_gen1_strategy_keys() {
+  echo "⚠️  Recover ${GEN1_STRATEGY_MIG} (mark rolled-back, re-apply with IF EXISTS guards)..."
+  npx prisma migrate resolve --rolled-back "${GEN1_STRATEGY_MIG}" 2>/dev/null || true
+}
+
+recover_abbrev_strategy_keys() {
+  echo "⚠️  Recover ${ABBREV_STRATEGY_MIG} (mark rolled-back, re-apply with IF EXISTS guards)..."
+  npx prisma migrate resolve --rolled-back "${ABBREV_STRATEGY_MIG}" 2>/dev/null || true
+}
+
 try_recover_and_rerun() {
   local recovered=false
 
@@ -56,9 +70,16 @@ try_recover_and_rerun() {
     recovered=true
   fi
 
+  if grep -qE "${GEN1_STRATEGY_MIG}|${ABBREV_STRATEGY_MIG}|MlShadowLog|MLShadowLog|migrate_gen1_strategy_keys|migrate_abbrev_to_fullword" "${LOG}"; then
+    if grep -q "${GEN1_STRATEGY_MIG}" "${LOG}"; then recover_gen1_strategy_keys; recovered=true; fi
+    if grep -q "${ABBREV_STRATEGY_MIG}" "${LOG}"; then recover_abbrev_strategy_keys; recovered=true; fi
+  fi
+
   if grep -q "P3009" "${LOG}"; then
     if grep -q "${TRADE_EXPORT_MIG}" "${LOG}"; then recover_trade_export; recovered=true; fi
     if grep -q "${PGVECTOR_MIG}" "${LOG}"; then recover_pgvector; recovered=true; fi
+    if grep -q "${GEN1_STRATEGY_MIG}" "${LOG}"; then recover_gen1_strategy_keys; recovered=true; fi
+    if grep -q "${ABBREV_STRATEGY_MIG}" "${LOG}"; then recover_abbrev_strategy_keys; recovered=true; fi
   fi
 
   if [[ "${recovered}" == "true" ]]; then

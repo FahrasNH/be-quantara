@@ -3,7 +3,7 @@
 -- Trade.entryContext JSON, backtest_history.strategy_key, trades.strategy_name
 -- Idempotent: only updates rows still holding Gen1 keys.
 
--- ── Bot ──────────────────────────────────────────────────────────────────────
+-- ── Bot (core — must exist) ──────────────────────────────────────────────────
 UPDATE "Bot" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
 UPDATE "Bot" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
 UPDATE "Bot" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
@@ -19,13 +19,7 @@ UPDATE "Bot" SET "strategyGroup" = (
   FROM unnest("strategyGroup") AS elem
 ) WHERE "strategyGroup" && ARRAY['ADAPTIVE_FUSION','SAC','SMART_MONEY_CONCEPTS','TREND_FOLLOWING','TREND_SURGE','TF','TM','MEAN_REVERSION','MEAN_DRIFT','MR','BREAKOUT_RETEST','BREAKOUT_STORM','BR']::text[];
 
--- ── UserStrategy ─────────────────────────────────────────────────────────────
-UPDATE "UserStrategy" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "UserStrategy" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "UserStrategy" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "UserStrategy" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-
--- ── Trade (firedByStrategy + entryContext JSON) ──────────────────────────────
+-- ── Trade (core — must exist; firedByStrategy + entryContext JSON) ───────────
 UPDATE "Trade" SET "firedByStrategy" = 'AF_SMC' WHERE "firedByStrategy" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
 UPDATE "Trade" SET "firedByStrategy" = 'TS_TF' WHERE "firedByStrategy" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
 UPDATE "Trade" SET "firedByStrategy" = 'MD_MR' WHERE "firedByStrategy" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
@@ -40,46 +34,65 @@ UPDATE "Trade" SET "entryContext" = jsonb_set("entryContext", '{strategyKey}', '
 UPDATE "Trade" SET "entryContext" = jsonb_set("entryContext", '{strategyKey}', '"BS_BR"', true)
   WHERE "entryContext"->>'strategyKey' IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
 
--- ── Analytics / ML (Prisma tables) ───────────────────────────────────────────
-UPDATE "StrategyPerformance" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-
-UPDATE "MlShadowLog" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "MlShadowLog" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "MlShadowLog" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "MlShadowLog" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-
-UPDATE "ParameterVersion" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "ParameterVersion" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "ParameterVersion" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "ParameterVersion" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'AF_SMC' WHERE "actualStrategy" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'TS_TF' WHERE "actualStrategy" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'MD_MR' WHERE "actualStrategy" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'BS_BR' WHERE "actualStrategy" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-
--- ── Runtime engine tables (may not exist on fresh Prisma-only DBs) ───────────
+-- ── Optional Prisma tables (may not exist on fresh/partial DBs) ──────────────
 DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'UserStrategy') THEN
+    UPDATE "UserStrategy" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "UserStrategy" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "UserStrategy" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "UserStrategy" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'StrategyPerformance') THEN
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'MLShadowLog') THEN
+    UPDATE "MLShadowLog" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'ParameterSuggestion') THEN
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'ParameterVersion') THEN
+    UPDATE "ParameterVersion" SET "strategyKey" = 'AF_SMC' WHERE "strategyKey" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'TS_TF' WHERE "strategyKey" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'MD_MR' WHERE "strategyKey" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'BS_BR' WHERE "strategyKey" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'MetaSelectorRecommendation') THEN
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'AF_SMC' WHERE "actualStrategy" IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'TS_TF' WHERE "actualStrategy" IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'MD_MR' WHERE "actualStrategy" IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'BS_BR' WHERE "actualStrategy" IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+  END IF;
+
+  -- Runtime engine tables (may not exist on fresh Prisma-only DBs)
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'backtest_history') THEN
     UPDATE backtest_history SET strategy_key = 'AF_SMC' WHERE strategy_key IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
     UPDATE backtest_history SET strategy_key = 'TS_TF' WHERE strategy_key IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
     UPDATE backtest_history SET strategy_key = 'MD_MR' WHERE strategy_key IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
     UPDATE backtest_history SET strategy_key = 'BS_BR' WHERE strategy_key IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
   END IF;
+
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'strategy_presets') THEN
     UPDATE strategy_presets SET strategy_key = 'AF_SMC' WHERE strategy_key IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
     UPDATE strategy_presets SET strategy_key = 'TS_TF' WHERE strategy_key IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
     UPDATE strategy_presets SET strategy_key = 'MD_MR' WHERE strategy_key IN ('MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
     UPDATE strategy_presets SET strategy_key = 'BS_BR' WHERE strategy_key IN ('BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
   END IF;
+
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'trades') THEN
     UPDATE trades SET strategy_name = 'AF_SMC' WHERE strategy_name IN ('ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
     UPDATE trades SET strategy_name = 'TS_TF' WHERE strategy_name IN ('TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
