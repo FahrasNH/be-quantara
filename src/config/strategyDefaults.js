@@ -588,7 +588,7 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // SMART_MONEY_CONCEPTS — SAC v1.0 (FOUNDRY tier)
+  // SMART_MONEY_CONCEPTS — SMC v3.0 (FOUNDRY tier)
   //
   //   Komponen A — Scalping  : Liquidity sweep + Order Block + CVD (1h bars)
   //   Komponen B — Intraday  : CHoCH + Order Block + EMA trend (1h bars)
@@ -600,7 +600,7 @@ const STRATEGIES = {
   // ─────────────────────────────────────────────
   SMART_MONEY_CONCEPTS: {
     name:          "SMART_MONEY_CONCEPTS",
-    label:         "Smart Money Concepts (SAC)",
+    label:         "Smart Money Concepts (SMC)",
     description:   "3-komponen SMC: Sweep+OB+CVD (scalping), CHoCH+OB+trend (intraday), FVG+displacement (swing). Blok entry berlawanan HTF.",
 
     // EMA untuk HTF trend (dipakai BotEngine)
@@ -639,40 +639,40 @@ const STRATEGIES = {
     cooldownAfterLoss:   60,
     maxConsecLoss:       3,
 
-    // SAC-specific knobs
-    sacEnabledComponents: ["A", "B", "C"],
-    sacMinVotes:           1,            // 1 = any qualifying component can fire
-    sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
+    // SMC-specific knobs
+    smcEnabledComponents: ["A", "B", "C"],
+    smcMinVotes:           1,            // 1 = any qualifying component can fire
+    smcMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
     // Uniform confidence floor across all 3 legs (factory default).
-    sacMinConfidenceA:     60,  // Scalping
-    sacMinConfidenceB:     60,  // Intraday
-    sacMinConfidenceC:     60,  // Swing
+    smcMinConfidenceA:     60,  // Scalping
+    smcMinConfidenceB:     60,  // Intraday
+    smcMinConfidenceC:     60,  // Swing
 
     // ── Event-driven SMC sequence engine (v3.0) ──────────────────────────────
     // sweep → CHoCH → displacement/FVG → mitigation → entry (causal, cross-bar)
-    sacUseSequenceEngine: true,          // false = legacy independent single-bar checks
-    sacSeqWindow:      60,               // max bars back to assemble the full sequence
+    smcUseSequenceEngine: true,          // false = legacy independent single-bar checks
+    smcSeqWindow:      60,               // max bars back to assemble the full sequence
 
     // Sweep detector
-    sacSwingLookback:  5,
-    sacSweepScanBars:  50,
-    sacSweepVolMult:   0.9,
+    smcSwingLookback:  5,
+    smcSweepScanBars:  50,
+    smcSweepVolMult:   0.9,
 
     // Order block
-    sacOBLookback:     15,
-    sacOBDispMult:     1.3,
+    smcOBLookback:     15,
+    smcOBDispMult:     1.3,
 
     // CHoCH
-    sacChochLookback:  20,
+    smcChochLookback:  20,
 
     // FVG (mitigation zone for the sequence engine)
-    sacFvgMinGap:      0.0015,           // 0.3% → 0.15%: catch smaller imbalances (more mitigations)
-    sacFvgScanBars:    40,
+    smcFvgMinGap:      0.0015,           // 0.3% → 0.15%: catch smaller imbalances (more mitigations)
+    smcFvgScanBars:    40,
 
     // Displacement
-    sacDispScanBars:   25,
-    sacDispVolMult:    1.8,
-    sacDispRangePct:   0.008,            // 1.2% → 0.8%: lower range bar for displacement
+    smcDispScanBars:   25,
+    smcDispVolMult:    1.8,
+    smcDispRangePct:   0.008,            // 1.2% → 0.8%: lower range bar for displacement
 
     // CVD / VWAP lookback
     vwapLookback:      14,

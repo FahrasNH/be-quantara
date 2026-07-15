@@ -1,5 +1,5 @@
 /**
- * SmartMoneyConceptsStrategy.js — v2.0.0 (SAC: Smart Money Concepts)
+ * SmartMoneyConceptsStrategy.js — v2.0.0 (SMC: Smart Money Concepts)
  *
  * FOUNDRY Tier — 3 Trade Types, each on its own timeframe stack:
  *   Scalping  (type A) : Liquidity sweep + OB + CVD  | entry 1m, confirm 5m,  trend 15m
@@ -24,6 +24,7 @@ const {
   resolveSwingGateFlags,
   sweetSpotPts,
 } = require("../smc/smcScalpGates");
+const { normalizeSmcParams } = require("../smc/smcParamCompat");
 
 const EPSILON = 1e-9;
 
@@ -36,13 +37,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "SMART_MONEY_CONCEPTS",
-      label: "Smart Money Concepts (SAC) v3.0",
+      label: "Smart Money Concepts (SMC) v3.0",
       description:
         "Event-driven SMC sequence engine (v3.0): " +
         "sweep → CHoCH/MSS → displacement/FVG → mitigation → entry. " +
         "Causal, cross-bar structure replicates institutional market reading. " +
         "3 independent trade types: Scalping (5m/1h), Intraday (15m/4h), Swing (4h/1w). " +
-        "HTF directional bias; sacUseSequenceEngine flag (default on) for fallback.",
+        "HTF directional bias; smcUseSequenceEngine flag (default on) for fallback.",
       version: "3.0.0",
       enabled: true,
       ...config,
@@ -63,19 +64,21 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // ── Sub-strategy RR/SL/TP multipliers (keyed by type name AND legacy letter) ─
     this.SUB_STRATEGIES = {
-      Scalping: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
-      Intraday: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
+      Scalping: { name: "SMC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
+      Intraday: { name: "SMC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
       // PRD aspirational: SL 1.2×ATR / TP 4.0×ATR (RR ≈ 3.33). Live/backtest
       // Planned RR comes from typeOverrides.Swing (Sprint 13 fast-fail SSOT).
-      Swing:    { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
+      Swing:    { name: "SMC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
       // Backward-compat aliases (old code that passes "A"/"B"/"C")
-      A: { name: "SAC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
-      B: { name: "SAC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
-      C: { name: "SAC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
+      A: { name: "SMC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
+      B: { name: "SMC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
+      C: { name: "SMC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
     };
 
     // Legacy letter → type name
     this.COMPONENT_TO_TYPE = { A: "Scalping", B: "Intraday", C: "Swing" };
+
+    this.config = normalizeSmcParams(this.config);
 
     this._lastSignalMeta = null;
 
@@ -311,9 +314,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * Bearish sweep → short opportunity.
    */
   _detectSweep(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
-    const leftLook = config.sacSwingLookback ?? 5;  // keep at 5 (left-side comparison window)
-    const scanBars = config.sacSweepScanBars ?? 50;  // 30 → 50 (scan further back for recent swing lows)
-    const volMult  = config.sacSweepVolMult  ?? 1.1;
+    const leftLook = config.smcSwingLookback ?? 5;  // keep at 5 (left-side comparison window)
+    const scanBars = config.smcSweepScanBars ?? 50;  // 30 → 50 (scan further back for recent swing lows)
+    const volMult  = config.smcSweepVolMult  ?? 1.1;
 
     if (lastIdx < leftLook + 3) return null;
 
@@ -354,8 +357,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * Returns OB bounds + whether current price is inside the zone.
    */
   _detectOrderBlock(closes, highs, lows, opens, volumes, volSMA, lastIdx, direction, config = {}) {
-    const lookback  = config.sacOBLookback ?? 15;
-    const dispMult  = config.sacOBDispMult ?? 1.8;
+    const lookback  = config.smcOBLookback ?? 15;
+    const dispMult  = config.smcOBDispMult ?? 1.8;
 
     if (lastIdx < lookback + 3) return null;
 
@@ -408,7 +411,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    *   a prior swing low → structural reversal to bearish.
    */
   _detectCHoCH(closes, highs, lows, lastIdx, config = {}) {
-    const lookback = config.sacChochLookback ?? 20;
+    const lookback = config.smcChochLookback ?? 20;
     if (lastIdx < lookback * 2 + 2) return null;
 
     const half = Math.floor(lookback / 2);
@@ -451,11 +454,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
 
     // 0.3% gaps are meaningful on 1h, noise-level rare on 5m). Flag-gated.
-    if (config.sacFvgAutoThreshold === true) {
+    if (config.smcFvgAutoThreshold === true) {
       return this._detectFVGAuto(closes, highs, lows, lastIdx, config, opens);
     }
-    const minGapPct = config.sacFvgMinGap  ?? 0.003;
-    const scanBars  = config.sacFvgScanBars ?? 30;
+    const minGapPct = config.smcFvgMinGap  ?? 0.003;
+    const scanBars  = config.smcFvgScanBars ?? 30;
 
     const cl = closes[lastIdx];
     const recentFVGs = [];
@@ -500,7 +503,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * O(n²) across a backtest, so prefix sums are cached per candle-array (LRU).
    */
   _detectFVGAuto(closes, highs, lows, lastIdx, config = {}, opens = null) {
-    const scanBars = config.sacFvgScanBars ?? 30;
+    const scanBars = config.smcFvgScanBars ?? 30;
     if (lastIdx < 2) return { bullish: null, bearish: null };
 
     // Incremental |body|% prefix: prefix[i] = Σ |bodyΔ(mid candle of bar i)|, i ≥ 1.
@@ -573,9 +576,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * Returns most recent displacement within scanBars.
    */
   _detectDisplacement(closes, highs, lows, volumes, volSMA, lastIdx, config = {}) {
-    const scanBars = config.sacDispScanBars ?? 25;
-    const volMult  = config.sacDispVolMult  ?? 2.0;
-    const rangePct = config.sacDispRangePct ?? 0.012; // 1.2% min range
+    const scanBars = config.smcDispScanBars ?? 25;
+    const volMult  = config.smcDispVolMult  ?? 2.0;
+    const rangePct = config.smcDispRangePct ?? 0.012; // 1.2% min range
 
     for (let i = lastIdx; i >= Math.max(1, lastIdx - scanBars); i--) {
       const cl  = closes[i];
@@ -617,12 +620,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
   _structConfigKey(config = {}) {
     return [
-      config.sacInternalStructureSize ?? 5,
-      config.sacSwingStructureSize ?? 50,
-      String(config.sacOrderBlockFilter ?? "ATR").toUpperCase(),
-      config.sacOrderBlockAtrLength ?? 200,
-      String(config.sacOrderBlockMitigation ?? "HIGHLOW").toUpperCase(),
-      config.sacInternalFilterConfluence === true ? 1 : 0,
+      config.smcInternalStructureSize ?? 5,
+      config.smcSwingStructureSize ?? 50,
+      String(config.smcOrderBlockFilter ?? "ATR").toUpperCase(),
+      config.smcOrderBlockAtrLength ?? 200,
+      String(config.smcOrderBlockMitigation ?? "HIGHLOW").toUpperCase(),
+      config.smcInternalFilterConfluence === true ? 1 : 0,
     ].join("|");
   }
 
@@ -675,8 +678,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return {
       cfgKey,
       lastIdx: -1,
-      swing: makeState(Math.max(2, config.sacSwingStructureSize ?? 50), false),
-      internal: makeState(Math.max(1, config.sacInternalStructureSize ?? 5), true),
+      swing: makeState(Math.max(2, config.smcSwingStructureSize ?? 50), false),
+      internal: makeState(Math.max(1, config.smcInternalStructureSize ?? 5), true),
       events: [],
       orderBlocks: [],
       pivots: { internalHighs: [], internalLows: [], swingHighs: [], swingLows: [] },
@@ -690,9 +693,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   _structAdvanceBar(cache, bar, closes, highs, lows, opens, config = {}) {
-    const filter = String(config.sacOrderBlockFilter ?? "ATR").toUpperCase();
-    const atrLength = Math.max(1, config.sacOrderBlockAtrLength ?? 200);
-    const mitigationMode = String(config.sacOrderBlockMitigation ?? "HIGHLOW").toUpperCase();
+    const filter = String(config.smcOrderBlockFilter ?? "ATR").toUpperCase();
+    const atrLength = Math.max(1, config.smcOrderBlockAtrLength ?? 200);
+    const mitigationMode = String(config.smcOrderBlockMitigation ?? "HIGHLOW").toUpperCase();
 
     // Parsed prices: high-volatility bars contribute their opposite extreme so
     // OB zones don't anchor to spike wicks (reference-indicator behaviour).
@@ -763,7 +766,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     };
 
     const structureConfluenceOk = (direction) => {
-      if (config.sacInternalFilterConfluence !== true) return true;
+      if (config.smcInternalFilterConfluence !== true) return true;
       const open = opens?.[bar] ?? closes[bar - 1] ?? closes[bar];
       const close = closes[bar];
       const upperWick = (highs[bar] ?? close) - Math.max(close, open);
@@ -867,25 +870,26 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // ═════════════════════════════════════════════════════════════════════════════
 
   _detectSMCSequence(indicators, lastIdx, config = {}) {
+    config = normalizeSmcParams(config);
     const { closes, highs, lows, volumes, volSMA } = indicators;
     const opens = indicators.opens;
-    const win = config.sacSeqWindow ?? 60;
+    const win = config.smcSeqWindow ?? 60;
     if (lastIdx < 25) return { signal: null, meta: null };
 
     const cl = closes[lastIdx];
 
 
-    //   sacPivotStructure      — CHoCH from the pivot structure engine's events
+    //   smcPivotStructure      — CHoCH from the pivot structure engine's events
     //                            instead of the naive 10-bar high/low compare
-    //   sacPremiumDiscountGate — LONG only below equilibrium (discount half),
+    //   smcPremiumDiscountGate — LONG only below equilibrium (discount half),
     //                            SHORT only above (premium half) of the trailing
     //                            swing range: don't buy expensive / sell cheap
-    const usePivot = config.sacPivotStructure === true;
-    const pdGate = config.sacPremiumDiscountGate === true;
+    const usePivot = config.smcPivotStructure === true;
+    const pdGate = config.smcPremiumDiscountGate === true;
     const structState = (usePivot || pdGate)
       ? this._getStructureState(indicators, lastIdx, config)
       : null;
-    const structureType = String(config.sacStructureType ?? "internal").toLowerCase();
+    const structureType = String(config.smcStructureType ?? "internal").toLowerCase();
 
     // ── STEP 1: current bar must be mitigating an unfilled FVG ────────────────
     const fvgs = this._detectFVG(closes, highs, lows, lastIdx, config, indicators.opens);
@@ -918,13 +922,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       //           ≥ body (buyers defended the level), close not below zone bottom.
       //   SHORT : wicked UP into premium, closed back DOWN (bearish), upper wick
       //           ≥ body, close not above zone top.
-      // Flag-gated (sacRejectionEntry, Scalping-only in backtest) → live unchanged.
-      if (config.sacRejectionEntry === true && opens) {
+      // Flag-gated (smcRejectionEntry, Scalping-only in backtest) → live unchanged.
+      if (config.smcRejectionEntry === true && opens) {
         const op = opens[lastIdx] ?? cl;
         const hi = highs[lastIdx] ?? cl;
         const lo = lows[lastIdx] ?? cl;
         const body = Math.abs(cl - op);
-        const wickRatio = config.sacRejectionWickRatio ?? 0.8; // wick ≥ 0.8× body
+        const wickRatio = config.smcRejectionWickRatio ?? 0.8; // wick ≥ 0.8× body
         if (isLong) {
           const lowerWick = Math.min(op, cl) - lo;
           const wickedIntoZone = lo <= fvg.midpoint;           // touched discount
@@ -1068,8 +1072,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const dRange = ((highs[dispIdx] ?? 0) - (lows[dispIdx] ?? 0)) / (closes[dispIdx] || 1);
 
     // Sprint 13: ATR-normalize by default (was flag-gated). Absolute % inflated
-    // Swing 4h scores vs Scalping and rewarded chase bars. Opt-out: sacScoreAtrNorm=false.
-    const useAtrNorm = ctx.config?.sacScoreAtrNorm !== false;
+    // Swing 4h scores vs Scalping and rewarded chase bars. Opt-out: smcScoreAtrNorm=false.
+    const useAtrNorm = ctx.config?.smcScoreAtrNorm !== false;
     let atrPct = 0;
     if (useAtrNorm) {
       let trSum = 0, n = 0;
@@ -1325,7 +1329,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // AF-SWING-V3: entry-TF ATR-ratio + RVOL + confidence-tier no-trade zone
   // (SWING_ENGINE_V3.md improvements 1/7/8/9/11 — regime filter, relative volume
   // filter, ATR expansion filter, adaptive sizing, consolidated no-trade zone).
-  // Opt-in via typeOverrides.Swing.sacSwingV3Gate = true; fail-open (returns
+  // Opt-in via typeOverrides.Swing.smcSwingV3Gate = true; fail-open (returns
   // "pass" state) when indicators lack the history needed, same convention as
   // the existing ADX gate. Does NOT touch the core FVG/displacement/OB entry
   // logic or confidence formula (_detectSignalC / _componentConfidence "C") —
@@ -1358,19 +1362,19 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
    * exactly like V3 disabled.
    */
   _evaluateSwingV3Gate(indicators, lastIdx, dir, confC, config = {}, typeOverride = {}) {
-    if (!typeOverride?.sacSwingV3Gate) return { allow: true, sizeMultiplier: 1 };
+    if (!typeOverride?.smcSwingV3Gate) return { allow: true, sizeMultiplier: 1 };
 
     const { volumes, volSMA } = indicators;
-    const minAtrRatio = typeOverride.sacSwingMinAtrRatio ?? 0.8;
-    const extremeAtrRatio = typeOverride.sacSwingAtrExtremeRatio ?? 2.5;
-    const minRvol = typeOverride.sacSwingMinRvol ?? 1.2;
-    const noTradeRvol = typeOverride.sacSwingNoTradeRvol ?? 1.0;
-    const minConfidence = typeOverride.sacSwingMinConfidenceV3 ?? 70;
-    const reduceConfidence = typeOverride.sacSwingReduceConfidenceV3 ?? 60;
+    const minAtrRatio = typeOverride.smcSwingMinAtrRatio ?? 0.8;
+    const extremeAtrRatio = typeOverride.smcSwingAtrExtremeRatio ?? 2.5;
+    const minRvol = typeOverride.smcSwingMinRvol ?? 1.2;
+    const noTradeRvol = typeOverride.smcSwingNoTradeRvol ?? 1.0;
+    const minConfidence = typeOverride.smcSwingMinConfidenceV3 ?? 70;
+    const reduceConfidence = typeOverride.smcSwingReduceConfidenceV3 ?? 60;
 
     // Improvement 1 (partial) — weekly/HTF regime must be a real trend, not
     // SIDEWAYS/UNKNOWN. Direction-alignment vs htfTrend is already enforced
-    // upstream by sacHtfHardBlock/soft-penalty; this only blocks flat regimes.
+    // upstream by smcHtfHardBlock/soft-penalty; this only blocks flat regimes.
     const htfTrend = config.htfTrend ?? null;
     if (htfTrend === "SIDEWAYS" || htfTrend === "UNKNOWN") {
       return { allow: false, sizeMultiplier: 0, reason: "regime_flat", htfTrend };
@@ -1425,7 +1429,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
       // HTF, SHORT needs BEARISH; SIDEWAYS/UNKNOWN = no entry either direction.
       // The legacy branch below is LONG-biased: LONG passes in SIDEWAYS while
-      // SHORT is blocked unless BEARISH. Under sacHtfHardBlock that asymmetry
+      // SHORT is blocked unless BEARISH. Under smcHtfHardBlock that asymmetry
       // produced a 104-LONG book at 11.5% WR (SHORT with-trend book: 20.4%) —
       // LONGs sailed through every falling tape the 0.2% EMA-spread threshold
       // labeled SIDEWAYS.
@@ -1672,7 +1676,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const currentPrice = closes[lastIdx];
     const sweepLevel = sweep.level;
     const displacementPct = Math.abs(currentPrice - sweepLevel) / sweepLevel;
-    const minDisplacementPct = config.sacScalpingMinDisplacementPct ?? 0.003; // 0.3% minimum
+    const minDisplacementPct = config.smcScalpingMinDisplacementPct ?? 0.003; // 0.3% minimum
 
     if (displacementPct < minDisplacementPct) return false;
 
@@ -1690,13 +1694,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // ─────────────────────────────────────────────────────────────────────────────
 
   detectSignalMulti(indicators, lastIdx, config = {}) {
+    config = normalizeSmcParams(config);
     const { closes, highs, lows, volumes, volSMA, emaFast, emaSlow } = indicators;
     const opens = indicators.opens;
     const htfTrend = config.htfTrend ?? null;
-    const enabled  = config.sacEnabledComponents ?? ["A", "B", "C"];
-    const minConfA = config.sacMinConfidenceA ?? 60;
-    const minConfB = config.sacMinConfidenceB ?? 65;
-    const minConfC = config.sacMinConfidenceC ?? 65;
+    const enabled  = config.smcEnabledComponents ?? ["A", "B", "C"];
+    const minConfA = config.smcMinConfidenceA ?? 60;
+    const minConfB = config.smcMinConfidenceB ?? 65;
+    const minConfC = config.smcMinConfidenceC ?? 65;
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
 
@@ -1726,8 +1731,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // sequence (sweep → CHoCH → displacement/FVG → mitigation → entry). Each
     // trade type runs the SAME sequence on its own timeframe candles (Scalping
     // 5m, Intraday 15m/5m, Swing 4h) via the triple-TF harness. Set
-    // sacUseSequenceEngine=false to fall back to the legacy single-bar logic.
-    const useSequence = config.sacUseSequenceEngine !== false;
+    // smcUseSequenceEngine=false to fall back to the legacy single-bar logic.
+    const useSequence = config.smcUseSequenceEngine !== false;
 
     const enabledNorm = enabled.map(k => this.COMPONENT_TO_TYPE[k] || k);
     const wantA = enabled.includes("A") || enabledNorm.includes("Scalping");
@@ -1864,7 +1869,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // every knife-catching LONG in SIDEWAYS-labeled downtrends while banning
     // the with-trend SHORTs. tierOverrides.regimeFilterRequired keeps the
     // legacy asymmetric behaviour (live parity — that path is live on STABLE+).
-    const strictAlign = config.sacHtfHardBlock === true;
+    const strictAlign = config.smcHtfHardBlock === true;
     const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true
       || strictAlign;
     let htfAlignPts = 0;
@@ -1927,8 +1932,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // 12mo CSV forensics: conf>=75 flips Scalping from netPF 0.90 to 1.18; LONG
     // is the weaker side (PF 0.74 vs SHORT 1.01) — SHORT>=75/LONG>=80 measured
     // netPF 1.35 (n=28, WR 46.4%). rawA here is the side string ("LONG"/"SHORT").
-    const scalpMinConfLong = config.sacMinConfidenceALong ?? effMinConf.A;
-    const scalpMinConfShort = config.sacMinConfidenceAShort ?? effMinConf.A;
+    const scalpMinConfLong = config.smcMinConfidenceALong ?? effMinConf.A;
+    const scalpMinConfShort = config.smcMinConfidenceAShort ?? effMinConf.A;
     const effMinConfA = rawA === "LONG" ? scalpMinConfLong : scalpMinConfShort;
 
 
@@ -1950,7 +1955,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;
     let sigSwing      = (rawC && confC >= effMinConf.C) ? rawC : null;
 
-    // AF-SWING-V3: opt-in no-trade zone + adaptive sizing (typeOverrides.Swing.sacSwingV3Gate).
+    // AF-SWING-V3: opt-in no-trade zone + adaptive sizing (typeOverrides.Swing.smcSwingV3Gate).
     // Disabled by default — behavior identical to pre-V3 when the flag is unset.
     const swingV3 = sigSwing
       ? this._evaluateSwingV3Gate(indicators, lastIdx, sigSwing, confC, config, typeOverrides.Swing)
@@ -1989,8 +1994,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
   detectSignal(indicators, lastIdx, config = {}) {
     const multi = this.detectSignalMulti(indicators, lastIdx, config);
-    const minVotes = config.sacMinVotes ?? 1;
-    const minAgg   = config.sacMinAggregateConfidence ?? 0;
+    const minVotes = config.smcMinVotes ?? 1;
+    const minAgg   = config.smcMinAggregateConfidence ?? 0;
 
     const signals = [multi.Scalping, multi.Intraday, multi.Swing].filter(Boolean);
     const long  = signals.filter(s => s === "LONG").length;

@@ -63,9 +63,9 @@ const STRATEGY_TUNING_PROFILES = {
     family: "Smart Money Concepts (price-structure, NOT indicator-based)",
     indicators: "Liquidity sweep, CHoCH/BOS, Fair Value Gap (FVG), Order Block, Displacement, CVD, Volume surge. EMA is used ONLY for higher-timeframe regime bias — there is NO RSI and NO EMA-cross entry.",
     tunable: [
-      "sacMinConfidenceA (Scalping entry confidence gate, 0-100 — lower = more trades)",
-      "sacMinConfidenceB (Intraday entry confidence gate, 0-100)",
-      "sacMinConfidenceC (Swing entry confidence gate, 0-100)",
+      "smcMinConfidenceA (Scalping entry confidence gate, 0-100 — lower = more trades)",
+      "smcMinConfidenceB (Intraday entry confidence gate, 0-100)",
+      "smcMinConfidenceC (Swing entry confidence gate, 0-100)",
       "riskPerTrade (combined risk fraction across the 3 concurrent components, e.g. 0.015 = 1.5%)",
       "strongTrendTPMult (TP multiplier that lets winners run in STRONG_TREND regime)",
       "maxTradesPerDay (daily trade cap)",

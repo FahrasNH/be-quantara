@@ -132,13 +132,13 @@ test("SMC-01: class instantiates without error", () => {
 
 test("SMC-02: SUB_STRATEGIES has Scalping/Intraday/Swing + A/B/C aliases", () => {
   const smc = new SmartMoneyConceptsStrategy();
-  assert.equal(smc.SUB_STRATEGIES.Scalping.name, "SAC_SCALP");
-  assert.equal(smc.SUB_STRATEGIES.Intraday.name, "SAC_INTRADAY");
-  assert.equal(smc.SUB_STRATEGIES.Swing.name,    "SAC_SWING");
+  assert.equal(smc.SUB_STRATEGIES.Scalping.name, "SMC_SCALP");
+  assert.equal(smc.SUB_STRATEGIES.Intraday.name, "SMC_INTRADAY");
+  assert.equal(smc.SUB_STRATEGIES.Swing.name,    "SMC_SWING");
   // Backward-compat aliases
-  assert.equal(smc.SUB_STRATEGIES.A.name, "SAC_SCALP");
-  assert.equal(smc.SUB_STRATEGIES.B.name, "SAC_INTRADAY");
-  assert.equal(smc.SUB_STRATEGIES.C.name, "SAC_SWING");
+  assert.equal(smc.SUB_STRATEGIES.A.name, "SMC_SCALP");
+  assert.equal(smc.SUB_STRATEGIES.B.name, "SMC_INTRADAY");
+  assert.equal(smc.SUB_STRATEGIES.C.name, "SMC_SWING");
 });
 
 // ── Abstract method implementations ──────────────────────────────────────────
@@ -327,7 +327,7 @@ test("SMC-22: detectSignal returns null when no component qualifies", () => {
 test("SMC-23: HTF blocking — LONG entry blocked when htfTrend=BEARISH", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const ind = sweepBullishIndicators();
-  const config = { htfTrend: "BEARISH", sacMinVotes: 1 };
+  const config = { htfTrend: "BEARISH", smcMinVotes: 1 };
   const multi = smc.detectSignalMulti(ind, N, config);
   // All LONG signals should be filtered out by HTF block
   assert.equal(multi.A, null, "A LONG should be blocked by bearish HTF");

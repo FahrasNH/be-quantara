@@ -232,6 +232,9 @@ class BotEngine extends EventEmitter {
       ),
     };
 
+    const { normalizeSmcParams } = require("../../../core/strategy-engine/smc/smcParamCompat");
+    this.config = normalizeSmcParams(this.config);
+
     this.state = {
       running:       false,
       starting:      false, // set synchronously in start() before first await — prevents double-start race
@@ -2981,7 +2984,7 @@ class BotEngine extends EventEmitter {
     const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
     const enabledComponents =
       this.config.afEnabledComponents ||
-      this.config.sacEnabledComponents ||
+      this.config.smcEnabledComponents ||
       ["A", "B", "C"];
     const riskPerTrade = riskShareForType(
       componentId,

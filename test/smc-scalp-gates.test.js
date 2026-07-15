@@ -120,7 +120,7 @@ test("CONF-META: _scoreSequence returns components for CSV forensics", () => {
     dispIdx: n - 5,
     chochIdx: n - 10,
     sweepIdx: n - 15,
-    config: { sacScoreAtrNorm: true },
+    config: { smcScoreAtrNorm: true },
     obConfluence: true,
   });
   assert.equal(typeof scored.score, "number");
@@ -204,10 +204,10 @@ test("SESSION in detectSignalMulti: Scalping null at 21 UTC when filter on", () 
   };
 
   const blocked = smc.detectSignalMulti(ind, 39, {
-    sacUseSequenceEngine: true,
-    sacMinConfidenceA: 50,
-    sacMinConfidenceALong: 50,
-    sacMinConfidenceAShort: 50,
+    smcUseSequenceEngine: true,
+    smcMinConfidenceA: 50,
+    smcMinConfidenceALong: 50,
+    smcMinConfidenceAShort: 50,
     scalpingChochValidate: false,
     smcSessionFilter: true,
     candleTimestamp: Date.UTC(2026, 6, 13, 21, 5, 0),
@@ -216,10 +216,10 @@ test("SESSION in detectSignalMulti: Scalping null at 21 UTC when filter on", () 
   assert.equal(blocked.Scalping, null);
 
   const open = smc.detectSignalMulti(ind, 39, {
-    sacUseSequenceEngine: true,
-    sacMinConfidenceA: 50,
-    sacMinConfidenceALong: 50,
-    sacMinConfidenceAShort: 50,
+    smcUseSequenceEngine: true,
+    smcMinConfidenceA: 50,
+    smcMinConfidenceALong: 50,
+    smcMinConfidenceAShort: 50,
     scalpingChochValidate: false,
     smcSessionFilter: true,
     candleTimestamp: Date.UTC(2026, 6, 13, 14, 5, 0),
