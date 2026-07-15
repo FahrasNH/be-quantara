@@ -12,7 +12,7 @@ const {
   evaluateVSAComponent,
   candlesFromIndicators,
   DEFAULTS,
-} = require("../af/vsaComponent");
+} = require("../af/vsaEntry");
 
 class VsaStrategy extends StrategyBase {
   constructor(config = {}) {

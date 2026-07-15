@@ -14,7 +14,7 @@ const {
   sweetSpotPts,
   SMC_ML_CSV_COLUMNS,
   DEFAULT_SWING_MAX_HOLD_HOURS,
-} = require("#core/strategy-engine/af/smcComponent.js");
+} = require("#core/strategy-engine/af/smcEntry.js");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const { TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
@@ -83,10 +83,14 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig hon
 
   // Factory-reset configs may omit legacy STRATEGIES.*.typeOverrides.Swing;
   // risk overrides via calculateRiskConfig opts remain the runtime SSOT.
-  const ov = STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
-    || STRATEGIES.AF_SMC?.typeOverrides?.Swing
-    || null;
-  if (ov) {
+  // A Swing override may also exist purely for non-risk knobs (e.g. the low-TF
+  // ATR-gate fix sets typeOverrides.Swing.atrMinMult only) — the legacy
+  // fast-fail assertions below apply ONLY when the fast-fail SSOT is present.
+  const ov = STRATEGIES.ADAPTIVE_FUSION?.typeOverrides?.Swing
+    ?? STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
+    ?? STRATEGIES.AF_SMC?.typeOverrides?.Swing
+    ?? null;
+  if (ov && ov.slAtrMult != null) {
     assert.equal(ov.slAtrMult, 1.8);
     assert.equal(ov.tpAtrMult, 4.5);
     assert.equal(ov.maxHoldHours, 240);

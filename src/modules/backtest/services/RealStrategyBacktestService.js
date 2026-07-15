@@ -41,7 +41,7 @@ const {
   applySmcFundingGuard,
   buildCostModelMeta,
   holdHoursBetween,
-} = require("../../../core/strategy-engine/af/smcComponent");
+} = require("../../../core/strategy-engine/af/smcEntry");
 const { buildBacktestEntryContext } = require("../../analytics/domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
@@ -1015,13 +1015,21 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const dailyBase = dailyStartCapital || capital;
       if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) continue;
 
-      // Check ATR gate — relative to the leg's own baseline when enabled
+      // Check ATR gate — relative to the leg's own baseline when enabled.
+      // Per-leg atrMinMult/atrMaxMult (typeOverrides[componentId]) let the
+      // absolute floor track each TF's real ATR% band (e.g. 5m Scalping 0.15%,
+      // 15m Intraday 0.4%, 4h Swing 0.8%). Falls back to the top-level
+      // atrMinPct/atrMaxPct when a leg has no override, so non-SMC strategies
+      // and live gating are unaffected.
+      const compAtr = cfg.typeOverrides?.[componentId];
+      const compAtrMin = compAtr?.atrMinMult ?? atrMinPct;
+      const compAtrMax = compAtr?.atrMaxMult ?? atrMaxPct;
       const atrPct = (atr / price) * 100;
       if (atrBaseline) {
         const base = atrBaseline[i];
         const rel = base > 0 ? atr / base : 1;
         if (rel < atrRelMin || rel > atrRelMax) continue;
-      } else if (atrPct < atrMinPct || atrPct > atrMaxPct) continue;
+      } else if (atrPct < compAtrMin || atrPct > compAtrMax) continue;
 
       // Calculate risk config for this component. Pass the REAL regime so
       // strongTrendTPMult (let winners run in STRONG_TREND) can fire — it was
@@ -1971,8 +1979,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const maxConsecLoss = cfg.maxConsecLoss ?? 3;
   const maxTradesPerDay = cfg.maxTradesPerDay ?? 6;
   const maxDailyLossPct = cfg.maxDailyLossPct ?? 0.03;
-  const atrMinPct = cfg.atrMinMult ?? 0;
-  const atrMaxPct = cfg.atrMaxMult ?? Infinity;
+  // Per-leg atrMinMult/atrMaxMult (typeOverrides[tradeType]) override the
+  // absolute floor so each TF gets its own band. runMultiTypeBacktest already
+  // spreads the override onto cfg.atrMinMult; this lookup makes the resolution
+  // explicit and safe even if a full (un-spread) config reaches this engine.
+  const legAtrOv = cfg.typeOverrides?.[cfg.tradeType] || {};
+  const atrMinPct = legAtrOv.atrMinMult ?? cfg.atrMinMult ?? 0;
+  const atrMaxPct = legAtrOv.atrMaxMult ?? cfg.atrMaxMult ?? Infinity;
 
   // live configs don't set atrGateRelative, so live gating is unchanged.
   const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
