@@ -98,6 +98,37 @@ describe("BS_BR metadata verify (already implemented)", () => {
     expect(enrich.breakoutVolumeRatio).toBe(1.8);
   });
 
+  test("applyBsBrSnapshotFields wires meta onto BotEngine indicator snapshot (not N/A)", () => {
+    const { applyBsBrSnapshotFields } = require("../src/shared/csv/strategyMlEnrichment");
+    const snap = { volumeRatio: 0.9 };
+    applyBsBrSnapshotFields(snap, {
+      bbSqueezeWidthAtr: 0.42,
+      breakoutVolumeRatio: 1.8,
+      retestDepthAtr: 0.3,
+      rejectionWickPct: 0.65,
+      consolidationBars: 12,
+      breakoutCandleAtr: 1.1,
+      bbWidth: 0.015,
+      volumeRatio: 1.8,
+    });
+    expect(snap.bbSqueezeWidthAtr).toBe(0.42);
+    expect(snap.breakoutVolumeRatio).toBe(1.8);
+    expect(snap.retestDepthAtr).toBe(0.3);
+    expect(snap.rejectionWickPct).toBe(0.65);
+    expect(snap.consolidationBars).toBe(12);
+    expect(snap.breakoutCandleAtr).toBe(1.1);
+    expect(snap.bbWidth).toBe(0.015);
+    expect(snap.volumeRatio).toBe(1.8);
+    // BotEngine source must call the helper (live trade.indicators path)
+    const fs = require("fs");
+    const path = require("path");
+    const beSrc = fs.readFileSync(
+      path.join(__dirname, "../src/modules/trading/application/BotEngine.js"),
+      "utf8"
+    );
+    assert.ok(beSrc.includes("applyBsBrSnapshotFields"), "BotEngine must call applyBsBrSnapshotFields");
+  });
+
   test("mapBacktestTrade + projectMlFields expose all 11 BS_BR ML columns", () => {
     const row = mapBacktestTrade({
       side: "LONG",
