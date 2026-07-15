@@ -2888,7 +2888,7 @@ class BotEngine extends EventEmitter {
 
     const SmartMoneyConceptsStrategy = require("../../../core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
     const afStrategy = new SmartMoneyConceptsStrategy();
-    const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcComponent");
+    const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcEntry");
 
     // Map legacy letters → type names for typeOverrides lookup
     const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;
@@ -3087,9 +3087,9 @@ class BotEngine extends EventEmitter {
    * Handler utama saat HTF = SIDEWAYS.
    * Dipanggil dari _tick() menggantikan detectSignal() biasa.
    *
-   * Strat A (PDF_SCALPING)    → diam total, 1m terlalu noise saat 15m sideways
-   * Strat B (PDF_DAYTRADING)  → breakout langsung jika candle HTF close keluar range
-   * Strat C (PDF_SWING)       → tunggu breakout valid, lalu entry setelah retest
+   * Aggressive Scalping (PDF_SCALPING)   → diam total, 1m terlalu noise saat 15m sideways
+   * Day Trading (PDF_DAYTRADING)         → breakout langsung jika candle HTF close keluar range
+   * Swing Trading (PDF_SWING)            → tunggu breakout valid, lalu entry setelah retest
    */
   async _checkSidewaysEntry(htfCandles, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi) {
     const signalType = this.config.signalType;

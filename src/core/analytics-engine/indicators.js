@@ -5,10 +5,10 @@
 // "Dokumentasi Panduan Strategi Trading"
 //   Aggressive Scalping, Day Trading, Swing Trading
 //
-// Signal types:
-//   PDF_SCALPING   → Strategi A (EMA9/21 + RSI zona + volume)
-//   PDF_DAYTRADING → Strategi B (EMA9/21/50 + RSI 50-70 + volume)
-//   PDF_SWING      → Strategi C (EMA21/50/200 + pullback RSI 40-60)
+// Signal types → PDF trade-type presets (strategyDefaults.js):
+//   PDF_SCALPING   → AGGRESSIVE_SCALPING (EMA9/21 + RSI zona + volume)
+//   PDF_DAYTRADING → DAY_TRADING         (EMA9/21/50 + RSI 50-70 + volume)
+//   PDF_SWING      → SWING_TRADING       (EMA21/50/200 + pullback RSI 40-60)
 // ─────────────────────────────────────────────
 
 // ─────────────────────────────────────────────
@@ -313,7 +313,7 @@ function detectRsiPullbackBounce(rsi, i, direction, opts = {}) {
 // ─────────────────────────────────────────────
 
 /**
- * STRATEGI A — Aggressive Scalping (PDF 2.4–2.5)
+ * Aggressive Scalping (AGGRESSIVE_SCALPING · PDF 2.4–2.5)
  *
  * LONG:  EMA9 > EMA21 AND Close > EMA9 AND RSI 50–70 AND Volume naik
  * SHORT: EMA9 < EMA21 AND Close < EMA9 AND RSI 30–50 AND Volume naik
@@ -385,7 +385,7 @@ function detectSignalPdfScalping(indicators, i, config = {}) {
 }
 
 /**
- * STRATEGI B — Day Trading (PDF 3.4–3.5)
+ * Day Trading (DAY_TRADING · PDF 3.4–3.5)
  *
  * LONG:  EMA9 > EMA21 AND Price > EMA50 (trend bullish) AND RSI 50–70 AND Volume naik
  * SHORT: EMA9 < EMA21 AND Price < EMA50 (trend bearish) AND RSI < 50 AND Volume naik
@@ -465,7 +465,7 @@ function detectSignalPdfDayTrading(indicators, i, config = {}) {
 }
 
 /**
- * STRATEGI C — Swing Trading (PDF 4.4–4.5)
+ * Swing Trading (SWING_TRADING · PDF 4.4–4.5)
  *
  * LONG:
  *   - Price > EMA50 (trend besar bullish)

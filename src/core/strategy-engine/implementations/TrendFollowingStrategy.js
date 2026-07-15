@@ -1,25 +1,19 @@
 /**
- * TrendFollowingStrategy.js — Trend Following (TS_TF)
+ * TrendFollowingStrategy.js — TS_TF thin orchestrator
  *
- * Philosophy: "Mengikuti tren setelah terkonfirmasi"
- * - Multi-timeframe: 1h HTF trend, 15m confirmation, 5m entry
- * - Entry: EMA/SMA crossover, Donchian breakout, ADX strength gate
- * - Trade type: Intraday + Swing (medium holding)
- * - Best for: FORGE tier (Rp15-30M, 54-58% WR, 100-180% annual)
- *
- * 3-Layer Confirmation:
- * 1. HTF (1h): Trend direction via EMA alignment + ADX strength
- * 2. MTF (15m): Breakout confirmation via Donchian channel
- * 3. Entry (5m): Pullback retest via EMA crossover + volume
- *
- * Indikator: EMA9/21/50, SMA, Donchian Channel, ADX, ATR, Volume
+ * Entry logic lives in ts/trendFollowingEntry.js (Sprint 15 structure refactor).
  */
 
 const StrategyBase = require("../base/StrategyBase");
-const { calcEMA, calcSMA, calcDonchian, calcADX, calcATR } = require("../../analytics-engine/indicators");
-// NOTE: Do NOT import checkHTFRegime here. That helper is Mean-Reversion logic
-// (blocks WITH-trend entries). Applying it to Trend Following inverted the
-// directional gate → 100% SHORT bias in uptrends (Sprint 12 bug analysis).
+const {
+  DEFAULTS: ENTRY_DEFAULTS,
+  freshTrendState,
+  detectHTFTrend,
+  isDonchianBroken,
+  checkLongEntry,
+  checkShortEntry,
+  evaluateTrendFollowingEntry,
+} = require("../ts/trendFollowingEntry");
 
 class TrendFollowingStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -37,437 +31,74 @@ class TrendFollowingStrategy extends StrategyBase {
 
     this.config = {
       ...this.config,
-      // Timeframes (multi-TF strategy)
-      htfInterval: "1h",        // Higher TF for trend direction
-      mtfInterval: "15m",       // Middle TF for confirmation
-      entryInterval: "5m",      // Entry TF for precision
-
-      // Multi-TF index alignment ratios
-      mtfRatio: 3,              // 15m / 5m  = 3
-      htfRatio: 12,             // 1h  / 5m  = 12
-
-      // EMAs & SMAs (trend structure)
-      emaTrendFast: 9,          // Fast EMA (entry signal)
-      emaTrendMid: 21,          // Mid EMA (structure)
-      emaTrendSlow: 50,         // Slow EMA (trend filter)
-      smaTrendFast: 9,          // SMA for crossover confirmation
-      smaTrendMid: 21,          // SMA for trend
-
-      // Donchian Channel (breakout detection)
-      donchianPeriod: 20,       // Last 20 bars for channel
-
-      // ADX (trend strength gate)
+      ...ENTRY_DEFAULTS,
+      htfInterval: "1h",
+      mtfInterval: "15m",
+      entryInterval: "5m",
+      emaTrendFast: 9,
+      emaTrendMid: 21,
+      emaTrendSlow: 50,
+      smaTrendFast: 9,
+      smaTrendMid: 21,
       adxPeriod: 14,
-      adxMinStrength: 25,       // Require ADX > 25 for strong trend (tidak sideways)
-
-      // RSI (momentum filter)
       rsiPeriod: 14,
       rsiOversold: 30,
       rsiOverbought: 70,
-
-      // Volume confirmation
       volSMAPeriod: 20,
-      minVolRatio: 1.0,         // Minimum volume ratio (>= 1.0× SMA)
-
-      // Risk management
-      riskPerTrade: 0.015,      // 1.5% per trade (medium-term holding)
-      slMultiplier: 1.5,        // SL = 1.5×ATR (wider than momentum)
-      tpMultiplier: 3.0,        // TP = 3.0×ATR → RR ~1:2.0
-      leverage: 2.0,            // 2x for FORGE tier
-
-      // Position management
-      maxTradesPerDay: 3,       // Fewer, high-conviction trades
-      minCapital: 15000000,     // Rp15M minimum (FORGE tier)
-      trailingStopAtrMultiplier: 1.0,  // Trail 1.0×ATR after 50% TP
-
-      // Take-profit mode
-      tpMode: "partial",        // 50% at 1.5R, trail rest
-
-      // Exit management
+      riskPerTrade: 0.015,
+      slMultiplier: 1.5,
+      tpMultiplier: 3.0,
+      leverage: 2.0,
+      maxTradesPerDay: 3,
+      minCapital: 15000000,
+      trailingStopAtrMultiplier: 1.0,
+      tpMode: "partial",
       maxBarsHeld: 100,
       breakEvenActivationPct: 0.25,
-      partialProfitPct: 0.5,    // Close 50% at 1.5R
+      partialProfitPct: 0.5,
     };
 
     this._openTrades = [];
-    this._trendState = this._freshTrendState();
+    this._trendState = freshTrendState();
     this._lastEntryChecklist = null;
-    // WeakMap keyed by the `indicators.highs` array reference — avoids recomputing
-    // the fallback Donchian channel on every single bar (see detectSignal below).
-    // WeakMap (not a plain field) so different bots/symbols sharing this singleton
-    // instance never leak a cached channel from one symbol's candles into another's.
     this._donchianCache = new WeakMap();
   }
 
-  _freshTrendState() {
-    return {
-      htfTrendConfirmed: false,
-      htfTrendDirection: null,    // "LONG" | "SHORT" | null
-      htfAdxStrength: 0,          // ADX value on HTF
-      donchianBroken: false,      // Breakout detected?
-      barsInTrend: 0,
-    };
-  }
-
   resetTrendState() {
-    this._trendState = this._freshTrendState();
+    this._trendState = freshTrendState();
     this._lastEntryChecklist = null;
   }
 
-  /**
-   * Layer 1: Detect HTF trend via EMA alignment + ADX strength
-   * Trend must be strong (ADX > threshold) to avoid sideways traps.
-   * @returns "LONG" | "SHORT" | null
-   */
-  // adxMinOverride: per-run value from the engine's merged config (2026-07-08
-  // fix). This class is a SERVER-STARTUP SINGLETON shared across all concurrent
-  // backtests/live bots — `this.config.adxMinStrength` is fixed forever at the
-  // constructor default (25) and can never reflect a per-request override
-  // (there is no safe way to mutate shared singleton state per-request without
-  // race conditions across concurrent users). Before this fix, testing
-  // adxMinStrength=20 via config produced IDENTICAL results to 25 (the stale
-  // inner gate silently floored it) — only detectable because the shipped
-  // default of 30 happens to exceed 25, so the bug was invisible until someone
-  // tried to go LOWER than the singleton default.
   detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF, adxHTF, adxMinOverride) {
-    if (!htfClosesLast || !emaFastHTF || !emaMidHTF || !emaSlowHTF) return null;
-
-    const close = htfClosesLast;
-    const adxMin = adxMinOverride ?? this.config.adxMinStrength ?? 25;
-
-    // LONG: EMA aligned upward, price above structure, ADX strong
-    if (
-      emaFastHTF > emaMidHTF && emaMidHTF > emaSlowHTF &&
-      close > emaMidHTF &&
-      (adxHTF == null || adxHTF >= adxMin)
-    ) {
-      return "LONG";
-    }
-
-    // SHORT: EMA aligned downward, price below structure, ADX strong
-    if (
-      emaFastHTF < emaMidHTF && emaMidHTF < emaSlowHTF &&
-      close < emaMidHTF &&
-      (adxHTF == null || adxHTF >= adxMin)
-    ) {
-      return "SHORT";
-    }
-
-    return null;
+    return detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF, adxHTF, adxMinOverride, this.config);
   }
 
-  /**
-   * Layer 2: Check Donchian breakout on MTF (confirmation of trend)
-   * LONG: close > upper channel (previous bar), or hold above after breakout
-   * SHORT: close < lower channel (previous bar), or hold below after breakout
-   */
   isDonchianBroken(closesEntry, donchianUpper, donchianLower, direction) {
-    const n = closesEntry?.length || 0;
-    if (n < 2) return false;
-
-    const closeCurr = closesEntry[n - 1];
-    const closePrev = closesEntry[n - 2];
-
-    if (direction === "LONG") {
-      // Breakout: prev <= upper, curr > upper (fresh break)
-      // atau sustained: curr > upper (holding breakout)
-      return closeCurr > donchianUpper;
-    }
-    // SHORT: opposite
-    return closeCurr < donchianLower;
+    return isDonchianBroken(closesEntry, donchianUpper, donchianLower, direction);
   }
 
-  /**
-   * Layer 3: Check LONG entry (5m) — pullback retest
-   * After breakout confirmed, wait for pullback to EMA9/21 + retest above
-   */
-  checkLongEntry(
-    closesEntry,
-    volumesEntry,
-    emaFastEntry,    // EMA9[5m]
-    emaMidEntry,     // EMA21[5m]
-    rsiEntry,
-    volumeCurrentEntry,
-    volumeSMAEntry,
-    htfTrend,
-    donchianBroken,
-    donchianUpperMTF,
-    adxHTF,
-    adxMinOverride,
-    minVolRatioOverride
-  ) {
-    if (!closesEntry || closesEntry.length === 0) {
-      return { valid: false, reason: "No entry closes" };
-    }
-
-    const closeCurr = closesEntry[closesEntry.length - 1];
-
-    // 1. HTF trend must be LONG
-    if (htfTrend !== "LONG") {
-      return { valid: false, reason: "HTF not in uptrend" };
-    }
-
-    // 2. ADX must be strong (avoid sideways)
-    const adxMin = adxMinOverride ?? this.config.adxMinStrength ?? 25;
-    if (adxHTF != null && adxHTF < adxMin) {
-      return { valid: false, reason: `ADX ${adxHTF.toFixed(1)} below strength threshold ${adxMin}` };
-    }
-
-    // 3. Donchian breakout confirmed
-    if (!donchianBroken) {
-      return { valid: false, reason: "No Donchian breakout confirmation" };
-    }
-
-    // 4. Entry conditions (5m pullback retest)
-    // Close > EMA9
-    if (closeCurr <= emaFastEntry) {
-      return { valid: false, reason: `Close not above EMA9 (pullback too deep)` };
-    }
-
-    // EMA9 > EMA21 (uptrend structure held)
-    if (emaFastEntry <= emaMidEntry) {
-      return { valid: false, reason: "EMA9 not above EMA21 (structure broken)" };
-    }
-
-    // RSI healthy zone (avoid overbought)
-    if (rsiEntry == null || rsiEntry < 30 || rsiEntry > 70) {
-      return { valid: false, reason: `RSI ${rsiEntry?.toFixed(1) || "null"} outside 30-70` };
-    }
-
-    // Volume confirmation
-    const minVolRatio = minVolRatioOverride ?? this.config.minVolRatio;
-    if (volumeCurrentEntry < volumeSMAEntry * minVolRatio) {
-      return { valid: false, reason: `Volume below ${minVolRatio}× SMA` };
-    }
-
-    return { valid: true, reason: "All LONG conditions met" };
+  checkLongEntry(...args) {
+    return checkLongEntry(...args, this.config);
   }
 
-  /**
-   * Layer 3: Check SHORT entry (5m) — mirror of LONG
-   */
-  checkShortEntry(
-    closesEntry,
-    volumesEntry,
-    emaFastEntry,    // EMA9[5m]
-    emaMidEntry,     // EMA21[5m]
-    rsiEntry,
-    volumeCurrentEntry,
-    volumeSMAEntry,
-    htfTrend,
-    donchianBroken,
-    donchianLowerMTF,
-    adxHTF,
-    adxMinOverride,
-    minVolRatioOverride
-  ) {
-    if (!closesEntry || closesEntry.length === 0) {
-      return { valid: false, reason: "No entry closes" };
-    }
-
-    const closeCurr = closesEntry[closesEntry.length - 1];
-
-    if (htfTrend !== "SHORT") {
-      return { valid: false, reason: "HTF not in downtrend" };
-    }
-
-    const adxMin = adxMinOverride ?? this.config.adxMinStrength ?? 25;
-    if (adxHTF != null && adxHTF < adxMin) {
-      return { valid: false, reason: `ADX too low for short` };
-    }
-
-    if (!donchianBroken) {
-      return { valid: false, reason: "No Donchian breakout confirmation" };
-    }
-
-    if (closeCurr >= emaFastEntry) {
-      return { valid: false, reason: `Close not below EMA9` };
-    }
-
-    if (emaFastEntry >= emaMidEntry) {
-      return { valid: false, reason: "EMA9 not below EMA21" };
-    }
-
-    if (rsiEntry == null || rsiEntry < 30 || rsiEntry > 70) {
-      return { valid: false, reason: `RSI outside 30-70` };
-    }
-
-    const minVolRatioS = minVolRatioOverride ?? this.config.minVolRatio;
-    if (volumeCurrentEntry < volumeSMAEntry * minVolRatioS) {
-      return { valid: false, reason: `Volume below threshold` };
-    }
-
-    return { valid: true, reason: "All SHORT conditions met" };
+  checkShortEntry(...args) {
+    return checkShortEntry(...args, this.config);
   }
 
-  /**
-   * Main signal detection (3-layer with multi-TF)
-   */
   detectSignal(indicators, lastIdx, config = {}) {
-    if (lastIdx < 50) return null;
-
-    // Entry TF (5m)
-    const closesEntry = (indicators.closes || []).slice(0, lastIdx + 1);
-    const volumesEntry = (indicators.volumes || []).slice(0, lastIdx + 1);
-    const atr = indicators.atr?.[lastIdx];
-    const rsiEntry = indicators.rsi?.[lastIdx];
-    const emaFastEntry = indicators.emaFast?.[lastIdx];   // EMA9
-    const emaMidEntry = indicators.emaSlow?.[lastIdx];    // EMA21
-    const volumeCurrentEntry = volumesEntry[volumesEntry.length - 1];
-    const volumeSMAEntry = indicators.volSMA?.[lastIdx] || 0;
-
-    if (!atr || !rsiEntry || !emaFastEntry || !emaMidEntry) return null;
-
-
-    // into the HTF arrays supplied by the backtest engine — the fixed ratios below
-    // assume the canonical 5m/15m/1h stack and silently point at the WRONG (often
-    // future) HTF bar when the engine runs other pairs (15m→4h ratio 16, 4h→1w
-    // ratio 42). Prefer the engine's pointer whenever provided.
-    const hasHTF = Array.isArray(indicators.closesHTF);
-    const hasMTF = Array.isArray(indicators.macd15m);
-    const idxHTF = Number.isInteger(config.htfIdx)
-      ? config.htfIdx
-      : (hasHTF ? Math.floor(lastIdx / (this.config.htfRatio || 12)) : lastIdx);
-    const idxMTF = hasMTF ? Math.floor(lastIdx / (this.config.mtfRatio || 3)) : lastIdx;
-
-
-    // Live path: htfTrend passed via config.htfTrend from BotEngine (status quo)
-    // Backtest path: read from indicators.closesHTF/emaFastHTF/emaMidHTF/emaSlowHTF/adxHTF
-    const htfClose   = indicators.closesHTF?.[idxHTF] ?? closesEntry[closesEntry.length - 1];
-    const htfEmaFast = indicators.emaFastHTF?.[idxHTF] ?? emaFastEntry;
-    const htfEmaMid  = indicators.emaMidHTF?.[idxHTF] ?? emaMidEntry;
-    const htfEmaSlow = indicators.emaSlowHTF?.[idxHTF] ?? indicators.emaTrend?.[lastIdx] ?? null;
-    const htfAdx     = indicators.adxHTF?.[idxHTF] ?? null;
-
-    const htfTrend = this.detectHTFTrend(htfClose, htfEmaFast, htfEmaMid, htfEmaSlow, htfAdx, config.adxMinStrength);
-
-    if (this._trendState.htfTrendDirection && htfTrend && htfTrend !== this._trendState.htfTrendDirection) {
-      this.resetTrendState();
-    }
-
-    if (!htfTrend) {
-      this._trendState.htfTrendConfirmed = false;
-      return null;
-    }
-
-    // Layer 2: MTF Donchian breakout
-    let donchianBroken = false;
-    let donchianUpperMTF = null;
-    let donchianLowerMTF = null;
-
-    if (hasMTF && indicators.donchian15m) {
-      const dc = indicators.donchian15m;
-      donchianUpperMTF = dc.upper?.[idxMTF];
-      donchianLowerMTF = dc.lower?.[idxMTF];
-      const mtfCloses = (indicators.closes15m || []).slice(0, idxMTF + 1);
-      if (mtfCloses.length > 0) {
-        donchianBroken = this.isDonchianBroken(mtfCloses, donchianUpperMTF, donchianLowerMTF, htfTrend);
-      }
-    } else {
-      // Compute Donchian on entry TF as fallback (memoized — see constructor comment;
-      // calcDonchian scans the full array, so recomputing it fresh on every bar was
-      // O(n²) over the backtest range).
-      const highs = indicators.highs || [];
-      const lows = indicators.lows || [];
-      // donchianPeriod: prefer per-run config over the singleton constructor
-      // default — this.config on a singleton means the UI/backtest knob was a
-      // dead knob (same class as the calculateRiskConfig 3-arg bug). Cache is
-      // keyed per (candle array, period): one run's period must not leak a
-      // stale channel into another run reusing the same arrays.
-      const donchianPeriod = config.donchianPeriod ?? this.config.donchianPeriod ?? 20;
-      let dcByPeriod = this._donchianCache.get(highs);
-      if (!dcByPeriod) {
-        dcByPeriod = new Map();
-        this._donchianCache.set(highs, dcByPeriod);
-      }
-      let dc = dcByPeriod.get(donchianPeriod);
-      if (!dc) {
-        dc = calcDonchian(highs, lows, donchianPeriod);
-        dcByPeriod.set(donchianPeriod, dc);
-      }
-      // BUG FIX: dc.upper[lastIdx]/dc.lower[lastIdx] include the CURRENT bar's own
-      // high/low in their rolling window, so close[lastIdx] can never exceed
-      // upper[lastIdx] (close <= high <= upper by construction) or undercut
-      // lower[lastIdx] (close >= low >= lower) — the breakout condition was
-      // mathematically unreachable, meaning TS_TF could never enter a trade via
-      // this fallback path (the only path ever exercised — nothing in the codebase
-      // populates indicators.donchian15m, so the `if (hasMTF...)` branch above never
-      // runs). Compare against the PRIOR bar's channel instead (excludes the current
-      // bar), which is how a breakout is actually defined: today's close vs.
-      // yesterday's N-period high/low.
-      donchianUpperMTF = dc.upper?.[lastIdx - 1];
-      donchianLowerMTF = dc.lower?.[lastIdx - 1];
-      donchianBroken = this.isDonchianBroken(closesEntry, donchianUpperMTF, donchianLowerMTF, htfTrend);
-    }
-
-    this._trendState.htfTrendConfirmed = true;
-    this._trendState.htfTrendDirection = htfTrend;
-    this._trendState.htfAdxStrength = htfAdx || 0;
-    this._trendState.donchianBroken = donchianBroken;
-    this._trendState.barsInTrend += 1;
-
-    // Layer 3: Entry checks
-    const adxMinStrength = config.adxMinStrength ?? this.config.adxMinStrength ?? 25;
-    const donchianPeriod = config.donchianPeriod ?? this.config.donchianPeriod ?? 20;
-    const longCheck = this.checkLongEntry(
-      closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
-      volumeCurrentEntry, volumeSMAEntry,
-      htfTrend, donchianBroken, donchianUpperMTF, htfAdx,
-      adxMinStrength, config.minVolRatio
-    );
-
-    // TF already enforces HTF direction via detectHTFTrend + entry checks.
-    // Never apply MR's checkHTFRegime here (it blocks with-trend entries).
-    if (longCheck.valid) {
-      // Hard-gate caveat: all checklist flags are true on every fill — low variance.
-      const volRatio = volumeSMAEntry > 0 ? volumeCurrentEntry / volumeSMAEntry : null;
-      this._lastEntryChecklist = {
-        htfTrendAligned: true,
-        adxPassed: true,
-        donchianBroken: true,
-        ema9Retest: true,
-        volumeConfirmed: true,
-        volRatio,
-        adxMinStrength,
-        donchianPeriod,
-      };
-      return "LONG";
-    }
-
-    const shortCheck = this.checkShortEntry(
-      closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
-      volumeCurrentEntry, volumeSMAEntry,
-      htfTrend, donchianBroken, donchianLowerMTF, htfAdx,
-      adxMinStrength, config.minVolRatio
-    );
-
-    if (shortCheck.valid) {
-      const volRatio = volumeSMAEntry > 0 ? volumeCurrentEntry / volumeSMAEntry : null;
-      this._lastEntryChecklist = {
-        htfTrendAligned: true,
-        adxPassed: true,
-        donchianBroken: true,
-        ema9Retest: true,
-        volumeConfirmed: true,
-        volRatio,
-        adxMinStrength,
-        donchianPeriod,
-      };
-      return "SHORT";
-    }
-
-    return null;
+    const result = evaluateTrendFollowingEntry({
+      indicators,
+      lastIdx,
+      config: { ...this.config, ...config },
+      trendState: this._trendState,
+      donchianCache: this._donchianCache,
+      defaults: ENTRY_DEFAULTS,
+    });
+    this._trendState = result.trendState;
+    this._lastEntryChecklist = result.entryChecklist;
+    return result.signal;
   }
 
-
-  // SMC contract. Before this, the 3-arg signature silently DISCARDED the
-  // slMultiplier/tpMultiplier the backtest engine passes (built from
-  // cfg.slAtrMult / typeOverrides) — every SL/TP knob for TS_TF (FE "SL
-  // Multiplier" atrMult 1.3, "TP Multiplier" riskReward 1.92) was a dead knob,
-  // and TF always traded the constructor defaults SL 1.5×ATR / TP 3.0×ATR
-  // (CSV cross-check: all 91 rows show Planned R:R 2.0 = 3.0/1.5, never 1.92).
-  // Live engines pass no slMultiplier/tpMultiplier in opts → fallback keeps
-  // live behavior byte-identical.
   calculateRiskConfig(entryPrice, atr, signal, _component, opts = {}) {
     const slMult = opts.slMultiplier ?? this.config.slMultiplier;
     const tpMult = opts.tpMultiplier ?? this.config.tpMultiplier;
@@ -645,8 +276,7 @@ class TrendFollowingStrategy extends StrategyBase {
     const donchianPeriod = checklist.donchianPeriod ?? this.config.donchianPeriod ?? 20;
     const adx = this._trendState.htfAdxStrength || 0;
     const volRatio = checklist.volRatio ?? null;
-    // Sprint 14 audit: TS_TF previously fell back to flat 0.7 in TrendSurgeUmbrella
-    // because componentConfidence was never set — race selection was tie-break only.
+
     let confidence = 50;
     if (adx >= adxMinStrength + 15) confidence += 18;
     else if (adx >= adxMinStrength + 5) confidence += 12;
@@ -662,7 +292,6 @@ class TrendFollowingStrategy extends StrategyBase {
     else if (bars > 40) confidence += 2;
     confidence = Math.max(40, Math.min(95, Math.round(confidence)));
 
-    // Sprint 15: flat tf* ML fields for Dynamic ML multi-sheet export
     const tfFields = {
       tfAdxStrength: this._trendState.htfAdxStrength ?? null,
       tfDonchianPeriod: donchianPeriod ?? null,
@@ -673,8 +302,6 @@ class TrendFollowingStrategy extends StrategyBase {
     };
 
     return {
-      // Racer identity — trade-type (Intraday/Swing) is stamped by the multi-TF harness.
-      // Hardcoding "Swing" painted every TF fill as Swing and broke AMT/TF type stats.
       component: "TS_TF",
       winningComponent: "TS_TF",
       strategyLabel: "Trend Following",
@@ -686,7 +313,6 @@ class TrendFollowingStrategy extends StrategyBase {
       barsInTrend: this._trendState.barsInTrend,
       componentConfidence: confidence,
       confidence: confidence / 100,
-      // Entry reason sources for CSV (hard-gate — nearly identical across trades).
       entryChecklist: {
         htfTrendAligned: checklist.htfTrendAligned ?? this._trendState.htfTrendConfirmed,
         adxPassed: checklist.adxPassed ?? (this._trendState.htfAdxStrength >= adxMinStrength),

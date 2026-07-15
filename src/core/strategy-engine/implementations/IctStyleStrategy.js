@@ -6,7 +6,7 @@
 "use strict";
 
 const StrategyBase = require("../base/StrategyBase");
-const { evaluateIctStyleEntry, DEFAULTS } = require("../bs/ictKillZoneRaid");
+const { evaluateIctStyleEntry, DEFAULTS } = require("../bs/ictKillZoneRaidEntry");
 
 class IctStyleStrategy extends StrategyBase {
   constructor(config = {}) {

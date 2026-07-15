@@ -9,7 +9,7 @@ const StrategyBase = require("../base/StrategyBase");
 const {
   evaluateStatisticalArbitrageEntry,
   DEFAULTS,
-} = require("../md/statisticalArbitrage");
+} = require("../md/statisticalArbitrageEntry");
 
 class StatisticalArbitrageStrategy extends StrategyBase {
   constructor(config = {}) {
