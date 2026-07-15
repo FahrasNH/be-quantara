@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`.  
+Sprint 14+ baseline — per-leg `typeOverrides` (see below).  
 Nilai di bawah dari **`strategyDefaults.js`**; beberapa knob runtime dari **engine ctor** (merge saat instantiate).
 
 ### Risk & SL/TP
@@ -50,7 +50,14 @@ Nilai di bawah dari **`strategyDefaults.js`**; beberapa knob runtime dari **engi
 
 ### Per trade type overrides
 
-Tidak ada — `typeOverrides: {}`.
+| Leg | Overrides |
+| --- | --- |
+| Scalping | `atrMinMult: 0.15` |
+| Intraday | `atrMinMult: 0.4` |
+| Swing | `atrMinMult: 0.8`, `adxMinStrength: 20` |
+
+Backtest merges these onto per-leg cfg; top-level `atrMinMult` / `adxMinStrength` remain live fallbacks.
+
 
 ### Yang bisa di-tune di FE Advance
 

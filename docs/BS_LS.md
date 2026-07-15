@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`LIQUIDATION_SQUEEZE`** preset (= Breakout geometry); liquidation/squeeze knobs dari **component DEFAULTS**.
+Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). Risk/SL/TP dari **`LIQUIDATION_SQUEEZE`** preset (= Breakout geometry); liquidation/squeeze knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -49,7 +49,14 @@ Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`LIQUIDATION_SQUEE
 
 ### Per trade type overrides
 
-Tidak ada — `typeOverrides: {}`.
+| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| --- | --- |
+| Scalping | 0.15 |
+| Intraday | 0.4 |
+| Swing | 0.8 |
+
+Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
+
 
 ---
 
