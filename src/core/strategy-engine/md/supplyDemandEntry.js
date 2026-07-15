@@ -35,7 +35,7 @@ function _zoneDistance(price, zoneLow, zoneHigh) {
   return price - zoneHigh;
 }
 
-function _isReversalCandle(opens, highs, lows, closes, idx, direction) {
+function _isReversalCandle(opens, highs, lows, closes, idx, direction, minReversalBodyPct = DEFAULTS.minReversalBodyPct) {
   const o = opens?.[idx] ?? closes[idx - 1] ?? closes[idx];
   const h = highs[idx];
   const l = lows[idx];
@@ -43,7 +43,7 @@ function _isReversalCandle(opens, highs, lows, closes, idx, direction) {
   const range = Math.max(h - l, 1e-12);
   const body = Math.abs(c - o);
   const bodyPct = body / range;
-  if (bodyPct < DEFAULTS.minReversalBodyPct) return false;
+  if (bodyPct < minReversalBodyPct) return false;
   if (direction === "LONG") {
     // Bullish rejection: close in upper half, preferably green
     return c >= o && c >= l + range * 0.55;
@@ -80,6 +80,7 @@ function evaluateSupplyDemandEntry({
   const baseConf = config.mdSdBaseConfidence ?? DEFAULTS.baseConfidence;
   const zoneBoost = config.mdSdZoneBoost ?? DEFAULTS.zoneBoost;
   const volBoost = config.mdSdVolBoost ?? DEFAULTS.volBoost;
+  const minReversalBodyPct = config.minReversalBodyPct ?? DEFAULTS.minReversalBodyPct;
 
   if (!closes || lastIdx < 30 || atr == null || !(atr > 0)) {
     return {
@@ -155,11 +156,11 @@ function evaluateSupplyDemandEntry({
   const longOk =
     demand.zone &&
     demand.dist <= radius &&
-    _isReversalCandle(opens, highs, lows, closes, lastIdx, "LONG");
+    _isReversalCandle(opens, highs, lows, closes, lastIdx, "LONG", minReversalBodyPct);
   const shortOk =
     supply.zone &&
     supply.dist <= radius &&
-    _isReversalCandle(opens, highs, lows, closes, lastIdx, "SHORT");
+    _isReversalCandle(opens, highs, lows, closes, lastIdx, "SHORT", minReversalBodyPct);
 
   // Prefer closer zone when both fire (rare)
   if (longOk && shortOk) {

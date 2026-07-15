@@ -6,7 +6,8 @@
 // and legacy A/B/C resolve via strategyKeyNormalizer ACL at ingress.
 //
 // ADAPTIVE_FUSION = umbrella-only (race flags). SMART_MONEY_CONCEPTS owns all
-// smc* knobs. WYCKOFF / VOLUME_SPREAD_ANALYSIS share AF component geometry only.
+// smc* knobs. Component racers spread from tier COMPONENT_BASE + own knobs — NOT
+// full parent engine presets (Donchian/ADX/BB/retest parent knobs stay on parents).
 // Gen1 strategy keys resolve via strategyKeyNormalizer at getStrategy() ingress.
 // ─────────────────────────────────────────────
 
@@ -71,6 +72,141 @@ const AF_COMPONENT_BASE = {
   trades:  "~3–8 trade/hari (1h eval)",
   winrate: "Target 52–60%",
   risk:    "Rendah-Sedang",
+};
+
+/** Shared TS component geometry (no Donchian/ADX/TF race flags). */
+const TS_COMPONENT_BASE = {
+  emaFast:       9,
+  emaSlow:       21,
+  emaTrend:      50,
+
+  rsiPeriod:     14,
+  rsiOverbought: 70,
+  rsiOversold:   30,
+  rsiLongMin:    35,
+  rsiLongMax:    75,
+  rsiShortMin:   25,
+  rsiShortMax:   65,
+
+  atrPeriod:     14,
+  atrMultiplier: 1.5,
+  riskReward:    2.0,
+  atrMinMult:    0.5,
+  atrMaxMult:    8.0,
+
+  higherTf:      "1h",
+  htfEmaFast:    9,
+  htfEmaSlow:    21,
+  sidewaysThresholdPct: 0.25,
+
+  volSmaMultiplier: 1.0,
+
+  riskPerTrade:        0.01,
+  maxDailyLossPct:     0.06,
+  maxTradesPerDay:     4,
+  cooldownAfterLoss:   5,
+  maxConsecLoss:       3,
+
+  leverage:      2,
+  interval:      "5m",
+  checkInterval: 60_000,
+
+  enabledComponents: ["Scalping", "Intraday", "Swing"],
+  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
+  trades:  "8-15 trade/hari",
+  winrate: "~54-58%",
+  risk:    "Sedang",
+};
+
+/** Shared MD component geometry (no BB/ADX/MR-specific knobs). */
+const MD_COMPONENT_BASE = {
+  emaFast:       9,
+  emaSlow:       21,
+  emaTrend:      50,
+
+  rsiPeriod:     14,
+  rsiOverbought: 75,
+  rsiOversold:   25,
+  rsiLongMin:    15,
+  rsiLongMax:    25,
+  rsiShortMin:   75,
+  rsiShortMax:   85,
+
+  atrPeriod:     14,
+  atrMultiplier: 1.5,
+  riskReward:    2.0,
+  atrMinMult:    0.5,
+  atrMaxMult:    6.0,
+
+  higherTf:      "15m",
+  htfEmaFast:    9,
+  htfEmaSlow:    21,
+  sidewaysThresholdPct: 0.3,
+
+  volSmaMultiplier: 0.8,
+
+  riskPerTrade:        0.01,
+  maxDailyLossPct:     0.03,
+  maxTradesPerDay:     3,
+  cooldownAfterLoss:   15,
+  maxConsecLoss:       2,
+
+  leverage:      1.0,
+  interval:      "15m",
+  checkInterval: 60_000,
+
+  enabledComponents: ["Scalping", "Intraday", "Swing"],
+  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
+  trades:  "5-15 trade/minggu",
+  winrate: "~55-60%",
+  risk:    "Rendah",
+};
+
+/** Shared BS component geometry (no breakout/retest BR-specific knobs). */
+const BS_COMPONENT_BASE = {
+  emaFast:       9,
+  emaSlow:       21,
+  emaTrend:      50,
+
+  rsiPeriod:     14,
+  rsiOverbought: 70,
+  rsiOversold:   30,
+  rsiLongMin:    40,
+  rsiLongMax:    70,
+  rsiShortMin:   30,
+  rsiShortMax:   60,
+
+  atrPeriod:     14,
+  atrMultiplier: 1.5,
+  riskReward:    3.0,
+  atrMinMult:    0.2,
+  atrMaxMult:    5.0,
+
+  higherTf:      "4h",
+  htfEmaFast:    9,
+  htfEmaSlow:    21,
+  sidewaysThresholdPct: 0.25,
+
+  volSmaMultiplier: 1.0,
+
+  riskPerTrade:        0.01,
+  maxDailyLossPct:     0.08,
+  maxTradesPerDay:     5,
+  cooldownAfterLoss:   5,
+  maxConsecLoss:       3,
+
+  leverage:      1,
+  interval:      "15m",
+  checkInterval: 900_000,
+
+  enabledComponents: ["Scalping", "Intraday", "Swing"],
+  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
+  trades:  "2-7 trade/hari",
+  winrate: "~51-56%",
+  risk:    "Sedang-Tinggi",
 };
 
 const STRATEGIES = {
@@ -436,25 +572,154 @@ STRATEGIES.BREAKOUT_STORM = {
   bsCombinationMode: "race",
 };
 
-// ─── Component keys — FLAT spread from parent presets ───────────────────────
+// ─── Component keys — tier COMPONENT_BASE + component-specific knobs ─────────
 STRATEGIES.WYCKOFF = {
   ...AF_COMPONENT_BASE,
   name: "WYCKOFF",
   label: "Wyckoff Method",
   signalType: "SMART_MONEY_CONCEPTS",
+
+  minBars: 100,
+  lookback: 100,
+  volMultiplier: 1.5,
+  climaxVolExtra: 0.5,
+  zigzagLength: 4,
+  springLookback: 20,
+  climaxLookback: 30,
+  psLookback: 50,
+  avgRangePeriod: 20,
+  bbPeriod: 20,
+  bbStdDev: 2,
+  bbWidthLookback: 100,
+  bbWidthMeanMult: 1.05,
+  bbWidthPercentileMax: 40,
+  rangeLookback: 20,
+  minRangeWidthPct: 0.005,
+  maxRangeWidthPct: 0.05,
+  minBarsInRange: 20,
+  penetrationAtrMult: 0.8,
+  recoveryWindow: 5,
+  volumeConfirmMult: 1.0,
+  volumeSmaPeriod: 20,
+  cooldownBars: 5,
+  entryModel: "aggressive",
+  priorTrendBars: 40,
+  priorTrendMinSlopePct: 0.01,
+  rejectionWickRatio: 0.45,
+  chochLookback: 12,
+  minRr: 2.0,
+  maxEntryProximityPct: 0.35,
+  eventScanBars: 80,
 };
 STRATEGIES.VOLUME_SPREAD_ANALYSIS = {
   ...AF_COMPONENT_BASE,
   name: "VOLUME_SPREAD_ANALYSIS",
   label: "Volume Spread Analysis",
   signalType: "SMART_MONEY_CONCEPTS",
+
+  minBars: 20,
+  volumeSmaPeriod: 20,
+  wideSpreadMult: 1.3,
+  narrowSpreadMult: 0.7,
+  lowRelVol: 0.7,
+  highRelVol: 1.5,
+  mismatchSpreadMult: 0.5,
+  swingRadius: 5,
+  swingLeftLook: 5,
+  swingScanBars: 50,
+  mismatchConfidencePenalty: 0.25,
 };
-STRATEGIES.MARKET_STRUCTURE  = { ...STRATEGIES.TREND_FOLLOWING, name: "MARKET_STRUCTURE",  label: "Dow Theory",             signalType: "TREND_FOLLOWING" };
-STRATEGIES.AUCTION_MARKET_THEORY  = { ...STRATEGIES.TREND_FOLLOWING, name: "AUCTION_MARKET_THEORY",  label: "Auction Market Theory",  signalType: "TREND_FOLLOWING" };
-STRATEGIES.SUPPLY_AND_DEMAND  = { ...STRATEGIES.MEAN_REVERSION, name: "SUPPLY_AND_DEMAND",  label: "Supply and Demand",           signalType: "MEAN_REVERSION" };
-STRATEGIES.STATISTICAL_ARBITRAGE  = { ...STRATEGIES.MEAN_REVERSION, name: "STATISTICAL_ARBITRAGE",  label: "Statistical Arbitrage",       signalType: "MEAN_REVERSION" };
-STRATEGIES.ICT_STYLE_TRADING = { ...STRATEGIES.BREAKOUT_RETEST, name: "ICT_STYLE_TRADING", label: "ICT-style trading",           signalType: "BREAKOUT_RETEST" };
-STRATEGIES.LIQUIDATION_SQUEEZE  = { ...STRATEGIES.BREAKOUT_RETEST, name: "LIQUIDATION_SQUEEZE",  label: "Liquidation/Squeeze Trading", signalType: "BREAKOUT_RETEST" };
+STRATEGIES.MARKET_STRUCTURE = {
+  ...TS_COMPONENT_BASE,
+  name: "MARKET_STRUCTURE",
+  label: "Dow Theory",
+  signalType: "TREND_FOLLOWING",
+
+  leftLook: 2,
+  rightLook: 2,
+  scanBars: 80,
+  minSwingPairs: 2,
+  entryPullbackPct: 0.35,
+  entryAtrMult: 0.75,
+};
+STRATEGIES.AUCTION_MARKET_THEORY = {
+  ...TS_COMPONENT_BASE,
+  name: "AUCTION_MARKET_THEORY",
+  label: "Auction Market Theory",
+  signalType: "TREND_FOLLOWING",
+
+  bins: 20,
+  valueAreaPct: 0.7,
+  vwapAtrMult: 0.5,
+  vwapTolerancePct: 0.005,
+  minSessionBars: 20,
+  minSessionBarsSwing: 6,
+};
+STRATEGIES.SUPPLY_AND_DEMAND = {
+  ...MD_COMPONENT_BASE,
+  name: "SUPPLY_AND_DEMAND",
+  label: "Supply and Demand",
+  signalType: "MEAN_REVERSION",
+
+  mdSdConfluenceAtrMult: 0.75,
+  mdSdVolConfirmMult: 0.9,
+  mdSdBaseConfidence: 0.62,
+  mdSdZoneBoost: 0.18,
+  mdSdVolBoost: 0.1,
+  mdSdScanBars: 40,
+  mdSdFvgMinGapPct: 0.0015,
+  mdSdObLookback: 25,
+  mdSdObDispMult: 1.3,
+  minReversalBodyPct: 0.35,
+};
+STRATEGIES.STATISTICAL_ARBITRAGE = {
+  ...MD_COMPONENT_BASE,
+  name: "STATISTICAL_ARBITRAGE",
+  label: "Statistical Arbitrage",
+  signalType: "MEAN_REVERSION",
+
+  mdSaLookback: 40,
+  mdSaEntryZ: 1.6,
+  mdSaExitZ: 0.4,
+  mdSaMinBars: 50,
+  mdSaBaseConfidence: 0.58,
+  mdSaZBoostPerUnit: 0.12,
+  mdSaMaxConfidence: 0.95,
+  mdSaUseVwapBlend: true,
+};
+STRATEGIES.ICT_STYLE_TRADING = {
+  ...BS_COMPONENT_BASE,
+  name: "ICT_STYLE_TRADING",
+  label: "ICT-style trading",
+  signalType: "BREAKOUT_RETEST",
+
+  bsIctSessionLookback: 20,
+  bsIctVolumeMult: 1.25,
+  bsIctRaidConfirmBars: 1,
+  bsIctBaseConfidence: 0.7,
+  bsIctOutsideKzConfidence: 0.45,
+  bsIctRequireKillZone: false,
+  bsIctMinWickBeyondPct: 0.0005,
+};
+STRATEGIES.LIQUIDATION_SQUEEZE = {
+  ...BS_COMPONENT_BASE,
+  name: "LIQUIDATION_SQUEEZE",
+  label: "Liquidation/Squeeze Trading",
+  signalType: "BREAKOUT_RETEST",
+
+  bsLsOiLookback: 20,
+  bsLsExtremeFundingLong: 0.0005,
+  bsLsExtremeFundingShort: -0.0005,
+  bsLsOiChangeConfirmPct: 1.0,
+  bsLsWickLookback: 20,
+  bsLsWickVolMult: 1.2,
+  bsLsMinWickBodyRatio: 1.5,
+  bsLsBaseConfidence: 0.55,
+  bsLsFundingBoost: 0.2,
+  bsLsOiBoost: 0.15,
+  bsLsDisplacementOnlyConfidence: 0.5,
+  bsLsMaxConfidence: 0.92,
+};
 
 const DEFAULT_STRATEGY_KEY = "SMART_MONEY_CONCEPTS";
 
@@ -490,6 +755,10 @@ module.exports = {
   resolveStrategyDefaults,
   listStrategies,
   STRATEGIES,
+  AF_COMPONENT_BASE,
+  TS_COMPONENT_BASE,
+  MD_COMPONENT_BASE,
+  BS_COMPONENT_BASE,
   DEFAULT_LEG_TYPE_OVERRIDES,
   DEFAULT_STRATEGY_KEY,
 };
