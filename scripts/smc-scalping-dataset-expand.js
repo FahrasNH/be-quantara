@@ -31,7 +31,16 @@ const fs = require("fs");
 const path = require("path");
 const { runTripleTypeBacktest } = require("../src/server/services/RealStrategyBacktestService");
 const { toCsv, TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
+const { SMC_ML_CSV_COLUMNS } = require("../src/core/strategy-engine/smc/smcScalpGates");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
+
+/** ML dataset CSV = CORE identity/PnL + SMC ML feature columns (not human report CSV). */
+const ML_DATASET_COLUMNS = [
+  ...TRADE_EXPORT_COLUMNS.filter(([k]) =>
+    ["id", "symbol", "side", "strategy", "component", "entryPrice", "exitPrice", "pnl", "fee", "pnlNet", "result", "atr", "entryReasons", "openTime", "closeTime"].includes(k)
+  ),
+  ...SMC_ML_CSV_COLUMNS,
+];
 
 const args = process.argv.slice(2);
 const get = (flag, def) => {
@@ -225,7 +234,7 @@ async function main() {
 
   const csvPath = path.join(OUT_DIR, "trades.csv");
   const statsPath = path.join(OUT_DIR, "stats.json");
-  fs.writeFileSync(csvPath, toCsv(allRows, TRADE_EXPORT_COLUMNS));
+  fs.writeFileSync(csvPath, toCsv(allRows, ML_DATASET_COLUMNS));
   const summary = {
     generatedAt: new Date().toISOString(),
     source: SOURCE,

@@ -18,6 +18,7 @@ module.exports = function createAdminRouter(helpers = {}) {
   // Real trade store (engine writes here via insertTrade). The Prisma `Trade`
   // model is unused/empty, so trade-derived admin data must read from this layer.
   const db = require("../../../infrastructure/db/database");
+  const { ADMIN_TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
   // File-backed platform state (maintenance/flags + flagged users) — no Prisma
   // model needed. See platformStore.js.
   const platformStore = require("../../../infrastructure/store/platformStore");
@@ -565,38 +566,9 @@ module.exports = function createAdminRouter(helpers = {}) {
    * GET /api/v1/admin/trades/export — streaming CSV of all trades, all users
    * (ADMIN-BE-04). Cursor-paginated so memory stays flat on large tables.
    */
-  // Same per-row fields as the user-facing insight export (history.js
-  // TRADE_COLUMNS), with a leading "User" column since admin spans all users.
-  const ADMIN_EXPORT_COLUMNS = [
-    ["user",       "User"],
-    ["id",         "ID"],
-    ["sessionId",  "Session ID"],
-    ["symbol",     "Symbol"],
-    ["side",       "Side"],
-    ["strategy",   "Strategy"],
-    ["status",     "Status"],
-    ["entryPrice", "Entry Price"],
-    ["exitPrice",  "Exit Price"],
-    ["sl",         "SL"],
-    ["tp",         "TP"],
-    ["size",       "Size"],
-    ["pnl",        "PnL Gross"],
-    ["fee",        "Fee"],
-    ["funding",    "Funding"],
-    ["pnlNet",     "PnL Net"],
-    ["pnlPct",     "PnL %"],
-    ["plannedRR",  "Planned R:R"],
-    ["actualRR",   "Actual R:R"],
-    ["duration",   "Duration"],
-    ["reason",     "Reason"],
-    ["dryRun",     "DryRun"],
-    ["mode",       "Mode"],
-    ["exchange",   "Exchange"],
-    ["openTime",   "Open Time"],
-    ["closeTime",  "Close Time"],
-    ["isPartial",  "Is Partial"],
-    ["result",     "Result"],
-  ];
+  // CORE CSV columns (Sprint 14 redesign) — shared with user + backtest export.
+  // Leading "User" column since admin spans all users.
+  const ADMIN_EXPORT_COLUMNS = ADMIN_TRADE_EXPORT_COLUMNS;
 
   router.get("/trades/export", ...requireAdmin, async (req, res) => {
     try {

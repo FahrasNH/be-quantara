@@ -919,6 +919,14 @@ function mapExportRow(row) {
 
   // BUG-008: field exit/close kosong untuk trade open → tampilkan 'N/A'.
   const NA = "N/A";
+  const conf = ind?.confidence;
+  const confidenceOut =
+    conf == null
+      ? NA
+      : typeof conf === "object"
+        ? (conf.Scalping ?? conf.Intraday ?? conf.Swing ?? conf.A ?? conf.B ?? conf.C ?? NA)
+        : conf;
+
   return {
     id:          row.id,
     sessionId:   row.session_id,
@@ -935,6 +943,13 @@ function mapExportRow(row) {
     pnlNet:      isOpen ? NA : pnlNet,
     pnlPct:      isOpen ? NA : (row.pnl_pct ?? null),
     reason:      isOpen ? NA : (row.reason ?? NA),
+    exitReason:  isOpen ? NA : (ind?.exitReason ?? row.reason ?? NA),
+    entryReasons: isOpen ? NA : (ind?.entryReasons ?? NA),
+    confidence:  confidenceOut,
+    htfTrend:    ind?.htfTrend ?? NA,
+    dailyRegime: ind?.dailyRegime ?? NA,
+    component:   ind?.winningComponent ?? ind?.component ?? NA,
+    atr:         ind?.atr ?? row.atr ?? NA,
     dryRun:      row.dry_run === 1,
     mode:        row.mode ?? null,
     exchange:    row.session_exchange ?? null,

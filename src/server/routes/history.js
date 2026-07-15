@@ -4,6 +4,11 @@
 
 const { Router } = require("express");
 const db = require("../../infrastructure/db/database");
+const {
+  TRADE_EXPORT_COLUMNS,
+  toCsv: toCsvShared,
+  buildPerformanceSummaryCsv,
+} = require("#shared/csv/tradeExportCsv.js");
 
 // parseInt yang aman — kembalikan `def` jika nilai tidak finite
 const safeInt = (val, def = 0) => {
@@ -62,85 +67,23 @@ module.exports = function createHistoryRouter({ SYMBOLS_LIST, getAllBots }) {
     }
   });
 
-  // Urutan kolom eksplisit untuk export trade (FEAT-001 menambah Duration /
-  // Planned R:R / Actual R:R; BUG-006 semua header bahasa Inggris). Map dari
-  // field getTradesExport → label header CSV.
-  const TRADE_COLUMNS = [
-    ["id",          "ID"],
-    ["sessionId",   "Session ID"],
-    ["symbol",      "Symbol"],
-    ["side",        "Side"],
-    ["strategy",    "Strategy"],
-    ["status",      "Status"],
-    ["entryPrice",  "Entry Price"],
-    ["exitPrice",   "Exit Price"],
-    ["sl",          "SL"],
-    ["tp",          "TP"],
-    ["size",        "Size"],
-    ["pnl",         "PnL Gross"],
-    ["fee",         "Fee"],
-    ["funding",     "Funding"],
-    ["pnlNet",      "PnL Net"],
-    ["pnlPct",      "PnL %"],
-    ["plannedRR",   "Planned R:R"],
-    ["actualRR",    "Actual R:R"],
-    ["duration",    "Duration"],
-    ["reason",      "Reason"],
-    ["dryRun",      "DryRun"],
-    ["mode",        "Mode"],
-    ["exchange",    "Exchange"],
-    ["openTime",    "Open Time"],
-    ["closeTime",   "Close Time"],
-    ["isPartial",   "Is Partial"],
-    ["result",      "Result"],
-  ];
-
-  const escapeCsv = (v) => {
-    if (v === null || v === undefined) return "";
-    const s = String(v);
-    return s.includes(",") || s.includes('"') || s.includes("\n")
-      ? `"${s.replace(/"/g, '""')}"`
-      : s;
-  };
+  // CORE CSV columns (Sprint 14 redesign) — shared with admin + backtest export.
+  const TRADE_COLUMNS = TRADE_EXPORT_COLUMNS;
 
   const toCsv = (data, columns = TRADE_COLUMNS) => {
     // columns = null → derive dari keys baris pertama (dipakai endpoint insights
     // yang punya skema field berbeda). label = key apa adanya.
-    const cols = columns ?? (data[0] ? Object.keys(data[0]).map((k) => [k, k]) : []);
-    const header = cols.map(([, label]) => label).join(",");
-    const rows = data.map((r) =>
-      cols.map(([key]) => escapeCsv(r[key])).join(",")
-    );
-    return [header, ...rows].join("\n");
+    if (columns == null) {
+      const cols = data[0] ? Object.keys(data[0]).map((k) => [k, k]) : [];
+      return toCsvShared(data, cols);
+    }
+    return toCsvShared(data, columns);
   };
 
   // Ringkasan performa (Performance Summary) — header eksplisit Metric,Value.
   // Hanya menghitung trade tertutup (status "Closed"); open & cancelled dikecualikan
   // dari total (BUG-008). Tidak ada baris pemisah kosong (BUG-005).
-  const buildSummaryCsv = (data) => {
-    const closed = data.filter((r) => r.status === "Closed");
-    const wins   = closed.filter((r) => r.result === "win").length;
-    const losses = closed.filter((r) => r.result === "loss").length;
-    const open      = data.filter((r) => r.status === "Open").length;
-    const cancelled = data.filter((r) => r.status === "Cancelled").length;
-    const netPnl = closed.reduce((s, r) => s + (Number(r.pnlNet) || 0), 0);
-    const winRate = closed.length ? ((wins / closed.length) * 100).toFixed(1) : "0.0";
-
-    const metrics = [
-      ["Performance Summary", ""],
-      ["Total Trades (exported)", data.length],
-      ["Closed Trades", closed.length],
-      ["Open Trades", open],
-      ["Cancelled Trades", cancelled],
-      ["Wins", wins],
-      ["Losses", losses],
-      ["Win Rate %", winRate],
-      ["Net PnL", netPnl.toFixed(4)],
-    ];
-    const header = "Metric,Value";
-    const rows = metrics.map(([m, v]) => `${escapeCsv(m)},${escapeCsv(v)}`);
-    return [header, ...rows].join("\n");
-  };
+  const buildSummaryCsv = buildPerformanceSummaryCsv;
 
   router.get("/trades", async (req, res) => {
     try {
