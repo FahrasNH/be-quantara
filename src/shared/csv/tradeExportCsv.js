@@ -179,26 +179,49 @@ const ML_FIELD_SETS = Object.freeze({
 
 const ML_STRATEGY_ALIASES = Object.freeze({
   TREND_FOLLOWING: "TS_TF",
+  "TREND FOLLOWING": "TS_TF",
   MARKET_STRUCTURE: "TS_MS",
+  "MARKET STRUCTURE": "TS_MS",
   VOLUME_PROFILE: "TS_VP",
+  "VOLUME PROFILE": "TS_VP",
   MEAN_REVERSION: "MD_MR",
+  "MEAN REVERSION": "MD_MR",
   SUPPLY_AND_DEMAND: "MD_SD",
+  "SUPPLY AND DEMAND": "MD_SD",
   STATISTICAL_ARBITRAGE: "MD_SA",
+  "STATISTICAL ARBITRAGE": "MD_SA",
   BREAKOUT_RETEST: "BS_BR",
+  "BREAKOUT RETEST": "BS_BR",
   BREAKOUT_TRADING: "BS_BR",
+  "BREAKOUT TRADING": "BS_BR",
   SMART_MONEY_CONCEPTS: "AF_SMC",
+  "SMART MONEY CONCEPTS": "AF_SMC",
   ADAPTIVE_FUSION: "AF_SMC",
+  "ADAPTIVE FUSION": "AF_SMC",
   WYCKOFF: "AF_WYCKOFF",
   VSA: "AF_VSA",
+  "VOLUME SPREAD ANALYSIS": "AF_VSA",
+  VOLUME_SPREAD_ANALYSIS: "AF_VSA",
   ICT: "BS_ICT",
+  "ICT-STYLE TRADING": "BS_ICT",
+  "ICT STYLE TRADING": "BS_ICT",
+  ICT_STYLE_TRADING: "BS_ICT",
   LIQUIDATION_SQUEEZE: "BS_LS",
+  "LIQUIDATION SQUEEZE": "BS_LS",
 });
 
 function normalizeMlStrategyKey(key) {
   const raw = String(key || "").trim().toUpperCase();
   if (!raw) return "";
   if (ML_FIELD_SETS[raw]) return raw;
-  return ML_STRATEGY_ALIASES[raw] || raw;
+  if (ML_STRATEGY_ALIASES[raw]) return ML_STRATEGY_ALIASES[raw];
+  // "ICT-style trading" → ICT_STYLE_TRADING / ICT-STYLE TRADING
+  const underscored = raw.replace(/[\s\-]+/g, "_");
+  if (ML_FIELD_SETS[underscored]) return underscored;
+  if (ML_STRATEGY_ALIASES[underscored]) return ML_STRATEGY_ALIASES[underscored];
+  const spaced = raw.replace(/[\s\-_]+/g, " ");
+  if (ML_STRATEGY_ALIASES[spaced]) return ML_STRATEGY_ALIASES[spaced];
+  return raw;
 }
 
 /**
@@ -212,7 +235,8 @@ function projectMlFields(trade, strategyKey) {
   const fields = ML_FIELD_SETS[key] || [];
   const out = {};
   for (const f of fields) {
-    out[f] = trade?.[f] ?? null;
+    const v = trade?.[f];
+    out[f] = v == null || v === "N/A" || v === "" ? null : v;
   }
   return out;
 }
@@ -240,8 +264,8 @@ function resolveTradeMlStrategyKey(trade) {
  * selected strategy that has at least one trade.
  *
  * @param {object[]} trades — mapped trade rows (mapBacktestTrade output)
- * @param {string[]|null} selectedStrategies — subset of ML_FIELD_SETS keys; null = auto from trades
- * @param {{ adminFormat?: boolean }} [opts]
+ * @param {string[]|null} selectedStrategies — subset of ML_FIELD_SETS keys; null/[] = auto from trades
+ * @param {{ adminFormat?: boolean, coreOnly?: boolean }} [opts]
  * @returns {Buffer}
  */
 function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}) {
@@ -254,10 +278,14 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
     coreCols.map(([, label]) => label),
     ...rows.map((r) => coreCols.map(([key]) => {
       const v = r?.[key];
-      return v === undefined || v === null ? "" : v;
+      return v === undefined || v === null || v === "N/A" ? "" : v;
     })),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coreAoA), "User Export");
+
+  if (opts.coreOnly) {
+    return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  }
 
   let stratList = Array.isArray(selectedStrategies) && selectedStrategies.length
     ? selectedStrategies.map(normalizeMlStrategyKey).filter((k) => ML_FIELD_SETS[k])

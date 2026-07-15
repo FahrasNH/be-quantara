@@ -30,6 +30,7 @@ const {
   DROPPED_ML_CSV_COLUMN_KEYS,
   buildDynamicMultiSheetXlsx,
   normalizeMlStrategyKey,
+  resolveTradeMlStrategyKey,
 } = require("#shared/csv/tradeExportCsv.js");
 const {
   buildSmcEntryFeatures,
@@ -458,6 +459,38 @@ describe("TS_MS / MD_* / BS_* / AF_* extract helpers", () => {
   });
 });
 
+describe("normalizeMlStrategyKey + resolveTradeMlStrategyKey", () => {
+  test("legacy long names map to ML_* keys", () => {
+    expect(normalizeMlStrategyKey("ICT-style trading")).toBe("BS_ICT");
+    expect(normalizeMlStrategyKey("Supply and Demand")).toBe("MD_SD");
+    expect(normalizeMlStrategyKey("Statistical Arbitrage")).toBe("MD_SA");
+    expect(normalizeMlStrategyKey("Trend Following")).toBe("TS_TF");
+    expect(normalizeMlStrategyKey("Liquidation Squeeze")).toBe("BS_LS");
+    expect(normalizeMlStrategyKey("Volume Spread Analysis")).toBe("AF_VSA");
+  });
+
+  test("resolve order: winningComponent → component → strategyKey → strategy", () => {
+    expect(resolveTradeMlStrategyKey({
+      winningComponent: "BS_ICT",
+      component: "Scalping",
+      strategyKey: "BS_BR",
+      strategy: "Breakout Storm",
+    })).toBe("BS_ICT");
+    expect(resolveTradeMlStrategyKey({
+      component: "MD_SD",
+      strategyKey: "MD_MR",
+      strategy: "Mean Drift",
+    })).toBe("MD_SD");
+    expect(resolveTradeMlStrategyKey({
+      strategyKey: "TS_TF",
+      strategy: "Trend Following",
+    })).toBe("TS_TF");
+    expect(resolveTradeMlStrategyKey({
+      strategy: "ICT-style trading",
+    })).toBe("BS_ICT");
+  });
+});
+
 describe("Dynamic ML multi-sheet XLSX", () => {
   function mkTrade(component, extra = {}) {
     return mapBacktestTrade({
@@ -467,11 +500,62 @@ describe("Dynamic ML multi-sheet XLSX", () => {
       reason: "TP",
       winningComponent: component,
       component,
+      strategyKey: component,
       openTime: "2024-01-01T00:00:00Z",
       closeTime: "2024-01-01T01:00:00Z",
       ...extra,
     }, { ...ctx, strategy: component }, 0);
   }
+
+  test("N trades across 3 strategies → 1 core + 3 ML sheets, no cross-strategy leakage", () => {
+    const XLSX = require("xlsx");
+    const trades = [
+      mkTrade("TS_TF", {
+        tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
+        tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
+        mrRsiValue: 99, // should NOT appear on ML_TS_TF
+      }),
+      mkTrade("MD_MR", {
+        mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98,
+        mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE",
+        tfAdxStrength: 99, // should NOT appear on ML_MD_MR
+      }),
+      mkTrade("BS_ICT", {
+        ictKillZoneHour: 8, ictKillZoneLevel: 95, ictRaidType: "RAID_LOW",
+        ictRaidDepthAtr: 0.5, ictVolumeRatio: 1.2, ictReversal: true, ictMssPct: 0.4,
+      }),
+    ];
+    const buf = buildDynamicMultiSheetXlsx(trades, null);
+    const wb = XLSX.read(buf, { type: "buffer" });
+    expect(wb.SheetNames).toEqual(["User Export", "ML_TS_TF", "ML_MD_MR", "ML_BS_ICT"]);
+
+    const tfSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_TS_TF, { header: 1 });
+    expect(tfSheet.length).toBe(2); // header + 1 trade
+    expect(tfSheet[0]).not.toContain("mrRsiValue");
+    expect(tfSheet[0]).toContain("tfAdxStrength");
+
+    const mrSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_MD_MR, { header: 1 });
+    expect(mrSheet.length).toBe(2);
+    expect(mrSheet[0]).not.toContain("tfAdxStrength");
+    expect(mrSheet[0]).toContain("mrRsiValue");
+
+    const ictSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_BS_ICT, { header: 1 });
+    expect(ictSheet.length).toBe(2);
+    expect(ictSheet[0]).toContain("ictKillZoneHour");
+  });
+
+  test("coreOnly → User Export sheet only", () => {
+    const XLSX = require("xlsx");
+    const trades = [
+      mkTrade("TS_TF", {
+        tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
+        tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
+      }),
+    ];
+    const buf = buildDynamicMultiSheetXlsx(trades, ["TS_TF"], { coreOnly: true });
+    const wb = XLSX.read(buf, { type: "buffer" });
+    expect(wb.SheetNames).toEqual(["User Export"]);
+  });
 
   test("single strategy → 2 sheets (User Export + ML_*)", () => {
     const XLSX = require("xlsx");

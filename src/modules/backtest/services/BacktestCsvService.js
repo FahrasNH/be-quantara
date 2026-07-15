@@ -185,6 +185,9 @@ function mapBacktestTrade(trade, ctx, index) {
     symbol: ctx.symbol,
     side: trade.side,
     strategy: ctx.strategy,
+    // Preserve for Dynamic ML sheet routing (resolveTradeMlStrategyKey order)
+    winningComponent: trade.winningComponent ?? null,
+    strategyKey: trade.strategyKey ?? strategyKeyForReasons ?? null,
     status: "Closed",
     entryPrice: entry,
     exitPrice: exit,
@@ -206,7 +209,7 @@ function mapBacktestTrade(trade, ctx, index) {
     marketCond: trade.marketCond ?? NA,
     htfTrend: trade.htfTrend ?? NA,
     dailyRegime: trade.dailyRegime ?? NA,
-    component: trade.component ?? trade.tradeType ?? NA,
+    component: trade.winningComponent || trade.component || trade.tradeType || NA,
     tradeType,
     atr: atrOut,
     entryRsi: rsiOut,
@@ -360,7 +363,7 @@ function exportBacktests(records, mode = "trades") {
 /**
  * Sprint 15 Dynamic ML multi-sheet XLSX export.
  * @param {object[]} records — backtest archive rows
- * @param {{ strategies?: string[], adminFormat?: boolean }} [opts]
+ * @param {{ strategies?: string[], adminFormat?: boolean, coreOnly?: boolean }} [opts]
  * @returns {Buffer}
  */
 function exportBacktestsXlsx(records, opts = {}) {
@@ -370,6 +373,7 @@ function exportBacktestsXlsx(records, opts = {}) {
     : null;
   return buildDynamicMultiSheetXlsx(rows, selected, {
     adminFormat: opts.adminFormat !== false,
+    coreOnly: Boolean(opts.coreOnly),
   });
 }
 
