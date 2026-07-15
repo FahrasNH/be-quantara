@@ -104,8 +104,9 @@ function evaluateStatisticalArbitrageEntry({
   const zBoost = config.mdSaZBoostPerUnit ?? DEFAULTS.zBoostPerUnit;
   const maxConf = config.mdSaMaxConfidence ?? DEFAULTS.maxConfidence;
   const useVwap = config.mdSaUseVwapBlend ?? DEFAULTS.useVwapBlend;
+  const minBars = config.mdSaMinBars ?? DEFAULTS.minBars;
 
-  if (!closes || lastIdx < Math.max(DEFAULTS.minBars, lookback)) {
+  if (!closes || lastIdx < Math.max(minBars, lookback)) {
     return { signal: null, confidence: 0, reason: "warmup", zScore: null, mode: null };
   }
 
