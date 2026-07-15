@@ -821,7 +821,7 @@ function getBreakoutRetestMeta() {
 }
 
 function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
-  const signalType = config.signalType || "PDF_DAYTRADING";
+  const signalType = config.signalType || "TREND_FOLLOWING";
 
   switch (signalType) {
     case "PDF_SCALPING":    return detectSignalPdfScalping(indicators, i, config);

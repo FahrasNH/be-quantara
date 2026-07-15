@@ -35,9 +35,8 @@ const {
  * ─── Legacy aliases (migrate → canonical via strategyKeyNormalizer ACL) ─────
  *   Umbrella keys (ADAPTIVE_FUSION, TREND_SURGE, MEAN_DRIFT, BREAKOUT_STORM)
  *   and Gen1 ingress keys normalize to SMART_MONEY_CONCEPTS / TREND_FOLLOWING / MEAN_REVERSION / BREAKOUT_RETEST.
- *   A / B / C                                    → PDF trade-type presets (NOT AF)
- *     (strategyDefaults.js A/B/C = Aggressive Scalping / Day / Swing — unrelated
- *      to AF component slots; never treat as Adaptive Fusion keys)
+ *   A / B / C                                    → trade-type legs Scalping / Intraday / Swing
+ *     (normalizeTradeTypeKey — NOT strategy keys)
  *
  * ─── GROK_AI_TRADING (experimental / VAULT bonus — NOT a tier umbrella) ──────
  *   Real strategy key that CAN generate entry/exit via Grok (xAI).

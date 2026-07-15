@@ -13,7 +13,7 @@ const ReportGeneratorService = require("../../analytics/services/ReportGenerator
 const OptimizationAnalysisService = require("../../analytics/services/OptimizationAnalysisService");
 const db = require("../../../infrastructure/db/database");
 const { simulateTrade, applyTradingCosts } = require("../../../../scripts/lib/simulator");
-const { STRATEGIES } = require("#config/strategyDefaults.js");
+const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefaults.js");
 const { normalizeStrategyKey, ingressNormalizeStrategyKey, STRATEGY_ABBREV } = require("../../../config/strategyKeyNormalizer");
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const GrokConfirmBatchProcessor = require("../../research/services/GrokConfirmBatchProcessor");
@@ -1271,7 +1271,7 @@ module.exports = function createBacktestRouter(context) {
       return res.status(400).json({ ok: false, error: `Invalid tpMode: ${tpMode}. Allowed: fixed, partial, auto` });
     }
 
-    const strategyCfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
+    const strategyCfg = resolveStrategyDefaults(strategyKey);
     if (!strategyCfg && !["SMART_MONEY_CONCEPTS"].includes(strategyKey)) {
       return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
     }

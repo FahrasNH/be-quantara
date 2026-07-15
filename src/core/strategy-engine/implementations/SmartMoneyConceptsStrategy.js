@@ -1698,7 +1698,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const { closes, highs, lows, volumes, volSMA, emaFast, emaSlow } = indicators;
     const opens = indicators.opens;
     const htfTrend = config.htfTrend ?? null;
-    const enabled  = config.smcEnabledComponents ?? ["A", "B", "C"];
+    const enabled  = config.enabledComponents ?? config.smcEnabledComponents ?? ["Scalping", "Intraday", "Swing"];
     const minConfA = config.smcMinConfidenceScalping ?? config.smcMinConfidenceA ?? 60;
     const minConfB = config.smcMinConfidenceIntraday ?? config.smcMinConfidenceB ?? 65;
     const minConfC = config.smcMinConfidenceSwing ?? config.smcMinConfidenceC ?? 65;

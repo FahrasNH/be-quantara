@@ -11,8 +11,11 @@
  *   legacy keys (SAC, TF, TM, MR, BR) are accepted ONLY at ingress via
  *   normalizeStrategyKey() / ingressNormalizeStrategyKey().
  *
- *   PDF trade-type keys (A/B/C → AGGRESSIVE_SCALPING/DAY_TRADING/SWING_TRADING)
- *   are a SEPARATE axis — use normalizeTradeTypeKey(), not strategy migration.
+ *   Trade-type leg keys (A/B/C → Scalping/Intraday/Swing) are a SEPARATE axis —
+ *   use normalizeTradeTypeKey(), not strategy migration.
+ *
+ *   Deprecated PDF preset strategy keys (AGGRESSIVE_SCALPING / DAY_TRADING /
+ *   SWING_TRADING) normalize to canonical engines via STRATEGY_MIGRATION_MAP.
  *
  *   Do NOT add deprecated abbrev literals outside this file.
  *   Guardrail: test/gen1-literal-guard.test.js
@@ -46,6 +49,11 @@ const STRATEGY_MIGRATION_MAP = Object.freeze({
   TM: "TREND_FOLLOWING",
   MR: "MEAN_REVERSION",
   BR: "BREAKOUT_RETEST",
+
+  // Deprecated PDF trade-type preset strategy keys → canonical engines
+  AGGRESSIVE_SCALPING: "SMART_MONEY_CONCEPTS",
+  DAY_TRADING: "TREND_FOLLOWING",
+  SWING_TRADING: "SMART_MONEY_CONCEPTS",
 });
 
 /** Deprecated abbrev literals — guardrail (must match STRATEGY_MIGRATION_MAP abbrevs). */
@@ -73,12 +81,17 @@ const GEN1_STRATEGY_LITERALS = Object.freeze([
   "BR",
 ]);
 
-/** PDF trade-type presets — NOT strategy keys; separate ingress axis. */
+/** Trade-type leg aliases — Scalping / Intraday / Swing (NOT strategy keys). */
 const LEGACY_TRADE_TYPE_ALIASES = Object.freeze({
-  A: "AGGRESSIVE_SCALPING",
-  B: "DAY_TRADING",
-  C: "SWING_TRADING",
+  A: "Scalping",
+  B: "Intraday",
+  C: "Swing",
+  AGGRESSIVE_SCALPING: "Scalping",
+  DAY_TRADING: "Intraday",
+  SWING_TRADING: "Swing",
 });
+
+const TRADE_TYPE_LEGS = Object.freeze(["Scalping", "Intraday", "Swing"]);
 
 const GEN1_STRATEGY_KEYS = new Set(Object.keys(STRATEGY_MIGRATION_MAP));
 
@@ -151,7 +164,7 @@ function isGen1StrategyKey(key) {
   return GEN1_STRATEGY_KEYS.has(k);
 }
 
-/** Normalize PDF trade-type key (A/B/C legacy → AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING). */
+/** Normalize trade-type leg key (A/B/C legacy → Scalping / Intraday / Swing). */
 function normalizeTradeTypeKey(key) {
   if (key == null || key === "") return key;
   const raw = String(key).toUpperCase();
@@ -161,7 +174,13 @@ function normalizeTradeTypeKey(key) {
 function isPdfTradeTypeKey(key) {
   const k = String(key || "").toUpperCase();
   return k === "A" || k === "B" || k === "C"
+    || TRADE_TYPE_LEGS.includes(k)
     || k === "AGGRESSIVE_SCALPING" || k === "DAY_TRADING" || k === "SWING_TRADING";
+}
+
+function isTradeTypeLeg(key) {
+  const k = normalizeTradeTypeKey(String(key || "").toUpperCase());
+  return TRADE_TYPE_LEGS.includes(k);
 }
 
 function getGen1DeprecationStats() {
@@ -222,6 +241,7 @@ module.exports = {
   DEPRECATED_STRATEGY_ABBREVS,
   GEN1_STRATEGY_KEYS,
   LEGACY_TRADE_TYPE_ALIASES,
+  TRADE_TYPE_LEGS,
   STRATEGY_ABBREV,
   ABBREV_TO_ENGINE,
   normalizeStrategyKey,
@@ -230,6 +250,7 @@ module.exports = {
   isLegacyAlias,
   isGen1StrategyKey,
   isPdfTradeTypeKey,
+  isTradeTypeLeg,
   abbrevToEngine,
   getGen1DeprecationStats,
   resetGen1DeprecationStats,
