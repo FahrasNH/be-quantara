@@ -2,7 +2,7 @@
 
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
-const { normalizeSmcParams } = require("../src/core/strategy-engine/smc/smcParamCompat");
+const { normalizeSmcParams } = require("../src/core/strategy-engine/af/smcParamCompat");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 
 describe("smcParamCompat", () => {

@@ -232,7 +232,7 @@ class BotEngine extends EventEmitter {
       ),
     };
 
-    const { normalizeSmcParams } = require("../../../core/strategy-engine/smc/smcParamCompat");
+    const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
     this.config = normalizeSmcParams(this.config);
 
     this.state = {
@@ -2888,7 +2888,7 @@ class BotEngine extends EventEmitter {
 
     const SmartMoneyConceptsStrategy = require("../../../core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
     const afStrategy = new SmartMoneyConceptsStrategy();
-    const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/smc/smcScalpGates");
+    const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcComponent");
 
     // Map legacy letters → type names for typeOverrides lookup
     const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;

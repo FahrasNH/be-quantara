@@ -23,8 +23,8 @@ const {
   resolveScalpingGateFlags,
   resolveSwingGateFlags,
   sweetSpotPts,
-} = require("../smc/smcScalpGates");
-const { normalizeSmcParams } = require("../smc/smcParamCompat");
+} = require("../af/smcComponent");
+const { normalizeSmcParams } = require("../af/smcParamCompat");
 
 const EPSILON = 1e-9;
 

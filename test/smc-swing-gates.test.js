@@ -14,7 +14,7 @@ const {
   sweetSpotPts,
   SMC_ML_CSV_COLUMNS,
   DEFAULT_SWING_MAX_HOLD_HOURS,
-} = require("#core/strategy-engine/smc/smcScalpGates.js");
+} = require("#core/strategy-engine/af/smcComponent.js");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const { TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
 const { STRATEGIES } = require("#config/strategyDefaults.js");

@@ -191,7 +191,7 @@ non-SMC racer wins, direction is promoted to type legs (standalone racer entry).
 `strategyDefaults.js`): Planned RR **2.0** (SL 2.2×ATR / TP 4.4×ATR; intentional deviation
 from PRD aspirational 1:4.5), `maxHoldHours=6` (TIME_STOP in multi-position BT + live),
 `smcSessionFilter` (block 21–23 UTC), `smcBlockLongInChop`, `smcRequireObRetest`.
-Helpers: `src/core/strategy-engine/smc/smcScalpGates.js`. CSV adds ML columns
+Helpers: `src/core/strategy-engine/af/smcComponent.js`. CSV adds ML columns
 (`sweepStrength`, `fvgSizeAtr`, …) + confidence component fields.
 `marketCond` ≠ `dailyRegime` — both always exported (entry-TF bucket vs daily ADX-proxy).
 Dataset expand recipe: `scripts/smc-scalping-dataset-expand.js`.

@@ -35,7 +35,7 @@ const {
 const {
   buildSmcEntryFeatures,
   SMC_ML_CSV_COLUMNS,
-} = require("../src/core/strategy-engine/smc/smcScalpGates");
+} = require("../src/core/strategy-engine/af/smcComponent");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const VolumeProfileStrategy = require("../src/core/strategy-engine/implementations/VolumeProfileStrategy");
 const TrendFollowingStrategy = require("../src/core/strategy-engine/implementations/TrendFollowingStrategy");
