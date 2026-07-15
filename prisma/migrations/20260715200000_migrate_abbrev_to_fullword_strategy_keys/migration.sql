@@ -1,6 +1,6 @@
 -- Migrate deprecated Gen2 abbrev strategy keys → full-word canonical keys (step 2 of 2)
 
--- ── Bot ──────────────────────────────────────────────────────────────────────
+-- ── Bot (core — must exist) ──────────────────────────────────────────────────
 UPDATE "Bot" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
 UPDATE "Bot" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
 UPDATE "Bot" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
@@ -32,21 +32,7 @@ UPDATE "Bot" SET "strategyGroup" = (
   FROM unnest("strategyGroup") AS elem
 ) WHERE "strategyGroup" && ARRAY['AF_SMC','AF_WYCKOFF','AF_VSA','TS_TF','TS_MS','TS_VP','MD_MR','MD_SD','MD_SA','BS_BR','BS_ICT','BS_LS','ADAPTIVE_FUSION','SAC','SMART_MONEY_CONCEPTS','WYCKOFF','VOLUME_SPREAD_ANALYSIS','TREND_FOLLOWING','TREND_SURGE','TF','TM','MARKET_STRUCTURE','AUCTION_MARKET_THEORY','MEAN_REVERSION','MEAN_DRIFT','MR','SUPPLY_AND_DEMAND','STATISTICAL_ARBITRAGE','BREAKOUT_RETEST','BREAKOUT_STORM','BR','ICT_STYLE_TRADING','LIQUIDATION_SQUEEZE']::text[];
 
--- ── UserStrategy ─────────────────────────────────────────────────────────────
-UPDATE "UserStrategy" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "UserStrategy" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
-UPDATE "UserStrategy" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
-UPDATE "UserStrategy" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "UserStrategy" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
-UPDATE "UserStrategy" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
-UPDATE "UserStrategy" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "UserStrategy" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
-UPDATE "UserStrategy" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
-UPDATE "UserStrategy" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-UPDATE "UserStrategy" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
-UPDATE "UserStrategy" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
-
--- ── Trade (firedByStrategy + entryContext JSON) ──────────────────────────────
+-- ── Trade (core — must exist; firedByStrategy + entryContext JSON) ───────────
 UPDATE "Trade" SET "firedByStrategy" = 'SMART_MONEY_CONCEPTS' WHERE "firedByStrategy" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
 UPDATE "Trade" SET "firedByStrategy" = 'WYCKOFF' WHERE "firedByStrategy" IN ('AF_WYCKOFF', 'WYCKOFF');
 UPDATE "Trade" SET "firedByStrategy" = 'VOLUME_SPREAD_ANALYSIS' WHERE "firedByStrategy" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
@@ -73,74 +59,99 @@ UPDATE "Trade" SET "entryContext" = jsonb_set("entryContext", '{strategyKey}', '
 UPDATE "Trade" SET "entryContext" = jsonb_set("entryContext", '{strategyKey}', '"ICT_STYLE_TRADING"', true) WHERE "entryContext"->>'strategyKey' IN ('BS_ICT', 'ICT_STYLE_TRADING');
 UPDATE "Trade" SET "entryContext" = jsonb_set("entryContext", '{strategyKey}', '"LIQUIDATION_SQUEEZE"', true) WHERE "entryContext"->>'strategyKey' IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
 
--- ── Analytics / ML (Prisma tables) ───────────────────────────────────────────
-UPDATE "StrategyPerformance" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
-UPDATE "StrategyPerformance" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
-
-UPDATE "MlShadowLog" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "MlShadowLog" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
-UPDATE "MlShadowLog" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
-UPDATE "MlShadowLog" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "MlShadowLog" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
-UPDATE "MlShadowLog" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
-UPDATE "MlShadowLog" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "MlShadowLog" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
-UPDATE "MlShadowLog" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
-UPDATE "MlShadowLog" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-UPDATE "MlShadowLog" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
-UPDATE "MlShadowLog" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
-
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
-UPDATE "ParameterSuggestion" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
-
-UPDATE "ParameterVersion" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "ParameterVersion" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
-UPDATE "ParameterVersion" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
-UPDATE "ParameterVersion" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "ParameterVersion" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
-UPDATE "ParameterVersion" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
-UPDATE "ParameterVersion" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "ParameterVersion" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
-UPDATE "ParameterVersion" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
-UPDATE "ParameterVersion" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-UPDATE "ParameterVersion" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
-UPDATE "ParameterVersion" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
-
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'SMART_MONEY_CONCEPTS' WHERE "actualStrategy" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'WYCKOFF' WHERE "actualStrategy" IN ('AF_WYCKOFF', 'WYCKOFF');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'VOLUME_SPREAD_ANALYSIS' WHERE "actualStrategy" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'TREND_FOLLOWING' WHERE "actualStrategy" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'MARKET_STRUCTURE' WHERE "actualStrategy" IN ('TS_MS', 'MARKET_STRUCTURE');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'AUCTION_MARKET_THEORY' WHERE "actualStrategy" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'MEAN_REVERSION' WHERE "actualStrategy" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'SUPPLY_AND_DEMAND' WHERE "actualStrategy" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'STATISTICAL_ARBITRAGE' WHERE "actualStrategy" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'BREAKOUT_RETEST' WHERE "actualStrategy" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'ICT_STYLE_TRADING' WHERE "actualStrategy" IN ('BS_ICT', 'ICT_STYLE_TRADING');
-UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'LIQUIDATION_SQUEEZE' WHERE "actualStrategy" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
-
--- ── Runtime engine tables (optional) ─────────────────────────────────────────
+-- ── Optional Prisma tables (may not exist on fresh/partial DBs) ──────────────
 DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'UserStrategy') THEN
+    UPDATE "UserStrategy" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "UserStrategy" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
+    UPDATE "UserStrategy" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
+    UPDATE "UserStrategy" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "UserStrategy" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
+    UPDATE "UserStrategy" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
+    UPDATE "UserStrategy" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "UserStrategy" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
+    UPDATE "UserStrategy" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
+    UPDATE "UserStrategy" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+    UPDATE "UserStrategy" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
+    UPDATE "UserStrategy" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'StrategyPerformance') THEN
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
+    UPDATE "StrategyPerformance" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'MLShadowLog') THEN
+    UPDATE "MLShadowLog" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
+    UPDATE "MLShadowLog" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'ParameterSuggestion') THEN
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
+    UPDATE "ParameterSuggestion" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'ParameterVersion') THEN
+    UPDATE "ParameterVersion" SET "strategyKey" = 'SMART_MONEY_CONCEPTS' WHERE "strategyKey" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'WYCKOFF' WHERE "strategyKey" IN ('AF_WYCKOFF', 'WYCKOFF');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'VOLUME_SPREAD_ANALYSIS' WHERE "strategyKey" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'TREND_FOLLOWING' WHERE "strategyKey" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'MARKET_STRUCTURE' WHERE "strategyKey" IN ('TS_MS', 'MARKET_STRUCTURE');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'AUCTION_MARKET_THEORY' WHERE "strategyKey" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'MEAN_REVERSION' WHERE "strategyKey" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'SUPPLY_AND_DEMAND' WHERE "strategyKey" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'STATISTICAL_ARBITRAGE' WHERE "strategyKey" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'BREAKOUT_RETEST' WHERE "strategyKey" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'ICT_STYLE_TRADING' WHERE "strategyKey" IN ('BS_ICT', 'ICT_STYLE_TRADING');
+    UPDATE "ParameterVersion" SET "strategyKey" = 'LIQUIDATION_SQUEEZE' WHERE "strategyKey" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'MetaSelectorRecommendation') THEN
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'SMART_MONEY_CONCEPTS' WHERE "actualStrategy" IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'WYCKOFF' WHERE "actualStrategy" IN ('AF_WYCKOFF', 'WYCKOFF');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'VOLUME_SPREAD_ANALYSIS' WHERE "actualStrategy" IN ('AF_VSA', 'VOLUME_SPREAD_ANALYSIS');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'TREND_FOLLOWING' WHERE "actualStrategy" IN ('TS_TF', 'TREND_FOLLOWING', 'TREND_SURGE', 'TF', 'TM');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'MARKET_STRUCTURE' WHERE "actualStrategy" IN ('TS_MS', 'MARKET_STRUCTURE');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'AUCTION_MARKET_THEORY' WHERE "actualStrategy" IN ('TS_VP', 'AUCTION_MARKET_THEORY');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'MEAN_REVERSION' WHERE "actualStrategy" IN ('MD_MR', 'MEAN_REVERSION', 'MEAN_DRIFT', 'MR');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'SUPPLY_AND_DEMAND' WHERE "actualStrategy" IN ('MD_SD', 'SUPPLY_AND_DEMAND');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'STATISTICAL_ARBITRAGE' WHERE "actualStrategy" IN ('MD_SA', 'STATISTICAL_ARBITRAGE');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'BREAKOUT_RETEST' WHERE "actualStrategy" IN ('BS_BR', 'BREAKOUT_RETEST', 'BREAKOUT_STORM', 'BR');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'ICT_STYLE_TRADING' WHERE "actualStrategy" IN ('BS_ICT', 'ICT_STYLE_TRADING');
+    UPDATE "MetaSelectorRecommendation" SET "actualStrategy" = 'LIQUIDATION_SQUEEZE' WHERE "actualStrategy" IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
+  END IF;
+
+  -- Runtime engine tables (optional)
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'backtest_history') THEN
     UPDATE backtest_history SET strategy_key = 'SMART_MONEY_CONCEPTS' WHERE strategy_key IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
     UPDATE backtest_history SET strategy_key = 'WYCKOFF' WHERE strategy_key IN ('AF_WYCKOFF', 'WYCKOFF');
@@ -155,6 +166,7 @@ DO $$ BEGIN
     UPDATE backtest_history SET strategy_key = 'ICT_STYLE_TRADING' WHERE strategy_key IN ('BS_ICT', 'ICT_STYLE_TRADING');
     UPDATE backtest_history SET strategy_key = 'LIQUIDATION_SQUEEZE' WHERE strategy_key IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
   END IF;
+
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'strategy_presets') THEN
     UPDATE strategy_presets SET strategy_key = 'SMART_MONEY_CONCEPTS' WHERE strategy_key IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
     UPDATE strategy_presets SET strategy_key = 'WYCKOFF' WHERE strategy_key IN ('AF_WYCKOFF', 'WYCKOFF');
@@ -169,6 +181,7 @@ DO $$ BEGIN
     UPDATE strategy_presets SET strategy_key = 'ICT_STYLE_TRADING' WHERE strategy_key IN ('BS_ICT', 'ICT_STYLE_TRADING');
     UPDATE strategy_presets SET strategy_key = 'LIQUIDATION_SQUEEZE' WHERE strategy_key IN ('BS_LS', 'LIQUIDATION_SQUEEZE');
   END IF;
+
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'trades') THEN
     UPDATE trades SET strategy_name = 'SMART_MONEY_CONCEPTS' WHERE strategy_name IN ('AF_SMC', 'ADAPTIVE_FUSION', 'SAC', 'SMART_MONEY_CONCEPTS');
     UPDATE trades SET strategy_name = 'WYCKOFF' WHERE strategy_name IN ('AF_WYCKOFF', 'WYCKOFF');
