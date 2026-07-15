@@ -33,7 +33,7 @@ db._pool.query = async (sql, params = []) => {
   return { rows: nextRows };
 };
 
-const BotEngine = require("../src/application/BotEngine");
+const BotEngine = require("../src/modules/trading/application/BotEngine");
 
 // ── Mini async-aware runner (jest-lite tidak meng-await test async) ───────────
 let pass = 0, fail = 0;

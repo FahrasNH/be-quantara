@@ -23,7 +23,7 @@ const {
   getMaxConcurrentPositions,
 } = require("../src/domain/tierConfig");
 const AccountCoordinator = require("../src/domain/AccountCoordinator");
-const BotEngine = require("../src/application/BotEngine");
+const BotEngine = require("../src/modules/trading/application/BotEngine");
 // Modul DB yang SAMA (cached) yang di-require BotEngine._checkAccountOpenCap →
 // override export-nya = stub untuk hitung posisi terbuka tanpa Postgres.
 const db = require("../src/infrastructure/db/database");

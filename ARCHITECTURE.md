@@ -18,6 +18,65 @@
 > **Deployment:** staging branch → `be-quantara-staging` (port 3001); production
 > (`main`) → `be-quantara-prod` (port 3000). VPS + PM2 + Nginx.
 
+
+---
+
+## 0. Modular layout (Sprint 14 migration)
+
+Target layout (alias-first; old paths keep **shim re-exports** during transition):
+
+```
+src/
+├── app/            # (bootstrap still via index.js → server/app.js)
+├── modules/        # feature slices: trading, backtest, analytics, ml, research, payment, admin, auth, users
+├── core/           # pure engines: strategy/signal/risk/position/analytics/research
+├── infrastructure/ # prisma, exchange, jobs, cron, notifications
+├── shared/         # middleware, constants, logger
+└── config/
+```
+
+### Path aliases (Node `package.json` `imports`)
+
+Use `#` imports with a `.js` suffix for nested files:
+
+- `#shared/logger` → `src/shared/logger`
+- `#config/env.js`, `#infra/db/prismaClient.js`
+- `#core/...`, `#modules/...`
+
+Forked workers (`backtestJobWorker`) inherit the same `imports` map automatically.
+
+### Services placement rule
+
+| Location | Owns |
+|----------|------|
+| `src/modules/<feature>/services/` | Feature/request-scoped services (backtest, grok, ml, payments, …) |
+| `src/modules/<feature>/routes/` | HTTP routers for that feature |
+| `src/modules/<feature>/domain/` | Feature-specific domain helpers |
+| `src/core/*-engine/` | Pure trading/research math — no Express routes |
+| `src/shared/` | Cross-cutting middleware, constants, logger |
+| `src/infrastructure/` | DB, exchange clients, cron, notifications |
+
+Legacy `src/services/*` and `src/server/services/*` paths remain as **shims** pointing into `modules/`. Prefer requiring the module path (or a `#modules/...` alias) in new code.
+
+### Umbrella racers (not dormant)
+
+MD and BS umbrellas race **all three** components by default (`mdCombinationMode` / `bsCombinationMode` = `race`):
+
+- Mean Drift: `MD_MR`, `MD_SD`, `MD_SA`
+- Breakout Storm: `BS_BR` (halted in live default), `BS_ICT`, `BS_LS`
+
+`GROK_AI_TRADING` remains experimental (VAULT / open mode), registered but not in tier race pools.
+
+### Subscription / tier gating
+
+- **Strategies:** `assertStrategyAllowed` / entitlement service (bots routes).
+- **Paid features:** `subscriptionGuard.requireFeature` on AI optimizer + MetaSelector recommend/history (defense-in-depth; service-layer checks remain).
+
+### Logger
+
+Prefer `#shared/logger` (pino) over `console.*` for production paths. Crash handlers in `index.js` already route through it.
+
+
 ---
 
 ## 1. Gen1 → Gen2 Strategy Naming (historical map)

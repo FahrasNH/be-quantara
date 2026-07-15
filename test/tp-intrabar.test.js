@@ -10,7 +10,7 @@
  */
 "use strict";
 
-const BotEngine = require("../src/application/BotEngine");
+const BotEngine = require("../src/modules/trading/application/BotEngine");
 
 let pass = 0, fail = 0;
 const failures = [];

@@ -1,3 +1,4 @@
+const log = require("#shared/logger").child({ component: "OkxClient" });
 // ─────────────────────────────────────────────────────────────────────────────
 // OkxClient.js — OKX USDT-M perpetual swap via CCXT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ class OkxClient extends CcxtFuturesClient {
     }
 
     const detail = errors.join(" | ");
-    console.warn(`[setTPSL OKX] Semua pendekatan gagal (${planType}): ${detail}`);
+    log.warn(`[setTPSL OKX] Semua pendekatan gagal (${planType}): ${detail}`);
     return { success: false, message: detail };
   }
 

@@ -123,15 +123,20 @@ const fakeUserExchange = {
 const _origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   if (request === '@prisma/client') return { PrismaClient: FakePrismaClient };
-  if (request.endsWith('infrastructure/exchange/BitgetClient')) return FakeBitgetClient;
-  if (request === './userExchange' || request.endsWith('/services/userExchange')) return fakeUserExchange;
+  if (String(request).endsWith('infrastructure/exchange/BitgetClient')
+      || String(request).endsWith('exchange/BitgetClient')) {
+    return FakeBitgetClient;
+  }
+  if (request === './userExchange' || String(request).endsWith('/services/userExchange')) {
+    return fakeUserExchange;
+  }
   return _origLoad.apply(this, arguments);
 };
 
 const { getExchangeStatus, switchExchange, validateNewExchangeKey } =
   require('../src/services/exchangeSwitch');
 
-Module._load = _origLoad; // restore
+// Keep BitgetClient mock for lazy requires inside validateExchangeKey (do not restore yet).
 
 const USER = 'user-123';
 const goodKeys = { newExchange: 'bitget', apiKey: 'ak', secretKey: 'sk', passphrase: 'pp' };
@@ -277,4 +282,6 @@ describe('switchExchange happy path (S2-QA-03 / AC-03,08)', () => {
   });
 });
 
-run();
+run().finally(() => {
+  Module._load = _origLoad;
+});

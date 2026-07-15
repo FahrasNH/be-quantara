@@ -3,6 +3,7 @@
  * Minimal smoke tests for Trend Following strategy (TS_TF)
  */
 
+const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
 const TrendFollowingStrategy = require("../src/domain/strategy/implementations/TrendFollowingStrategy");
 
 describe("TrendFollowingStrategy", () => {
@@ -232,3 +233,5 @@ describe("TrendFollowingStrategy", () => {
     });
   });
 });
+
+run();

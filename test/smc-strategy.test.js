@@ -19,7 +19,7 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 
-const SmartMoneyConceptsStrategy = require("../src/domain/strategy/implementations/SmartMoneyConceptsStrategy");
+const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -336,14 +336,14 @@ test("SMC-23: HTF blocking — LONG entry blocked when htfTrend=BEARISH", () => 
 
 // ── calculateRiskConfig ───────────────────────────────────────────────────────
 
-test("SMC-24: calculateRiskConfig Component A has tighter SL (0.8× ATR)", () => {
+test("SMC-24: calculateRiskConfig Component A has tighter SL (1.0× ATR vs B 1.2×)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const rA  = smc.calculateRiskConfig(100, 2.0, "LONG", "A");
   const rB  = smc.calculateRiskConfig(100, 2.0, "LONG", "B");
-  // A SL multiplier (0.8) < B SL multiplier (1.2)
+  // A SL multiplier (1.0) < B SL multiplier (1.2)
   assert.ok(rA.slDistance < rB.slDistance, "Scalp should have tighter SL than intraday");
-  assert.equal(rA.stopLoss,   parseFloat((100 - 2.0 * 0.8).toFixed(8)));
-  assert.equal(rA.takeProfit, parseFloat((100 + 2.0 * 1.5).toFixed(8)));
+  assert.equal(rA.stopLoss,   parseFloat((100 - 2.0 * 1.0).toFixed(8)));
+  assert.equal(rA.takeProfit, parseFloat((100 + 2.0 * 4.5).toFixed(8)));
 });
 
 test("SMC-25: calculateRiskConfig Component C has widest TP (4.0× ATR)", () => {

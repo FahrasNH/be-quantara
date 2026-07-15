@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const source = fs.readFileSync(
-  path.join(__dirname, '../src/services/userExchange.js'),
+  path.join(__dirname, '../src/modules/trading/services/userExchange.js'),
   'utf8'
 );
 

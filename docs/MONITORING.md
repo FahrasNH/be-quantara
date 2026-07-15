@@ -1,67 +1,23 @@
-# 📡 Monitoring & Threshold — Quantara Bot Trading
+# Monitoring & Scheduled Jobs
 
-Apa yang dipantau saat bot LIVE, ambang batas, dan sinyal bahaya.
+In-process schedulers (no OS crontab required for these). Started from `src/server/app.js` after DB init.
 
----
+| Job | Module | Schedule (UTC) | Purpose |
+|-----|--------|----------------|---------|
+| Performance daily | `src/infrastructure/cron/performanceAggregationCron.js` | Every day 02:00 | `StrategyPerformanceService.aggregateDaily` |
+| Performance weekly | same | Sunday 03:00 | Rolling `7d` + `30d` aggregations |
+| Performance monthly | same | 1st of month 04:00 | `all-time` aggregation |
+| Walk-forward | same → `WalkForwardJob` | Sunday 23:00 | Parameter walk-forward optimization |
+| Backup | `BackupScheduler` | Every 24h | DB backup |
+| Exchange key purge | `exchangeKeyPurge.scheduleKeyPurge` | Every 6h | Soft-deleted key cleanup |
+| Pair-tier drift | `PairTierDriftMonitor` | Continuous | Observability for stale pair tiers |
+| Bot watchdog | `startBotWatchdog` in `app.js` | Interval | Resume zombie bots |
 
-## 1. Risk gate per-bot (otomatis, `BotEngine._checkRiskGates`)
+Manual / CLI:
 
-Bot **berhenti entry** otomatis bila salah satu terpenuhi:
+```bash
+npm run jobs:walk-forward-dry
+npm run jobs:walk-forward-optimize
+```
 
-| Gate | TS_TF | MD_MR | BS_BR |
-|------|-------|-------|-------|
-| Max risk/trade | 3% | 2% | 4% |
-| **Daily loss limit** | 6% | 5% | 8% |
-| Max trade/hari | 6 | 3 | 7 |
-| Cooldown setelah loss | 10 min | 15 min | 5 min |
-| Max loss beruntun | 2 | 2 | 3 |
-
-> ⚠️ Counter (`dailyLoss`, `consecLoss`, `dailyTradeCount`) di-recompute dari trade
-> hari ini saat startup → **bertahan setelah restart/redeploy** (tidak ter-reset).
-
-## 2. Gate level-AKUN (lintas-bot, `AccountCoordinator`)
-
-Beberapa bot berbagi 1 akun. Koordinator mencegah over-commit:
-
-| Parameter | Default | Arti |
-|-----------|---------|------|
-| `maxAccountUtilization` | 0.8 | Σ margin semua posisi ≤ 80% equity |
-| `maxAccountDailyLossPct` | 0.06 | Stop entry lintas-bot bila loss agregat (realized+floating) ≥ 6% |
-| `maxConcurrentPositions` | 0 (∞) | Batas posisi serentak (0 = dibatasi anggaran margin) |
-| per simbol | 1 | Maks 1 posisi/simbol di akun |
-
-Konfigurasi via env: `MAX_ACCOUNT_DAILY_LOSS_PCT`, `cfg.maxAccountUtilization`, `cfg.maxConcurrentPositions`.
-
----
-
-## 3. Yang HARUS dipantau manusia
-
-| Item | Sumber | Ambang ALERT |
-|------|--------|--------------|
-| **Posisi tanpa SL** | log `🚨 SL tidak terkonfirmasi` | apa pun → INTERVENSI |
-| **Emergency close** | log `SL_FAILED_EMERGENCY_CLOSE` | sering → cek koneksi exchange |
-| Balance gagal dibaca | log `Balance gagal dibaca — skip entry` | berulang → cek API key/rate-limit |
-| Entry ditahan koordinator | log `🚦 Entry ditahan koordinator` | sering → equity/margin mepet |
-| Drawdown akun | equity exchange | mendekati `maxAccountDailyLossPct` |
-| Daily loss per bot | `riskState.dailyLoss` di status bot | mendekati limit |
-| Net vs Gross PnL | dashboard | gap besar = fee tinggi (cek leverage) |
-| WS terputus | dashboard badge `○ Offline` | data tidak real-time |
-
-## 4. Health & uptime
-
-- `GET /health` → cek `ok:true`, `uptime` naik.
-- PM2: `pm2 list`, `pm2 logs quantara --lines 50`.
-- DB: pastikan `init()` jalan saat boot (migrasi kolom fee/funding idempotent).
-
-## 5. Notifikasi
-
-- **Telegram** (`TelegramNotifier.js`): notifikasi open/close trade — set `TELEGRAM_*` env.
-- **AlertManager** (`AlertManager.js`): alert kondisi kritis.
-- Logging terstruktur via DB `logs` table (per session) + stdout (PM2).
-
-## 6. Sinyal "matikan sekarang" (lihat [EMERGENCY.md](EMERGENCY.md))
-
-- Posisi terbuka tanpa SL yang gagal di-emergency-close.
-- Daily loss akun menembus batas tapi bot tetap entry (bug gate).
-- Balance turun tak wajar vs trade tercatat (kemungkinan eksekusi tak sinkron).
-- API key bocor / aktivitas withdraw tak dikenal.
+Alerts: cron failures go through `TelegramNotifier`.

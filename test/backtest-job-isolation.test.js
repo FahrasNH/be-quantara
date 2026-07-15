@@ -247,16 +247,17 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(vsaOnly.entryModel, undefined);
   });
 
-  await test("AMT / TS_VP keeps Intraday+Swing; pins single-racer isolation", () => {
+  await test("AMT / TS_VP supports all 3 trade types; pins single-racer isolation", () => {
     const {
       applyStrategyJobDefaults,
       MULTI_TYPE_STRATEGY_MAP,
     } = require("../src/server/services/runBacktestJob");
     const { STRATEGY_SUPPORTED_TYPES } = require("../src/constants/strategySupportedTypes");
 
-    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.TS_VP, ["Intraday", "Swing"]);
-    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_VP, ["Intraday", "Swing"]);
-    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_MS, ["Intraday", "Swing"]);
+    // Sprint 14 factory reset: uniform 3 trade types across race components
+    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.TS_VP, ["Scalping", "Intraday", "Swing"]);
+    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_VP, ["Scalping", "Intraday", "Swing"]);
+    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_MS, ["Scalping", "Intraday", "Swing"]);
 
     const standalone = applyStrategyJobDefaults("TS_VP", {});
     assert.deepStrictEqual(standalone.selectedComponents, ["TS_VP"]);

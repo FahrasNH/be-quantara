@@ -20,10 +20,10 @@ const STRATEGY_RECAP_CATALOG = {
       "Liquidity sweeps, BOS/CHoCH, displacement, order blocks, fair value gaps, premium/discount.",
     indicators: "Market structure, swing H/L, session H/L, volume, OI (partial), CVD (partial).",
     pdfTradeType: "Scalping, Intraday, Swing",
-    runtimeTradeTypes: ["Scalping", "Swing"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "AF-SCALP-19: Intraday removed from runtime (5m fragility). OI/CVD subset not fully wired vs PDF.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   AF_WYCKOFF: {
     pdfName: "Wyckoff Method",
@@ -31,65 +31,70 @@ const STRATEGY_RECAP_CATALOG = {
       "Accumulation, markup, distribution, markdown; spring and upthrust detection in trading ranges.",
     indicators: "Price, volume, range width, effort vs result (volume confirmation).",
     pdfTradeType: "Intraday, Swing",
-    runtimeTradeTypes: ["Scalping", "Swing"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Runtime adds Scalping leg; Intraday not routed (same AF umbrella type set as SMC).",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   AF_VSA: {
     pdfName: "Volume Spread Analysis — VSA",
     concept: "Volume relative to spread and close — effort vs result conviction.",
     indicators: "Volume, candle spread, relative volume ratio.",
     pdfTradeType: "Intraday, Swing",
-    runtimeTradeTypes: ["Scalping", "Swing"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
-    recapNotes: "Runtime adds Scalping leg; Intraday not routed (AF umbrella).",
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   TS_TF: {
     pdfName: "Trend Following",
     concept: "Follow confirmed trend direction after structure and momentum align.",
     indicators: "EMA/SMA stack, Donchian channel, ADX, ATR.",
     pdfTradeType: "Intraday, Swing",
-    runtimeTradeTypes: ["Intraday", "Swing"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "implemented",
-    recapNotes: null,
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   TS_MS: {
     pdfName: "Dow Theory / Market Structure",
     concept: "Higher-high/higher-low (or lower-low/lower-high) swing structure pullbacks.",
     indicators: "Price structure, volume, multi-timeframe alignment.",
     pdfTradeType: "Swing, Position",
-    runtimeTradeTypes: ["Intraday", "Swing"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
-    recapNotes: "Position trade type not supported in engine routing.",
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   TS_VP: {
     pdfName: "Auction Market Theory",
     concept: "Balance vs imbalance; trade from value-area edges and session auction.",
     indicators: "Session VWAP, value-area proxy (Market Profile partial).",
     pdfTradeType: "Intraday",
-    runtimeTradeTypes: ["Intraday", "Swing"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Swing uses UTC-week session on 4h. Full Market Profile not implemented.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   MD_MR: {
     pdfName: "Mean Reversion",
     concept: "Price tends to revert toward mean / fair value after extension.",
     indicators: "VWAP, Bollinger Bands, RSI, z-score (entry-TF).",
     pdfTradeType: "Scalping, Intraday",
-    runtimeTradeTypes: ["Scalping", "Intraday"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "implemented",
-    recapNotes: "ADX regime + OB/FVG precision are internal MD_MR overlays, not separate catalog methods.",
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   MD_SD: {
     pdfName: "Supply and Demand",
     concept: "Buyer/seller imbalance zones — demand/supply retest after displacement.",
     indicators: "OB/FVG-style zones, rejection wicks, volume (base-rally schematic partial).",
     pdfTradeType: "Intraday, Swing",
-    runtimeTradeTypes: ["Scalping", "Intraday"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
-    recapNotes: "Classic base-rally / rally-base schematics approximated via structure zones.",
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   MD_SA: {
     pdfName: "Statistical Arbitrage",
@@ -98,10 +103,10 @@ const STRATEGY_RECAP_CATALOG = {
     indicators:
       "v1: z-score, rolling mean, optional benchmark residual — not full cointegration/correlation/spread pairs.",
     pdfTradeType: "Algo, Intraday, Swing",
-    runtimeTradeTypes: ["Scalping", "Intraday"],
+    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "True multi-leg pairs/cointegration requires multi-symbol infra (roadmap). Catalog text reflects v1 honestly.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   BS_BR: {
     pdfName: "Breakout Trading",
@@ -112,7 +117,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14: HALTED from live/tier package — Advance backtest-only until 5-window re-test gate passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   BS_ICT: {
     pdfName: "ICT-style trading",
@@ -121,7 +126,8 @@ const STRATEGY_RECAP_CATALOG = {
     pdfTradeType: "Especially Intraday",
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
-    recapNotes: "Full OTE/MSS stack narrower than PDF; kill-zone + raid path is primary.",
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   BS_LS: {
     pdfName: "Liquidation/Squeeze Trading",
@@ -130,7 +136,8 @@ const STRATEGY_RECAP_CATALOG = {
     pdfTradeType: "Scalping, Intraday",
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
-    recapNotes: "No true liquidation feed or DOM order-flow stack; OI/funding overlays when data exists.",
+    recapNotes:
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
 };
 

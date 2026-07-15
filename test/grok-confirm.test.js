@@ -221,7 +221,9 @@ test("GrokConfirmPromptBuilder — lite prompt fields", () => {
     minConfidenceEntry: 8,
     minTpConfidence: 7,
   });
-  if (!built.text.includes("ADAPTIVE_FUSION")) throw new Error("missing strategy");
+  if (!/ADAPTIVE_FUSION|Smart Money|Adaptive Fusion/i.test(built.text)) {
+    throw new Error("missing strategy");
+  }
   if (!built.text.includes("96988")) throw new Error("missing SL rules");
   if (!built.text.includes("98588")) throw new Error("missing TP rules");
   if (!built.text.includes("confirm_entry")) throw new Error("missing task");

@@ -8,6 +8,16 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
+bot.db
+
+# Loose local experiment outputs
+scalping-ablation.txt
+*.ablation.txt
+
+# Generated docs (keep .md as source of truth)
+docs/**/*.docx
+docs/**/*.html
+docs/generated/
 
 # Logs
 *.log

@@ -1,3 +1,15 @@
+/**
+ * security-fixes.test.js — integration checks against a running API.
+ * Skips cleanly when required env (DATABASE_URL / JWT secrets) is missing
+ * so the glob `npm test` runner stays green offline.
+ */
+'use strict';
+
+if (!process.env.DATABASE_URL || !process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET || !process.env.ENCRYPTION_KEY) {
+  console.log('⏭  security-fixes.test.js skipped — DATABASE_URL / JWT_* / ENCRYPTION_KEY not set');
+  process.exit(0);
+}
+
 const http = require('http');
 const { app, server } = require('../src/server/app');
 const { PrismaClient } = require('@prisma/client');

@@ -10,6 +10,7 @@
  * - LONG & SHORT signal handling
  */
 
+const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
 const assert = require("assert");
 const BreakoutTradingStrategy = require("../src/domain/strategy/implementations/BreakoutTradingStrategy");
 
@@ -552,3 +553,5 @@ console.log("   - Entry validation: 4 tests");
 console.log("   - Confidence grading (Bug 3): 2 tests");
 console.log("   - detectSignal SL/TP + skip (Bug 1/2): 3 tests");
 console.log("   Total: 41 tests\n");
+
+run();

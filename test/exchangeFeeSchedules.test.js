@@ -96,7 +96,7 @@ test("funding accrual uses injected rate", () => {
 
 test("runBacktestJob wires exchangeType + feeSchedule into compute path", () => {
   const src = fs.readFileSync(
-    path.join(__dirname, "../src/server/services/runBacktestJob.js"),
+    path.join(__dirname, "../src/modules/backtest/services/runBacktestJob.js"),
     "utf8"
   );
   assert.ok(src.includes("exchangeType"), "exchangeType missing from job");
@@ -107,7 +107,7 @@ test("runBacktestJob wires exchangeType + feeSchedule into compute path", () => 
 
 test("HistoricalKlinesService accepts exchangeType override", () => {
   const src = fs.readFileSync(
-    path.join(__dirname, "../src/server/services/HistoricalKlinesService.js"),
+    path.join(__dirname, "../src/modules/backtest/services/HistoricalKlinesService.js"),
     "utf8"
   );
   assert.ok(src.includes("exchangeTypeOverride") || src.includes("exchangeType: exchangeTypeOverride"));

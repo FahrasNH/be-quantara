@@ -348,9 +348,11 @@ const STRATEGIES = {
     rsiShortMin:   25,
     rsiShortMax:   65,
 
+    // Sprint 14 factory reset — canonical Trend Following geometry (PDF:
+    // EMA/SMA, Donchian, ADX, ATR). SL 1.5×ATR, TP 3.0×ATR (RR 1:2), 1% risk.
     atrPeriod:     14,
-    atrMultiplier: 1.3,
-    riskReward:    1.92,       // TP = 1.92×1.3 ≈ 2.5x ATR (v2.3)
+    atrMultiplier: 1.5,        // SL = 1.5×ATR
+    riskReward:    2.0,        // TP = 3.0×ATR (RR 1:2)
     atrMinMult:    0.5,
     atrMaxMult:    8.0,
 
@@ -362,24 +364,15 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    // v2.8 (2026-07-04): per-type ladder. Combined cap 0.03 distributed by
-    // TYPE_RISK_WEIGHTS (Intraday 1 : Swing 2) → 1%/position Intraday, 2% Swing.
-    // TF is the best 12m performer (+13.9 on $250 leg, WR 48%). Live single-TF
-    // engine carries the full combined cap per position (one position at a time
-    // → same worst-case max loss as 2 concurrent backtest legs).
-    riskPerTrade:     0.03,
+    // Uniform 1% risk (factory default; per-type ladder removed).
+    riskPerTrade:     0.01,
     maxDailyLossPct:  0.06,
     maxTradesPerDay:  4,
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
-    // FEE-04: mode "partial" mengunci 40% di +1R & 27.5% di +2R lalu menggeser
-
-    // (2026-07-07): partial mode juga berfungsi sebagai DIAGNOSTIK — leg
-    // Partial_1R/Partial_2R/TP di CSV mengukur seberapa sering tiap level
-    // tersentuh (touch-rate +1R = 45.6%, +2R = 14% pada run 12mo). Jangan
-    // ganti mode ini untuk "memperbaiki" PF — perbaiki geometri Entry/SL/TP.
-    tpMode:        "partial",
+    // Factory default: close 100% at TP (no partial/trailing overlay).
+    tpMode:        "fixed",
 
     leverage:      2,
     interval:      "5m",
@@ -390,34 +383,19 @@ const STRATEGIES = {
 
     signalType:    "TREND_FOLLOWING",
 
+    // No per-type overrides — every leg uses the canonical geometry above.
+    typeOverrides: {},
 
-    // further fee drag (in-sample netPF 0.76 -> 0.82; bull window 0.96 was the
-    // best single-window result found). SL/time-stop exits remain taker+slippage.
-    typeOverrides: {
-      Intraday: { makerEntry: true, makerFeeRate: 0.0002 },
-      // Weekly HTF ADX rarely reaches 30 — Swing leg was structurally dead
-      // (0 Swing trades across Dow/AMT/TF). Soften to 20 for the 4h/1w path only.
-      Swing:    { makerEntry: true, makerFeeRate: 0.0002, adxMinStrength: 20 },
-    },
-
-
-    // AKTIF di backtest dengan index timestamp-aligned (htfPtr, closed bar — the
-    // strategy's hardcoded ratio-12 mapping was reading future bars on 15m→4h /
-    // 4h→1w legs). ADX 30 dipilih dari sweep 4 window (25/30 × ±strongDay):
-    // ADX30 menang di SEMUA window — 12mo eval netPF 0.83→1.29 (net -90.5→+64.6),
-    // bull 1.54, bear/recovery masih <1 tapi rugi terpangkas 60-79%. Satu-satunya
-    // varian dengan total 4yr net positif. strongDay gate MERUSAK semua kombinasi
-    // (tfRequireStrongTrend tetap OFF). tfHtfLayerEnabled: false = kontrol A/B.
-    adxMinStrength:    30,
+    // HTF trend layer (EMA + ADX) is core to Trend Following (PDF indicator).
+    // ADX 25 = textbook trend-strength threshold (was tuned to 30).
+    adxMinStrength:    25,
     tfHtfLayerEnabled: true,
 
-    // Sprint 12: TS sub-components race independently (default).
-    // Set tsCombinationMode:"gate" to restore Sprint 9 A→B→C layering for A/B.
+    // Sub-components race independently (architecture default).
     tsCombinationMode: "race",
-    // Gate flags only apply when tsCombinationMode is "gate" or "hybrid".
-    tsUseStructureGate: true,
-    tsUseVwapPrecision: true,
-    // Spec: abs(price-VWAP) <= vwapAtrMult × ATR. 0.5 after 0.3 proved too tight on 5m.
+    // Experimental precision gates OFF (only apply in "gate"/"hybrid" mode).
+    tsUseStructureGate: false,
+    tsUseVwapPrecision: false,
     vwapAtrMult: 0.5,
 
     trades:        "8-15 trade/hari",
@@ -451,9 +429,11 @@ const STRATEGIES = {
     rsiShortMin:   75,
     rsiShortMax:   85,
 
+    // Sprint 14 factory reset — canonical Mean Reversion (PDF: VWAP, Bollinger,
+    // RSI, z-score). SL 1.5×ATR, TP 3.0×ATR (RR 1:2), 1% risk.
     atrPeriod:     14,
-    atrMultiplier: 1.4,
-    riskReward:    2.29,       // TP = 1.4×2.29 ≈ 3.2x ATR → RR ~1:2.3 (v2.3)
+    atrMultiplier: 1.5,        // SL = 1.5×ATR
+    riskReward:    2.0,        // TP = 3.0×ATR (RR 1:2)
     atrMinMult:    0.5,
     atrMaxMult:    6.0,
 
@@ -464,11 +444,8 @@ const STRATEGIES = {
 
     volSmaMultiplier: 0.8,
 
-    // v2.8 (2026-07-04): per-type ladder. Combined cap 0.015 distributed by
-    // TYPE_RISK_WEIGHTS (Scalping 0.5 : Intraday 1) → 0.5%/1% per position
-    // (user-specified). NOTE: MR expectancy still negative on n=7 — ladder set
-    // per user request, but entry-gate quality is the real fix, not size.
-    riskPerTrade:     0.015,
+    // Uniform 1% risk (factory default; per-type ladder removed).
+    riskPerTrade:     0.01,
     maxDailyLossPct:  0.03,
     maxTradesPerDay:  3,
     cooldownAfterLoss: 15,
@@ -511,9 +488,12 @@ const STRATEGIES = {
     rsiShortMin:   30,
     rsiShortMax:   60,
 
+    // Sprint 14 factory reset — canonical Breakout (PDF: Volume, ATR, Bollinger
+    // width, range H/L). SL 1.5×ATR, TP 4.5×ATR (RR 1:3 — breakouts run
+    // further), 1% risk.
     atrPeriod:     14,
-    atrMultiplier: 1.4,
-    riskReward:    3.93,       // TP = 1.4×3.93 ≈ 5.5× ATR → RR ~1:4 (v2.3)
+    atrMultiplier: 1.5,        // SL = 1.5×ATR
+    riskReward:    3.0,        // TP = 4.5×ATR (RR 1:3)
     atrMinMult:    0.2,
     atrMaxMult:    5.0,
 
@@ -524,7 +504,8 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.02,
+    // Uniform 1% risk (factory default).
+    riskPerTrade:     0.01,
     maxDailyLossPct:  0.08,
     maxTradesPerDay:  5,
     cooldownAfterLoss: 5,
@@ -634,9 +615,11 @@ const STRATEGIES = {
     rsiShortMin:   25,
     rsiShortMax:   55,
 
+    // Sprint 14 factory reset — SMC is structure-based (PDF: market structure,
+    // swing H/L, session H/L, volume, OI, CVD). SL 1.5×ATR, TP 3.0×ATR (RR 1:2).
     atrPeriod:     14,
-    atrMultiplier: 1.2,
-    riskReward:    2.0,
+    atrMultiplier: 1.5,        // SL = 1.5×ATR
+    riskReward:    2.0,        // TP = 3.0×ATR (RR 1:2)
     atrMinMult:    0.8,
     atrMaxMult:    5.0,
 
@@ -647,17 +630,9 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    // riskPerTrade = COMBINED max loss across all concurrent components (A/B/C),
-    // NOT per-component. Both engines enforce this: backtest sizes each type at
-    // riskPerTrade/3 (runTripleTypeBacktest), and live now divides per component
-    // too (BotEngine._handleMultiPositionSignal). Progression 0.5%→1.5%→2.0%
-    // (2026-07-03): at 0.5% return was ~1%/yr (size-bound, not edge-bound). The
-    // 12mo BTC run then showed Sharpe 5.16 with max DD only 1.18% at 1.5% —
-    // strongly under-risked. Trader+quant sign-off raised to 2.0% (est. DD ~1.6%,
-    // return ~5%). 2.0% is moderate-aggressive; 3.0% is the prudent ceiling for
-    // 3 correlated components — do NOT exceed. NOTE: backtest DD is in-sample
-    // (40 trades, favorable period); expect live DD 2-4× higher.
-    riskPerTrade:        0.02,
+    // Uniform 1% combined risk (backtest sizes each concurrent component at
+    // riskPerTrade/3; live divides per component too). Factory default.
+    riskPerTrade:        0.01,
     maxDailyLossPct:     0.03,
     maxTradesPerDay:     8,
     cooldownAfterLoss:   60,
@@ -667,13 +642,10 @@ const STRATEGIES = {
     sacEnabledComponents: ["A", "B", "C"],
     sacMinVotes:           1,            // 1 = any qualifying component can fire
     sacMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
-    sacMinConfidenceA:     65,
-    sacMinConfidenceB:     55,  // Intraday — lowered 65→55 (2026-07-03): 65 produced only
-                                // ~3 Intraday entries per 12mo on BTC. Intraday (15m/4h) is
-                                // meant to be the workhorse (3–5/day target); the sequence
-                                // engine is already selective, so a slightly lower confidence
-                                // floor unlocks frequency without loosening Scalping/Swing.
-    sacMinConfidenceC:     65,  // Swing
+    // Uniform confidence floor across all 3 legs (factory default).
+    sacMinConfidenceA:     60,  // Scalping
+    sacMinConfidenceB:     60,  // Intraday
+    sacMinConfidenceC:     60,  // Swing
 
     // ── Event-driven SMC sequence engine (v3.0) ──────────────────────────────
     // sweep → CHoCH → displacement/FVG → mitigation → entry (causal, cross-bar)
@@ -714,44 +686,12 @@ const STRATEGIES = {
     winrate: "Target 52–60%",
     risk:    "Rendah-Sedang",
 
-    // Sprint 13 — Scalping + Swing typeOverrides (aligned with FE backtestStrategies).
-    // Scalping: INTENTIONAL RR deviation from PRD 1:4.5 → live/backtest Planned RR = 2.0.
-    // Swing: PRD aspirational 1.2/4.0 (RR≈3.33); INTENTIONAL fast-fail SSOT → SL 1.8 / TP 4.5 (RR 2.5).
-    typeOverrides: {
-      Scalping: {
-        slAtrMult: 2.2,
-        tpAtrMult: 4.4,
-        maxHoldHours: 6,
-        smcSessionFilter: true,
-        smcSessionBlockHoursUtc: [21, 22],
-        smcBlockLongInChop: true,
-        smcRequireObRetest: true,
-        sacMinConfidenceALong: 80,
-        sacMinConfidenceAShort: 75,
-        scalpingChochValidate: true,
-        makerEntry: true,
-        makerFeeRate: 0.0002,
-      },
-      Swing: {
-        // Fast-fail: SL 1.2×ATR too thin vs BTC 4h wick noise → widen to 1.8×ATR.
-        // TP 4.5×ATR keeps Planned RR = 2.5 (breakeven WR 28.6%).
-        slAtrMult: 1.8,
-        tpAtrMult: 4.5,
-        maxHoldHours: 240,           // 10d TIME_STOP (was unbounded → 544h holds)
-        smcRequireObRetest: true,    // require FVG/OB retrace — cut premature entries
-        smcFundingGuard: true,
-        smcMaxFundingRate: 0.0002,   // 0.02% — skip extreme premium
-        smcHoldWarnHours: 168,       // Telegram warn after 7d
-        swingMarketingBlocked: true, // FOUNDRY/FORGE marketing gate until 2023 revalidated
-        makerEntry: true,
-        makerFeeRate: 0.0002,
-        sacPivotStructure: false,
-        sacPremiumDiscountGate: false,
-        sacFvgAutoThreshold: false,
-        sacHtfHardBlock: false,
-        sacSwingV3Gate: false,
-      },
-    },
+    // Sprint 14 factory reset — no per-type overrides. Every leg (Scalping 5m/1h,
+    // Intraday 15m/4h, Swing 4h/1w) uses the canonical geometry above
+    // (SL 1.5×ATR / TP 3.0×ATR, RR 1:2). The prior over-fit stack (session
+    // filters, asymmetric confidence 80/75, funding guards, maker-fee entries,
+    // fast-fail SL widening) was removed for a clean baseline.
+    typeOverrides: {},
   },
 
   // ─────────────────────────────────────────────
