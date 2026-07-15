@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
- * Read-only DB audit: inventory Gen1 strategyKey values in Bot / Trade / Backtest tables.
+ * Read-only DB audit: inventory legacy/Gen1 strategyKey values across Prisma + runtime tables.
  * Run: node scripts/audit-gen1-strategy-keys.js
  */
 require("dotenv").config();
 const { PrismaClient } = require("@prisma/client");
 const { GEN1_STRATEGY_KEYS, STRATEGY_MIGRATION_MAP } = require("../src/config/strategyKeyNormalizer");
+const { GEN1_STRATEGY_KEY_TARGETS } = require("./gen1-strategy-key-tables");
 
 const prisma = new PrismaClient();
 
 const GEN1_LIST = [...GEN1_STRATEGY_KEYS];
 
-async function groupByStrategyKey(model, field = "strategyKey") {
+async function groupByPrismaField(model, field) {
   try {
     const rows = await prisma[model].groupBy({
       by: [field],
@@ -22,7 +23,21 @@ async function groupByStrategyKey(model, field = "strategyKey") {
       .sort((a, b) => b.count - a.count);
   } catch (e) {
     if (e.code === "P2021" || /does not exist/i.test(String(e.message))) {
-      return [];
+      return null;
+    }
+    throw e;
+  }
+}
+
+async function groupByRawSql(sql) {
+  try {
+    const rows = await prisma.$queryRawUnsafe(sql);
+    return rows
+      .map((r) => ({ strategyKey: r.key, count: Number(r.count) }))
+      .sort((a, b) => b.count - a.count);
+  } catch (e) {
+    if (/does not exist|relation .* does not exist/i.test(String(e.message))) {
+      return null;
     }
     throw e;
   }
@@ -41,20 +56,30 @@ async function main() {
   console.log("Migration map:", JSON.stringify(STRATEGY_MIGRATION_MAP, null, 2));
   console.log("");
 
-  const tables = [
-    { name: "Bot", model: "bot" },
-    { name: "Trade", model: "trade" },
-    { name: "Backtest", model: "backtest" },
-    { name: "StrategyPerformance", model: "strategyPerformance" },
-    { name: "TradeFeatureContext", model: "tradeFeatureContext" },
-    { name: "MlShadowLog", model: "mlShadowLog" },
-  ];
-
   let totalGen1 = 0;
-  for (const { name, model } of tables) {
-    const all = await groupByStrategyKey(model);
+
+  for (const target of GEN1_STRATEGY_KEY_TARGETS) {
+    const label = target.label || `${target.model}.${target.field}`;
+    let all;
+
+    if (target.kind === "prisma") {
+      all = await groupByPrismaField(target.model, target.field);
+      if (all === null) {
+        console.log(`── ${label} ──`);
+        console.log("  (table/model not present — skipped)\n");
+        continue;
+      }
+    } else {
+      all = await groupByRawSql(target.groupBySql);
+      if (all === null) {
+        console.log(`── ${label} ──`);
+        console.log("  (table not present — skipped)\n");
+        continue;
+      }
+    }
+
     const gen1 = filterGen1(all);
-    console.log(`── ${name} (${all.length} distinct keys) ──`);
+    console.log(`── ${label} (${all.length} distinct keys) ──`);
     if (gen1.length === 0) {
       console.log("  ✓ No Gen1 strategyKey rows\n");
     } else {
