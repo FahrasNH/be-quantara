@@ -219,7 +219,7 @@ function makeLiveBot(clientOverrides = {}) {
   });
 
   await t("#5 account gate: per-bot OK tapi agregat akun lewat batas → _checkRiskGates BLOK", async () => {
-    const AccountCoordinator = require("../src/domain/AccountCoordinator");
+    const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
     const coord = new AccountCoordinator({ userId: "uX", maxAccountDailyLossPct: 0.06 });
     coord.setAccountEquity(1000);
     coord.reportRisk("uX:ETHUSDT", { realizedLoss: 70, floatingLoss: 0 }); // bot lain rugi 7%

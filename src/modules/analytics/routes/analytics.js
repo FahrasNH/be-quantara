@@ -45,7 +45,7 @@ function getRAGBacktestEngines() {
     const FeatureEngineer             = require("../../ml/domain/FeatureEngineer");
     const VectorStore                 = require("../../../infrastructure/db/VectorStore");
     const { _pool }                   = require("../../../infrastructure/db/database");
-    const ConservativeBacktestEngine  = require("../../../domain/ConservativeBacktestEngine");
+    const ConservativeBacktestEngine  = require("#core/research-engine/ConservativeBacktestEngine.js");
     const WalkForwardBacktest         = require("../../../core/research-engine/WalkForwardBacktest");
     const BiasQuantificationReport    = require("../../../core/research-engine/BiasQuantificationReport");
     const AblationTest                = require("../../../core/research-engine/AblationTest");

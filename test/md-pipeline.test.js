@@ -5,14 +5,14 @@
 "use strict";
 
 const assert = require("assert");
-const { classifyAdxRegime, evaluateAdxRegimeGate } = require("../src/domain/strategy/md/adxRegimeGate");
+const { classifyAdxRegime, evaluateAdxRegimeGate } = require("#core/strategy-engine/md/adxRegimeGate.js");
 const {
   detectFairValueGaps,
   detectOrderBlocks,
   refineMdEntry,
   resolveMdTakeProfit,
-} = require("../src/domain/strategy/md/orderBlockFvg");
-const MeanReversionStrategy = require("../src/domain/strategy/implementations/MeanReversionStrategy");
+} = require("#core/strategy-engine/md/orderBlockFvg.js");
+const MeanReversionStrategy = require("#core/strategy-engine/implementations/MeanReversionStrategy.js");
 const { TIER_COMPONENT_MAP } = require("../src/config/strategies");
 
 function test(name, fn) {

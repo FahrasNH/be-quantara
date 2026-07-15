@@ -2,7 +2,7 @@
  * tradeAttribution unit tests (TASK 2.3 — Multi-Strategy per Coin).
  * Mencakup AC-04: firedByStrategy terisi + SL/TP match config strategi yang fire.
  */
-const { buildTradeAttribution } = require("../src/domain/tradeAttribution");
+const { buildTradeAttribution } = require("#modules/analytics/domain/tradeAttribution.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {
@@ -51,7 +51,7 @@ console.log("\n🏷️  tradeAttribution Unit Tests\n");
 
 // ── resolvePersistedStrategyKey: prefer winning component over umbrella ──────
 {
-  const { resolvePersistedStrategyKey } = require("../src/domain/tradeAttribution");
+  const { resolvePersistedStrategyKey } = require("#modules/analytics/domain/tradeAttribution.js");
   t(
     "winningComponent beats config umbrella",
     resolvePersistedStrategyKey({

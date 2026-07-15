@@ -10,7 +10,7 @@
  * lifecycle start/stop, dan Scenario 1-3 dari TASK 4.2 (versi unit).
  */
 const MultiStrategyCoordinator = require("../src/application/MultiStrategyCoordinator");
-const AccountCoordinator = require("../src/domain/AccountCoordinator");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

@@ -11,10 +11,10 @@ const {
   resolveScalpingGateFlags,
   buildSmcEntryFeatures,
   SMC_ML_CSV_COLUMNS,
-} = require("../src/domain/strategy/smc/smcScalpGates");
-const { applyRegimeGate } = require("../src/domain/dailyRegimeGate");
+} = require("#core/strategy-engine/smc/smcScalpGates.js");
+const { applyRegimeGate } = require("#core/signal-engine/dailyRegimeGate.js");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
-const { TRADE_EXPORT_COLUMNS } = require("../src/domain/tradeExportCsv");
+const { TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
 
 test("GATE-SESSION: blocks 21–22 UTC when enabled, fail-open when off", () => {
   const ts21 = Date.UTC(2026, 6, 13, 21, 30, 0);

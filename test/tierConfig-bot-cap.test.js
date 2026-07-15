@@ -1,7 +1,7 @@
 /**
  * tierConfig maxActiveBots — unit tests (P2-11).
  */
-const { TIER_CONFIG, TIER_ORDER, getMaxActiveBots } = require("../src/domain/tierConfig");
+const { TIER_CONFIG, TIER_ORDER, getMaxActiveBots } = require("#core/risk-engine/tierConfig.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

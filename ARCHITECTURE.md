@@ -8,7 +8,7 @@
 > (Sprint 12 AF/TS; Sprint 10 MD; Sprint 11 BS). Live keys:
 > `AF_SMC/WYCKOFF/VSA`, `TS_TF/MS/VP`, `MD_MR/SD/SA`, `BS_BR/ICT/LS`.
 > `maxPositionsPerSymbol = 1` for every tier. ADX is a **risk overlay inside MD_MR**,
-> not a catalog racer. SSOT: `src/config/strategies.js`, `src/domain/tierConfig.js`,
+> not a catalog racer. SSOT: `src/config/strategies.js`, `src/core/risk-engine/tierConfig.js`,
 > FE `tierStrategyMap.js`.
 >
 > **Changelog (BUG-CRITICAL 502, 11 Jul 2026):** Real-engine backtests
@@ -23,17 +23,27 @@
 
 ## 0. Modular layout (Sprint 14 migration)
 
-Target layout (alias-first; old paths keep **shim re-exports** during transition):
+Target layout (alias-first). Legacy `src/domain/` shims were **removed** (Sprint 14
+shim-dissolution): importers use `#core` / `#modules` / `#shared` / `#config`.
 
 ```
 src/
 ├── app/            # (bootstrap still via index.js → server/app.js)
 ├── modules/        # feature slices: trading, backtest, analytics, ml, research, payment, admin, auth, users
-├── core/           # pure engines: strategy/signal/risk/position/analytics/research
+│   └── <feature>/domain/   # feature-local domain helpers (not a global domain layer)
+├── core/           # pure engines: strategy/signal/risk/position/analytics/research/execution
 ├── infrastructure/ # prisma, exchange, jobs, cron, notifications
-├── shared/         # middleware, constants, logger
-└── config/
+├── shared/         # middleware, constants, logger, csv helpers
+├── config/         # strategies catalog + strategyDefaults (A/B/C presets)
+└── application/    # thin shims → modules/trading/application (transition)
 ```
+
+### File naming convention
+
+- **PascalCase** — modules that export a class (`AccountCoordinator.js`, `WinPredictor.js`)
+- **camelCase** — modules that export functions/objects (`tierConfig.js`, `tradeExportCsv.js`)
+- Strategy parameter defaults live in `src/config/strategyDefaults.js` (formerly
+  misnamed `legacyStrategies.js` — actively used, not dead legacy code).
 
 ### Path aliases (Node `package.json` `imports`)
 
@@ -94,13 +104,13 @@ Legacy Gen1 / descriptor keys remain as migrate-only aliases in `STRATEGY_MIGRAT
 Also still accepted as aliases → Gen2: `SMART_MONEY_CONCEPTS` / `SAC` → `AF_SMC`;
 `TF` → `TS_TF`; `MR` → `MD_MR`; `BR` → `BS_BR`.
 
-`A` / `B` / `C` in `legacyStrategies.js` are **PDF trade-type presets**, not AF racers.
+`A` / `B` / `C` in `strategyDefaults.js` are **PDF trade-type presets**, not AF racers.
 
 ---
 
 ## 2. Tier → Strategy Entitlement (SSOT)
 
-**Source of truth:** `src/domain/tierConfig.js` (`TIER_CONFIG[tier].strategies`).
+**Source of truth:** `src/core/risk-engine/tierConfig.js` (`TIER_CONFIG[tier].strategies`).
 
 Entitlement still stores **legacy descriptor keys**; runtime normalizes them to Gen2 via
 `normalizeStrategyKey` / `STRATEGY_MIGRATION_MAP`. FE package engines use Gen2 keys
@@ -150,7 +160,7 @@ default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throt
 
 ## 4. Strategy Config — Adaptive Fusion (AF_SMC)
 
-**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/AdaptiveFusionUmbrella.js`
+**Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/AdaptiveFusionUmbrella.js`
 
 ### 4.1 Component model (Sprint 12 — Race-to-Confirm; AF-SUB-03 rescope)
 
@@ -178,10 +188,10 @@ Trade types for AF: **Scalping / Swing** only (Intraday removed AF-SCALP-19). Wh
 non-SMC racer wins, direction is promoted to type legs (standalone racer entry).
 
 **Sprint 13 Scalping SSOT** (`typeOverrides.Scalping` in FE `backtestStrategies.js` + BE
-`legacyStrategies.js`): Planned RR **2.0** (SL 2.2×ATR / TP 4.4×ATR; intentional deviation
+`strategyDefaults.js`): Planned RR **2.0** (SL 2.2×ATR / TP 4.4×ATR; intentional deviation
 from PRD aspirational 1:4.5), `maxHoldHours=6` (TIME_STOP in multi-position BT + live),
 `smcSessionFilter` (block 21–23 UTC), `smcBlockLongInChop`, `smcRequireObRetest`.
-Helpers: `src/domain/strategy/smc/smcScalpGates.js`. CSV adds ML columns
+Helpers: `src/core/strategy-engine/smc/smcScalpGates.js`. CSV adds ML columns
 (`sweepStrength`, `fvgSizeAtr`, …) + confidence component fields.
 `marketCond` ≠ `dailyRegime` — both always exported (entry-TF bucket vs daily ADX-proxy).
 Dataset expand recipe: `scripts/smc-scalping-dataset-expand.js`.
@@ -204,7 +214,7 @@ Canonical live keys: `AF_SMC`, `AF_WYCKOFF`, `AF_VSA`, `TS_TF`, `TS_MS`, `TS_VP`
 Legacy aliases (migrate, do not delete abruptly): `ADAPTIVE_FUSION` / `SMART_MONEY_CONCEPTS` → `AF_SMC`,
 `TREND_FOLLOWING` → `TS_TF`, `MEAN_REVERSION` → `MD_MR`, `BREAKOUT_RETEST` → `BS_BR`.
 
-`A` / `B` / `C` in `legacyStrategies.js` are **PDF trade-type presets** (Scalping/Day/Swing),
+`A` / `B` / `C` in `strategyDefaults.js` are **PDF trade-type presets** (Scalping/Day/Swing),
 not Adaptive Fusion components — do not confuse with AF racers.
 
 **`GROK_AI_TRADING`:** experimental VAULT bonus that *does* generate LLM entry signals.
@@ -221,7 +231,7 @@ Pairwise signal correlation &lt; 0.5 among SMC/Wyckoff/VSA remains a **monitorin
 
 ## 5. Strategy Config — Trend Surge (TS_TF)
 
-**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/TrendSurgeUmbrella.js`
+**Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/TrendSurgeUmbrella.js`
 
 ### 5.1 Component model (Sprint 12 — Race-to-Confirm)
 
@@ -251,7 +261,7 @@ keys become the race pool; per-trade `strategyLabel` comes from the winning race
 
 ## 6. Strategy Config — Mean Drift (MD_MR)
 
-**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/MeanDriftUmbrella.js`
+**Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/MeanDriftUmbrella.js`
 + racer implementations (`MeanReversionStrategy`, `SupplyDemandStrategy`, `StatisticalArbitrageStrategy`).
 
 ### 6.1 Component model (Sprint 10 — Race-to-Confirm)
@@ -311,7 +321,7 @@ Backtest: FE `COMPONENT_TO_ENGINE` maps `MD_SD`/`MD_SA` → `MD_MR` engine run w
 
 ## 7. Strategy Config — Breakout Storm (BS_BR)
 
-**Source of truth:** `src/config/strategies.js` + `src/domain/strategy/umbrellas/BreakoutStormUmbrella.js`
+**Source of truth:** `src/config/strategies.js` + `src/core/strategy-engine/umbrellas/BreakoutStormUmbrella.js`
 + racer implementations (`BreakoutTradingStrategy`, `IctStyleStrategy`, `LiquidationSqueezeStrategy`).
 
 ### 7.1 Component model (Sprint 11 — Race-to-Confirm)

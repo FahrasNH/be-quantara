@@ -11,8 +11,8 @@ require("dotenv").config();
 
 const prisma         = require("../../src/infrastructure/db/prismaClient");
 const MLShadowService = require("../../src/server/services/MLShadowService");
-const WinPredictor   = require("../../src/domain/WinPredictor");
-const FeatureEngineer = require("../../src/domain/FeatureEngineer");
+const WinPredictor   = require("#modules/ml/domain/WinPredictor.js");
+const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
 
 async function main() {
   const args = process.argv.slice(2);

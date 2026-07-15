@@ -9,7 +9,7 @@
  *   2. fail-closed saat equity unknown   — (BUG-FIX-02)
  *   3. balanceCache TTL + backoff 50011  — (OPS-FIX-01) yang menjamin (2)
  */
-const AC = require("../src/domain/AccountCoordinator");
+const AC = require("#modules/trading/domain/AccountCoordinator.js");
 const { getCachedBalance, invalidate } = require("../src/services/balanceCache");
 
 let pass = 0, fail = 0;

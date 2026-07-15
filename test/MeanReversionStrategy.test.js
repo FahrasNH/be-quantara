@@ -1,5 +1,5 @@
 const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
-const MeanReversionStrategy = require("../src/domain/strategy/implementations/MeanReversionStrategy");
+const MeanReversionStrategy = require("#core/strategy-engine/implementations/MeanReversionStrategy.js");
 
 describe("MeanReversionStrategy (Mean Drift — dual-component)", () => {
   let strategy;

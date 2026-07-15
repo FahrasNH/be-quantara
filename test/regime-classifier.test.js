@@ -8,7 +8,7 @@
 
 "use strict";
 
-const { RegimeClassifierEngine, PRIMARY, MODIFIER } = require("../src/domain/RegimeClassifierEngine");
+const { RegimeClassifierEngine, PRIMARY, MODIFIER } = require("#core/signal-engine/RegimeClassifierEngine.js");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test utilities

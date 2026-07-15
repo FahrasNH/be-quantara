@@ -9,7 +9,7 @@ const {
   strategyCsvColumnKeys,
   resolveExportColumnKeys,
 } = require("../src/server/services/csv/strategyReasonFormatters");
-const { TRADE_EXPORT_COLUMN_KEYS } = require("../src/domain/tradeExportCsv");
+const { TRADE_EXPORT_COLUMN_KEYS } = require("#shared/csv/tradeExportCsv.js");
 
 const ctx = {
   backtestId: "bt-1",

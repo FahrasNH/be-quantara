@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────
-// legacyStrategies.js — Kumpulan Strategi Trading (legacy A/B/C)
+// strategyDefaults.js — A/B/C trade-type parameter defaults + strategy presets
+// (formerly legacyStrategies.js — NOT legacy/unused; actively used as STRATEGIES SSOT)
 //
 // Berdasarkan: "Dokumentasi Panduan Strategi Trading"
 //   Aggressive Scalping, Day Trading, dan Swing Trading

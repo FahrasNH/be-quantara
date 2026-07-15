@@ -4,7 +4,7 @@
  *
  * Idempotent (upserts by unique key):
  *   - 4 SubscriptionTier rows (FOUNDRY/FORGE/MINT/VAULT) mirrored from
- *     domain/tierConfig.js + domain/pricing.js (IDR prices).
+ *     core/risk-engine/tierConfig.js + modules/payment/domain/pricing.js (IDR prices).
  *   - 2 sample vouchers: WELCOME10 (10% off, max Rp100k) and LAUNCH50K
  *     (Rp50k off, min purchase Rp149k).
  *
@@ -18,8 +18,8 @@ const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "../.env") });
 
 const prisma = require("../src/infrastructure/db/prismaClient");
-const { TIER_ORDER, TIER_CONFIG } = require("../src/domain/tierConfig");
-const { TIER_PRICING_IDR, YEARLY_MONTHS } = require("../src/domain/pricing");
+const { TIER_ORDER, TIER_CONFIG } = require("#core/risk-engine/tierConfig.js");
+const { TIER_PRICING_IDR, YEARLY_MONTHS } = require("#modules/payment/domain/pricing.js");
 
 async function seedTiers() {
   let n = 0;

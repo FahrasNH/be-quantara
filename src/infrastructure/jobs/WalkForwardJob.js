@@ -25,7 +25,7 @@ const fs      = require("fs");
 const path    = require("path");
 const prisma  = require("../db/prismaClient");
 const { notifyError, notifyInfo } = require("../notifications/TelegramNotifier");
-const optimizer = require("../../domain/WalkForwardOptimizer");
+const optimizer = require("#core/research-engine/WalkForwardOptimizer.js");
 
 const CHECKPOINT_FILE = path.resolve(
   __dirname, "../../../data/walk-forward-checkpoint.json"

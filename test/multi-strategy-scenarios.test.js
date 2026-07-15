@@ -5,8 +5,8 @@
  *  - hitung atribusi trade (buildTradeAttribution) → firedByStrategy + SL/TP.
  */
 const MultiStrategyCoordinator = require("../src/application/MultiStrategyCoordinator");
-const AccountCoordinator = require("../src/domain/AccountCoordinator");
-const { buildTradeAttribution } = require("../src/domain/tradeAttribution");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
+const { buildTradeAttribution } = require("#modules/analytics/domain/tradeAttribution.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

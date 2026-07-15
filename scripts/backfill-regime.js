@@ -17,7 +17,7 @@
 const path   = require("path");
 const fs     = require("fs");
 const prisma = require("../src/infrastructure/db/prismaClient");
-const { RegimeClassifierEngine } = require("../src/domain/RegimeClassifierEngine");
+const { RegimeClassifierEngine } = require("#core/signal-engine/RegimeClassifierEngine.js");
 
 // ── CLI flags ──────────────────────────────────────────────────────────────────
 const DRY_RUN   = process.argv.includes("--dry-run");

@@ -5,27 +5,27 @@
 "use strict";
 
 const assert = require("assert");
-const { evaluateSupplyDemandEntry } = require("../src/domain/strategy/md/supplyDemandEntry");
+const { evaluateSupplyDemandEntry } = require("#core/strategy-engine/md/supplyDemandEntry.js");
 const {
   evaluateStatisticalArbitrageEntry,
   _rollingMeanStd,
   _residualZScore,
-} = require("../src/domain/strategy/md/statisticalArbitrage");
+} = require("#core/strategy-engine/md/statisticalArbitrage.js");
 const {
   isKillZone,
   detectLiquidityRaid,
   evaluateIctStyleEntry,
-} = require("../src/domain/strategy/bs/ictKillZoneRaid");
+} = require("#core/strategy-engine/bs/ictKillZoneRaid.js");
 const {
   calculateOIChangePercent,
   evaluateOIFundingGate,
   detectLiquidationWick,
   evaluateLiquidationSqueezeEntry,
-} = require("../src/domain/strategy/bs/liquidationSqueeze");
+} = require("#core/strategy-engine/bs/liquidationSqueeze.js");
 const { TIER_COMPONENT_MAP, LIVE_COMPONENT_KEYS, STRATEGY_CATALOG } = require("../src/config/strategies");
-const MeanDriftUmbrella = require("../src/domain/strategy/umbrellas/MeanDriftUmbrella");
-const BreakoutStormUmbrella = require("../src/domain/strategy/umbrellas/BreakoutStormUmbrella");
-const { strategyRegistry } = require("../src/domain/strategy/StrategyRegistry");
+const MeanDriftUmbrella = require("#core/strategy-engine/umbrellas/MeanDriftUmbrella.js");
+const BreakoutStormUmbrella = require("#core/strategy-engine/umbrellas/BreakoutStormUmbrella.js");
+const { strategyRegistry } = require("#core/strategy-engine/StrategyRegistry.js");
 const {
   resolveEntryReasons,
   formatSupplyDemandReasons,

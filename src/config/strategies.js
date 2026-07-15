@@ -23,7 +23,7 @@ const {
  *   MEAN_REVERSION / MR                          → MD_MR
  *   BREAKOUT_RETEST / BR                         → BS_BR
  *   A / B / C                                    → PDF trade-type presets (NOT AF)
- *     (legacyStrategies.js A/B/C = Aggressive Scalping / Day / Swing — unrelated
+ *     (strategyDefaults.js A/B/C = Aggressive Scalping / Day / Swing — unrelated
  *      to AF component slots; never treat as Adaptive Fusion keys)
  *
  * ─── GROK_AI_TRADING (experimental / VAULT bonus — NOT a tier umbrella) ──────

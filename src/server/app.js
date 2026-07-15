@@ -13,8 +13,8 @@ const cfg = require("../config/env");
 const BotEngine = require("../application/BotEngine");
 const AdaptiveStrategyEngine = require("../application/AdaptiveStrategyEngine");
 const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinator");
-const AccountCoordinator = require("../domain/AccountCoordinator");
-const { getStrategy } = require("../domain/legacyStrategies");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
+const { getStrategy } = require("#config/strategyDefaults.js");
 const { createExchangeClient } = require("../infrastructure/exchange");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
@@ -66,7 +66,7 @@ const MULTI_STRATEGY_ENABLED = process.env.MULTI_STRATEGY_ENABLED !== "false";
 const { getTierStrategies, getUserTier } = require("../services/entitlement");
 // Cap account-wide posisi terbuka per-tier (fix meter "8/4"). Dipakai di resume
 // agar cap di-set tanpa perlu start manual.
-const { getMaxConcurrentPositions } = require("../domain/tierConfig");
+const { getMaxConcurrentPositions } = require("#core/risk-engine/tierConfig.js");
 // PAIR-TIER: klasifikasi pair (LIQUID/STABLE/VOLATILE) untuk override SL/posisi
 // + filter strategi. Dipakai di createBot*/resume agar override SELALU diterapkan,
 // tidak peduli bot dibuat lewat start manual atau auto-resume.

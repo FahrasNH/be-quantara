@@ -55,10 +55,10 @@ async function section(name) {
 
 // ── Load modules ──────────────────────────────────────────────────────────────
 
-const FeatureEngineer   = require("../src/domain/FeatureEngineer");
-const WinPredictor      = require("../src/domain/WinPredictor");
-const SimilarTradeAdvisor = require("../src/domain/SimilarTradeAdvisor");
-const HybridAdvisor     = require("../src/domain/HybridAdvisor");
+const FeatureEngineer   = require("#modules/ml/domain/FeatureEngineer.js");
+const WinPredictor      = require("#modules/ml/domain/WinPredictor.js");
+const SimilarTradeAdvisor = require("#modules/ml/domain/SimilarTradeAdvisor.js");
+const HybridAdvisor     = require("#modules/ml/domain/HybridAdvisor.js");
 const MLShadowService   = require("../src/server/services/MLShadowService");
 
 // ── Test fixtures ─────────────────────────────────────────────────────────────

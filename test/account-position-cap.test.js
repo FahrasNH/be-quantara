@@ -21,8 +21,8 @@ const assert = require("node:assert");
 const {
   TIER_CONFIG,
   getMaxConcurrentPositions,
-} = require("../src/domain/tierConfig");
-const AccountCoordinator = require("../src/domain/AccountCoordinator");
+} = require("#core/risk-engine/tierConfig.js");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 const BotEngine = require("../src/modules/trading/application/BotEngine");
 // Modul DB yang SAMA (cached) yang di-require BotEngine._checkAccountOpenCap →
 // override export-nya = stub untuk hitung posisi terbuka tanpa Postgres.

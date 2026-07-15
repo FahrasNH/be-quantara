@@ -56,7 +56,7 @@ test("floating daily loss included in gates", () => {
 
 test("Swing typeOverrides soften weekly ADX in TREND_FOLLOWING (optional post factory-reset)", () => {
   const strat = fs.readFileSync(
-    path.join(__dirname, "../src/domain/legacyStrategies.js"),
+    path.join(__dirname, "../src/config/strategyDefaults.js"),
     "utf8"
   );
   // Factory-reset canonical configs may drop legacy Swing adxMinStrength:20;

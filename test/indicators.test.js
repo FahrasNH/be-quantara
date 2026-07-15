@@ -13,7 +13,7 @@ const {
   calcBollingerBands,
   calcVolumeSMA,
   calcIndicators,
-} = require("../src/domain/indicators");
+} = require("#core/analytics-engine/indicators.js");
 
 // ────────────────────────────────────────────────────
 // TEST UTILITIES

@@ -66,7 +66,7 @@ function assertNoNanInf(obj, path = "") {
 // Imports
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { RegimeClassifierEngine, PRIMARY, MODIFIER } = require("../src/domain/RegimeClassifierEngine");
+const { RegimeClassifierEngine, PRIMARY, MODIFIER } = require("#core/signal-engine/RegimeClassifierEngine.js");
 const StrategyPerformanceService = require("../src/server/services/StrategyPerformanceService");
 const { _helpers: H } = StrategyPerformanceService;
 
@@ -473,7 +473,7 @@ promises.push(test("38. backfill-regime.js exists and is valid JS", () => {
 }));
 
 promises.push(test("39. RegimeClassifierEngine singleton is exported correctly", () => {
-  const engine = require("../src/domain/RegimeClassifierEngine");
+  const engine = require("#core/signal-engine/RegimeClassifierEngine.js");
   assert(typeof engine.classify        === "function", "classify missing on singleton");
   assert(typeof engine.classifyMultiTF === "function", "classifyMultiTF missing on singleton");
   assert(typeof engine.invalidateCache === "function", "invalidateCache missing on singleton");

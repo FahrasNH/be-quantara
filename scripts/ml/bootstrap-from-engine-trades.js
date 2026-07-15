@@ -18,13 +18,13 @@ require("dotenv").config();
 
 const fs   = require("fs");
 const path = require("path");
-const FeatureEngineer = require("../../src/domain/FeatureEngineer");
+const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
 const VectorStore     = require("../../src/infrastructure/db/VectorStore");
 const { _pool }       = require("../../src/infrastructure/db/database");
 const {
   fetchClosedEngineTrades,
   buildMlArtifactsFromEngineRows,
-} = require("../../src/domain/engineTradeMlAdapter");
+} = require("#modules/analytics/domain/engineTradeMlAdapter.js");
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {

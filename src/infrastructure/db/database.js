@@ -485,7 +485,7 @@ function parseSession(row) {
 
 async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators, strategyName, isPartial }) {
   // Prefer winning-racer / firedByStrategy over umbrella engine keys.
-  const { resolvePersistedStrategyKey } = require("../../domain/tradeAttribution");
+  const { resolvePersistedStrategyKey } = require("#modules/analytics/domain/tradeAttribution.js");
   const resolvedStrategy = resolvePersistedStrategyKey({
     strategyName,
     indicators,
@@ -529,7 +529,7 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
  * @returns {{ scanned: number, updated: number }}
  */
 async function backfillTradeStrategyNames({ limit = 5000 } = {}) {
-  const { resolvePersistedStrategyKey } = require("../../domain/tradeAttribution");
+  const { resolvePersistedStrategyKey } = require("#modules/analytics/domain/tradeAttribution.js");
   const { rows } = await pool.query(
     `SELECT id, strategy_name, indicators
        FROM trades

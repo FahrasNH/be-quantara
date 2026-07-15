@@ -14,7 +14,7 @@
  * Standalone runner: exit code != 0 if any assertion fails.
  */
 const MultiStrategyCoordinator = require("../src/application/MultiStrategyCoordinator");
-const AccountCoordinator = require("../src/domain/AccountCoordinator");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

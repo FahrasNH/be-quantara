@@ -28,7 +28,7 @@ const fs     = require("fs");
 const prisma = require("../src/infrastructure/db/prismaClient");
 
 // Inline indicator helpers (avoid circular dependencies with BotEngine)
-const { calcEMA, calcATR, calcRSI, calcSMA, calcBollingerBands } = require("../src/domain/indicators");
+const { calcEMA, calcATR, calcRSI, calcSMA, calcBollingerBands } = require("#core/analytics-engine/indicators.js");
 
 // ── CLI args ─────────────────────────────────────────────────────────────────
 const args = Object.fromEntries(

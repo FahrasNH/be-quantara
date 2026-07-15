@@ -28,7 +28,7 @@ const {
   pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
-} = require("../../../domain/tradeExportCsv");
+} = require("#shared/csv/tradeExportCsv.js");
 const {
   formatExitReason,
   resolveEntryReasons,
