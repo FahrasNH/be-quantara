@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline. Risk/SL/TP dari **`SUPPLY_AND_DEMAND`** preset (= Mean Reversion geometry); S&D-specific knobs dari **component DEFAULTS**.
+Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). Risk/SL/TP dari **`SUPPLY_AND_DEMAND`** preset (= Mean Reversion geometry); S&D-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -46,7 +46,14 @@ Sprint 14 baseline. Risk/SL/TP dari **`SUPPLY_AND_DEMAND`** preset (= Mean Rever
 
 ### Per trade type overrides
 
-Tidak ada pada preset `SUPPLY_AND_DEMAND`.
+| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| --- | --- |
+| Scalping | 0.15 |
+| Intraday | 0.4 |
+| Swing | 0.8 |
+
+Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
+
 
 ---
 

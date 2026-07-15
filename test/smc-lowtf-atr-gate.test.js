@@ -8,7 +8,8 @@
  * (Scalping 0 trades / 3mo, Intraday ~3 / 3mo).
  *
  * The fix adds per-leg atrMinMult via typeOverrides (Scalping 0.15, Intraday
- * 0.4, Swing 0.8-unchanged) plus Intraday smcMinConfidenceB 60→55. This test
+ * 0.4, Swing 0.8-unchanged) plus per-leg confidence floors (Scalping 30,
+ * Intraday 45). This test
  * runs the REAL backtest engine (runTripleTypeBacktest — same code path the
  * product uses for SMART_MONEY_CONCEPTS) across two non-overlapping synthetic windows and
  * asserts:
@@ -111,7 +112,8 @@ test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intrad
   assert.equal(ov.Scalping.atrMinMult, 0.15, "Scalping atrMinMult must be 0.15");
   assert.equal(ov.Intraday.atrMinMult, 0.4, "Intraday atrMinMult must be 0.4");
   assert.equal(ov.Swing.atrMinMult, 0.8, "Swing atrMinMult must stay 0.8");
-  assert.equal(ov.Intraday.smcMinConfidenceB, 55, "Intraday confB must be restored to 55");
+  assert.equal(ov.Scalping.smcMinConfidenceA, 30, "Scalping confA must be 30");
+  assert.equal(ov.Intraday.smcMinConfidenceB, 45, "Intraday confB must be 45");
   // Top-level floor (what LIVE gating reads) is untouched at 0.8 → live unchanged.
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.atrMinMult, 0.8, "top-level atrMinMult (live) must stay 0.8");
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.smcMinConfidenceB, 60, "top-level confB (live) must stay 60");
