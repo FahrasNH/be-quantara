@@ -1,3 +1,5 @@
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+
 /**
  * GrokConfirmPromptBuilder.js — prompt lite untuk Mode B (Grok Confirm Gate).
  *
@@ -21,7 +23,7 @@ const STRATEGY_CONTEXT = {
       "from RSI/EMA values.",
     relevantIndicators: ["htfTrend"],
   },
-  TF: {
+  TS: {
     label: "Trend Following (EMA + Donchian breakout)",
     methodology:
       "Entry logic: EMA fast/mid alignment + Donchian channel breakout + volume, filtered " +
@@ -29,7 +31,7 @@ const STRATEGY_CONTEXT = {
       "Judge trend strength, breakout validity, and whether RSI leaves room for continuation.",
     relevantIndicators: ["htfTrend", "rsi", "emaTrendBias"],
   },
-  MR: {
+  MD: {
     label: "Mean Reversion (VWAP deviation)",
     methodology:
       "Entry logic: price stretched from VWAP/mean reverting back. A signal AGAINST the " +
@@ -38,7 +40,7 @@ const STRATEGY_CONTEXT = {
       "whether HTF regime allows a reversion leg.",
     relevantIndicators: ["htfTrend", "rsi"],
   },
-  BR: {
+  BS: {
     label: "Breakout Trading (BB-squeeze + retest)",
     methodology:
       "Entry logic: Bollinger Band Width squeeze (consolidation) → breakout with volume → " +
@@ -48,16 +50,12 @@ const STRATEGY_CONTEXT = {
   },
 };
 
-const KEY_TO_CONTEXT = {
+const ENGINE_TO_CONTEXT = {
   AF_SMC: "SMC",
-  SMART_MONEY_CONCEPTS: "SMC",
   ADAPTIVE_FUSION: "SMC",
-  TS_TF: "TF",
-  TREND_FOLLOWING: "TF",
-  MD_MR: "MR",
-  MEAN_REVERSION: "MR",
-  BS_BR: "BR",
-  BREAKOUT_RETEST: "BR",
+  TS_TF: "TS",
+  MD_MR: "MD",
+  BS_BR: "BS",
 };
 
 class GrokConfirmPromptBuilder {
@@ -82,7 +80,8 @@ class GrokConfirmPromptBuilder {
     const slAtrMult = atr > 0 ? (slDist / atr).toFixed(2) : "N/A";
     const tpAtrMult = atr > 0 ? (tpDist / atr).toFixed(2) : "N/A";
 
-    const contextKey = KEY_TO_CONTEXT[String(strategyKey || "").toUpperCase()];
+    const canonical = normalizeStrategyKey(String(strategyKey || "").toUpperCase());
+    const contextKey = ENGINE_TO_CONTEXT[canonical];
     const stratCtx = contextKey ? STRATEGY_CONTEXT[contextKey] : null;
 
     // Only surface the indicator fields this strategy actually consults —

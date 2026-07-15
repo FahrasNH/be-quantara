@@ -20,7 +20,7 @@ const VECTOR_DIM = 60;
 
 const REGIMES = ["trend_up", "trend_down", "ranging", "expansion", "compression", "high_vol", "low_vol", "other"];
 const PAIR_TIERS = ["LIQUID", "STABLE", "VOLATILE"];
-const STRATEGY_KEYS = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
+const STRATEGY_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
 const TRADE_TYPES = ["Scalping", "Swing"];
 
 const FEATURE_NAMES = [
@@ -47,8 +47,8 @@ const FEATURE_NAMES = [
   // [50-59] Historical features
   "hist_winRate", "hist_profitFactor", "hist_sharpe", "hist_avgHoldingHours",
   "hist_recentWinStreak", "hist_recentLossStreak",
-  "hist_strategy_ADAPTIVE_FUSION", "hist_strategy_TREND_FOLLOWING",
-  "hist_strategy_MEAN_REVERSION", "hist_strategy_BREAKOUT_RETEST",
+  "hist_strategy_AF_SMC", "hist_strategy_TS_TF",
+  "hist_strategy_MD_MR", "hist_strategy_BS_BR",
 ];
 
 class FeatureEngineer {

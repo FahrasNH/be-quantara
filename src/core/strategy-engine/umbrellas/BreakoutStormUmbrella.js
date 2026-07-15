@@ -13,6 +13,7 @@ const BreakoutTradingStrategy = require("../implementations/BreakoutTradingStrat
 const IctStyleStrategy = require("../implementations/IctStyleStrategy");
 const LiquidationSqueezeStrategy = require("../implementations/LiquidationSqueezeStrategy");
 const { BS_BR_HALTED } = require("../../../config/strategies");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 const RACER_PRIORITY = ["BS_BR", "BS_ICT", "BS_LS"];
 const RACER_LABELS = {
@@ -60,8 +61,8 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
     }
     const active = new Set();
     for (const c of raw) {
-      const k = String(c || "").toUpperCase();
-      if (k === "BS_BR" || k === "BREAKOUT_RETEST" || k === "BREAKOUT_TRADING" || k === "BR") {
+      const k = normalizeStrategyKey(String(c || "").toUpperCase());
+      if (k === "BS_BR" || String(c || "").toUpperCase() === "BREAKOUT_TRADING") {
         // Explicit selection (dedicated backtest / override) still allowed —
         // live bots blocked by strategyGuard + getTierStrategies filter.
         active.add("BS_BR");

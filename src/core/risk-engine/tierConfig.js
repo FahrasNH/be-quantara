@@ -7,11 +7,13 @@
 // Tier hierarchy: FOUNDRY < FORGE < MINT < VAULT
 // ─────────────────────────────────────────────
 
+const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
+
 const TIER_CONFIG = {
   FOUNDRY: {
     label: "Foundry",
     price: 9,
-    strategies: ["ADAPTIVE_FUSION"],
+    strategies: ["AF_SMC"],
     maxPositions: 1,
     // Multi-Strategy per Coin: equal-weight capital + race-to-confirm
     // (max 1 open position per symbol; strategies compete for the slot).
@@ -33,7 +35,7 @@ const TIER_CONFIG = {
   FORGE: {
     label: "Forge",
     price: 24,
-    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
+    strategies: ["AF_SMC", "TS_TF"],
     maxPositions: 1,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
@@ -50,7 +52,7 @@ const TIER_CONFIG = {
   MINT: {
     label: "Mint",
     price: 54,
-    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
+    strategies: ["AF_SMC", "TS_TF", "MD_MR"],
     maxPositions: 1,
     capitalAllocation: { equal: true },
     maxPositionsPerSymbol: 1,
@@ -66,7 +68,7 @@ const TIER_CONFIG = {
   VAULT: {
     label: "Vault",
     price: 99,
-    strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
+    strategies: ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"],
     maxPositions: 1,
     // equal: true → 25% per strategi. dynamic (AI optimizer) menyusul di Fase 3.
     // Race-to-confirm: max 1 open position per symbol regardless of strategy count.
@@ -105,13 +107,14 @@ function canUseStrategy(tier, strategyKey) {
   const config = getTierConfig(tier);
   if (!config) return { allowed: false };
 
-  if (config.strategies.includes(strategyKey)) {
+  const normalized = normalizeStrategyKey(String(strategyKey || "").toUpperCase());
+
+  if (config.strategies.includes(normalized)) {
     return { allowed: true };
   }
 
-  // Find the lowest tier that unlocks this strategy
   const requiredTier = TIER_ORDER.find((t) =>
-    TIER_CONFIG[t].strategies.includes(strategyKey)
+    TIER_CONFIG[t].strategies.includes(normalized)
   );
 
   return { allowed: false, requiredTier: requiredTier ?? null };

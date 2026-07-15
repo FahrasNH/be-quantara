@@ -35,6 +35,7 @@
 
 const EventEmitter = require("events");
 const { resolveConflicts } = require("../../../core/signal-engine/SignalConflictResolver");
+const { STRATEGY_ABBREV } = require("../../../config/strategyKeyNormalizer");
 
 class MultiStrategyCoordinator extends EventEmitter {
   /**
@@ -126,8 +127,7 @@ class MultiStrategyCoordinator extends EventEmitter {
 
   /** ADAPTIVE_FUSION → "AF" (initials) — keeps the startup banner on one line. */
   _abbrev(key) {
-    const map = { ADAPTIVE_FUSION: "AF", TREND_FOLLOWING: "TM", MEAN_REVERSION: "MR", BREAKOUT_RETEST: "BR" };
-    return map[key] || this._titleCase(key).split(" ").map(w => w[0]).join("").toUpperCase();
+    return STRATEGY_ABBREV[key] || this._titleCase(key).split(" ").map(w => w[0]).join("").toUpperCase();
   }
 
   /**

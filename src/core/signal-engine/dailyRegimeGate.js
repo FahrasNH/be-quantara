@@ -3,7 +3,7 @@
 //
 // Detects whether daily timeframe is in a strong trend or choppy/sideways regime.
 // Used by BOTH backtest engine (RealStrategyBacktestService) and live engine
-// (BotEngine) to gate momentum strategies (TF, BR) and reduce size on choppy days.
+// (BotEngine) to gate momentum strategies (TS_TF, BS_BR) and reduce size on choppy days.
 //
 // Principle: ADX-proxy = |EMA9−EMA21| / ATR
 //   - Strong trend (>0.8): full trading, all strategies active
@@ -16,10 +16,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { calcEMA, calcATR } = require("../analytics-engine/indicators");
+const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
 
 // Thresholds (principle-based, NOT optimized to any period)
 const TREND_STRENGTH_THRESHOLD_STRONG = 0.8;  // trend: full trading
-const TREND_STRENGTH_THRESHOLD_CHOP = 0.5;    // chop: TF/BR disabled, SMC −50%
+const TREND_STRENGTH_THRESHOLD_CHOP = 0.5;    // chop: TS_TF/BS_BR disabled, SMC −50%
 
 /**
  * Compute daily trend strength for a set of daily candles.
@@ -106,12 +107,10 @@ function applyRegimeGate(params) {
     return { allow: true, riskPerTrade, reason: "no_signal_or_unknown_regime" };
   }
 
-  const key = String(strategyKey || "").toUpperCase();
-  const isMomentum = key.includes("TREND_FOLLOWING") || key.includes("TS_TF")
-    || key.includes("TS_MS") || key.includes("TS_VP")
-    || key.includes("BREAKOUT") || key.includes("BS_BR");
-  const isStructure = key.includes("SMART_MONEY") || key.includes("AF_SMC")
-    || key.includes("AF_WYCKOFF") || key.includes("AF_VSA");
+  const key = normalizeStrategyKey(String(strategyKey || "").toUpperCase());
+  const isMomentum = key === "TS_TF" || key === "TS_MS" || key === "TS_VP"
+    || key.startsWith("BS_");
+  const isStructure = key === "AF_SMC" || key === "AF_WYCKOFF" || key === "AF_VSA";
 
   if (regime === "STRONG_TREND") {
     // Full trading, all strategies enabled

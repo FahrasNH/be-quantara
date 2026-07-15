@@ -13,13 +13,14 @@ const HistoricalKlinesService = require("./HistoricalKlinesService");
 const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest } = require("./RealStrategyBacktestService");
 const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../../shared/constants/strategySupportedTypes");
 const { applyDedicatedBsBrBacktestConfig } = require("../../../config/strategies");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 const {
   normalizeExchangeType,
   resolveFeeSchedule,
 } = require("../../../shared/constants/exchangeFeeSchedules");
 
 const AF_SMC_KEYS = new Set([
-  "AF_SMC", "ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS",
+  "AF_SMC", "ADAPTIVE_FUSION",
   "AF_WYCKOFF", "AF_VSA",
 ]);
 
@@ -41,15 +42,12 @@ const TYPE_TF = {
 const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];
 const MULTI_TYPE_STRATEGY_MAP = {
   TS_TF: ALL_THREE_TYPES,
-  TREND_FOLLOWING: ALL_THREE_TYPES,
   TS_MS: ALL_THREE_TYPES,
   TS_VP: ALL_THREE_TYPES,
   MD_MR: ALL_THREE_TYPES,
-  MEAN_REVERSION: ALL_THREE_TYPES,
   MD_SD: ALL_THREE_TYPES,
   MD_SA: ALL_THREE_TYPES,
   BS_BR: ALL_THREE_TYPES,
-  BREAKOUT_RETEST: ALL_THREE_TYPES,
   BS_ICT: ALL_THREE_TYPES,
   BS_LS: ALL_THREE_TYPES,
 };
@@ -158,8 +156,8 @@ function _normalizeAfRacerKeys(raw) {
   if (!Array.isArray(raw) || !raw.length) return [];
   const out = new Set();
   for (const c of raw) {
-    const k = String(c || "").toUpperCase();
-    if (k === "AF_SMC" || k === "SMART_MONEY_CONCEPTS" || k === "ADAPTIVE_FUSION" || k === "SMC") {
+    const k = normalizeStrategyKey(String(c || "").toUpperCase());
+    if (k === "AF_SMC" || String(c || "").toUpperCase() === "SMC") {
       out.add("AF_SMC");
     } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
       out.add("AF_WYCKOFF");

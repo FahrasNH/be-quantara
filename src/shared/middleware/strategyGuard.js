@@ -2,7 +2,7 @@
  * strategyGuard.js  (src/middleware/strategyGuard.js)
  * Middleware: blokir strategi yang belum production-ready dari start live/dry-run.
  *
- *   BREAKOUT_RETEST / BS_BR: Sprint 14 HALT — 5/5 backtest windows unprofitable
+ *   BS_BR: Sprint 14 HALT — 5/5 backtest windows unprofitable
  *   (WR 37.1%, PF 0.72, n=267). Live blocked; dry-run/backtest allowed so fixes
  *   can be validated. Re-enable only after ≥4/5 window gate passes.
  *
@@ -20,6 +20,7 @@
 'use strict';
 
 const { isBsBrHaltedKey } = require('../../config/strategies');
+const { normalizeStrategyKey } = require('../../config/strategyKeyNormalizer');
 
 // Strategi yang diblokir total (live maupun dry-run)
 const BLOCKED_STRATEGIES = new Set([
@@ -27,12 +28,11 @@ const BLOCKED_STRATEGIES = new Set([
 ]);
 
 // Strategi yang hanya boleh dry-run, belum boleh live
-// Set STRATEGY_OVERRIDE=BS_BR (atau BREAKOUT_RETEST) di .env untuk izinkan live (dev saja)
+// Set STRATEGY_OVERRIDE=BS_BR di .env untuk izinkan live (dev saja)
 const DRY_RUN_ONLY_STRATEGIES = new Set([
-  'BREAKOUT_RETEST',
   'BREAKOUT_TRADING',
   'BS_BR',
-  'BR',
+  'BREAKOUT_STORM',
 ]);
 
 /**
@@ -49,8 +49,12 @@ function strategyGuard(req, res, next) {
   const overrideEnv = process.env.STRATEGY_OVERRIDE ?? '';
   const overrides   = overrideEnv.split(',').map(s => s.trim()).filter(Boolean);
   const upper = String(strategy).toUpperCase();
-  const overridden = overrides.some((o) => String(o).toUpperCase() === upper
-    || (isBsBrHaltedKey(upper) && isBsBrHaltedKey(o)));
+  const canonical = normalizeStrategyKey(upper);
+  const overridden = overrides.some((o) => {
+    const oUpper = String(o).toUpperCase();
+    return oUpper === upper || oUpper === canonical
+      || (isBsBrHaltedKey(upper) && isBsBrHaltedKey(o));
+  });
 
   // Block total — bahkan staging wajib override eksplisit via env
   if (BLOCKED_STRATEGIES.has(strategy) && !overridden) {
@@ -65,7 +69,7 @@ function strategyGuard(req, res, next) {
   }
 
   // Dry-run only — boleh dry-run, tidak boleh live (kecuali STRATEGY_OVERRIDE)
-  const dryRunOnly = DRY_RUN_ONLY_STRATEGIES.has(strategy)
+  const dryRunOnly = DRY_RUN_ONLY_STRATEGIES.has(canonical)
     || DRY_RUN_ONLY_STRATEGIES.has(upper)
     || isBsBrHaltedKey(strategy);
   if (dryRunOnly && !dryRun && !overridden) {

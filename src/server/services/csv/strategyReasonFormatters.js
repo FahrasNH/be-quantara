@@ -11,7 +11,7 @@
  *   Mean Drift      (MINT):    MD_MR  | MD_SD      | MD_SA
  *   Breakout Storm  (VAULT):   BS_BR  | BS_ICT     | BS_LS
  *
- * Legacy aliases (SMART_MONEY_CONCEPTS → AF_SMC, etc.) are normalised below.
+ * Legacy ingress aliases normalised via strategyKeyNormalizer ACL.
  *
  * ── Hard-gate caveats (low inter-trade variance) ────────────────────────────
  * AF_SMC: Sweep → CHoCH → FVG are hard prerequisites in _detectSMCSequence.
@@ -22,6 +22,8 @@
  *   are nearly identical across fills. Treat as checklist confirmation, not a
  *   unique per-trade narrative.
  */
+
+const { normalizeStrategyKey: aclNormalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 /** @type {Record<string, string>} */
 const EXIT_REASON_LABELS = {
@@ -40,20 +42,18 @@ const EXIT_REASON_LABELS = {
 };
 
 const LEGACY_KEY_MAP = {
-  SMART_MONEY_CONCEPTS: "AF_SMC",
   SMC: "AF_SMC",
   WYCKOFF: "AF_WYCKOFF",
   VSA: "AF_VSA",
-  TREND_FOLLOWING: "TS_TF",
   MARKET_STRUCTURE: "TS_MS",
   DOW_THEORY: "TS_MS",
   VOLUME_PROFILE: "TS_VP",
   AMT: "TS_VP",
-  MEAN_REVERSION: "MD_MR",
-  BREAKOUT_RETEST: "BS_BR",
   BREAKOUT: "BS_BR",
   ADAPTIVE_FUSION: "AF_SMC",
   TREND_SURGE: "TS_TF",
+  MEAN_DRIFT: "MD_MR",
+  BREAKOUT_STORM: "BS_BR",
 };
 
 function titleCaseSnake(raw) {
@@ -66,7 +66,8 @@ function titleCaseSnake(raw) {
 function normalizeStrategyKey(key) {
   if (!key) return "";
   const upper = String(key).trim().toUpperCase();
-  return LEGACY_KEY_MAP[upper] || upper;
+  const acl = aclNormalizeStrategyKey(upper);
+  return LEGACY_KEY_MAP[upper] || acl;
 }
 
 /**

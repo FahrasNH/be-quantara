@@ -15,6 +15,7 @@ const AdaptiveStrategyEngine = require("../application/AdaptiveStrategyEngine");
 const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinator");
 const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 const { getStrategy } = require("#config/strategyDefaults.js");
+const { ingressNormalizeStrategyKey } = require("#config/strategyKeyNormalizer.js");
 const { createExchangeClient } = require("../infrastructure/exchange");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
@@ -846,7 +847,7 @@ async function _resumeOneBotAttempt(bot, prisma) {
     const pc = pairClassifier.classify(bot.symbol);
     if (pc.tier === "VOLATILE") {
       const filtered = strategies.filter((s) => !pc.blockedStrategies.includes(s));
-      const volStrategies = filtered.length > 0 ? filtered : ["MEAN_REVERSION"];
+      const volStrategies = filtered.length > 0 ? filtered : ["MD_MR"];
       if (JSON.stringify(volStrategies) !== JSON.stringify(strategies)) {
         strategies = volStrategies;
         await prisma.bot.update({
@@ -889,7 +890,10 @@ async function _resumeOneBotAttempt(bot, prisma) {
   } else {
     instance = createBotInstance(bot.userId, bot.symbol, {
       capital:     bot.capital,
-      strategyKey: bot.strategyKey,
+      strategyKey: ingressNormalizeStrategyKey(bot.strategyKey, {
+        source: "app.startup-resume",
+        mode: "live",
+      }),
       dryRun:      bot.dryRun,
       tpMode:      bot.tpMode ?? "full",
       botId:       bot.id,
