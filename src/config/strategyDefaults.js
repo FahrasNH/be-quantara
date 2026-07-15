@@ -1,233 +1,82 @@
 // ─────────────────────────────────────────────
-// strategyDefaults.js — trade-type parameter presets + strategy engine presets
-// (formerly legacyStrategies.js — NOT legacy/unused; actively used as STRATEGIES SSOT)
+// strategyDefaults.js — strategy engine presets (STRATEGIES SSOT)
 //
-// Berdasarkan: "Dokumentasi Panduan Strategi Trading"
-//   Aggressive Scalping, Day Trading, dan Swing Trading
+// Per-strategy leg tuning lives in typeOverrides (Scalping / Intraday / Swing).
+// Deprecated PDF preset keys (AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING)
+// and legacy A/B/C resolve via strategyKeyNormalizer ACL at ingress.
 //
-// PDF trade-type presets pakai key identitas asli (bukan A/B/C generik):
-//   AGGRESSIVE_SCALPING (HTF:15m, Entry:1m)
-//   DAY_TRADING         (HTF:1H,  Entry:15m) ⭐ default getStrategy()
-//   SWING_TRADING       (HTF:1D,  Entry:4H)
-// Key lama "A"/"B"/"C" dipetakan ke identitas ini di getStrategy() (backward-compat).
-//
-// FOUNDRY / Adaptive Fusion single source of truth:
-//   ADAPTIVE_FUSION = canonical root (SMC params + AF race flags). SMART_MONEY_CONCEPTS /
-//   WYCKOFF / VOLUME_SPREAD_ANALYSIS derive FLAT from ADAPTIVE_FUSION (same pattern as MD/BS).
-//   Gen1 strategy keys resolve via strategyKeyNormalizer ACL at getStrategy() ingress.
-//
-// Confidence floors: prefer smcMinConfidenceScalping/Intraday/Swing; legacy
-// smcMinConfidenceA/B/C still accepted via smcParamCompat normalizeSmcParams().
+// ADAPTIVE_FUSION = umbrella-only (race flags). SMART_MONEY_CONCEPTS owns all
+// smc* knobs. WYCKOFF / VOLUME_SPREAD_ANALYSIS share AF component geometry only.
+// Gen1 strategy keys resolve via strategyKeyNormalizer at getStrategy() ingress.
 // ─────────────────────────────────────────────
 
 const {
   normalizeStrategyKey,
-  normalizeTradeTypeKey,
 } = require("./strategyKeyNormalizer");
+
+/** Per-leg ATR% floor — calibrated to 5m / 15m / 4h entry stacks (backtest merge). */
+const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
+  Scalping: { atrMinMult: 0.15 },
+  Intraday: { atrMinMult: 0.4 },
+  Swing:    { atrMinMult: 0.8 },
+});
+
+/** SMC-only leg overrides (confidence floors stay on SMART_MONEY_CONCEPTS only). */
+const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
+  Scalping: { atrMinMult: 0.15 },
+  Intraday: { atrMinMult: 0.4, smcMinConfidenceIntraday: 55, smcMinConfidenceB: 55 },
+  Swing:    { atrMinMult: 0.8 },
+});
+
+/** Shared AF component geometry (no smc* — Wyckoff/VSA racers + SMC base). */
+const AF_COMPONENT_BASE = {
+  emaFast:       9,
+  emaSlow:       21,
+  emaTrend:      50,
+
+  rsiPeriod:     14,
+  rsiOverbought: 70,
+  rsiOversold:   30,
+  rsiLongMin:    45,
+  rsiLongMax:    75,
+  rsiShortMin:   25,
+  rsiShortMax:   55,
+
+  atrPeriod:     14,
+  atrMultiplier: 1.5,
+  riskReward:    2.0,
+  atrMinMult:    0.8,
+  atrMaxMult:    5.0,
+
+  higherTf:      "4h",
+  htfEmaFast:    9,
+  htfEmaSlow:    21,
+  sidewaysThresholdPct: 0.15,
+
+  volSmaMultiplier: 1.0,
+
+  riskPerTrade:        0.01,
+  maxDailyLossPct:     0.03,
+  maxTradesPerDay:     8,
+  cooldownAfterLoss:   60,
+  maxConsecLoss:       3,
+
+  leverage:      3,
+  interval:      "1h",
+  checkInterval: 3_600_000,
+
+  enabledComponents: ["Scalping", "Intraday", "Swing"],
+  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
+  trades:  "~3–8 trade/hari (1h eval)",
+  winrate: "Target 52–60%",
+  risk:    "Rendah-Sedang",
+};
 
 const STRATEGIES = {
 
   // ─────────────────────────────────────────────
-  // Aggressive Scalping  (PDF trade-type preset)
-  //
-  //   HTF Trend Filter : 15m (EMA9/21 + close vs EMA)
-  //   Entry TF         : 1m (default)
-  //   EMA              : 9 / 21
-  //   RSI              : 7 | Long >50, Short <50
-  //   Volume           : Wajib di atas rata-rata
-  //   SL               : 0.5x ATR | TP: 1x ATR (RR 1:2)
-  //   Risk/trade       : 0.5%–1%
-  // ─────────────────────────────────────────────
-  AGGRESSIVE_SCALPING: {
-    name:          "AGGRESSIVE_SCALPING",
-    label:         "Aggressive Scalping",
-    description:   "EMA9/21 + RSI zona momentum + volume spike. Frekuensi tinggi, cocok market volatile",
-
-    // EMA entry
-    emaFast:       9,
-    emaSlow:       21,
-    emaTrend:      0,          // Tidak pakai EMA trend di entry TF (pakai HTF saja)
-
-    // RSI
-    rsiPeriod:     7,
-    rsiOverbought: 70,
-    rsiOversold:   30,
-    rsiLongMin:    50,         // Long: RSI di zona momentum bullish
-    rsiLongMax:    70,
-    rsiShortMin:   30,
-    rsiShortMax:   50,
-
-    // ATR
-    atrPeriod:     14,
-    atrMultiplier: 0.5,        // SL = 0.5x ATR
-    riskReward:    2,          // TP = 2x SL = 1.0x ATR
-    atrMinMult:    0.3,        // ATR minimum = 0.3x price% (market tidak terlalu sepi)
-    atrMaxMult:    3.0,        // ATR maximum = 3.0x price% (market tidak terlalu liar)
-
-    // HTF trend filter
-    higherTf:      "15m",      // Higher timeframe untuk filter trend
-    htfEmaFast:    9,          // EMA HTF untuk deteksi trend
-    htfEmaSlow:    21,
-    sidewaysThresholdPct: 0.15, // EMA spread < 0.15% = sideways → no trade
-
-    // Volume
-    volSmaMultiplier: 1.0,     // Volume harus >= 1.0x vol SMA
-
-    // Risk management
-    riskPerTrade:     0.01,    // 1% per trade
-    maxDailyLossPct:  0.03,    // Stop trading jika loss harian >= 3%
-    maxTradesPerDay:  20,       // Maks 20 trade/hari (scalping frekuensi tinggi)
-    cooldownAfterLoss: 2,       // Cooldown 2 menit setelah loss
-    maxConsecLoss:    3,        // Stop trading jika 3 loss berturut-turut
-
-    leverage:      3,
-    interval:      "1m",
-    checkInterval: 30000,
-
-    signalType:    "PDF_SCALPING",
-
-    // Info UI
-    trades:        "5-20 trade/hari",
-    winrate:       "~45-55%",
-    risk:          "Tinggi",
-  },
-
-  // ─────────────────────────────────────────────
-  // Day Trading ⭐ RECOMMENDED  (PDF trade-type preset · default getStrategy)
-  //
-  //   HTF Trend Filter : 1H (EMA9/21 + close vs EMA50)
-  //   Entry TF         : 15m (default)
-  //   EMA              : 9 / 21 + EMA50 trend filter
-  //   RSI              : 14 | Long 50-70, Short 30-50
-  //   Volume           : Wajib di atas rata-rata
-  //   SL               : 1x ATR | TP: 1.5–3x ATR (RR 1:2)
-  //   Risk/trade       : 1%–2%
-  // ─────────────────────────────────────────────
-  DAY_TRADING: {
-    name:          "DAY_TRADING",
-    label:         "Day Trading",
-    description:   "EMA9/21 + filter EMA50 + RSI 50-70 + volume. Balanced frekuensi & akurasi",
-
-    emaFast:       9,
-    emaSlow:       21,
-    emaTrend:      50,         // Filter trend entry: price harus di atas/bawah EMA50
-
-    rsiPeriod:     14,
-    rsiOverbought: 70,
-    rsiOversold:   30,
-    rsiLongMin:    50,
-    rsiLongMax:    70,
-    rsiShortMin:   30,
-    rsiShortMax:   50,
-
-    atrPeriod:     14,
-    atrMultiplier: 1.0,        // SL = 1x ATR
-    riskReward:    2,          // TP = 2x ATR
-    atrMinMult:    0.2,
-    atrMaxMult:    4.0,
-
-    // HTF trend filter
-    higherTf:      "1h",
-    htfEmaFast:    9,
-    htfEmaSlow:    21,
-    sidewaysThresholdPct: 0.2,
-
-    // Sideways breakout mode (aktif saat HTF = SIDEWAYS)
-    sidewaysRangeLookback:   20,    // Jumlah candle HTF untuk range konsolidasi
-    sidewaysBreakoutVolMult: 1.2,   // Volume min = 1.2× SMA saat breakout
-    sidewaysBreakoutBufMult: 0.3,   // Buffer tepi range = ATR × 0.3
-
-    volSmaMultiplier: 1.0,
-
-    riskPerTrade:     0.015,
-    maxDailyLossPct:  0.04,    // Stop jika loss harian >= 4%
-    maxTradesPerDay:  8,
-    cooldownAfterLoss: 5,       // Cooldown 5 menit
-    maxConsecLoss:    3,
-
-    leverage:      3,
-    interval:      "15m",
-    checkInterval: 60000,
-
-    signalType:    "PDF_DAYTRADING",
-
-    trades:        "3-8 trade/hari",
-    winrate:       "~55-65%",
-    risk:          "Sedang",
-  },
-
-  // ─────────────────────────────────────────────
-  // Swing Trading  (PDF trade-type preset)
-  //
-  //   HTF Trend Filter : 1D (close vs EMA200)
-  //   Entry TF         : 4H
-  //   EMA              : 21 / 50 + EMA200 trend filter
-  //   RSI              : 14 | Sesuai pullback trend (40-60)
-  //   Volume           : Wajib di atas rata-rata
-  //   SL               : 1.5x ATR | TP: 4.5x ATR (RR 1:3)
-  //   Risk/trade       : 1%–2%
-  // ─────────────────────────────────────────────
-  SWING_TRADING: {
-    name:          "SWING_TRADING",
-    label:         "Swing Trading",
-    description:   "EMA21/50/200 + pullback ke EMA + RSI 40-60. Trade sedikit tapi momentum kuat",
-
-    emaFast:       21,
-    emaSlow:       50,
-    emaTrend:      200,        // Filter tren besar di entry TF (4H)
-
-    rsiPeriod:     14,
-    rsiOverbought: 60,
-    rsiOversold:   40,
-    rsiLongMin:    40,
-    rsiLongMax:    60,
-    rsiShortMin:   40,
-    rsiShortMax:   60,
-
-    atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5x ATR
-    riskReward:    3,          // TP = 4.5x ATR (RR 1:3)
-    atrMinMult:    0.1,
-    atrMaxMult:    6.0,
-
-    // HTF trend filter
-    higherTf:      "1d",
-    htfEmaFast:    21,
-    htfEmaSlow:    50,
-    sidewaysThresholdPct: 0.3, // Swing lebih toleran sideways (EMA spread < 0.3%)
-
-    // Sideways retest mode (aktif saat HTF = SIDEWAYS)
-    sidewaysRangeLookback:   20,    // Candle daily untuk range konsolidasi
-    sidewaysBreakoutVolMult: 1.2,   // Volume breakout lebih ketat
-    sidewaysBreakoutBufMult: 0.3,   // Buffer = ATR × 0.3
-
-    volSmaMultiplier: 0.8,     // Swing: volume sedikit lebih longgar
-
-    riskPerTrade:     0.015,
-    maxDailyLossPct:  0.05,    // Swing tahan floating lebih besar
-    maxTradesPerDay:  3,
-    cooldownAfterLoss: 60,      // Cooldown 1 jam setelah loss swing
-    maxConsecLoss:    2,        // Stop setelah 2 loss berturut
-
-    leverage:      2,
-    interval:      "4h",
-    checkInterval: 300000,
-
-    signalType:    "PDF_SWING",
-
-    trades:        "1-5 trade/minggu",
-    winrate:       "~65-75%",
-    risk:          "Rendah-Sedang",
-  },
-
-  // ─────────────────────────────────────────────
   // TREND_FOLLOWING — Multi-TF Momentum (FORGE Tier)
-  //
-  //   HTF: 1H (EMA trend)
-  //   MTF: 15m (MACD + RSI momentum)
-  //   Entry: 5m (EMA + RSI + volume confirmation)
-
-  //   Target: 54-58% WR, 100-180% annual
   // ─────────────────────────────────────────────
   TREND_FOLLOWING: {
     name:          "TREND_FOLLOWING",
@@ -246,15 +95,12 @@ const STRATEGIES = {
     rsiShortMin:   25,
     rsiShortMax:   65,
 
-    // Sprint 14 factory reset — canonical Trend Following geometry (PDF:
-    // EMA/SMA, Donchian, ADX, ATR). SL 1.5×ATR, TP 3.0×ATR (RR 1:2), 1% risk.
     atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5×ATR
-    riskReward:    2.0,        // TP = 3.0×ATR (RR 1:2)
+    atrMultiplier: 1.5,
+    riskReward:    2.0,
     atrMinMult:    0.5,
     atrMaxMult:    8.0,
 
-    // HTF trend filter
     higherTf:      "1h",
     htfEmaFast:    9,
     htfEmaSlow:    21,
@@ -262,14 +108,12 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    // Uniform 1% risk (factory default; per-type ladder removed).
     riskPerTrade:     0.01,
     maxDailyLossPct:  0.06,
     maxTradesPerDay:  4,
     cooldownAfterLoss: 5,
     maxConsecLoss:    3,
 
-    // Factory default: close 100% at TP (no partial/trailing overlay).
     tpMode:        "fixed",
 
     leverage:      2,
@@ -281,17 +125,17 @@ const STRATEGIES = {
 
     signalType:    "TREND_FOLLOWING",
 
-    // No per-type overrides — every leg uses the canonical geometry above.
-    typeOverrides: {},
+    enabledComponents: ["Scalping", "Intraday", "Swing"],
+    typeOverrides: {
+      Scalping: { atrMinMult: 0.15 },
+      Intraday: { atrMinMult: 0.4 },
+      Swing:    { atrMinMult: 0.8, adxMinStrength: 20 },
+    },
 
-    // HTF trend layer (EMA + ADX) is core to Trend Following (PDF indicator).
-    // ADX 25 = textbook trend-strength threshold (was tuned to 30).
     adxMinStrength:    25,
     tfHtfLayerEnabled: true,
 
-    // Sub-components race independently (architecture default).
     tsCombinationMode: "race",
-    // Experimental precision gates OFF (only apply in "gate"/"hybrid" mode).
     tsUseStructureGate: false,
     tsUseVwapPrecision: false,
     vwapAtrMult: 0.5,
@@ -303,12 +147,6 @@ const STRATEGIES = {
 
   // ─────────────────────────────────────────────
   // MEAN_REVERSION — BB Extremes (MINT Tier)
-  //
-  //   BB: 20 period, 2σ deviation
-  //   RSI: 14 period (oversold <25, overbought >75)
-  //   Entry: Price touch band + RSI confirmation + 2-bar validate
-
-  //   Target: 55-60% WR, 100-150% annual
   // ─────────────────────────────────────────────
   MEAN_REVERSION: {
     name:          "MEAN_REVERSION",
@@ -327,11 +165,9 @@ const STRATEGIES = {
     rsiShortMin:   75,
     rsiShortMax:   85,
 
-    // Sprint 14 factory reset — canonical Mean Reversion (PDF: VWAP, Bollinger,
-    // RSI, z-score). SL 1.5×ATR, TP 3.0×ATR (RR 1:2), 1% risk.
     atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5×ATR
-    riskReward:    2.0,        // TP = 3.0×ATR (RR 1:2)
+    atrMultiplier: 1.5,
+    riskReward:    2.0,
     atrMinMult:    0.5,
     atrMaxMult:    6.0,
 
@@ -342,14 +178,13 @@ const STRATEGIES = {
 
     volSmaMultiplier: 0.8,
 
-    // Uniform 1% risk (factory default; per-type ladder removed).
     riskPerTrade:     0.01,
     maxDailyLossPct:  0.03,
     maxTradesPerDay:  3,
     cooldownAfterLoss: 15,
     maxConsecLoss:    2,
 
-    leverage:      1.0,        // No leverage
+    leverage:      1.0,
     interval:      "15m",
     checkInterval: 60000,
 
@@ -358,6 +193,9 @@ const STRATEGIES = {
 
     signalType:    "MEAN_REVERSION",
 
+    enabledComponents: ["Scalping", "Intraday", "Swing"],
+    typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
     trades:        "5-15 trade/minggu",
     winrate:       "~55-60%",
     risk:          "Rendah",
@@ -365,9 +203,6 @@ const STRATEGIES = {
 
   // ─────────────────────────────────────────────
   // BREAKOUT_RETEST — Breakout + Retest (VAULT Tier)
-  //
-  //   Entry TF  : 15m — deteksi level S&R 20-bar, breakout + retest
-
   // ─────────────────────────────────────────────
   BREAKOUT_RETEST: {
     name:          "BREAKOUT_RETEST",
@@ -386,12 +221,9 @@ const STRATEGIES = {
     rsiShortMin:   30,
     rsiShortMax:   60,
 
-    // Sprint 14 factory reset — canonical Breakout (PDF: Volume, ATR, Bollinger
-    // width, range H/L). SL 1.5×ATR, TP 4.5×ATR (RR 1:3 — breakouts run
-    // further), 1% risk.
     atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5×ATR
-    riskReward:    3.0,        // TP = 4.5×ATR (RR 1:3)
+    atrMultiplier: 1.5,
+    riskReward:    3.0,
     atrMinMult:    0.2,
     atrMaxMult:    5.0,
 
@@ -402,7 +234,6 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    // Uniform 1% risk (factory default).
     riskPerTrade:     0.01,
     maxDailyLossPct:  0.08,
     maxTradesPerDay:  5,
@@ -418,20 +249,16 @@ const STRATEGIES = {
 
     signalType:    "BREAKOUT_RETEST",
 
+    enabledComponents: ["Scalping", "Intraday", "Swing"],
+    typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+
     trades:        "2-7 trade/hari",
     winrate:       "~51-56%",
     risk:          "Sedang-Tinggi",
   },
 
   // ─────────────────────────────────────────────
-  // GROK_AI_TRADING — Experimental / VAULT bonus (NOT a tier umbrella)
-  //
-  // AF-CONFIG-AUDIT clarification (2026-07-11):
-  //   • This IS a real strategy key that generates entry/exit via Grok (xAI).
-  //   • It is NOT one of the 4 canonical umbrellas (AF/TS/MD/BS).
-  //   • Architecture preference: LLM complementary only (GrokConfirm overlay).
-  //   • Kept for VAULT bonus entitlement + admin experiments; do not add to
-  //     TIER_COMPONENT_MAP race pools. Prefer GrokConfirm on AF/TS/MD/BS bots.
+  // GROK_AI_TRADING — Experimental / VAULT bonus
   // ─────────────────────────────────────────────
   GROK_AI_TRADING: {
     name:          "GROK_AI_TRADING",
@@ -485,164 +312,102 @@ const STRATEGIES = {
   },
 
   // ─────────────────────────────────────────────
-  // ADAPTIVE_FUSION — SMC v3.0 (FOUNDRY tier) · CANONICAL ROOT
-  //
-  //   SSOT tuning SMC + AF race flags. SMART_MONEY_CONCEPTS / WYCKOFF / VOLUME_SPREAD_ANALYSIS spread
-  //   verbatim below (FLAT pattern). Persisted umbrella key ADAPTIVE_FUSION
-  //   resolves to SMART_MONEY_CONCEPTS engine via StrategyRegistry.
-  //
-  //   Legs (Scalping / Intraday / Swing) — smcEnabledComponents slot A/B/C
-  //   maps via SmartMoneyConceptsStrategy.COMPONENT_TO_TYPE.
+  // ADAPTIVE_FUSION — umbrella-only (FOUNDRY tier)
+  // Race flags + component pool. No smc* / leg trading geometry here.
   // ─────────────────────────────────────────────
   ADAPTIVE_FUSION: {
     name:          "ADAPTIVE_FUSION",
     label:         "Adaptive Fusion",
-    description:   "3-komponen SMC: Sweep+OB+CVD (scalping), CHoCH+OB+trend (intraday), FVG+displacement (swing). Blok entry berlawanan HTF.",
+    description:   "Umbrella: SMART_MONEY_CONCEPTS + Wyckoff + VSA race-to-confirm.",
 
-    // EMA untuk HTF trend (dipakai BotEngine)
-    emaFast:       9,
-    emaSlow:       21,
-    emaTrend:      50,
-
-    rsiPeriod:     14,
-    rsiOverbought: 70,
-    rsiOversold:   30,
-    rsiLongMin:    45,
-    rsiLongMax:    75,
-    rsiShortMin:   25,
-    rsiShortMax:   55,
-
-    // Sprint 14 factory reset — SMC is structure-based (PDF: market structure,
-    // swing H/L, session H/L, volume, OI, CVD). SL 1.5×ATR, TP 3.0×ATR (RR 1:2).
-    atrPeriod:     14,
-    atrMultiplier: 1.5,        // SL = 1.5×ATR
-    riskReward:    2.0,        // TP = 3.0×ATR (RR 1:2)
-    atrMinMult:    0.8,
-    atrMaxMult:    5.0,
-
-    higherTf:      "4h",
-    htfEmaFast:    9,
-    htfEmaSlow:    21,
-    sidewaysThresholdPct: 0.15,
-
-    volSmaMultiplier: 1.0,
-
-    // Uniform 1% combined risk (backtest sizes each concurrent component at
-    // riskPerTrade/3; live divides per component too). Factory default.
-    riskPerTrade:        0.01,
-    maxDailyLossPct:     0.03,
-    maxTradesPerDay:     8,
-    cooldownAfterLoss:   60,
-    maxConsecLoss:       3,
-
-    // SMC-specific knobs. Slot "A"/"B"/"C" = leg Scalping/Intraday/Swing
-    // (COMPONENT_TO_TYPE) — beda dari preset trade-type top-level A/B/C.
-    smcEnabledComponents: ["A", "B", "C"],
-    smcMinVotes:           1,            // 1 = any qualifying component can fire
-    smcMinAggregateConfidence: 0,        // aggregate gate disabled (per-component gates apply)
-    // Uniform confidence floor across all 3 legs (factory default).
-    smcMinConfidenceScalping: 60,
-    smcMinConfidenceIntraday: 60,
-    smcMinConfidenceSwing:    60,
-    // Legacy A/B/C keys — kept for persisted configs; canonical names above win on conflict.
-    smcMinConfidenceA:     60,
-    smcMinConfidenceB:     60,
-    smcMinConfidenceC:     60,
-
-    // ── Event-driven SMC sequence engine (v3.0) ──────────────────────────────
-    // sweep → CHoCH → displacement/FVG → mitigation → entry (causal, cross-bar)
-    smcUseSequenceEngine: true,          // false = legacy independent single-bar checks
-    smcSeqWindow:      60,               // max bars back to assemble the full sequence
-
-    // Sweep detector
-    smcSwingLookback:  5,
-    smcSweepScanBars:  50,
-    smcSweepVolMult:   0.9,
-
-    // Order block
-    smcOBLookback:     15,
-    smcOBDispMult:     1.3,
-
-    // CHoCH
-    smcChochLookback:  20,
-
-    // FVG (mitigation zone for the sequence engine)
-    smcFvgMinGap:      0.0015,           // 0.3% → 0.15%: catch smaller imbalances (more mitigations)
-    smcFvgScanBars:    40,
-
-    // Displacement
-    smcDispScanBars:   25,
-    smcDispVolMult:    1.8,
-    smcDispRangePct:   0.008,            // 1.2% → 0.8%: lower range bar for displacement
-
-    // CVD / VWAP lookback
-    vwapLookback:      14,
-
-    leverage:      3,
-    interval:      "1h",
-    checkInterval: 3_600_000,
-
-    // AF umbrella race flags — SINGLE SOURCE for SMART_MONEY_CONCEPTS / WYCKOFF / VOLUME_SPREAD_ANALYSIS
-    // (dulu di blok ADAPTIVE_FUSION yang duplikatif; sekarang hidup di sini).
-    // Default "race" (Sprint 12); "vote" = rollback Sprint 8 (2/3 majority).
     afCombinationMode: "race",
-    afUseThreeComponentVoting: true, // false → smc_only passthrough
-    afMinVotes:        2,            // vote-mode only; altcoin override → 3
-    afRejectOnDissent: true,         // vote-mode only
-
-    signalType:    "ADAPTIVE_FUSION",
+    afUseThreeComponentVoting: true,
+    afMinVotes:        2,
+    afRejectOnDissent: true,
+    afEnabledComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
 
     trades:  "~3–8 trade/hari (1h eval)",
     winrate: "Target 52–60%",
     risk:    "Rendah-Sedang",
-
-    // AF-SMC low-TF ATR-gate fix (2026-07-15): the ABSOLUTE atrMinMult floor
-    // above (0.8 = 0.8% ATR/price) was calibrated for the 4h chart. Applied
-    // uniformly it starves the low-TF legs — 5m BTC ATR is ~0.05-0.25%, 15m
-    // ~0.2-0.6% — so the 0.8% floor rejected nearly every bar (Scalping 0
-    // trades / 3mo, Intraday ~3 trades / 3mo). Per-leg atrMinMult scales the
-    // floor to each TF's real ATR% band while keeping Swing (4h) at the proven
-    // 0.8. Intraday smcMinConfidenceB restores the proven 2026-07-03 tuning
-    // (60 → 55). These are BACKTEST-only knobs: the triple/multi-type engine
-    // spreads typeOverrides[leg] onto the per-type config, so the ATR gate and
-    // the SMC confidence floor pick them up. Live gating (BotEngine) reads the
-    // TOP-LEVEL atrMinMult (0.8) and smcMinConfidenceB (60) and does NOT merge
-    // typeOverrides into those gates — live behaviour is unchanged.
-    typeOverrides: {
-      Scalping: { atrMinMult: 0.15 },
-      Intraday: { atrMinMult: 0.4, smcMinConfidenceIntraday: 55, smcMinConfidenceB: 55 },
-      Swing:    { atrMinMult: 0.8 },
-    },
   },
 
   // ─────────────────────────────────────────────
-  // v2.0 UMBRELLA/COMPONENT KEYS
-  // Canonical keys are assigned below from parent presets (single source of
-  // truth — avoids copy-paste drift). signalType points at the umbrella engine
-  // key so StrategyRegistry resolves one instance; per-trade attribution uses
-  // the winning racer label (SMART_MONEY_CONCEPTS / WYCKOFF / VOLUME_SPREAD_ANALYSIS, etc.).
-  //
-  // NOTE: AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING above are PDF trade-type
-  // presets, NOT Adaptive Fusion components. Do not confuse with SMART_MONEY_CONCEPTS / WYCKOFF /
-  // VOLUME_SPREAD_ANALYSIS. Old persisted keys "A"/"B"/"C" map to them via getStrategy() below.
+  // SMART_MONEY_CONCEPTS — SMC v3.0 engine (all smc* SSOT)
   // ─────────────────────────────────────────────
+  SMART_MONEY_CONCEPTS: {
+    ...AF_COMPONENT_BASE,
+    name:          "SMART_MONEY_CONCEPTS",
+    label:         "Smart Money Concepts",
+    description:   "3-komponen SMC: Sweep+OB+CVD (scalping), CHoCH+OB+trend (intraday), FVG+displacement (swing). Blok entry berlawanan HTF.",
+
+    smcMinVotes:           1,
+    smcMinAggregateConfidence: 0,
+    smcMinConfidenceScalping: 60,
+    smcMinConfidenceIntraday: 60,
+    smcMinConfidenceSwing:    60,
+    smcMinConfidenceA:     60,
+    smcMinConfidenceB:     60,
+    smcMinConfidenceC:     60,
+
+    smcUseSequenceEngine: true,
+    smcSeqWindow:      60,
+
+    smcSwingLookback:  5,
+    smcSweepScanBars:  50,
+    smcSweepVolMult:   0.9,
+
+    smcOBLookback:     15,
+    smcOBDispMult:     1.3,
+
+    smcChochLookback:  20,
+
+    smcFvgMinGap:      0.0015,
+    smcFvgScanBars:    40,
+
+    smcDispScanBars:   25,
+    smcDispVolMult:    1.8,
+    smcDispRangePct:   0.008,
+
+    vwapLookback:      14,
+
+    signalType:    "SMART_MONEY_CONCEPTS",
+
+    enabledComponents: ["Scalping", "Intraday", "Swing"],
+    typeOverrides: { ...SMC_LEG_TYPE_OVERRIDES },
+  },
 };
 
-// Canonical component keys — FLAT spread from ADAPTIVE_FUSION root (no copy-paste drift).
-STRATEGIES.SMART_MONEY_CONCEPTS = {
-  ...STRATEGIES.ADAPTIVE_FUSION,
-  name: "SMART_MONEY_CONCEPTS",
-  label: "Smart Money Concepts",
-  signalType: "SMART_MONEY_CONCEPTS",
+// ─── Umbrella aliases (race flags only — no smc* / leg geometry) ─────────────
+STRATEGIES.TREND_SURGE = {
+  name: "TREND_SURGE",
+  label: "Trend Surge",
+  description: "Umbrella: TREND_FOLLOWING + Dow Theory + AMT race-to-confirm.",
+  tsCombinationMode: "race",
+  tsUseStructureGate: false,
+  tsUseVwapPrecision: false,
 };
+STRATEGIES.MEAN_DRIFT = {
+  name: "MEAN_DRIFT",
+  label: "Mean Drift",
+  description: "Umbrella: Mean Reversion + Supply/Demand + Stat Arb race-to-confirm.",
+  mdCombinationMode: "race",
+};
+STRATEGIES.BREAKOUT_STORM = {
+  name: "BREAKOUT_STORM",
+  label: "Breakout Storm",
+  description: "Umbrella: Breakout + ICT + Liquidation/Squeeze race-to-confirm.",
+  bsCombinationMode: "race",
+};
+
+// ─── Component keys — FLAT spread from parent presets ───────────────────────
 STRATEGIES.WYCKOFF = {
-  ...STRATEGIES.ADAPTIVE_FUSION,
+  ...AF_COMPONENT_BASE,
   name: "WYCKOFF",
   label: "Wyckoff Method",
   signalType: "SMART_MONEY_CONCEPTS",
 };
 STRATEGIES.VOLUME_SPREAD_ANALYSIS = {
-  ...STRATEGIES.ADAPTIVE_FUSION,
+  ...AF_COMPONENT_BASE,
   name: "VOLUME_SPREAD_ANALYSIS",
   label: "Volume Spread Analysis",
   signalType: "SMART_MONEY_CONCEPTS",
@@ -654,12 +419,21 @@ STRATEGIES.STATISTICAL_ARBITRAGE  = { ...STRATEGIES.MEAN_REVERSION, name: "STATI
 STRATEGIES.ICT_STYLE_TRADING = { ...STRATEGIES.BREAKOUT_RETEST, name: "ICT_STYLE_TRADING", label: "ICT-style trading",           signalType: "BREAKOUT_RETEST" };
 STRATEGIES.LIQUIDATION_SQUEEZE  = { ...STRATEGIES.BREAKOUT_RETEST, name: "LIQUIDATION_SQUEEZE",  label: "Liquidation/Squeeze Trading", signalType: "BREAKOUT_RETEST" };
 
+const DEFAULT_STRATEGY_KEY = "SMART_MONEY_CONCEPTS";
+
+/** Merge canonical engine defaults with umbrella-only overrides when key is an alias. */
+function resolveStrategyDefaults(strategyKey) {
+  const raw = String(strategyKey || DEFAULT_STRATEGY_KEY).toUpperCase();
+  const canonical = normalizeStrategyKey(raw);
+  const engine = STRATEGIES[canonical] || STRATEGIES[DEFAULT_STRATEGY_KEY];
+  if (raw !== canonical && STRATEGIES[raw]) {
+    return { ...engine, ...STRATEGIES[raw] };
+  }
+  return engine;
+}
+
 function getStrategy(overrideKey = null) {
-  const raw = (overrideKey || "DAY_TRADING").toUpperCase();
-  const stratKey = normalizeStrategyKey(raw);
-  if (STRATEGIES[stratKey]) return STRATEGIES[stratKey];
-  const tradeKey = normalizeTradeTypeKey(raw);
-  return STRATEGIES[tradeKey] || STRATEGIES.DAY_TRADING;
+  return resolveStrategyDefaults(overrideKey);
 }
 
 function listStrategies() {
@@ -674,4 +448,11 @@ function listStrategies() {
   }));
 }
 
-module.exports = { getStrategy, listStrategies, STRATEGIES };
+module.exports = {
+  getStrategy,
+  resolveStrategyDefaults,
+  listStrategies,
+  STRATEGIES,
+  DEFAULT_LEG_TYPE_OVERRIDES,
+  DEFAULT_STRATEGY_KEY,
+};
