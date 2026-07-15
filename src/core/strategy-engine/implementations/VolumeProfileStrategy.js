@@ -57,11 +57,21 @@ class VolumeProfileStrategy extends StrategyBase {
       ...config.volumeProfile,
       ...config,
     });
+    const nested = result.meta || {};
+    // Sprint 15: flat vp* ML fields for Dynamic ML multi-sheet export
+    const vpFields = {
+      vpVwapLevel: nested.vwap ?? null,
+      vpVahLevel: nested.vah ?? null,
+      vpValLevel: nested.val ?? null,
+      vpPocLevel: nested.poc ?? null,
+      vpTriggerType: result.reason ? String(result.reason).toUpperCase() : null,
+    };
     this._lastSignalMeta = {
       component: "TS_VP",
       winningComponent: result.signal ? "TS_VP" : null,
       strategyLabel: "Auction Market Theory",
       ...result,
+      ...vpFields,
     };
     return result.signal || null;
   }

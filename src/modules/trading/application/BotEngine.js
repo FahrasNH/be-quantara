@@ -2234,6 +2234,14 @@ class BotEngine extends EventEmitter {
             indicatorSnapshot.strategyLabel = attributionLabel;
             indicatorSnapshot.signalComponents = tfMeta.signalComponents || null;
             indicatorSnapshot.tsRace = tfMeta.tsRace || null;
+            // Sprint 15: TS_VP ML metadata → persisted trade.indicators
+            if (tfMeta.winningComponent === "TS_VP") {
+              indicatorSnapshot.vpVwapLevel = tfMeta.vpVwapLevel ?? null;
+              indicatorSnapshot.vpVahLevel = tfMeta.vpVahLevel ?? null;
+              indicatorSnapshot.vpValLevel = tfMeta.vpValLevel ?? null;
+              indicatorSnapshot.vpPocLevel = tfMeta.vpPocLevel ?? null;
+              indicatorSnapshot.vpTriggerType = tfMeta.vpTriggerType ?? null;
+            }
           }
         }
       } else if (
