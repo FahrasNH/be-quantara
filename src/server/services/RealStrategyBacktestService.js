@@ -2629,10 +2629,11 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
     : typeOrder;
-  // Mirror backtest.js TYPE_TF so ADX weekly soft-cap + HTF directional gates
-  // know which trend TF each leg uses.
+  // Mirror backtest.js TYPE_TF (Sprint 14 ladder: Scalping 5m/1h · Intraday
+  // 15m/4h · Swing 4h/1w) so ADX weekly soft-cap + HTF directional gates know
+  // which trend TF each leg uses.
   const TYPE_TF_HTF = {
-    Scalping: "4h",
+    Scalping: "1h",
     Intraday: "4h",
     Swing: "1w",
   };
@@ -2649,7 +2650,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       tradeType,
       entryTf: tradeType === "Swing" ? "4h"
         : tradeType === "Intraday" ? "15m"
-          : tradeType === "Scalping" ? "15m"
+          : tradeType === "Scalping" ? "5m"
             : cfg.entryTf,
     });
     const entryCandles = opts.entryCandles?.[tradeType];

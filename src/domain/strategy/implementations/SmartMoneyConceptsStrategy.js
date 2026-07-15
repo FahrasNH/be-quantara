@@ -49,13 +49,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     });
 
     // ── Trade type TF configuration (each type runs on its own TF stack) ─────
+    // Sprint 14 factory reset — genuine 3-rung ladder (matches backtest TYPE_TF):
+    //   Scalping 5m/1h · Intraday 15m/4h · Swing 4h/1w.
+    // NOTE: the 5m Scalping leg is NEW and unproven (5m SMC historically WR
+    // ~28.6%, below coin-flip) → it is Advance-backtest-only and gated OUT of
+    // real live trading by liveTradeTypeGate.js. The previously-live 15m cadence
+    // now lives under the Intraday label (proven, live-eligible).
     this.TRADE_TYPE_TF_CONFIG = {
-
-      // 5m SMC WR 28.6% (BELOW 33.3% coin-flip) net PF 0.67 — zero edge at any
-      // filter. 15m SMC WR ~37% (above coin-flip) net PF 1.03 — real edge. The
-      // "Scalping" leg now runs 15m/4h (Intraday cadence, ~0.24 trades/day; the
-      // 4-8/day scalp target is unreachable for fee-viable BTC SMC).
-      Scalping: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },
+      Scalping: { entryTf: "5m",  confirmTf: "15m", trendTf: "1h" },
       Intraday: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },
       Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w" },
     };

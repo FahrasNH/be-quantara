@@ -2822,6 +2822,20 @@ class BotEngine extends EventEmitter {
 
     // Map legacy letters → type names for typeOverrides lookup
     const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;
+
+    // Sprint 14 live-safety gate: unproven legs (the new 5m Scalping) are
+    // Advance-backtest-only and must not trade real money until they clear
+    // walk-forward validation. Real-live only (dryRun === false) — dry-run still
+    // exercises every leg. Skip-only: cannot enable anything, only blocks.
+    if (this.config.dryRun === false) {
+      const { isTypeLiveEligible } = require("../config/liveTradeTypeGate");
+      const stratKey = this.config.signalType || this.config.strategyKey || this.config.name;
+      if (!isTypeLiveEligible(stratKey, typeName)) {
+        this._log("info", `[Multi-AF:${componentId}] ${typeName} leg skipped — backtest-only, not live-eligible (Sprint 14)`);
+        return;
+      }
+    }
+
     const typeOverride = this.config.typeOverrides?.[typeName] || this.config.typeOverrides?.[componentId] || {};
 
     // Sprint 13: Side×Regime for Scalping LONGs in CHOP (live parity with backtest)

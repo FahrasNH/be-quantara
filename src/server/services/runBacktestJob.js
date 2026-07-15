@@ -23,21 +23,35 @@ const AF_SMC_KEYS = new Set([
   "AF_WYCKOFF", "AF_VSA",
 ]);
 
+// Trade-type → timeframe ladder (Sprint 14 factory reset).
+// Scalping is now a GENUINE low-TF leg (5m/1h), distinct from Intraday (15m/4h).
+// Previously Scalping and Intraday were both 15m/4h (100% overlap) — the leg
+// labelled "Scalping" was really a 15m intraday leg. Now: 5m → 15m → 4h → 1w.
+// NOTE: this table is GLOBAL (shared by every umbrella). Moving Scalping to 5m
+// moves the Scalping leg for MD_*/BS_* too — intended (uniform 3-type ladder).
 const TYPE_TF = {
-  Scalping: { entry: "15m", trend: "4h" },
+  Scalping: { entry: "5m",  trend: "1h" },
   Intraday: { entry: "15m", trend: "4h" },
   Swing:    { entry: "4h",  trend: "1w" },
 };
 
+// Sprint 14: every umbrella runs all 3 trade types (Scalping/Intraday/Swing).
+// AF_* route via Object.keys(TYPE_TF); TS_*/MD_*/BS_* route via this map. All
+// intersected with STRATEGY_SUPPORTED_TYPES, so this stays the superset.
+const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];
 const MULTI_TYPE_STRATEGY_MAP = {
-  TS_TF: ["Intraday", "Swing"],
-  TREND_FOLLOWING: ["Intraday", "Swing"],
-  TS_MS: ["Intraday", "Swing"],
-  TS_VP: ["Intraday", "Swing"],
-  MD_MR: ["Scalping", "Intraday"],
-  MEAN_REVERSION: ["Scalping", "Intraday"],
-  MD_SD: ["Scalping", "Intraday"],
-  MD_SA: ["Scalping", "Intraday"],
+  TS_TF: ALL_THREE_TYPES,
+  TREND_FOLLOWING: ALL_THREE_TYPES,
+  TS_MS: ALL_THREE_TYPES,
+  TS_VP: ALL_THREE_TYPES,
+  MD_MR: ALL_THREE_TYPES,
+  MEAN_REVERSION: ALL_THREE_TYPES,
+  MD_SD: ALL_THREE_TYPES,
+  MD_SA: ALL_THREE_TYPES,
+  BS_BR: ALL_THREE_TYPES,
+  BREAKOUT_RETEST: ALL_THREE_TYPES,
+  BS_ICT: ALL_THREE_TYPES,
+  BS_LS: ALL_THREE_TYPES,
 };
 
 const TYPE_MAX_PERIOD = {

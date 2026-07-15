@@ -2,29 +2,32 @@
  * STRATEGY_SUPPORTED_TYPES — which trade types each strategy supports.
  * Used for FE dropdown filtering and BE validation.
  *
- * Trading Strategy Recap.pdf trade types are in strategyRecapCatalog.js (pdfTradeType).
- * Intentional runtime drifts (documented in ARCHITECTURE § Recap Alignment):
- *   AF_* — Scalping+Swing only (AF-SCALP-19 dropped Intraday; PDF lists Intraday for SMC/Wyckoff/VSA)
- *   TS_MS — no Position leg (PDF swing+position)
- *   TS_VP — Swing kept for 4h UTC-week session (PDF intraday-primary)
- *   MD_SD / MD_SA — Scalping+Intraday (PDF also lists Swing for SA/SD)
- *   BS_BR — all 3 supported in Advance backtest; live/tier package halted (Sprint 14)
+ * Sprint 14 factory reset: EVERY strategy now exposes all 3 trade types
+ * (Scalping / Intraday / Swing) uniformly, regardless of per-leg profitability
+ * ("apapun hasilnya" — product decision for consistent UX). Legs that have not
+ * passed the 5-window walk-forward gate are Advance-backtest-only and are NOT
+ * auto-enabled for live tier packages — the live routing gate (liveTradeTypeGate.js)
+ * restricts which of these types may actually trade real money.
+ *
+ * Trade-type timeframes (runBacktestJob.TYPE_TF): Scalping 5m/1h, Intraday
+ * 15m/4h, Swing 4h/1w. Concept + indicators per strategy: strategyRecapCatalog.js.
  */
 
+const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];
+
 const STRATEGY_SUPPORTED_TYPES = {
-  AF_SMC: ["Scalping", "Swing"],           // PDF: +Intraday — intentionally omitted (AF-SCALP-19)
-  AF_WYCKOFF: ["Scalping", "Swing"],       // PDF: Intraday+Swing
-  AF_VSA: ["Scalping", "Swing"],           // PDF: Intraday+Swing
-  TS_TF: ["Intraday", "Swing"],            // Scalping removed to avoid 5m fetch failure
-  TS_MS: ["Intraday", "Swing"],            // PDF Position not supported
-  // AMT Swing uses UTC-week session (4h day-session cannot clear min bars) — see volumeProfileComponent
-  TS_VP: ["Intraday", "Swing"],            // PDF: Intraday-primary
-  MD_MR: ["Scalping", "Intraday"],         // Swing not applicable (mean reversion short-term only)
-  MD_SD: ["Scalping", "Intraday"],         // PDF: Intraday+Swing
-  MD_SA: ["Scalping", "Intraday"],         // PDF: Algo/Intraday/Swing — v1 single-symbol only
-  BS_BR: ["Scalping", "Intraday", "Swing"], // PDF: Scalping→Swing; live halted — backtest-only
-  BS_ICT: ["Scalping", "Intraday", "Swing"], // PDF: especially Intraday
-  BS_LS: ["Scalping", "Intraday", "Swing"],  // PDF: Scalping+Intraday
+  AF_SMC: ALL_THREE_TYPES,
+  AF_WYCKOFF: ALL_THREE_TYPES,
+  AF_VSA: ALL_THREE_TYPES,
+  TS_TF: ALL_THREE_TYPES,
+  TS_MS: ALL_THREE_TYPES,
+  TS_VP: ALL_THREE_TYPES,
+  MD_MR: ALL_THREE_TYPES,
+  MD_SD: ALL_THREE_TYPES,
+  MD_SA: ALL_THREE_TYPES,
+  BS_BR: ALL_THREE_TYPES,
+  BS_ICT: ALL_THREE_TYPES,
+  BS_LS: ALL_THREE_TYPES,
 };
 
 /**
