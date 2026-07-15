@@ -29,7 +29,7 @@ const path = require("path");
 const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX } = require("../../../core/analytics-engine/indicators");
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
-const { normalizeSmcParams } = require("../../../core/strategy-engine/smc/smcParamCompat");
+const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
@@ -41,7 +41,7 @@ const {
   applySmcFundingGuard,
   buildCostModelMeta,
   holdHoursBetween,
-} = require("../../../core/strategy-engine/smc/smcScalpGates");
+} = require("../../../core/strategy-engine/af/smcComponent");
 const { buildBacktestEntryContext } = require("../../analytics/domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");

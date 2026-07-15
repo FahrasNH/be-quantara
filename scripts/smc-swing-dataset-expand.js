@@ -33,7 +33,7 @@ const fs = require("fs");
 const path = require("path");
 const { runTripleTypeBacktest } = require("../src/server/services/RealStrategyBacktestService");
 const { toCsv, TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
-const { SMC_ML_CSV_COLUMNS } = require("../src/core/strategy-engine/smc/smcScalpGates");
+const { SMC_ML_CSV_COLUMNS } = require("../src/core/strategy-engine/af/smcComponent");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 /** ML dataset CSV = CORE identity/PnL + SMC ML feature columns (not human report CSV). */

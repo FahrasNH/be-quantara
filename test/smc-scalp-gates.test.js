@@ -11,7 +11,7 @@ const {
   resolveScalpingGateFlags,
   buildSmcEntryFeatures,
   SMC_ML_CSV_COLUMNS,
-} = require("#core/strategy-engine/smc/smcScalpGates.js");
+} = require("#core/strategy-engine/af/smcComponent.js");
 const { applyRegimeGate } = require("#core/signal-engine/dailyRegimeGate.js");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const { TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
