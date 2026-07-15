@@ -19,15 +19,16 @@ assert.deepEqual(catalog.engines.map((e) => e.key), CANONICAL_ENGINE_KEYS);
 assert.deepEqual(catalog.components.map((c) => c.key), LIVE_COMPONENT_KEYS);
 assert.ok(!catalog.engines.some((e) => e.key === "ADAPTIVE_FUSION"));
 assert.ok(!catalog.components.some((c) => /legacy/i.test(c.label)));
-assert.equal(catalog.aliases.ADAPTIVE_FUSION, "AF_SMC");
-assert.equal(catalog.aliases.TREND_FOLLOWING, "TS_TF");
-assert.ok(catalog.components.some((c) => c.key === "AF_WYCKOFF" && c.label === "Wyckoff Method"));
-assert.ok(catalog.components.some((c) => c.key === "TS_MS" && c.label === "Dow Theory"));
-assert.ok(catalog.components.some((c) => c.key === "MD_SD" && c.label === "Supply and Demand"));
-assert.ok(catalog.components.some((c) => c.key === "MD_SA" && c.label === "Statistical Arbitrage"));
-assert.ok(catalog.components.some((c) => c.key === "BS_ICT" && c.label === "ICT-style trading"));
-assert.ok(catalog.components.some((c) => c.key === "BS_LS" && c.label === "Liquidation/Squeeze Trading"));
-assert.ok(catalog.components.some((c) => c.key === "BS_BR" && c.label === "Breakout Trading"));
+assert.equal(catalog.aliases.ADAPTIVE_FUSION, "SMART_MONEY_CONCEPTS");
+assert.equal(catalog.aliases.TS_TF, "TREND_FOLLOWING");
+assert.equal(catalog.aliases.TREND_SURGE, "TREND_FOLLOWING");
+assert.ok(catalog.components.some((c) => c.key === "WYCKOFF" && c.label === "Wyckoff Method"));
+assert.ok(catalog.components.some((c) => c.key === "MARKET_STRUCTURE" && c.label === "Dow Theory"));
+assert.ok(catalog.components.some((c) => c.key === "SUPPLY_AND_DEMAND" && c.label === "Supply and Demand"));
+assert.ok(catalog.components.some((c) => c.key === "STATISTICAL_ARBITRAGE" && c.label === "Statistical Arbitrage"));
+assert.ok(catalog.components.some((c) => c.key === "ICT_STYLE_TRADING" && c.label === "ICT-style trading"));
+assert.ok(catalog.components.some((c) => c.key === "LIQUIDATION_SQUEEZE" && c.label === "Liquidation/Squeeze Trading"));
+assert.ok(catalog.components.some((c) => c.key === "BREAKOUT_RETEST" && c.label === "Breakout Trading"));
 
 assert.deepEqual(LIVE_RECAP_KEYS, LIVE_COMPONENT_KEYS);
 for (const key of LIVE_RECAP_KEYS) {
@@ -39,14 +40,14 @@ for (const key of LIVE_RECAP_KEYS) {
   assert.ok(STRATEGY_RECAP_CATALOG[key]?.recapStatus, `${key} recapStatus required`);
 }
 
-assert.equal(normalizeStrategyKey("ADAPTIVE_FUSION"), "AF_SMC");
-assert.equal(normalizeStrategyKey("SAC"), "AF_SMC");
-assert.equal(normalizeStrategyKey("TM"), "TS_TF");
-assert.equal(normalizeStrategyKey("MR"), "MD_MR");
-assert.equal(normalizeStrategyKey("BR"), "BS_BR");
+assert.equal(normalizeStrategyKey("ADAPTIVE_FUSION"), "SMART_MONEY_CONCEPTS");
+assert.equal(normalizeStrategyKey("SAC"), "SMART_MONEY_CONCEPTS");
+assert.equal(normalizeStrategyKey("TM"), "TREND_FOLLOWING");
+assert.equal(normalizeStrategyKey("MR"), "MEAN_REVERSION");
+assert.equal(normalizeStrategyKey("BR"), "BREAKOUT_RETEST");
 assert.equal(isLegacyAlias("ADAPTIVE_FUSION"), true);
 assert.equal(isLegacyAlias("TM"), true);
-assert.equal(isLegacyAlias("AF_SMC"), false);
+assert.equal(isLegacyAlias("SMART_MONEY_CONCEPTS"), false);
 
 console.log("  ✓ catalog engines/components exclude Gen1 aliases");
 console.log("  ✓ aliases map present for normalize only");

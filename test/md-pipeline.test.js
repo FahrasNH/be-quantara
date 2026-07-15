@@ -158,12 +158,12 @@ console.log("\n═══ MD-SUB-03: Pipeline integration ═══");
 
 test("TIER_COMPONENT_MAP MINT/VAULT race pools (Sprint 10/11)", () => {
   const mint = TIER_COMPONENT_MAP.MINT;
-  assert.deepStrictEqual(mint.active, ["MD_MR", "MD_SD", "MD_SA"]);
+  assert.deepStrictEqual(mint.active, ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"]);
   assert.strictEqual(mint.combination.mode, "race");
-  assert.deepStrictEqual(mint.combination.participants, ["MD_MR", "MD_SD", "MD_SA"]);
+  assert.deepStrictEqual(mint.combination.participants, ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"]);
   const vault = TIER_COMPONENT_MAP.VAULT;
-  assert.deepStrictEqual(vault.active, ["BS_ICT", "BS_LS"]);
-  assert.deepStrictEqual(vault.halted, ["BS_BR"]);
+  assert.deepStrictEqual(vault.active, ["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"]);
+  assert.deepStrictEqual(vault.halted, ["BREAKOUT_RETEST"]);
   assert.strictEqual(vault.combination.mode, "race");
 });
 

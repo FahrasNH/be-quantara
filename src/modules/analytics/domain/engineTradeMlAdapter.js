@@ -112,7 +112,7 @@ function buildExitContextFromEngineRow(row) {
 }
 
 function normalizeStrategyKey(raw) {
-  if (!raw) return "AF_SMC";
+  if (!raw) return "SMART_MONEY_CONCEPTS";
   return aclNormalizeStrategyKey(String(raw).toUpperCase());
 }
 

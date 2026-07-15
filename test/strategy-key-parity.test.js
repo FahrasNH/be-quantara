@@ -1,5 +1,5 @@
 /**
- * Parity: Gen1 key input normalizes to same engine/config resolution as Gen2.
+ * Parity: deprecated alias input normalizes to same engine/config resolution as canonical.
  */
 const assert = require("assert/strict");
 const {
@@ -11,41 +11,53 @@ const {
 const StrategyRegistry = require("../src/core/strategy-engine/StrategyRegistry");
 const { getStrategy } = require("../src/config/strategyDefaults");
 
-console.log("\n═══ strategy key Gen1↔Gen2 parity ═══\n");
+console.log("\n═══ strategy key alias↔canonical parity ═══\n");
 
 resetGen1DeprecationStats();
 const { strategyRegistry: registry } = StrategyRegistry;
 
-const PAIRS = [
-  ["SMART_MONEY_CONCEPTS", "AF_SMC"],
-  ["ADAPTIVE_FUSION", "AF_SMC"],
-  ["SAC", "AF_SMC"],
-  ["TREND_FOLLOWING", "TS_TF"],
-  ["TF", "TS_TF"],
-  ["TM", "TS_TF"],
-  ["MEAN_REVERSION", "MD_MR"],
-  ["MR", "MD_MR"],
-  ["BREAKOUT_RETEST", "BS_BR"],
-  ["BR", "BS_BR"],
+const ALIAS_PAIRS = [
+  ["ADAPTIVE_FUSION", "SMART_MONEY_CONCEPTS"],
+  ["SAC", "SMART_MONEY_CONCEPTS"],
+  ["AF_SMC", "SMART_MONEY_CONCEPTS"],
+  ["TREND_SURGE", "TREND_FOLLOWING"],
+  ["TF", "TREND_FOLLOWING"],
+  ["TM", "TREND_FOLLOWING"],
+  ["TS_TF", "TREND_FOLLOWING"],
+  ["MEAN_DRIFT", "MEAN_REVERSION"],
+  ["MR", "MEAN_REVERSION"],
+  ["MD_MR", "MEAN_REVERSION"],
+  ["BREAKOUT_STORM", "BREAKOUT_RETEST"],
+  ["BR", "BREAKOUT_RETEST"],
+  ["BS_BR", "BREAKOUT_RETEST"],
+  ["AF_WYCKOFF", "WYCKOFF"],
+  ["AF_VSA", "VOLUME_SPREAD_ANALYSIS"],
+  ["TS_MS", "MARKET_STRUCTURE"],
+  ["TS_VP", "AUCTION_MARKET_THEORY"],
+  ["MD_SD", "SUPPLY_AND_DEMAND"],
+  ["MD_SA", "STATISTICAL_ARBITRAGE"],
+  ["BS_ICT", "ICT_STYLE_TRADING"],
+  ["BS_LS", "LIQUIDATION_SQUEEZE"],
 ];
 
-for (const [gen1, gen2] of PAIRS) {
-  assert.equal(normalizeStrategyKey(gen1), gen2, `${gen1} → ${gen2}`);
-  assert.equal(ingressNormalizeStrategyKey(gen1, { source: "test", mode: "backtest" }), gen2);
-  assert.ok(isLegacyAlias(gen1), `${gen1} is legacy`);
+for (const [alias, canonical] of ALIAS_PAIRS) {
+  assert.equal(normalizeStrategyKey(alias), canonical, `${alias} → ${canonical}`);
+  assert.equal(ingressNormalizeStrategyKey(alias, { source: "test", mode: "backtest" }), canonical);
+  assert.ok(isLegacyAlias(alias), `${alias} is legacy`);
 
-  const instGen1 = registry.get(gen1);
-  const instGen2 = registry.get(gen2);
-  assert.equal(instGen1, instGen2, `registry parity ${gen1} vs ${gen2}`);
+  const instAlias = registry.get(alias);
+  const instCanonical = registry.get(canonical);
+  assert.equal(instAlias, instCanonical, `registry parity ${alias} vs ${canonical}`);
 
-  const cfgGen1 = getStrategy(gen1);
-  const cfgGen2 = getStrategy(gen2);
-  assert.equal(cfgGen1.signalType, cfgGen2.signalType, `getStrategy signalType ${gen1}`);
-  assert.equal(cfgGen1.emaFast, cfgGen2.emaFast, `getStrategy params ${gen1}`);
+  const cfgAlias = getStrategy(alias);
+  const cfgCanonical = getStrategy(canonical);
+  assert.equal(cfgAlias.signalType, cfgCanonical.signalType, `getStrategy signalType ${alias}`);
+  assert.equal(cfgAlias.emaFast, cfgCanonical.emaFast, `getStrategy params ${alias}`);
 }
 
-assert.equal(normalizeStrategyKey("AF_WYCKOFF"), "AF_WYCKOFF", "components pass through");
+assert.equal(normalizeStrategyKey("TREND_FOLLOWING"), "TREND_FOLLOWING", "canonical pass-through");
+assert.equal(normalizeStrategyKey("WYCKOFF"), "WYCKOFF", "components pass through");
 assert.equal(normalizeStrategyKey("GROK_AI_TRADING"), "GROK_AI_TRADING");
 
-console.log("  ✓ All Gen1→Gen2 pairs normalize to same registry + config");
+console.log("  ✓ All alias→canonical pairs normalize to same registry + config");
 console.log("\nAll strategy-key-parity tests passed.\n");

@@ -30,7 +30,7 @@ const EPSILON = 1e-9;
 
 // AF-SWING-V3: per-indicators-object ATR cache (fast/slow period arrays), so the
 // ATR-ratio regime check reads O(1) per bar instead of recomputing full-array
-// ATR on every bar (same WeakMap-memoization pattern as the TS_TF Donchian fix).
+// ATR on every bar (same WeakMap-memoization pattern as the TREND_FOLLOWING Donchian fix).
 const _swingAtrCache = new WeakMap();
 
 class SmartMoneyConceptsStrategy extends StrategyBase {
@@ -612,7 +612,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // is the entry-quality upgrade for the sequence detector.
   //
   // PERFORMANCE CONTRACT: backtest engines call detectSignal once per bar with
-  // a shared indicators object — a full O(n) rebuild per bar is the BS_BR
+  // a shared indicators object — a full O(n) rebuild per bar is the BREAKOUT_RETEST
   // O(n²) hang class. The state machine only consumes bars FORWARD, so we
   // cache per candle-array (strategies are singletons → small LRU keyed by
   // the closes reference) and advance only the new bars on each call.
@@ -1333,7 +1333,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // "pass" state) when indicators lack the history needed, same convention as
   // the existing ADX gate. Does NOT touch the core FVG/displacement/OB entry
   // logic or confidence formula (_detectSignalC / _componentConfidence "C") —
-  // those stay exactly as validated (AF_SMC Swing captures 97% planned RR).
+  // those stay exactly as validated (SMART_MONEY_CONCEPTS Swing captures 97% planned RR).
   // ─────────────────────────────────────────────────────────────────────────────
 
   _getCachedATR(indicators, highs, lows, closes, period) {
@@ -1939,7 +1939,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     // Entry-TF ADX chop gate (per-component, opt-in via typeOverrides[type].minAdx).
     // indicators.adx is only populated when the backtest engine computes it for
-    // AF_SMC (see RealStrategyBacktestService) — without that wiring this is a
+    // SMART_MONEY_CONCEPTS (see RealStrategyBacktestService) — without that wiring this is a
     // no-op (adxVal undefined → gate skipped), same fail-open default as before.
     const adxVal = indicators.adx?.[lastIdx];
     const passesAdx = (minAdx) => {
@@ -1980,7 +1980,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       swingV3: sigSwing ? swingV3 : undefined,
       // Surface sequence structural meta for CSV entryReasons (was dead field).
       // Hard-gate caveat: sweep+CHoCH+FVG are prerequisites — labels nearly identical
-      // across AF_SMC trades; only FVG direction + obConfluence typically vary.
+      // across SMART_MONEY_CONCEPTS trades; only FVG direction + obConfluence typically vary.
       sequenceMeta: this._lastSequenceMeta || null,
       confidenceComponents: this._lastSequenceMeta?.confidenceComponents || null,
     };

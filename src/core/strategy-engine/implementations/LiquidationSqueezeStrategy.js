@@ -1,5 +1,5 @@
 /**
- * LiquidationSqueezeStrategy.js — BS_LS (Liquidation/Squeeze Trading)
+ * LiquidationSqueezeStrategy.js — LIQUIDATION_SQUEEZE (Liquidation/Squeeze Trading)
  * BREAKOUT_STORM race participant #2.
  */
 
@@ -15,7 +15,7 @@ const {
 class LiquidationSqueezeStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "BS_LS",
+      name: "LIQUIDATION_SQUEEZE",
       label: "Liquidation/Squeeze Trading",
       description:
         "BS race participant (PDF Liquidation/Squeeze): wick displacement proxy " +
@@ -32,7 +32,7 @@ class LiquidationSqueezeStrategy extends StrategyBase {
     let score = 50;
     if (volatility > 0.55) score += 20;
     return [{
-      key: "BS_LS",
+      key: "LIQUIDATION_SQUEEZE",
       label: this.config.label,
       score: Math.max(0, Math.min(100, score)),
       reason: "ls_affinity",
@@ -75,8 +75,8 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       lsOiForecast24h: result.oiChange ?? null,
     };
     this._lastSignalMeta = {
-      component: "BS_LS",
-      winningComponent: result.signal ? "BS_LS" : null,
+      component: "LIQUIDATION_SQUEEZE",
+      winningComponent: result.signal ? "LIQUIDATION_SQUEEZE" : null,
       strategyLabel: "Liquidation/Squeeze Trading",
       componentConfidence: result.signal ? Math.round(result.confidence * 100) : 0,
       confidence: result.confidence,

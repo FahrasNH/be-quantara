@@ -21,7 +21,7 @@ function _bool(v) {
   return Boolean(v);
 }
 
-/** TS_TF — 6 fields */
+/** TREND_FOLLOWING — 6 fields */
 function extractTsTfEnrichment(meta) {
   if (!meta) return {};
   const checklist = meta.entryChecklist || {};
@@ -37,7 +37,7 @@ function extractTsTfEnrichment(meta) {
   };
 }
 
-/** TS_MS — 6 fields */
+/** MARKET_STRUCTURE — 6 fields */
 function extractTsMsEnrichment(meta) {
   if (!meta) return {};
   const nested = meta.meta && typeof meta.meta === "object" ? meta.meta : {};
@@ -60,13 +60,13 @@ function extractTsMsEnrichment(meta) {
     msPullbackConfirmed: _bool(
       meta.msPullbackConfirmed
       ?? (reason.includes("pullback") || reason.includes("bounce") || reason.includes("reject")
-        ? Boolean(meta.signal || meta.winningComponent === "TS_MS")
+        ? Boolean(meta.signal || meta.winningComponent === "MARKET_STRUCTURE")
         : null)
     ),
   };
 }
 
-/** TS_VP — 5 fields (existing) */
+/** AUCTION_MARKET_THEORY — 5 fields (existing) */
 function extractTsVpEnrichment(meta) {
   if (!meta) return {};
   const nested = meta.meta && typeof meta.meta === "object" ? meta.meta : {};
@@ -81,7 +81,7 @@ function extractTsVpEnrichment(meta) {
   };
 }
 
-/** MD_MR — 7 fields */
+/** MEAN_REVERSION — 7 fields */
 function extractMdMrEnrichment(meta) {
   if (!meta) return {};
   const bb = meta._lastBBLevels || meta.bbLevels || {};
@@ -97,7 +97,7 @@ function extractMdMrEnrichment(meta) {
   };
 }
 
-/** MD_SD — 7 fields */
+/** SUPPLY_AND_DEMAND — 7 fields */
 function extractMdSdEnrichment(meta) {
   if (!meta) return {};
   const zone = meta.nearestZone || {};
@@ -136,7 +136,7 @@ function extractMdSdEnrichment(meta) {
   };
 }
 
-/** MD_SA — 7 fields */
+/** STATISTICAL_ARBITRAGE — 7 fields */
 function extractMdSaEnrichment(meta) {
   if (!meta) return {};
   const z = _num(meta.saZScore ?? meta.zScore);
@@ -161,7 +161,7 @@ function extractMdSaEnrichment(meta) {
   };
 }
 
-/** BS_ICT — 7 fields */
+/** ICT_STYLE_TRADING — 7 fields */
 function extractBsIctEnrichment(meta) {
   if (!meta) return {};
   const kz = meta.killZone || {};
@@ -187,13 +187,13 @@ function extractBsIctEnrichment(meta) {
     ictRaidDepthAtr: raidDepth,
     ictVolumeRatio: _num(meta.ictVolumeRatio ?? meta.volumeRatio ?? raid.volumeRatio),
     ictReversal: _bool(
-      meta.ictReversal ?? (reason.includes("reversal") || Boolean(raid.detected && meta.winningComponent === "BS_ICT"))
+      meta.ictReversal ?? (reason.includes("reversal") || Boolean(raid.detected && meta.winningComponent === "ICT_STYLE_TRADING"))
     ),
     ictMssPct: _num(meta.ictMssPct ?? meta.mssPct),
   };
 }
 
-/** BS_LS — 7 fields */
+/** LIQUIDATION_SQUEEZE — 7 fields */
 function extractBsLsEnrichment(meta) {
   if (!meta) return {};
   const wick = meta.wick || {};
@@ -208,7 +208,7 @@ function extractBsLsEnrichment(meta) {
   };
 }
 
-/** AF_VSA — 7 fields */
+/** VOLUME_SPREAD_ANALYSIS — 7 fields */
 function extractAfVsaEnrichment(meta) {
   if (!meta) return {};
   const nested = meta.meta && typeof meta.meta === "object" ? meta.meta : {};
@@ -240,7 +240,7 @@ function extractAfVsaEnrichment(meta) {
   };
 }
 
-/** AF_WYCKOFF — 7 fields */
+/** WYCKOFF — 7 fields */
 function extractAfWyckoffEnrichment(meta) {
   if (!meta) return {};
   const nested = meta.meta && typeof meta.meta === "object" ? meta.meta : {};
@@ -284,7 +284,7 @@ function extractAfWyckoffEnrichment(meta) {
 }
 
 /**
- * Copy BS_BR ML fields onto a live trade indicator snapshot (BotEngine).
+ * Copy BREAKOUT_RETEST ML fields onto a live trade indicator snapshot (BotEngine).
  * Mirrors extractBsBrEnrichment keys used by backtest → CSV.
  */
 function applyBsBrSnapshotFields(snapshot, meta) {

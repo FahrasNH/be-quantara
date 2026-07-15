@@ -385,18 +385,18 @@ test("AMT Intraday still uses UTC-day + minSessionBars 20 (4h day-session remain
 
 console.log("\n═══ TrendSurge Race (Sprint 12) ═══");
 
-test("FORGE active components include TS_MS + TS_VP", () => {
+test("FORGE active components include MARKET_STRUCTURE + AUCTION_MARKET_THEORY", () => {
   const active = getActiveComponentsForTier("FORGE");
-  assert.ok(active.includes("TS_TF"));
-  assert.ok(active.includes("TS_MS"));
-  assert.ok(active.includes("TS_VP"));
-  assert.ok(isActiveComponent("TS_MS"));
-  assert.ok(isActiveComponent("TS_VP"));
+  assert.ok(active.includes("TREND_FOLLOWING"));
+  assert.ok(active.includes("MARKET_STRUCTURE"));
+  assert.ok(active.includes("AUCTION_MARKET_THEORY"));
+  assert.ok(isActiveComponent("MARKET_STRUCTURE"));
+  assert.ok(isActiveComponent("AUCTION_MARKET_THEORY"));
 });
 
 test("FOUNDRY still lists AF Wyckoff + VSA", () => {
   const active = getActiveComponentsForTier("FOUNDRY");
-  assert.deepStrictEqual(active, ["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+  assert.deepStrictEqual(active, ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"]);
 });
 
 test("umbrella registers three components", () => {
@@ -416,11 +416,11 @@ test("race: highest confidence wins with attribution", () => {
   umb._vp.getLastSignalMeta = () => ({ confidence: 0, reason: "awaiting" });
   const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
     tsCombinationMode: "race",
-    selectedComponents: ["TS_TF", "TS_MS", "TS_VP"],
+    selectedComponents: ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"],
   });
   assert.strictEqual(sig, "LONG");
   const meta = umb.getLastSignalMeta();
-  assert.strictEqual(meta.winningComponent, "TS_MS");
+  assert.strictEqual(meta.winningComponent, "MARKET_STRUCTURE");
   assert.strictEqual(meta.strategyLabel, "Dow Theory");
   assert.strictEqual(umb.getLastRaceMeta().mode, "race");
 });
@@ -435,12 +435,12 @@ test("race: TF-only selected → MS/VP do not participate", () => {
   umb._vp.detectSignal = () => { vpCalled = true; return "LONG"; };
   const sig = umb.detectSignal({ closes: new Array(60).fill(100) }, 59, {
     tsCombinationMode: "race",
-    selectedComponents: ["TS_TF"],
+    selectedComponents: ["TREND_FOLLOWING"],
   });
   assert.strictEqual(sig, "SHORT");
   assert.strictEqual(msCalled, false);
   assert.strictEqual(vpCalled, false);
-  assert.strictEqual(umb.getLastSignalMeta().winningComponent, "TS_TF");
+  assert.strictEqual(umb.getLastSignalMeta().winningComponent, "TREND_FOLLOWING");
 });
 
 test("gate mode rollback: structure gate still blocks", () => {
@@ -477,7 +477,7 @@ test("gate mode: layers pass when gate + precision allow", () => {
   assert.strictEqual(umb.getLastLayerMeta().reason, "ts_layers_passed");
 });
 
-test("tie-break prefers TS_TF over TS_MS at equal confidence", () => {
+test("tie-break prefers TREND_FOLLOWING over MARKET_STRUCTURE at equal confidence", () => {
   const umb = new TrendSurgeUmbrella();
   umb._tf.detectSignal = () => "LONG";
   umb._tf.getLastSignalMeta = () => ({ confidence: 0.8 });
@@ -488,7 +488,7 @@ test("tie-break prefers TS_TF over TS_MS at equal confidence", () => {
     tsCombinationMode: "race",
   });
   assert.strictEqual(sig, "LONG");
-  assert.strictEqual(umb.getLastSignalMeta().winningComponent, "TS_TF");
+  assert.strictEqual(umb.getLastSignalMeta().winningComponent, "TREND_FOLLOWING");
 });
 
 console.log("\nAll TS Dow Theory / Auction Market Theory / race tests passed.\n");

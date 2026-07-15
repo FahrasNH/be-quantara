@@ -1,6 +1,6 @@
 /**
  * TrendFollowingStrategy.test.js
- * Minimal smoke tests for Trend Following strategy (TS_TF)
+ * Minimal smoke tests for Trend Following strategy (TREND_FOLLOWING)
  */
 
 const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
@@ -184,7 +184,7 @@ describe("TrendFollowingStrategy", () => {
     // as the current bar. Since that channel's rolling window includes the
     // current bar's own high/low, `close > upper` / `close < lower` was
     // mathematically impossible (close <= high <= upper; close >= low >= lower)
-    // — TS_TF could never produce a signal, in live OR backtest, regardless of
+    // — TREND_FOLLOWING could never produce a signal, in live OR backtest, regardless of
     // data. Fixed by comparing against the PRIOR bar's channel.
     const { calcIndicators } = require("#core/analytics-engine/indicators.js");
 

@@ -1,9 +1,9 @@
-# BS_ICT — Entry Triggers (AS-IS)
+# ICT_STYLE_TRADING — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a BS_ICT entry and the signal labels emitted on fill.  
-**Strategy key**: `BS_ICT` (`IctStyleStrategy`, v1.0) — Breakout Storm racer #1  
+**Scope**: What triggers a ICT_STYLE_TRADING entry and the signal labels emitted on fill.  
+**Strategy key**: `ICT_STYLE_TRADING` (`IctStyleStrategy`, v1.0) — Breakout Storm racer #1  
 **Engine SSOT**: `ictKillZoneRaid.js` → `evaluateIctStyleEntry`  
-**Config SSOT**: `strategyDefaults.js` → `BS_ICT` (inherits `BREAKOUT_RETEST`) + component DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `ICT_STYLE_TRADING` (inherits `BREAKOUT_RETEST`) + component DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -14,7 +14,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`BS_ICT`** preset (= Breakout geometry); ICT-specific knobs dari **component DEFAULTS**.
+Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`ICT_STYLE_TRADING`** preset (= Breakout geometry); ICT-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -53,7 +53,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-BS_ICT combines **session kill-zone timing** with a **liquidity raid** (sweep + rejection close).
+ICT_STYLE_TRADING combines **session kill-zone timing** with a **liquidity raid** (sweep + rejection close).
 
 ```
 Kill Zone Check → Liquidity Raid (session H/L sweep + close back) → signal
@@ -125,7 +125,7 @@ Labels come from `entryMeta.killZone`, `entryMeta.raid`, `entryMeta.reason`.
 
 ## AS-IS quirks
 
-- **VAULT umbrella**: BS_ICT wins stamp `winningComponent: "BS_ICT"`.
+- **VAULT umbrella**: ICT_STYLE_TRADING wins stamp `winningComponent: "ICT_STYLE_TRADING"`.
 - **`requireKillZone` default is `false`**: kill zone is soft preference, not a hard gate unless explicitly enabled.
 - **MSS / OTE not implemented**: labels exist in formatter vocabulary only.
 

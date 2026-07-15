@@ -1,5 +1,5 @@
 /**
- * Trend Following (TS_TF) — standalone entry for TREND_SURGE.
+ * Trend Following (TREND_FOLLOWING) — standalone entry for TREND_SURGE.
  *
  * 3-layer: HTF trend → MTF Donchian breakout → 5m entry pullback.
  * Extracted from TrendFollowingStrategy (Sprint 15 structure refactor).
@@ -200,7 +200,7 @@ function resolveDonchian(indicators, lastIdx, config, donchianCache) {
 }
 
 /**
- * Main TS_TF entry evaluation at lastIdx.
+ * Main TREND_FOLLOWING entry evaluation at lastIdx.
  *
  * @returns {{ signal: 'LONG'|'SHORT'|null, trendState: object, entryChecklist: object|null }}
  */

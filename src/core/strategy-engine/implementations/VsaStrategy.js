@@ -17,7 +17,7 @@ const {
 class VsaStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "AF_VSA",
+      name: "VOLUME_SPREAD_ANALYSIS",
       label: "Volume Spread Analysis (VSA)",
       description:
         "AF Component C: no-demand / no-supply / stopping-volume near swing structure.",
@@ -35,7 +35,7 @@ class VsaStrategy extends StrategyBase {
     if (volatility > 1.0 && volatility < 2.5) score += 15;
     return [
       {
-        key: "AF_VSA",
+        key: "VOLUME_SPREAD_ANALYSIS",
         label: this.config.label,
         score: Math.max(0, Math.min(100, score)),
         reason: "volume_conviction_affinity",
@@ -82,8 +82,8 @@ class VsaStrategy extends StrategyBase {
       vsaReversal: patternType === "STOPPING_VOLUME" || reason.includes("stopping_volume"),
     };
     this._lastSignalMeta = {
-      component: "AF_VSA",
-      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "AF_VSA" : null,
+      component: "VOLUME_SPREAD_ANALYSIS",
+      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "VOLUME_SPREAD_ANALYSIS" : null,
       strategyLabel: "Volume Spread Analysis (VSA)",
       vote: result.vote,
       confidence: result.confidence,

@@ -18,7 +18,7 @@ const {
 class VolumeProfileStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "TS_VP",
+      name: "AUCTION_MARKET_THEORY",
       label: "Auction Market Theory",
       description:
         "TS race participant: Auction Market Theory — session VWAP reclaim / Value Area edge entries (independent of Trend Following).",
@@ -34,7 +34,7 @@ class VolumeProfileStrategy extends StrategyBase {
     let score = 50;
     if (volume >= 1.0) score += 20;
     return [{
-      key: "TS_VP",
+      key: "AUCTION_MARKET_THEORY",
       label: this.config.label,
       score: Math.max(0, Math.min(100, score)),
       reason: "liquidity_affinity",
@@ -67,8 +67,8 @@ class VolumeProfileStrategy extends StrategyBase {
       vpTriggerType: result.reason ? String(result.reason).toUpperCase() : null,
     };
     this._lastSignalMeta = {
-      component: "TS_VP",
-      winningComponent: result.signal ? "TS_VP" : null,
+      component: "AUCTION_MARKET_THEORY",
+      winningComponent: result.signal ? "AUCTION_MARKET_THEORY" : null,
       strategyLabel: "Auction Market Theory",
       ...result,
       ...vpFields,
@@ -82,7 +82,7 @@ class VolumeProfileStrategy extends StrategyBase {
       ...config.volumeProfile,
       ...config,
     });
-    this._lastSignalMeta = { component: "TS_VP", ...result };
+    this._lastSignalMeta = { component: "AUCTION_MARKET_THEORY", ...result };
     return result;
   }
 
@@ -92,7 +92,7 @@ class VolumeProfileStrategy extends StrategyBase {
       ...config.volumeProfile,
       ...config,
     });
-    this._lastSignalMeta = { component: "TS_VP", ...result };
+    this._lastSignalMeta = { component: "AUCTION_MARKET_THEORY", ...result };
     return result;
   }
 

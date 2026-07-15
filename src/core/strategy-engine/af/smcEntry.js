@@ -1,5 +1,5 @@
 /**
- * smcEntry.js — Sprint 13 Scalping + Swing gates + ML feature helpers for AF_SMC.
+ * smcEntry.js — Sprint 13 Scalping + Swing gates + ML feature helpers for SMART_MONEY_CONCEPTS.
  *
  * Fail-open defaults: gates only fire when their config flags are explicitly on
  * (typeOverrides enable them by default in FE/BE presets).

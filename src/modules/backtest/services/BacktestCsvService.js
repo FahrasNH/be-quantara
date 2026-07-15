@@ -7,19 +7,19 @@
  * mapBacktestTrade routes trade.entryMeta via resolveEntryReasons().
  *
  * Supported strategies & their reason variability:
- * - AF_SMC: Hard-gate (sweep+CHoCH+FVG=prerequisites) → low variance
- * - AF_WYCKOFF: Multi-item checklist → very low variance
- * - AF_VSA: 4 patterns × 3 locations → medium variance
- * - TS_TF: 3-layer checklist → very low variance
- * - TS_MS: 4-layer checklist → very low variance
- * - TS_VP: 1-of-4 mutually-exclusive → low variance
- * - MD_MR: Hybrid (hard entry + soft regime/confluence) → HIGHEST variance
- * - BS_BR: 3-phase sequential → very low variance
+ * - SMART_MONEY_CONCEPTS: Hard-gate (sweep+CHoCH+FVG=prerequisites) → low variance
+ * - WYCKOFF: Multi-item checklist → very low variance
+ * - VOLUME_SPREAD_ANALYSIS: 4 patterns × 3 locations → medium variance
+ * - TREND_FOLLOWING: 3-layer checklist → very low variance
+ * - MARKET_STRUCTURE: 4-layer checklist → very low variance
+ * - AUCTION_MARKET_THEORY: 1-of-4 mutually-exclusive → low variance
+ * - MEAN_REVERSION: Hybrid (hard entry + soft regime/confluence) → HIGHEST variance
+ * - BREAKOUT_RETEST: 3-phase sequential → very low variance
  *
  * Umbrellas use race-to-confirm: exactly ONE component wins per bar.
- * Trade attribution shows winning component key (AF_SMC, AF_WYCKOFF, etc).
+ * Trade attribution shows winning component key (SMART_MONEY_CONCEPTS, WYCKOFF, etc).
  *
- * Umbrella_Component scheme: AF_* / TS_* / MD_MR / BS_BR (see strategyReasonFormatters.js).
+ * Umbrella_Component scheme: AF_* / TS_* / MEAN_REVERSION / BREAKOUT_RETEST (see strategyReasonFormatters.js).
  */
 
 const { formatDuration } = require("../../../infrastructure/db/database");

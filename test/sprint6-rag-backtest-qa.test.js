@@ -81,7 +81,7 @@ function makeTrades(n = 30, startDate = new Date("2025-01-01")) {
     trades.push({
       id:          `trade-${i}`,
       symbol:      "BTCUSDT",
-      strategyKey: "AF_SMC",
+      strategyKey: "SMART_MONEY_CONCEPTS",
       regime:      "trend_up",
       entryAt:     d.toISOString(),
       createdAt:   d.toISOString(),

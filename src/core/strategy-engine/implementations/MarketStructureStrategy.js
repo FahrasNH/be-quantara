@@ -30,7 +30,7 @@ function structureConfigFrom(config = {}) {
 class MarketStructureStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "TS_MS",
+      name: "MARKET_STRUCTURE",
       label: "Dow Theory",
       description:
         "TS race participant: Dow Theory HH/HL pullback entries on HTF structure (independent of Trend Following).",
@@ -47,7 +47,7 @@ class MarketStructureStrategy extends StrategyBase {
     if (trend_strength > 0.55) score += 20;
     if (trend_strength < 0.25) score -= 15;
     return [{
-      key: "TS_MS",
+      key: "MARKET_STRUCTURE",
       label: this.config.label,
       score: Math.max(0, Math.min(100, score)),
       reason: "structure_affinity",
@@ -90,8 +90,8 @@ class MarketStructureStrategy extends StrategyBase {
       msPullbackConfirmed: Boolean(result.signal),
     };
     this._lastSignalMeta = {
-      component: "TS_MS",
-      winningComponent: result.signal ? "TS_MS" : null,
+      component: "MARKET_STRUCTURE",
+      winningComponent: result.signal ? "MARKET_STRUCTURE" : null,
       strategyLabel: "Dow Theory",
       atr: atrSafe,
       ...result,
@@ -105,7 +105,7 @@ class MarketStructureStrategy extends StrategyBase {
     const lows = indicators.lowsHTF || indicators.lows || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
     const result = evaluateMarketStructureComponent(highs, lows, idx, structureConfigFrom(config));
-    this._lastSignalMeta = { component: "TS_MS", ...result };
+    this._lastSignalMeta = { component: "MARKET_STRUCTURE", ...result };
     return result;
   }
 
@@ -114,7 +114,7 @@ class MarketStructureStrategy extends StrategyBase {
     const lows = indicators.lowsHTF || indicators.lows || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
     const result = evaluateMarketStructureGate(highs, lows, idx, direction, structureConfigFrom(config));
-    this._lastSignalMeta = { component: "TS_MS", ...result };
+    this._lastSignalMeta = { component: "MARKET_STRUCTURE", ...result };
     return result;
   }
 

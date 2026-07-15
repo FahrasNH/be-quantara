@@ -27,14 +27,14 @@ const {
  * Umbrella names are tier-access bags — not fusion/voting mechanisms.
  *
  * ─── Canonical live component keys ───────────────────────────────────────────
- *   AF_SMC · AF_WYCKOFF · AF_VSA   (FOUNDRY — Adaptive Fusion pool)
- *   TS_TF  · TS_MS     · TS_VP    (FORGE  — Trend Surge pool)
- *   MD_MR  · MD_SD     · MD_SA    (MINT  — Mean Drift pool)
- *   BS_BR  · BS_ICT    · BS_LS    (VAULT — Breakout Storm pool)
+ *   SMART_MONEY_CONCEPTS · WYCKOFF · VOLUME_SPREAD_ANALYSIS   (FOUNDRY — Adaptive Fusion pool)
+ *   TREND_FOLLOWING  · MARKET_STRUCTURE     · AUCTION_MARKET_THEORY    (FORGE  — Trend Surge pool)
+ *   MEAN_REVERSION  · SUPPLY_AND_DEMAND     · STATISTICAL_ARBITRAGE    (MINT  — Mean Drift pool)
+ *   BREAKOUT_RETEST  · ICT_STYLE_TRADING    · LIQUIDATION_SQUEEZE    (VAULT — Breakout Storm pool)
  *
  * ─── Legacy aliases (migrate → canonical via strategyKeyNormalizer ACL) ─────
  *   Umbrella keys (ADAPTIVE_FUSION, TREND_SURGE, MEAN_DRIFT, BREAKOUT_STORM)
- *   and Gen1 ingress keys normalize to AF_SMC / TS_TF / MD_MR / BS_BR.
+ *   and Gen1 ingress keys normalize to SMART_MONEY_CONCEPTS / TREND_FOLLOWING / MEAN_REVERSION / BREAKOUT_RETEST.
  *   A / B / C                                    → PDF trade-type presets (NOT AF)
  *     (strategyDefaults.js A/B/C = Aggressive Scalping / Day / Swing — unrelated
  *      to AF component slots; never treat as Adaptive Fusion keys)
@@ -61,53 +61,53 @@ const UMBRELLA_STRATEGIES = {
 
 const COMPONENT_STRATEGIES = {
   // ADAPTIVE_FUSION — FOUNDRY Tier (3 independent racers: SMC + Wyckoff + VSA)
-  AF_SMC:     "AF_SMC",     // Smart Money Concepts     ✅ LIVE (racer)
-  AF_WYCKOFF: "AF_WYCKOFF", // Wyckoff Spring/Upthrust  ✅ LIVE (racer)
-  AF_VSA:     "AF_VSA",     // Volume Spread Analysis   ✅ LIVE (racer)
+  SMART_MONEY_CONCEPTS:     "SMART_MONEY_CONCEPTS",     // Smart Money Concepts     ✅ LIVE (racer)
+  WYCKOFF: "WYCKOFF", // Wyckoff Spring/Upthrust  ✅ LIVE (racer)
+  VOLUME_SPREAD_ANALYSIS:     "VOLUME_SPREAD_ANALYSIS",     // Volume Spread Analysis   ✅ LIVE (racer)
   AF_LS:      "AF_LS",      // Liquidity Sweep          ⏳ Sprint 9+
   AF_OBR:     "AF_OBR",     // Order Block Retest       ⏳ Sprint 9+
 
   // TREND_SURGE — FORGE Tier (Sprint 12: race-to-confirm among independent racers)
-  TS_TF:  "TS_TF",    // Trend Following        ✅ LIVE (race participant)
-  TS_MS:  "TS_MS",    // Dow Theory (HH/HL)     ✅ LIVE (race participant — Sprint 12)
-  TS_VP:  "TS_VP",    // Auction Market Theory  ✅ LIVE (race participant — Sprint 12)
+  TREND_FOLLOWING:  "TREND_FOLLOWING",    // Trend Following        ✅ LIVE (race participant)
+  MARKET_STRUCTURE:  "MARKET_STRUCTURE",    // Dow Theory (HH/HL)     ✅ LIVE (race participant — Sprint 12)
+  AUCTION_MARKET_THEORY:  "AUCTION_MARKET_THEORY",    // Auction Market Theory  ✅ LIVE (race participant — Sprint 12)
   TS_EW:  "TS_EW",    // Elliott Wave           ⏳ Future
   TS_PA:  "TS_PA",    // Price Action           ⏳ Future
 
   // MEAN_DRIFT — MINT Tier (Sprint 10: race-to-confirm)
-  //   ADX Trend Strength Filter remains overlay inside MD_MR (not a racer)
-  MD_MR:  "MD_MR",    // Mean Reversion           ✅ LIVE (racer)
-  MD_SD:  "MD_SD",    // Supply and Demand        ✅ LIVE (racer — Sprint 10)
-  MD_SA:  "MD_SA",    // Statistical Arbitrage    ✅ LIVE (racer — Sprint 10)
+  //   ADX Trend Strength Filter remains overlay inside MEAN_REVERSION (not a racer)
+  MEAN_REVERSION:  "MEAN_REVERSION",    // Mean Reversion           ✅ LIVE (racer)
+  SUPPLY_AND_DEMAND:  "SUPPLY_AND_DEMAND",    // Supply and Demand        ✅ LIVE (racer — Sprint 10)
+  STATISTICAL_ARBITRAGE:  "STATISTICAL_ARBITRAGE",    // Statistical Arbitrage    ✅ LIVE (racer — Sprint 10)
 
   // BREAKOUT_STORM — VAULT Tier (Sprint 11: race-to-confirm)
-  BS_BR:  "BS_BR",    // Breakout Retest              ⛔ HALTED Sprint 14 (5/5 windows loss)
-  BS_ICT: "BS_ICT",   // ICT-style trading            ✅ LIVE (racer — Sprint 11)
-  BS_LS:  "BS_LS",    // Liquidation/Squeeze Trading  ✅ LIVE (racer — Sprint 11)
+  BREAKOUT_RETEST:  "BREAKOUT_RETEST",    // Breakout Retest              ⛔ HALTED Sprint 14 (5/5 windows loss)
+  ICT_STYLE_TRADING: "ICT_STYLE_TRADING",   // ICT-style trading            ✅ LIVE (racer — Sprint 11)
+  LIQUIDATION_SQUEEZE:  "LIQUIDATION_SQUEEZE",    // Liquidation/Squeeze Trading  ✅ LIVE (racer — Sprint 11)
 };
 
 /**
- * Sprint 14: BS_BR Halt — realized backtest WR 37.1% / PF 0.72 across 5 windows
- * (n=267). Keep ICT + LS in the VAULT race; do NOT re-enable BS_BR until the
+ * Sprint 14: BREAKOUT_RETEST Halt — realized backtest WR 37.1% / PF 0.72 across 5 windows
+ * (n=267). Keep ICT + LS in the VAULT race; do NOT re-enable BREAKOUT_RETEST until the
  * 5-window re-test gate clears AFTER v2.6 entry-retest + volatility-floor fixes
  * (see Notion Sprint 14: ≥4/5 window PF>1, WR≥45%, hold-time matches PRD).
  * Override per-run via config.bsBrHalted === false (backtest validation only).
  */
 const BS_BR_HALTED = true;
 /** Gen2-only; ingress aliases resolved via normalizeStrategyKey. */
-const BS_BR_HALT_ALIASES = new Set(["BS_BR", "BREAKOUT_STORM"]);
+const BS_BR_HALT_ALIASES = new Set(["BREAKOUT_RETEST", "BREAKOUT_STORM"]);
 
 function isBsBrHaltedKey(key) {
   if (!BS_BR_HALTED) return false;
   const canonical = normalizeStrategyKey(String(key || "").toUpperCase());
-  return canonical === "BS_BR";
+  return canonical === "BREAKOUT_RETEST";
 }
 
 function isBsBrOnlyKey(key) {
-  return normalizeStrategyKey(String(key || "").toUpperCase()) === "BS_BR";
+  return normalizeStrategyKey(String(key || "").toUpperCase()) === "BREAKOUT_RETEST";
 }
 
-/** Dedicated BS_BR backtest — true BR engine, ignore live halt (strategyGuard still blocks live). */
+/** Dedicated BREAKOUT_RETEST backtest — true BR engine, ignore live halt (strategyGuard still blocks live). */
 function applyDedicatedBsBrBacktestConfig(cfg = {}) {
   const comps = cfg.selectedComponents || cfg.bsActiveRacers || [];
   const bsOnly = Array.isArray(comps) && comps.length > 0
@@ -117,8 +117,8 @@ function applyDedicatedBsBrBacktestConfig(cfg = {}) {
     ...cfg,
     bsCombinationMode: "single",
     bsBrHalted: false,
-    selectedComponents: ["BS_BR"],
-    bsActiveRacers: ["BS_BR"],
+    selectedComponents: ["BREAKOUT_RETEST"],
+    bsActiveRacers: ["BREAKOUT_RETEST"],
   };
 }
 
@@ -136,34 +136,34 @@ const EXPERIMENTAL_STRATEGIES = {
 
 const TIER_COMPONENT_MAP = {
   FOUNDRY: {
-    active: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+    active: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
     umbrella: "ADAPTIVE_FUSION",
     abbrev: "AF",
     // Sprint 12: umbrella is a tier access bag; components race independently.
-    combination: { mode: "race", participants: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"] },
+    combination: { mode: "race", participants: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"] },
   },
   FORGE: {
-    active: ["TS_TF", "TS_MS", "TS_VP"],
+    active: ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"],
     umbrella: "TREND_SURGE",
     abbrev: "TS",
-    combination: { mode: "race", participants: ["TS_TF", "TS_MS", "TS_VP"] },
+    combination: { mode: "race", participants: ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"] },
   },
   MINT: {
-    active: ["MD_MR", "MD_SD", "MD_SA"],
+    active: ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"],
     umbrella: "MEAN_DRIFT",
     abbrev: "MD",
-    combination: { mode: "race", participants: ["MD_MR", "MD_SD", "MD_SA"] },
+    combination: { mode: "race", participants: ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"] },
   },
   VAULT: {
-    // Sprint 14: BS_BR removed from live race pool until re-test gate passes.
-    active: BS_BR_HALTED ? ["BS_ICT", "BS_LS"] : ["BS_BR", "BS_ICT", "BS_LS"],
+    // Sprint 14: BREAKOUT_RETEST removed from live race pool until re-test gate passes.
+    active: BS_BR_HALTED ? ["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"] : ["BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"],
     umbrella: "BREAKOUT_STORM",
     abbrev: "BS",
     combination: {
       mode: "race",
-      participants: BS_BR_HALTED ? ["BS_ICT", "BS_LS"] : ["BS_BR", "BS_ICT", "BS_LS"],
+      participants: BS_BR_HALTED ? ["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"] : ["BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"],
     },
-    halted: BS_BR_HALTED ? ["BS_BR"] : [],
+    halted: BS_BR_HALTED ? ["BREAKOUT_RETEST"] : [],
   },
 };
 
@@ -182,10 +182,10 @@ function getActiveComponentsForTier(tier) {
  */
 function isActiveComponent(key) {
   const liveKeys = [
-    "AF_SMC", "AF_WYCKOFF", "AF_VSA",
-    "TS_TF", "TS_MS", "TS_VP",
-    "MD_MR", "MD_SD", "MD_SA",
-    "BS_BR", "BS_ICT", "BS_LS",
+    "SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS",
+    "TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY",
+    "MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE",
+    "BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE",
     "GROK_AI_TRADING", // experimental — see EXPERIMENTAL_STRATEGIES
   ];
   return liveKeys.includes(key);
@@ -193,18 +193,18 @@ function isActiveComponent(key) {
 
 /** Display metadata for live engines + race components (UI / filter catalog). */
 const STRATEGY_CATALOG_BASE = {
-  AF_SMC:     { label: "Smart Money Concepts",     umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "engine",    status: "production", tier: "FOUNDRY" },
-  AF_WYCKOFF: { label: "Wyckoff Method",           umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
-  AF_VSA:     { label: "Volume Spread Analysis",   umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
-  TS_TF:      { label: "Trend Following",          umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "engine",    status: "production", tier: "FORGE" },
-  TS_MS:      { label: "Dow Theory",               umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
-  TS_VP:      { label: "Auction Market Theory",    umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
-  MD_MR:      { label: "Mean Reversion",              umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
-  MD_SD:      { label: "Supply and Demand",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
-  MD_SA:      { label: "Statistical Arbitrage",       umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
-  BS_BR:      { label: "Breakout Trading",            umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: BS_BR_HALTED ? "halted" : "production", tier: "VAULT" },
-  BS_ICT:     { label: "ICT-style trading",           umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
-  BS_LS:      { label: "Liquidation/Squeeze Trading", umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
+  SMART_MONEY_CONCEPTS:     { label: "Smart Money Concepts",     umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "engine",    status: "production", tier: "FOUNDRY" },
+  WYCKOFF: { label: "Wyckoff Method",           umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
+  VOLUME_SPREAD_ANALYSIS:     { label: "Volume Spread Analysis",   umbrella: "Adaptive Fusion", umbrellaAbbrev: "AF", role: "component", status: "production", tier: "FOUNDRY" },
+  TREND_FOLLOWING:      { label: "Trend Following",          umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "engine",    status: "production", tier: "FORGE" },
+  MARKET_STRUCTURE:      { label: "Dow Theory",               umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
+  AUCTION_MARKET_THEORY:      { label: "Auction Market Theory",    umbrella: "Trend Surge",     umbrellaAbbrev: "TS", role: "component", status: "production", tier: "FORGE" },
+  MEAN_REVERSION:      { label: "Mean Reversion",              umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "engine",    status: "production", tier: "MINT" },
+  SUPPLY_AND_DEMAND:      { label: "Supply and Demand",           umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
+  STATISTICAL_ARBITRAGE:      { label: "Statistical Arbitrage",       umbrella: "Mean Drift",      umbrellaAbbrev: "MD", role: "component", status: "production", tier: "MINT" },
+  BREAKOUT_RETEST:      { label: "Breakout Trading",            umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "engine",    status: BS_BR_HALTED ? "halted" : "production", tier: "VAULT" },
+  ICT_STYLE_TRADING:     { label: "ICT-style trading",           umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
+  LIQUIDATION_SQUEEZE:      { label: "Liquidation/Squeeze Trading", umbrella: "Breakout Storm",  umbrellaAbbrev: "BS", role: "component", status: "production", tier: "VAULT" },
 };
 
 /** Merge Trading Strategy Recap.pdf Konsep/Indicator/trade-type SSOT into catalog rows. */
@@ -226,12 +226,12 @@ const STRATEGY_CATALOG = Object.fromEntries(
   })
 );
 
-const CANONICAL_ENGINE_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
+const CANONICAL_ENGINE_KEYS = ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const LIVE_COMPONENT_KEYS = [
-  "AF_SMC", "AF_WYCKOFF", "AF_VSA",
-  "TS_TF", "TS_MS", "TS_VP",
-  "MD_MR", "MD_SD", "MD_SA",
-  "BS_BR", "BS_ICT", "BS_LS",
+  "SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS",
+  "TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY",
+  "MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE",
+  "BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE",
 ];
 
 /**

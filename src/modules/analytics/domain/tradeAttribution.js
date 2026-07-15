@@ -7,7 +7,7 @@
  * dengan harga SL/TP aktual dan multiplier-nya (AC-04).
  *
  * slMultiplier/tpMultiplier diturunkan dari jarak SL/TP terhadap ATR agar akurat
- * lintas-strategi — termasuk saat ADAPTIVE_FUSION / BS_BR meng-override
+ * lintas-strategi — termasuk saat ADAPTIVE_FUSION / BREAKOUT_RETEST meng-override
  * jarak per-komponen (bukan sekadar atrMultiplier statis).
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -22,10 +22,10 @@ const round4 = (v) => (Number.isFinite(v) ? parseFloat(v.toFixed(4)) : null);
  * normalizeStrategyKey → STRATEGY_MIGRATION_MAP (SSOT for legacy aliases).
  */
 const STRATEGY_ABBREV_TO_KEY = {
-  AF: "AF_SMC",
-  TS: "TS_TF",
-  MD: "MD_MR",
-  BS: "BS_BR",
+  AF: "SMART_MONEY_CONCEPTS",
+  TS: "TREND_FOLLOWING",
+  MD: "MEAN_REVERSION",
+  BS: "BREAKOUT_RETEST",
 };
 
 /**
@@ -33,7 +33,7 @@ const STRATEGY_ABBREV_TO_KEY = {
  * Prefer race winning component / firedByStrategy over umbrella engine keys.
  *
  * Historical gap: rows without indicators.winningComponent|firedByStrategy can
- * only be normalized to the umbrella engine (e.g. ADAPTIVE_FUSION → AF_SMC) —
+ * only be normalized to the umbrella engine (e.g. ADAPTIVE_FUSION → SMART_MONEY_CONCEPTS) —
  * per-racer identity is lost for those rows.
  *
  * @param {Object} [p]

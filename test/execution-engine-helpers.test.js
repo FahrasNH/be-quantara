@@ -45,7 +45,7 @@ t("fmtPx uses more decimals for cheap coins", () => {
 });
 
 t("isMeanReversionKey + GROK_CONFIRM_STRATEGIES", () => {
-  assert.strictEqual(isMeanReversionKey("MD_MR"), true);
+  assert.strictEqual(isMeanReversionKey("MEAN_REVERSION"), true);
   assert.strictEqual(isMeanReversionKey("mr"), true);
   assert.strictEqual(isMeanReversionKey("TREND_FOLLOWING"), false);
   assert.ok(GROK_CONFIRM_STRATEGIES.has("ADAPTIVE_FUSION"));
@@ -90,21 +90,21 @@ t("estimateRoundTripFee: taker vs maker entry", () => {
 
 t("filterOrphanTradesForEngine: leader vs member ownership", () => {
   const rows = [
-    { id: 1, indicators: JSON.stringify({ strategy: "AF_SMC" }) },
+    { id: 1, indicators: JSON.stringify({ strategy: "SMART_MONEY_CONCEPTS" }) },
     { id: 2, indicators: null },
-    { id: 3, indicators: JSON.stringify({ strategy: "TS_TF" }) },
+    { id: 3, indicators: JSON.stringify({ strategy: "TREND_FOLLOWING" }) },
   ];
   const leader = filterOrphanTradesForEngine(rows, {
-    groupKey: "g1", strategyKey: "AF_SMC", isGroupLeader: true,
+    groupKey: "g1", strategyKey: "SMART_MONEY_CONCEPTS", isGroupLeader: true,
   });
   assert.deepStrictEqual(leader.map((r) => r.id), [1, 2]);
 
   const member = filterOrphanTradesForEngine(rows, {
-    groupKey: "g1", strategyKey: "TS_TF", isGroupLeader: false,
+    groupKey: "g1", strategyKey: "TREND_FOLLOWING", isGroupLeader: false,
   });
   assert.deepStrictEqual(member.map((r) => r.id), [3]);
 
-  const noGroup = filterOrphanTradesForEngine(rows, { strategyKey: "AF_SMC" });
+  const noGroup = filterOrphanTradesForEngine(rows, { strategyKey: "SMART_MONEY_CONCEPTS" });
   assert.strictEqual(noGroup.length, 3);
 });
 

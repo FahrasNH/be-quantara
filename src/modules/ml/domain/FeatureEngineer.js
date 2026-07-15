@@ -20,7 +20,7 @@ const VECTOR_DIM = 60;
 
 const REGIMES = ["trend_up", "trend_down", "ranging", "expansion", "compression", "high_vol", "low_vol", "other"];
 const PAIR_TIERS = ["LIQUID", "STABLE", "VOLATILE"];
-const STRATEGY_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
+const STRATEGY_KEYS = ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const TRADE_TYPES = ["Scalping", "Swing"];
 
 const FEATURE_NAMES = [

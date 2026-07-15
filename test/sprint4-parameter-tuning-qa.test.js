@@ -115,7 +115,7 @@ group("A — WalkForwardOptimizer", () => {
 
   (async () => {
     const space = { confidenceFloor: { min: 65, max: 70, step: 5 } };
-    const results = await opt.runGridSearch("AF_SMC", "BTCUSDT", simTrades, space);
+    const results = await opt.runGridSearch("SMART_MONEY_CONCEPTS", "BTCUSDT", simTrades, space);
     assert(Array.isArray(results), "T12: runGridSearch returns array");
     if (results.length >= 2) {
       assert(results[0].validMetrics.sharpe >= results[1].validMetrics.sharpe, "T13: runGridSearch sorted by sharpe desc");
@@ -134,7 +134,7 @@ group("A — WalkForwardOptimizer", () => {
       enteredAt: new Date(),
     }));
     const space = { confidenceFloor: { min: 65, max: 70, step: 5 } };
-    const res = await opt.runGridSearch("AF_SMC", "BTCUSDT", badTrades, space);
+    const res = await opt.runGridSearch("SMART_MONEY_CONCEPTS", "BTCUSDT", badTrades, space);
     assert(Array.isArray(res), "T16: runGridSearch with bad trades returns array");
     assert(res.every(r => opt.passesConstraints(r.validMetrics)), "T17: no failing combo in results");
     assert(res.every(r => r.trainMetrics.profitFactor >= 1.2), "T18: all PF >= 1.2");
@@ -149,8 +149,8 @@ group("A — WalkForwardOptimizer", () => {
   // 22–23: optimize returns correct shape
   (async () => {
     try {
-      const res = await opt.optimize("AF_SMC", "BTCUSDT", { trainDays: 7, validDays: 3 });
-      assert(res.strategyKey === "AF_SMC", "T22: optimize returns strategyKey");
+      const res = await opt.optimize("SMART_MONEY_CONCEPTS", "BTCUSDT", { trainDays: 7, validDays: 3 });
+      assert(res.strategyKey === "SMART_MONEY_CONCEPTS", "T22: optimize returns strategyKey");
       assert(typeof res.timestamp === "string", "T23: optimize returns timestamp string");
     } catch (e) {
       assert(true, "T22: optimize returns strategyKey (no DB)");
@@ -160,7 +160,7 @@ group("A — WalkForwardOptimizer", () => {
 
   // 24–25: SEARCH_SPACE is defined for all 4 strategies
   assert(Object.keys(SEARCH_SPACE).length === 4, "T24: SEARCH_SPACE has 4 strategies");
-  assert(["AF_SMC","TS_TF","MD_MR","BS_BR"].every(k => k in SEARCH_SPACE), "T25: SEARCH_SPACE keys correct");
+  assert(["SMART_MONEY_CONCEPTS","TREND_FOLLOWING","MEAN_REVERSION","BREAKOUT_RETEST"].every(k => k in SEARCH_SPACE), "T25: SEARCH_SPACE keys correct");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -199,13 +199,13 @@ group("B — WalkForwardJob", () => {
     // Clear first to ensure clean state
     await job.clearCheckpoint();
 
-    const testCheckpoint = { completed: ["AF_SMC:BTCUSDT"], updatedAt: new Date().toISOString() };
+    const testCheckpoint = { completed: ["SMART_MONEY_CONCEPTS:BTCUSDT"], updatedAt: new Date().toISOString() };
     await job.saveCheckpoint(testCheckpoint);
 
     const loaded = await job.loadCheckpoint();
     assert(loaded !== null, "T31: checkpoint load returns non-null");
     assert(Array.isArray(loaded?.completed), "T32: loaded checkpoint has completed array");
-    assert(loaded.completed.includes("AF_SMC:BTCUSDT"), "T33: loaded checkpoint includes saved key");
+    assert(loaded.completed.includes("SMART_MONEY_CONCEPTS:BTCUSDT"), "T33: loaded checkpoint includes saved key");
 
     // T35–T37: checkpoint directory and content
     assert(fs.existsSync(dataDir), "T35: data directory created by saveCheckpoint");
@@ -260,7 +260,7 @@ group("C — ParameterDeployService", () => {
   // 47–49: rollback returns error when no version exists
   (async () => {
     try {
-      const result = await svc.rollback("AF_SMC", "NONEXISTENTSYMBOL999", "admin");
+      const result = await svc.rollback("SMART_MONEY_CONCEPTS", "NONEXISTENTSYMBOL999", "admin");
       assert(result.success === false, "T47: rollback fails gracefully when no version");
       assert(typeof result.error === "string", "T48: rollback returns error string");
       assert(result.error.length > 0, "T49: rollback error message non-empty");
@@ -274,7 +274,7 @@ group("C — ParameterDeployService", () => {
   // 50–52: getDeployHistory returns array
   (async () => {
     try {
-      const versions = await svc.getDeployHistory("AF_SMC", "BTCUSDT", 5);
+      const versions = await svc.getDeployHistory("SMART_MONEY_CONCEPTS", "BTCUSDT", 5);
       assert(Array.isArray(versions), "T50: getDeployHistory returns array");
       assert(versions.length <= 5, "T51: getDeployHistory respects limit");
       assert(true, "T52: getDeployHistory does not throw");
@@ -288,7 +288,7 @@ group("C — ParameterDeployService", () => {
   // 53–55: checkAutoRollback returns triggered=false for no data
   (async () => {
     try {
-      const result = await svc.checkAutoRollback("AF_SMC", "NONEXISTENTSYMBOL999");
+      const result = await svc.checkAutoRollback("SMART_MONEY_CONCEPTS", "NONEXISTENTSYMBOL999");
       assert(result.triggered === false || typeof result.triggered === "boolean", "T53: checkAutoRollback returns triggered boolean");
       assert(typeof result.reason === "string", "T54: checkAutoRollback returns reason string");
       assert(result.reason.length > 0, "T55: checkAutoRollback reason non-empty");
@@ -302,7 +302,7 @@ group("C — ParameterDeployService", () => {
   // 56–58: sanityCheck on empty trades passes by default
   (async () => {
     try {
-      const result = await svc.sanityCheck("AF_SMC", "NONEXISTENTSYMBOL999", {});
+      const result = await svc.sanityCheck("SMART_MONEY_CONCEPTS", "NONEXISTENTSYMBOL999", {});
       assert(typeof result.pass === "boolean", "T56: sanityCheck returns pass boolean");
       assert(result.pass === true, "T57: sanityCheck passes on empty window");
       assert(typeof result.reason === "string", "T58: sanityCheck returns reason string");
@@ -396,10 +396,10 @@ group("E — Edge Cases", () => {
   (async () => {
     try {
       const opt2 = new WalkForwardOptimizer();
-      const res = await opt2.optimize("AF_SMC", "NONEXISTENTSYMBOL_ZERO", {
+      const res = await opt2.optimize("SMART_MONEY_CONCEPTS", "NONEXISTENTSYMBOL_ZERO", {
         trainDays: 1, validDays: 1,
       });
-      assert(res.strategyKey === "AF_SMC", "T74: optimize with zero trades returns shape");
+      assert(res.strategyKey === "SMART_MONEY_CONCEPTS", "T74: optimize with zero trades returns shape");
     } catch (e) {
       assert(true, "T74: optimize with zero trades returns shape (no DB)");
     }

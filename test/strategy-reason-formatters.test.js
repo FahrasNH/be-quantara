@@ -32,7 +32,7 @@ describe("formatExitReason", () => {
   });
 });
 
-describe("formatSmcReasons (AF_SMC)", () => {
+describe("formatSmcReasons (SMART_MONEY_CONCEPTS)", () => {
   test("null → empty", () => expect(formatSmcReasons(null)).toBe(""));
   test("minimal sequence", () => {
     const out = formatSmcReasons({
@@ -48,7 +48,7 @@ describe("formatSmcReasons (AF_SMC)", () => {
   });
 });
 
-describe("formatWyckoffReasons (AF_WYCKOFF)", () => {
+describe("formatWyckoffReasons (WYCKOFF)", () => {
   test("null → empty", () => expect(formatWyckoffReasons(null)).toBe(""));
   test("spring reason", () => {
     expect(formatWyckoffReasons({ reason: "wyckoff_spring" })).toBe("Spring");
@@ -74,7 +74,7 @@ describe("formatWyckoffReasons (AF_WYCKOFF)", () => {
   });
 });
 
-describe("formatVsaReasons (AF_VSA)", () => {
+describe("formatVsaReasons (VOLUME_SPREAD_ANALYSIS)", () => {
   test("null → empty", () => expect(formatVsaReasons(null)).toBe(""));
   test("stopping volume + swing proximity", () => {
     expect(formatVsaReasons({
@@ -90,7 +90,7 @@ describe("formatVsaReasons (AF_VSA)", () => {
   });
 });
 
-describe("formatTrendFollowingReasons (TS_TF)", () => {
+describe("formatTrendFollowingReasons (TREND_FOLLOWING)", () => {
   test("null → empty", () => expect(formatTrendFollowingReasons(null)).toBe(""));
   test("full checklist", () => {
     const out = formatTrendFollowingReasons({
@@ -108,7 +108,7 @@ describe("formatTrendFollowingReasons (TS_TF)", () => {
   });
 });
 
-describe("formatMarketStructureReasons (TS_MS)", () => {
+describe("formatMarketStructureReasons (MARKET_STRUCTURE)", () => {
   test("null → empty", () => expect(formatMarketStructureReasons(null)).toBe(""));
   test("dow HL bounce", () => {
     const out = formatMarketStructureReasons({ reason: "dow_hl_pullback_bounce" });
@@ -124,7 +124,7 @@ describe("formatMarketStructureReasons (TS_MS)", () => {
   });
 });
 
-describe("formatVolumeProfileReasons (TS_VP)", () => {
+describe("formatVolumeProfileReasons (AUCTION_MARKET_THEORY)", () => {
   test("null → empty", () => expect(formatVolumeProfileReasons(null)).toBe(""));
   test("maps four branches", () => {
     expect(formatVolumeProfileReasons({ reason: "vwap_reclaim" })).toBe("VWAP Reclaim");
@@ -134,7 +134,7 @@ describe("formatVolumeProfileReasons (TS_VP)", () => {
   });
 });
 
-describe("formatMeanReversionReasons (MD_MR)", () => {
+describe("formatMeanReversionReasons (MEAN_REVERSION)", () => {
   test("null → empty", () => expect(formatMeanReversionReasons(null)).toBe(""));
   test("parses pipe-delimited reason", () => {
     const out = formatMeanReversionReasons({
@@ -158,7 +158,7 @@ describe("formatMeanReversionReasons (MD_MR)", () => {
   });
 });
 
-describe("formatBreakoutReasons (BS_BR)", () => {
+describe("formatBreakoutReasons (BREAKOUT_RETEST)", () => {
   test("null → empty", () => expect(formatBreakoutReasons(null)).toBe(""));
   test("core phases", () => {
     expect(formatBreakoutReasons({
@@ -172,19 +172,19 @@ describe("formatBreakoutReasons (BS_BR)", () => {
 describe("resolveEntryReasons dispatcher", () => {
   test("dispatches by winningComponent", () => {
     expect(resolveEntryReasons("ADAPTIVE_FUSION", {
-      winningComponent: "AF_SMC",
+      winningComponent: "SMART_MONEY_CONCEPTS",
       sequenceMeta: { sweepIdx: 0, chochIdx: 1, fvg: { type: "bullish" } },
     })).toContain("Liquidity Sweep");
   });
-  test("dispatches TS_VP by strategy key", () => {
-    expect(resolveEntryReasons("TS_VP", { reason: "val_bounce" })).toBe("VAL Bounce");
+  test("dispatches AUCTION_MARKET_THEORY by strategy key", () => {
+    expect(resolveEntryReasons("AUCTION_MARKET_THEORY", { reason: "val_bounce" })).toBe("VAL Bounce");
   });
-  test("dispatches MD_MR", () => {
+  test("dispatches MEAN_REVERSION", () => {
     expect(resolveEntryReasons("MEAN_REVERSION", {
       reason: "Scalping: RSI 20 < 28, BB touch | ADX:balance | OB/FVG✓",
     })).toContain("RSI Extreme");
   });
-  test("dispatches BS_BR", () => {
+  test("dispatches BREAKOUT_RETEST", () => {
     expect(resolveEntryReasons("BREAKOUT_RETEST", {
       bbSqueeze: true, rangeBreakout: true, retestConfirmation: true,
     })).toBe("BB Squeeze, Range Break, Retest Confirm");
@@ -200,26 +200,26 @@ describe("resolveEntryReasons dispatcher", () => {
       sequenceMeta: {
         sweepIdx: 10, chochIdx: 12, fvg: { type: "bearish" }, obConfluence: true,
       },
-      component: "AF_SMC",
-      winningComponent: "AF_SMC",
+      component: "SMART_MONEY_CONCEPTS",
+      winningComponent: "SMART_MONEY_CONCEPTS",
       strategyLabel: "Smart Money Concepts",
     };
-    const out = resolveEntryReasons("AF_SMC", afMeta);
+    const out = resolveEntryReasons("SMART_MONEY_CONCEPTS", afMeta);
     expect(out).toContain("Liquidity Sweep");
     expect(out).toContain("CHoCH");
     expect(out).toContain("Bearish FVG");
     expect(out).toContain("Fresh OB");
     expect(out.length > 0).toBe(true);
   });
-  test("MD_MR + TS_VP + BS_BR synthetic meta never empty", () => {
-    expect(resolveEntryReasons("MD_MR", {
+  test("MEAN_REVERSION + AUCTION_MARKET_THEORY + BREAKOUT_RETEST synthetic meta never empty", () => {
+    expect(resolveEntryReasons("MEAN_REVERSION", {
       reason: "Scalping: RSI 24.1 < 28, BB(1.5σ) touch, below VWAP | ADX:balance | OB/FVG✓",
       adxRegime: "balance",
       hasObFvgConfluence: true,
     }).length > 0).toBe(true);
-    expect(resolveEntryReasons("TS_VP", { reason: "vah_reject" })).toBe("VAH Reject");
-    expect(resolveEntryReasons("BS_BR", {
-      winningComponent: "BS_BR",
+    expect(resolveEntryReasons("AUCTION_MARKET_THEORY", { reason: "vah_reject" })).toBe("VAH Reject");
+    expect(resolveEntryReasons("BREAKOUT_RETEST", {
+      winningComponent: "BREAKOUT_RETEST",
       bbSqueeze: true,
       rangeBreakout: true,
       retestConfirmation: true,

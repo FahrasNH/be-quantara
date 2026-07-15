@@ -1,8 +1,8 @@
 /**
- * BreakoutTradingStrategy.js — BS_BR thin orchestrator
+ * BreakoutTradingStrategy.js — BREAKOUT_RETEST thin orchestrator
  *
  * Entry logic lives in bs/breakoutTradingEntry.js (Sprint 15 structure refactor).
- * Persisted strategy key stays "BREAKOUT_RETEST" / umbrella "BS_BR".
+ * Persisted strategy key stays "BREAKOUT_RETEST" / umbrella "BREAKOUT_RETEST".
  */
 
 const StrategyBase = require("../base/StrategyBase");

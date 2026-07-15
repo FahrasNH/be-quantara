@@ -51,11 +51,11 @@ const STRATEGY_CONTEXT = {
 };
 
 const ENGINE_TO_CONTEXT = {
-  AF_SMC: "SMC",
+  SMART_MONEY_CONCEPTS: "SMC",
   ADAPTIVE_FUSION: "SMC",
-  TS_TF: "TS",
-  MD_MR: "MD",
-  BS_BR: "BS",
+  TREND_FOLLOWING: "TS",
+  MEAN_REVERSION: "MD",
+  BREAKOUT_RETEST: "BS",
 };
 
 class GrokConfirmPromptBuilder {

@@ -24,7 +24,7 @@ const vault = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT
 
 {
   const dry = filterStrategiesByMode(vault, "dry");
-  // Sprint 14 factory reset: BS_BR / BREAKOUT_RETEST is halted from auto pools
+  // Sprint 14 factory reset: BREAKOUT_RETEST / BREAKOUT_RETEST is halted from auto pools
   // (dry + live). Dedicated BR backtests still override via applyDedicatedBsBrBacktestConfig.
   t("dry mode → BR halted from auto pools (3 strategies)", dry.length === 3);
   t("dry mode → BR not in pool while halted", !dry.includes("BREAKOUT_RETEST"));

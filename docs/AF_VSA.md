@@ -1,9 +1,9 @@
-# AF_VSA — Entry Triggers (AS-IS)
+# VOLUME_SPREAD_ANALYSIS — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an AF_VSA entry and the signal labels emitted on fill.  
-**Strategy key**: `AF_VSA` (`VsaStrategy`, v1.0)  
+**Scope**: What triggers an VOLUME_SPREAD_ANALYSIS entry and the signal labels emitted on fill.  
+**Strategy key**: `VOLUME_SPREAD_ANALYSIS` (`VsaStrategy`, v1.0)  
 **Engine SSOT**: `vsaComponent.js` → `evaluateVSAComponent`  
-**Config SSOT**: `strategyDefaults.js` → `AF_VSA` (inherits `SMART_MONEY_CONCEPTS` risk) + `vsaComponent.js` DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `VOLUME_SPREAD_ANALYSIS` (inherits `SMART_MONEY_CONCEPTS` risk) + `vsaComponent.js` DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`AF_VSA`** preset (= SMC geometry); VSA-specific knobs dari **component DEFAULTS**.
+Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`VOLUME_SPREAD_ANALYSIS`** preset (= SMC geometry); VSA-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -55,7 +55,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-AF_VSA requires price **near swing structure**, then classifies the current bar's **volume-spread relationship** (effort vs result).
+VOLUME_SPREAD_ANALYSIS requires price **near swing structure**, then classifies the current bar's **volume-spread relationship** (effort vs result).
 
 ```
 Swing Proximity Gate → VSA Pattern (stopping volume / no-demand / no-supply) → signal
@@ -128,7 +128,7 @@ Unmapped `reason` strings fall back to `titleCaseSnake(raw)` — rare on success
 
 ## AS-IS quirks
 
-- **AF umbrella**: AF_VSA wins use `winningComponent: "AF_VSA"`. Other AF racers use their own label vocabularies.
+- **AF umbrella**: VOLUME_SPREAD_ANALYSIS wins use `winningComponent: "VOLUME_SPREAD_ANALYSIS"`. Other AF racers use their own label vocabularies.
 - **Effort/result mismatch**: reduces confidence only — never adds or removes labels.
 - **Three primary patterns**: Stopping Volume, No-Demand, and No-Supply are mutually exclusive per fill.
 

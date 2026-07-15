@@ -515,7 +515,7 @@ module.exports = function createBotsRouter(helpers) {
           });
         }
       } else {
-        const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "AF_SMC", {
+        const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "SMART_MONEY_CONCEPTS", {
           source: "bots-afs.create",
           mode: "live",
         });
@@ -619,7 +619,7 @@ module.exports = function createBotsRouter(helpers) {
         }
       } else {
         // Legacy: entitlement check untuk strategi tunggal yang dipilih.
-        const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "AF_SMC", {
+        const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "SMART_MONEY_CONCEPTS", {
           source: "bots-afs.create",
           mode: "live",
         });
@@ -667,7 +667,7 @@ module.exports = function createBotsRouter(helpers) {
           }
           // Filter out blocked strategies for multi mode
           strategies = strategies.filter(s => !pairClass.blockedStrategies.includes(s));
-          if (!strategies.length) strategies = ["MD_MR"];
+          if (!strategies.length) strategies = ["MEAN_REVERSION"];
         }
       }
 
@@ -731,7 +731,7 @@ module.exports = function createBotsRouter(helpers) {
         });
       }
 
-      // Sprint 14 HALT: never arm BS_BR live, even when
+      // Sprint 14 HALT: never arm BREAKOUT_RETEST live, even when
       // strategyKey is omitted from body (existing bot or multi-tier path).
       {
         const { isBsBrHaltedKey } = require("../../../config/strategies");
@@ -1149,7 +1149,7 @@ module.exports = function createBotsRouter(helpers) {
   router.patch(
     "/:symbol/config",
     validateSymbolParam,
-    strategyGuard, // memblok BS_BR bila strategyKey dikirim
+    strategyGuard, // memblok BREAKOUT_RETEST bila strategyKey dikirim
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -1575,13 +1575,13 @@ module.exports = function createBotsRouter(helpers) {
     // Race-pool components for AF (Gen2). Legacy A/B/C PDF presets are unrelated.
     const { normalizeStrategyKey, TIER_COMPONENT_MAP } = require("../../../config/strategies");
     const canonical = normalizeStrategyKey(key);
-    if (canonical === "AF_SMC" || key === "ADAPTIVE_FUSION") {
+    if (canonical === "SMART_MONEY_CONCEPTS" || key === "ADAPTIVE_FUSION") {
       response.components = (TIER_COMPONENT_MAP.FOUNDRY?.active || []).map((ck) => ({
         key: ck,
         name: STRATEGIES[ck]?.label || ck,
       }));
-      response.canonicalKey = "AF_SMC";
-      if (key !== "AF_SMC") response.deprecatedAliasOf = "AF_SMC";
+      response.canonicalKey = "SMART_MONEY_CONCEPTS";
+      if (key !== "SMART_MONEY_CONCEPTS") response.deprecatedAliasOf = "SMART_MONEY_CONCEPTS";
     }
 
     res.json({

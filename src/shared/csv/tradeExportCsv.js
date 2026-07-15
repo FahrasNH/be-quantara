@@ -128,83 +128,83 @@ function buildPerformanceSummaryCsv(data) {
  * Keys must match trade object fields populated by strategy enrichment.
  */
 const ML_FIELD_SETS = Object.freeze({
-  AF_SMC: Object.freeze([
+  SMART_MONEY_CONCEPTS: Object.freeze([
     "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct",
     "htfAdx", "hourUtc", "confSweepStrength", "confFvgSize",
     "confDisplacementPct", "confHtfAlignment", "confMitigationDepth", "confObConfluence",
   ]),
-  BS_BR: Object.freeze([
+  BREAKOUT_RETEST: Object.freeze([
     "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr", "rejectionWickPct",
     "consolidationBars", "breakoutCandleAtr", "fundingRateAtEntry", "fundingForecast24h",
     "holdHours", "volumeRatio", "bbWidth",
   ]),
-  TS_VP: Object.freeze([
+  AUCTION_MARKET_THEORY: Object.freeze([
     "vpVwapLevel", "vpVahLevel", "vpValLevel", "vpPocLevel", "vpTriggerType",
   ]),
-  TS_TF: Object.freeze([
+  TREND_FOLLOWING: Object.freeze([
     "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend",
     "tfVolRatio", "tfHtfTrendConfirmed", "tfEmaCrossover",
   ]),
-  TS_MS: Object.freeze([
+  MARKET_STRUCTURE: Object.freeze([
     "msSwingHighPrice", "msSwingLowPrice", "msPullbackDepthAtr",
     "msHhPattern", "msLlPattern", "msPullbackConfirmed",
   ]),
-  MD_MR: Object.freeze([
+  MEAN_REVERSION: Object.freeze([
     "mrRsiValue", "mrBbMidLevel", "mrBbUpperLevel", "mrBbLowerLevel",
     "mrVwapLevel", "mrVwapDeviation", "mrAdxRegime",
   ]),
-  MD_SD: Object.freeze([
+  SUPPLY_AND_DEMAND: Object.freeze([
     "sdZoneType", "sdZoneLevel", "sdZoneSizeAtr", "sdRetestDepthAtr",
     "sdVolumeConfirmation", "sdTimeToRetestBars", "sdConfluence",
   ]),
-  MD_SA: Object.freeze([
+  STATISTICAL_ARBITRAGE: Object.freeze([
     "saZScore", "saMaValue", "saStdDev", "saUpperBand",
     "saLowerBand", "saBandTouch", "saMeanRevertBars",
   ]),
-  AF_WYCKOFF: Object.freeze([
+  WYCKOFF: Object.freeze([
     "wyPatternType", "wyAccumulationBars", "wyFakeBreakDepthAtr", "wyReclameBars",
     "wyVolumeRatio", "wySosOrSow", "wyLpsLevel",
   ]),
-  AF_VSA: Object.freeze([
+  VOLUME_SPREAD_ANALYSIS: Object.freeze([
     "vsaPatternType", "vsaSpread", "vsaVolume", "vsaAvgSpread",
     "vsaAvgVolume", "vsaSwingProximity", "vsaReversal",
   ]),
-  BS_ICT: Object.freeze([
+  ICT_STYLE_TRADING: Object.freeze([
     "ictKillZoneHour", "ictKillZoneLevel", "ictRaidType", "ictRaidDepthAtr",
     "ictVolumeRatio", "ictReversal", "ictMssPct",
   ]),
-  BS_LS: Object.freeze([
+  LIQUIDATION_SQUEEZE: Object.freeze([
     "lsOiValue", "lsOiPercentile", "lsBbWidth", "lsBbWidthPercentile",
     "lsLiquidationLevel", "lsWickDepthAtr", "lsOiForecast24h",
   ]),
 });
 
 const ML_STRATEGY_ALIASES = Object.freeze({
-  "TREND FOLLOWING": "TS_TF",
-  MARKET_STRUCTURE: "TS_MS",
-  "MARKET STRUCTURE": "TS_MS",
-  VOLUME_PROFILE: "TS_VP",
-  "VOLUME PROFILE": "TS_VP",
-  "MEAN REVERSION": "MD_MR",
-  SUPPLY_AND_DEMAND: "MD_SD",
-  "SUPPLY AND DEMAND": "MD_SD",
-  STATISTICAL_ARBITRAGE: "MD_SA",
-  "STATISTICAL ARBITRAGE": "MD_SA",
-  "BREAKOUT RETEST": "BS_BR",
-  BREAKOUT_TRADING: "BS_BR",
-  "BREAKOUT TRADING": "BS_BR",
-  "SMART MONEY CONCEPTS": "AF_SMC",
-  "ADAPTIVE FUSION": "AF_SMC",
-  WYCKOFF: "AF_WYCKOFF",
-  VSA: "AF_VSA",
-  "VOLUME SPREAD ANALYSIS": "AF_VSA",
-  VOLUME_SPREAD_ANALYSIS: "AF_VSA",
-  ICT: "BS_ICT",
-  "ICT-STYLE TRADING": "BS_ICT",
-  "ICT STYLE TRADING": "BS_ICT",
-  ICT_STYLE_TRADING: "BS_ICT",
-  LIQUIDATION_SQUEEZE: "BS_LS",
-  "LIQUIDATION SQUEEZE": "BS_LS",
+  "TREND FOLLOWING": "TREND_FOLLOWING",
+  MARKET_STRUCTURE: "MARKET_STRUCTURE",
+  "MARKET STRUCTURE": "MARKET_STRUCTURE",
+  VOLUME_PROFILE: "AUCTION_MARKET_THEORY",
+  "VOLUME PROFILE": "AUCTION_MARKET_THEORY",
+  "MEAN REVERSION": "MEAN_REVERSION",
+  SUPPLY_AND_DEMAND: "SUPPLY_AND_DEMAND",
+  "SUPPLY AND DEMAND": "SUPPLY_AND_DEMAND",
+  STATISTICAL_ARBITRAGE: "STATISTICAL_ARBITRAGE",
+  "STATISTICAL ARBITRAGE": "STATISTICAL_ARBITRAGE",
+  "BREAKOUT RETEST": "BREAKOUT_RETEST",
+  BREAKOUT_TRADING: "BREAKOUT_RETEST",
+  "BREAKOUT TRADING": "BREAKOUT_RETEST",
+  "SMART MONEY CONCEPTS": "SMART_MONEY_CONCEPTS",
+  "ADAPTIVE FUSION": "SMART_MONEY_CONCEPTS",
+  WYCKOFF: "WYCKOFF",
+  VSA: "VOLUME_SPREAD_ANALYSIS",
+  "VOLUME SPREAD ANALYSIS": "VOLUME_SPREAD_ANALYSIS",
+  VOLUME_SPREAD_ANALYSIS: "VOLUME_SPREAD_ANALYSIS",
+  ICT: "ICT_STYLE_TRADING",
+  "ICT-STYLE TRADING": "ICT_STYLE_TRADING",
+  "ICT STYLE TRADING": "ICT_STYLE_TRADING",
+  ICT_STYLE_TRADING: "ICT_STYLE_TRADING",
+  LIQUIDATION_SQUEEZE: "LIQUIDATION_SQUEEZE",
+  "LIQUIDATION SQUEEZE": "LIQUIDATION_SQUEEZE",
 });
 
 function normalizeMlStrategyKey(key) {

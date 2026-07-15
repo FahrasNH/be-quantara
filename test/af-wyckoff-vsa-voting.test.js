@@ -600,12 +600,12 @@ test("pearsonCorrelation identical series → ~1", () => {
 });
 
 test("umbrella registers 3 components", () => {
-  const af = strategyRegistry.get("AF_SMC");
+  const af = strategyRegistry.get("SMART_MONEY_CONCEPTS");
   assert.ok(af);
   const keys = af.getComponentKeys();
-  assert.ok(keys.includes("AF_SMC"));
-  assert.ok(keys.includes("AF_WYCKOFF"));
-  assert.ok(keys.includes("AF_VSA"));
+  assert.ok(keys.includes("SMART_MONEY_CONCEPTS"));
+  assert.ok(keys.includes("WYCKOFF"));
+  assert.ok(keys.includes("VOLUME_SPREAD_ANALYSIS"));
   assert.strictEqual(keys.length, 3);
 });
 
@@ -688,7 +688,7 @@ test("Wyckoff-only detectSignalMulti vote-mode promotes standalone vote (no SMC 
     afCombinationMode: "vote",
     afUseThreeComponentVoting: true,
     afMinVotes: 2,
-    afActiveVoters: ["AF_WYCKOFF"],
+    afActiveVoters: ["WYCKOFF"],
   });
   assert.ok(multi.meta?.afVotes, "afVotes meta present");
   // Either NEUTRAL (no spring) or standalone promotion — must not throw / hard-zero from threshold
@@ -720,28 +720,28 @@ test("default race mode: detectSignalMulti attaches afRace meta (not vote gate)"
   assert.strictEqual(multi.meta.afVotes, null);
 });
 
-test("race tie-break prefers AF_SMC over AF_WYCKOFF at equal confidence", () => {
+test("race tie-break prefers SMART_MONEY_CONCEPTS over WYCKOFF at equal confidence", () => {
   const um = new AdaptiveFusionUmbrella();
   const winner = um._pickRaceWinner([
-    { key: "AF_WYCKOFF", confidence: 0.8, signal: "LONG", label: "Wyckoff Method" },
-    { key: "AF_SMC", confidence: 0.8, signal: "SHORT", label: "Smart Money Concepts" },
+    { key: "WYCKOFF", confidence: 0.8, signal: "LONG", label: "Wyckoff Method" },
+    { key: "SMART_MONEY_CONCEPTS", confidence: 0.8, signal: "SHORT", label: "Smart Money Concepts" },
   ]);
-  assert.strictEqual(winner.key, "AF_SMC");
+  assert.strictEqual(winner.key, "SMART_MONEY_CONCEPTS");
   assert.strictEqual(winner.signal, "SHORT");
 });
 
 test("race: higher confidence wins regardless of priority", () => {
   const um = new AdaptiveFusionUmbrella();
   const winner = um._pickRaceWinner([
-    { key: "AF_SMC", confidence: 0.5, signal: "LONG", label: "Smart Money Concepts" },
-    { key: "AF_VSA", confidence: 0.9, signal: "SHORT", label: "Volume Spread Analysis" },
+    { key: "SMART_MONEY_CONCEPTS", confidence: 0.5, signal: "LONG", label: "Smart Money Concepts" },
+    { key: "VOLUME_SPREAD_ANALYSIS", confidence: 0.9, signal: "SHORT", label: "Volume Spread Analysis" },
   ]);
-  assert.strictEqual(winner.key, "AF_VSA");
+  assert.strictEqual(winner.key, "VOLUME_SPREAD_ANALYSIS");
 });
 
 test("FOUNDRY tier map uses race combination (not voting)", () => {
   const { TIER_COMPONENT_MAP } = require("../src/config/strategies");
-  assert.deepStrictEqual(TIER_COMPONENT_MAP.FOUNDRY.active, ["AF_SMC", "AF_WYCKOFF", "AF_VSA"]);
+  assert.deepStrictEqual(TIER_COMPONENT_MAP.FOUNDRY.active, ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"]);
   assert.strictEqual(TIER_COMPONENT_MAP.FOUNDRY.combination.mode, "race");
   assert.ok(!TIER_COMPONENT_MAP.FOUNDRY.voting, "voting key removed from FOUNDRY map");
 });
@@ -752,8 +752,8 @@ test("GROK_AI_TRADING is experimental identity, not migrated to AF/TS", () => {
   assert.strictEqual(EXPERIMENTAL_STRATEGIES.GROK_AI_TRADING, "GROK_AI_TRADING");
   assert.strictEqual(isLegacyAlias("GROK_AI_TRADING"), false);
   assert.strictEqual(isLegacyAlias("ADAPTIVE_FUSION"), true);
-  assert.strictEqual(normalizeStrategyKey("ADAPTIVE_FUSION"), "AF_SMC");
-  assert.strictEqual(normalizeStrategyKey("AF_WYCKOFF"), "AF_WYCKOFF");
+  assert.strictEqual(normalizeStrategyKey("ADAPTIVE_FUSION"), "SMART_MONEY_CONCEPTS");
+  assert.strictEqual(normalizeStrategyKey("WYCKOFF"), "WYCKOFF");
 });
 
 test("REGRESSION: WyckoffStrategy default entryModel fires on mature spring (not moderate)", () => {
@@ -785,10 +785,10 @@ test("REGRESSION: Wyckoff-only race promotes Scalping+Swing, not Intraday", () =
     rsi: c.closes.map(() => 50),
   };
   const multi = um.detectSignalMulti(indicators, c.lastIdx, {
-    afActiveRacers: ["AF_WYCKOFF"],
+    afActiveRacers: ["WYCKOFF"],
     entryModel: "aggressive",
   });
-  assert.strictEqual(multi.meta?.winningComponent, "AF_WYCKOFF");
+  assert.strictEqual(multi.meta?.winningComponent, "WYCKOFF");
   assert.strictEqual(multi.Scalping, "LONG");
   assert.strictEqual(multi.Swing, "LONG");
   assert.strictEqual(multi.Intraday, null, "AF racers must not attribute Intraday");

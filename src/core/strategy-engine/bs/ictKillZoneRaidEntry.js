@@ -1,5 +1,5 @@
 /**
- * ICT-style trading (BS_ICT) — BREAKOUT_STORM race participant.
+ * ICT-style trading (ICT_STYLE_TRADING) — BREAKOUT_STORM race participant.
  *
  * Kill Zone UTC windows + Liquidity Raid as standalone reversal entry:
  *   raid HIGH (sweep session high + close back) → SHORT
@@ -203,7 +203,7 @@ function evaluateIctStyleEntry({
     reason: `ict_${raid.reason}_${kz.active ? kz.zone : "off_kz"}`,
     killZone: kz,
     raid,
-    winningComponent: "BS_ICT",
+    winningComponent: "ICT_STYLE_TRADING",
     strategyLabel: "ICT-style trading",
   };
 }

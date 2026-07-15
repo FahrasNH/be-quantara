@@ -9,7 +9,7 @@
  *   data/feature-importance.json
  *
  * Usage:
- *   node scripts/analytics/feature-importance.js [--strategy AF_SMC] [--days 90]
+ *   node scripts/analytics/feature-importance.js [--strategy SMART_MONEY_CONCEPTS] [--days 90]
  */
 
 "use strict";

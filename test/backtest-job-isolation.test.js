@@ -80,7 +80,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     // Stub runner by cancelling before work — we only assert handshake + store.
     const jobId = BacktestJobService.createJob("user-test", {
       sym: "BTCUSDT",
-      strategyKey: "AF_SMC",
+      strategyKey: "SMART_MONEY_CONCEPTS",
       strategyCfg: { label: "AF", interval: "15m", higherTf: "4h" },
       periodId: "3m",
       capital: 1000,
@@ -117,13 +117,13 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     try {
       // Hold activeCount by creating a job that we don't let finish — use cancel on first after second is queued.
       const id1 = BacktestJobService.createJob("u1", {
-        sym: "ETHUSDT", strategyKey: "BS_BR",
+        sym: "ETHUSDT", strategyKey: "BREAKOUT_RETEST",
         strategyCfg: { label: "BR", interval: "15m" },
         periodId: "3m", capital: 1000, parameters: {},
       });
       await sleep(10);
       const id2 = BacktestJobService.createJob("u1", {
-        sym: "ETHUSDT", strategyKey: "MD_MR",
+        sym: "ETHUSDT", strategyKey: "MEAN_REVERSION",
         strategyCfg: { label: "MR", interval: "15m" },
         periodId: "3m", capital: 1000, parameters: {},
       });
@@ -148,7 +148,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     BacktestJobService._dispatch = () => {};
     try {
       const jobId = BacktestJobService.createJob("u-ttl", {
-        sym: "BTCUSDT", strategyKey: "AF_WYCKOFF",
+        sym: "BTCUSDT", strategyKey: "WYCKOFF",
         strategyCfg: { label: "Wyckoff", interval: "15m" },
         periodId: "12m", capital: 1000, parameters: {},
       });
@@ -168,7 +168,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     BacktestJobService._dispatch = () => {};
     try {
       const jobId = BacktestJobService.createJob("u-ttl2", {
-        sym: "BTCUSDT", strategyKey: "AF_VSA",
+        sym: "BTCUSDT", strategyKey: "VOLUME_SPREAD_ANALYSIS",
         strategyCfg: { label: "VSA", interval: "15m" },
         periodId: "12m", capital: 1000, parameters: {},
       });
@@ -199,55 +199,55 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.ok(job.result?.trades?.length === 1);
   });
 
-  await test("AF_WYCKOFF job opts get single-racer defaults in runBacktestJob", () => {
+  await test("WYCKOFF job opts get single-racer defaults in runBacktestJob", () => {
     const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
-    const out = applyStrategyJobDefaults("AF_WYCKOFF", {});
-    assert.deepStrictEqual(out.afActiveRacers, ["AF_WYCKOFF"]);
-    assert.deepStrictEqual(out.selectedComponents, ["AF_WYCKOFF"]);
+    const out = applyStrategyJobDefaults("WYCKOFF", {});
+    assert.deepStrictEqual(out.afActiveRacers, ["WYCKOFF"]);
+    assert.deepStrictEqual(out.selectedComponents, ["WYCKOFF"]);
     assert.strictEqual(out.entryModel, "aggressive");
     assert.strictEqual(out.wyckoff.entryModel, "aggressive");
-    const preserved = applyStrategyJobDefaults("AF_WYCKOFF", { afActiveVoters: ["AF_VSA"] });
-    assert.deepStrictEqual(preserved.afActiveVoters, ["AF_VSA"]);
+    const preserved = applyStrategyJobDefaults("WYCKOFF", { afActiveVoters: ["VOLUME_SPREAD_ANALYSIS"] });
+    assert.deepStrictEqual(preserved.afActiveVoters, ["VOLUME_SPREAD_ANALYSIS"]);
     assert.ok(!preserved.afActiveRacers);
-    const moderate = applyStrategyJobDefaults("AF_WYCKOFF", { entryModel: "moderate" });
+    const moderate = applyStrategyJobDefaults("WYCKOFF", { entryModel: "moderate" });
     assert.strictEqual(moderate.entryModel, "moderate");
-    const feWyckoffOnly = applyStrategyJobDefaults("AF_WYCKOFF", {
-      afActiveVoters: ["AF_WYCKOFF"],
-      selectedComponents: ["AF_WYCKOFF"],
+    const feWyckoffOnly = applyStrategyJobDefaults("WYCKOFF", {
+      afActiveVoters: ["WYCKOFF"],
+      selectedComponents: ["WYCKOFF"],
     });
     assert.strictEqual(feWyckoffOnly.entryModel, "aggressive");
   });
 
-  await test("FE Advanced AF_SMC + Wyckoff-only voters still get aggressive entryModel", () => {
+  await test("FE Advanced SMART_MONEY_CONCEPTS + Wyckoff-only voters still get aggressive entryModel", () => {
     const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
-    // useBacktest collapses AF_WYCKOFF → engine AF_SMC with afActiveVoters/selectedComponents
-    const feCollapse = applyStrategyJobDefaults("AF_SMC", {
-      afActiveVoters: ["AF_WYCKOFF"],
-      selectedComponents: ["AF_WYCKOFF"],
+    // useBacktest collapses WYCKOFF → engine SMART_MONEY_CONCEPTS with afActiveVoters/selectedComponents
+    const feCollapse = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
+      afActiveVoters: ["WYCKOFF"],
+      selectedComponents: ["WYCKOFF"],
       afUseThreeComponentVoting: true,
       afMinVotes: 2,
     });
     assert.strictEqual(feCollapse.entryModel, "aggressive");
     assert.strictEqual(feCollapse.wyckoff.entryModel, "aggressive");
-    assert.deepStrictEqual(feCollapse.afActiveVoters, ["AF_WYCKOFF"]);
+    assert.deepStrictEqual(feCollapse.afActiveVoters, ["WYCKOFF"]);
 
     // Full FOUNDRY package must NOT force Wyckoff aggressive (SMC+Wyckoff+VSA race)
-    const fullAf = applyStrategyJobDefaults("AF_SMC", {
-      afActiveVoters: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
-      selectedComponents: ["AF_SMC", "AF_WYCKOFF", "AF_VSA"],
+    const fullAf = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
+      afActiveVoters: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
+      selectedComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
     });
     assert.strictEqual(fullAf.entryModel, undefined);
     assert.ok(!fullAf.wyckoff);
 
     // VSA-only collapse must not get Wyckoff aggressive defaults
-    const vsaOnly = applyStrategyJobDefaults("AF_SMC", {
-      afActiveVoters: ["AF_VSA"],
-      selectedComponents: ["AF_VSA"],
+    const vsaOnly = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
+      afActiveVoters: ["VOLUME_SPREAD_ANALYSIS"],
+      selectedComponents: ["VOLUME_SPREAD_ANALYSIS"],
     });
     assert.strictEqual(vsaOnly.entryModel, undefined);
   });
 
-  await test("AMT / TS_VP supports all 3 trade types; pins single-racer isolation", () => {
+  await test("AMT / AUCTION_MARKET_THEORY supports all 3 trade types; pins single-racer isolation", () => {
     const {
       applyStrategyJobDefaults,
       MULTI_TYPE_STRATEGY_MAP,
@@ -255,29 +255,29 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     const { STRATEGY_SUPPORTED_TYPES } = require("../src/constants/strategySupportedTypes");
 
     // Sprint 14 factory reset: uniform 3 trade types across race components
-    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.TS_VP, ["Scalping", "Intraday", "Swing"]);
-    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_VP, ["Scalping", "Intraday", "Swing"]);
-    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.TS_MS, ["Scalping", "Intraday", "Swing"]);
+    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.AUCTION_MARKET_THEORY, ["Scalping", "Intraday", "Swing"]);
+    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.AUCTION_MARKET_THEORY, ["Scalping", "Intraday", "Swing"]);
+    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.MARKET_STRUCTURE, ["Scalping", "Intraday", "Swing"]);
 
-    const standalone = applyStrategyJobDefaults("TS_VP", {});
-    assert.deepStrictEqual(standalone.selectedComponents, ["TS_VP"]);
-    assert.deepStrictEqual(standalone.tsActiveRacers, ["TS_VP"]);
+    const standalone = applyStrategyJobDefaults("AUCTION_MARKET_THEORY", {});
+    assert.deepStrictEqual(standalone.selectedComponents, ["AUCTION_MARKET_THEORY"]);
+    assert.deepStrictEqual(standalone.tsActiveRacers, ["AUCTION_MARKET_THEORY"]);
     assert.strictEqual(standalone.activeTypes, undefined);
 
-    // FE Advanced collapse TS_VP → TS_TF must NOT strip Swing
-    const feCollapse = applyStrategyJobDefaults("TS_TF", {
-      selectedComponents: ["TS_VP"],
+    // FE Advanced collapse AUCTION_MARKET_THEORY → TREND_FOLLOWING must NOT strip Swing
+    const feCollapse = applyStrategyJobDefaults("TREND_FOLLOWING", {
+      selectedComponents: ["AUCTION_MARKET_THEORY"],
     });
     assert.strictEqual(feCollapse.activeTypes, undefined);
   });
 
-  await test("BS_BR dedicated backtest uses single mode and ignores live halt", () => {
+  await test("BREAKOUT_RETEST dedicated backtest uses single mode and ignores live halt", () => {
     const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
-    const out = applyStrategyJobDefaults("BS_BR", { selectedComponents: ["BS_BR"] });
+    const out = applyStrategyJobDefaults("BREAKOUT_RETEST", { selectedComponents: ["BREAKOUT_RETEST"] });
     assert.strictEqual(out.bsCombinationMode, "single");
     assert.strictEqual(out.bsBrHalted, false);
-    assert.deepStrictEqual(out.bsActiveRacers, ["BS_BR"]);
-    const raceOnly = applyStrategyJobDefaults("BS_BR", { selectedComponents: ["BS_ICT", "BS_LS"] });
+    assert.deepStrictEqual(out.bsActiveRacers, ["BREAKOUT_RETEST"]);
+    const raceOnly = applyStrategyJobDefaults("BREAKOUT_RETEST", { selectedComponents: ["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"] });
     assert.strictEqual(raceOnly.bsCombinationMode, undefined);
     assert.strictEqual(raceOnly.bsBrHalted, undefined);
   });
@@ -285,7 +285,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
   await test("worker crash path marks job failed without throwing in parent", async () => {
     // Simulate worker exit failure via cancel+fail semantics on a fresh job object.
     const jobId = BacktestJobService.createJob("u2", {
-      sym: "BTCUSDT", strategyKey: "AF_VSA",
+      sym: "BTCUSDT", strategyKey: "VOLUME_SPREAD_ANALYSIS",
       strategyCfg: { label: "VSA", interval: "15m", higherTf: "4h" },
       periodId: "12m", capital: 1000, parameters: {},
     });
@@ -302,7 +302,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     BacktestJobService._dispatch = () => {};
     try {
       const jobId = BacktestJobService.createJob("cursor-user", {
-        sym: "BTCUSDT", strategyKey: "BS_BR",
+        sym: "BTCUSDT", strategyKey: "BREAKOUT_RETEST",
         strategyCfg: { label: "BR", interval: "15m" },
         periodId: "3m", capital: 1000, parameters: {},
       });
