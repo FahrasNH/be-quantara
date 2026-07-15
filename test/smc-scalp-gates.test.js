@@ -132,10 +132,12 @@ test("CONF-META: _scoreSequence returns components for CSV forensics", () => {
   assert.equal(scored.components.obConfluence, true);
 });
 
-test("CSV-COLS: Sprint 13 ML columns present in TRADE_EXPORT_COLUMNS", () => {
+test("CSV-COLS: Sprint 13 ML columns live in SMC_ML_CSV_COLUMNS, not TRADE_EXPORT_COLUMNS", () => {
   const keys = new Set(TRADE_EXPORT_COLUMNS.map(([k]) => k));
+  assert.ok(keys.has("entryReasons"), "CORE must include entryReasons");
+  assert.ok(keys.has("atr"), "CORE must include atr");
   for (const [k] of SMC_ML_CSV_COLUMNS) {
-    assert.ok(keys.has(k), `missing CSV column ${k}`);
+    assert.ok(!keys.has(k), `stale ML column ${k} must not be in TRADE_EXPORT_COLUMNS`);
   }
 });
 

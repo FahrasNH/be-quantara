@@ -1,6 +1,7 @@
 /**
  * backtest-csv-entry-reasons.test.js — mapBacktestTrade prefers trade-close
  * entryReasons and falls back to entryMeta formatters (SMC / MD_MR / TS_VP / BS_BR).
+ * Sprint 14: CORE CSV schema (no stale ML numerics).
  */
 
 const { describe, test, expect, run } = require("./helpers/jest-lite");
@@ -8,8 +9,12 @@ const { mapBacktestTrade, buildTradesCsv } = require("../src/server/services/Bac
 const {
   strategyCsvColumnKeys,
   resolveExportColumnKeys,
+  UNIVERSAL_CSV_COLUMN_KEYS,
 } = require("../src/server/services/csv/strategyReasonFormatters");
-const { TRADE_EXPORT_COLUMN_KEYS } = require("#shared/csv/tradeExportCsv.js");
+const {
+  TRADE_EXPORT_COLUMN_KEYS,
+  DROPPED_ML_CSV_COLUMN_KEYS,
+} = require("#shared/csv/tradeExportCsv.js");
 
 const ctx = {
   backtestId: "bt-1",
@@ -66,7 +71,8 @@ describe("mapBacktestTrade entryReasons", () => {
         reason: "Intraday: RSI 74.2 > 72, BB(2.0σ) touch, above VWAP | ADX:transition | OB/FVG~",
       },
     }, { ...ctx, strategy: "Mean Reversion" }, 0);
-    expect(mr.entryReasons).toContain("RSI Overbought");
+    expect(mr.entryReasons).toContain("RSI Extreme");
+    expect(mr.entryReasons).toContain("BB Touch");
 
     const vp = mapBacktestTrade({
       side: "LONG", entry: 100, exit: 101, reason: "TP", strategyKey: "TS_VP",
@@ -82,6 +88,8 @@ describe("mapBacktestTrade entryReasons", () => {
       },
     }, { ...ctx, strategy: "Breakout Trading" }, 0);
     expect(br.entryReasons).toContain("BB Squeeze");
+    expect(br.entryReasons).toContain("Range Break");
+    expect(br.entryReasons).toContain("Retest Confirm");
   });
 
   test("tradeType classified by hold duration; hourUtc + holdHours derived", () => {
@@ -109,46 +117,65 @@ describe("mapBacktestTrade entryReasons", () => {
   });
 });
 
-describe("per-strategy CSV schema", () => {
+describe("CORE CSV schema (Sprint 14 redesign)", () => {
   const baseTrade = {
     date: "2026-01-01", side: "LONG", entry: 100, exit: 110, pnl: 10, fee: 0.5, reason: "TP",
   };
 
-  test("BS_BR export omits SMC-only columns", () => {
+  test("export includes Entry Reasons and omits all stale ML columns", () => {
     const csv = buildTradesCsv([{
       id: 1, symbol: "BTCUSDT", strategy_key: "BS_BR",
-      trades_data: [{ ...baseTrade, component: "BS_BR" }],
+      trades_data: [{
+        ...baseTrade,
+        component: "BS_BR",
+        entryReasons: "BB Squeeze, Range Break, Volume Spike, Retest Confirm",
+      }],
     }], { includeSummary: false });
-    expect(csv).toContain("BB Squeeze Width ATR");
-    expect(csv).toContain("Retest Depth ATR");
-    expect(csv).not.toContain("Sweep Strength");
-    expect(csv).not.toContain("FVG Size ATR");
-    expect(csv).not.toContain("Conf Sweep");
-    expect(csv).not.toContain("Conf OB Confluence");
-    expect(csv).not.toContain("HTF ADX");
+    expect(csv).toContain("Entry Reasons");
+    expect(csv).toContain("Component");
+    expect(csv).toContain("HTF Trend");
+    expect(csv).toContain("Daily Regime");
+    for (const key of DROPPED_ML_CSV_COLUMN_KEYS) {
+      const labelHints = [
+        "Sweep Strength", "FVG Size ATR", "BB Squeeze Width ATR", "Retest Depth ATR",
+        "Conf Sweep", "Conf OB Confluence", "HTF ADX", "Hour UTC", "Hold Hours",
+        "Funding Rate At Entry", "Consolidation Bars",
+      ];
+      for (const label of labelHints) {
+        expect(csv).not.toContain(label);
+      }
+      expect(TRADE_EXPORT_COLUMN_KEYS).not.toContain(key);
+    }
   });
 
-  test("AF_SMC export omits BR-only columns", () => {
-    const csv = buildTradesCsv([{
+  test("AF_SMC and BS_BR share the same CORE columns", () => {
+    const smc = buildTradesCsv([{
       id: 2, symbol: "BTCUSDT", strategy_key: "AF_SMC",
       trades_data: [{ ...baseTrade, component: "AF_SMC" }],
     }], { includeSummary: false });
-    expect(csv).toContain("Sweep Strength");
-    expect(csv).toContain("Conf Sweep");
-    expect(csv).not.toContain("BB Squeeze Width ATR");
-    expect(csv).not.toContain("Retest Depth ATR");
-    expect(csv).not.toContain("Consolidation Bars");
+    const br = buildTradesCsv([{
+      id: 3, symbol: "BTCUSDT", strategy_key: "BS_BR",
+      trades_data: [{ ...baseTrade, component: "BS_BR" }],
+    }], { includeSummary: false });
+    const smcHeader = smc.split("\n")[0];
+    const brHeader = br.split("\n")[0];
+    expect(smcHeader).toBe(brHeader);
+    expect(smcHeader).toContain("Entry Reasons");
+    expect(smcHeader).not.toContain("Sweep Strength");
+    expect(brHeader).not.toContain("BB Squeeze Width ATR");
   });
 
-  test("mixed batch uses union of component columns", () => {
+  test("resolveExportColumnKeys returns CORE only (no strategy extras)", () => {
     const keys = resolveExportColumnKeys(["AF_SMC", "BS_BR"], TRADE_EXPORT_COLUMN_KEYS);
-    expect(keys).toContain("sweepStrength");
-    expect(keys).toContain("bbSqueezeWidthAtr");
-    expect(strategyCsvColumnKeys("BS_BR")).not.toContain("sweepStrength");
-    expect(strategyCsvColumnKeys("AF_SMC")).not.toContain("retestDepthAtr");
+    expect(keys).toEqual([...TRADE_EXPORT_COLUMN_KEYS]);
+    expect(keys).not.toContain("sweepStrength");
+    expect(keys).not.toContain("bbSqueezeWidthAtr");
+    expect(strategyCsvColumnKeys("BS_BR")).toEqual([]);
+    expect(strategyCsvColumnKeys("AF_SMC")).toEqual([]);
+    expect(UNIVERSAL_CSV_COLUMN_KEYS).toContain("entryReasons");
   });
 
-  test("universal columns always present for BS_BR", () => {
+  test("CORE headers always present for any component", () => {
     const csv = buildTradesCsv([{
       id: 3, symbol: "BTCUSDT", strategy_key: "BS_BR",
       trades_data: [{
@@ -158,10 +185,15 @@ describe("per-strategy CSV schema", () => {
         closeTime: "2024-01-01T11:00:00Z",
       }],
     }], { includeSummary: false });
-    expect(csv).toContain("Hour UTC");
-    expect(csv).toContain("Hold Hours");
-    expect(csv).toContain("Trade Type");
-    expect(csv).toContain("Funding Rate At Entry");
+    expect(csv).toContain("Entry Reasons");
+    expect(csv).toContain("Exit Reason");
+    expect(csv).toContain("Open Time");
+    expect(csv).toContain("Close Time");
+    expect(csv).toContain("DryRun");
+    expect(csv).not.toContain("Hour UTC");
+    expect(csv).not.toContain("Hold Hours");
+    expect(csv).not.toContain("Trade Type");
+    expect(csv).not.toContain("Funding Rate At Entry");
   });
 });
 

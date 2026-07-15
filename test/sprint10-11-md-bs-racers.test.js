@@ -352,7 +352,8 @@ test("formatters for new keys non-empty", () => {
     dataAvailable: false,
     wick: { detected: true },
   }).length > 0);
-  assert.ok(resolveEntryReasons("MD_SA", { winningComponent: "MD_SA", zScore: -2.1, saMode: "rolling_mean" }).includes("Statistical"));
+  assert.ok(resolveEntryReasons("MD_SA", { winningComponent: "MD_SA", zScore: -2.1, saMode: "rolling_mean" }).includes("Z-Score Extreme"));
+  assert.ok(resolveEntryReasons("MD_SA", { winningComponent: "MD_SA", zScore: -2.1, saMode: "rolling_mean" }).includes("Std Threshold"));
 });
 
 console.log("\nAll Sprint 10/11 strategy tests passed.\n");

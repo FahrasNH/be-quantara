@@ -18,8 +18,11 @@ assert(summary.includes("BTCUSDT"), "summary CSV should include symbol");
 
 const trades = exportBacktests(sample, "trades");
 assert(trades.includes("LONG"), "trades CSV should include side");
-assert(trades.includes("User,ID,Session ID,Symbol,Side,Strategy"), "trades CSV should use admin Trade History columns");
+assert(trades.includes("User,ID,Symbol,Side,Strategy,Component"), "trades CSV should use CORE admin columns");
+assert(trades.includes("Entry Reasons"), "trades CSV should include Entry Reasons");
 assert(trades.includes("Backtest"), "trades CSV should label user as Backtest");
 assert(trades.includes("Performance Summary"), "trades CSV should include performance summary");
+assert(!trades.includes("Sweep Strength"), "trades CSV must omit stale ML columns");
+assert(!trades.includes("Session ID"), "trades CSV CORE schema drops Session ID");
 
 console.log("✓ BacktestCsvService tests passed");

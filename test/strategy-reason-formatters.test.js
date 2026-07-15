@@ -1,5 +1,6 @@
 /**
  * strategy-reason-formatters.test.js — unit tests for per-strategy CSV reason formatters.
+ * Vocabulary aligned to Sprint 14 Notion CSV redesign.
  */
 
 const { describe, test, expect, run } = require("./helpers/jest-lite");
@@ -39,11 +40,11 @@ describe("formatSmcReasons (AF_SMC)", () => {
     });
     expect(out).toBe("Liquidity Sweep, CHoCH, Bullish FVG");
   });
-  test("full with Fresh Order Block", () => {
+  test("full with Fresh OB", () => {
     const out = formatSmcReasons({
       sweepIdx: 1, chochIdx: 2, fvg: { type: "bearish" }, obConfluence: true,
     });
-    expect(out).toBe("Liquidity Sweep, CHoCH, Bearish FVG, Fresh Order Block");
+    expect(out).toBe("Liquidity Sweep, CHoCH, Fresh OB, Bearish FVG");
   });
 });
 
@@ -60,32 +61,32 @@ describe("formatWyckoffReasons (AF_WYCKOFF)", () => {
         entry: {
           checklist: {
             sosOrSow: true,
-            manipulation: true,
-            reclaimOrReject: true,
             volumeConfirm: true,
+            lpsOrLpsy: true,
           },
         },
       },
     });
     expect(out).toContain("Upthrust");
     expect(out).toContain("SOW");
-    expect(out).toContain("Manipulation");
+    expect(out).toContain("Volume Climax");
+    expect(out).toContain("LPS/LPSY");
   });
 });
 
 describe("formatVsaReasons (AF_VSA)", () => {
   test("null → empty", () => expect(formatVsaReasons(null)).toBe(""));
-  test("stopping volume + location", () => {
+  test("stopping volume + swing proximity", () => {
     expect(formatVsaReasons({
       reason: "vsa_stopping_volume_low",
       meta: { nearSwing: { type: "low" } },
-    })).toBe("Stopping Volume near Swing Low");
+    })).toBe("Stopping Volume, Swing Proximity");
   });
   test("no demand near high", () => {
     expect(formatVsaReasons({
       reason: "vsa_no_demand",
       meta: { nearSwing: { type: "high" } },
-    })).toBe("No-Demand near Swing High");
+    })).toBe("No-Demand, Swing Proximity");
   });
 });
 
@@ -103,7 +104,7 @@ describe("formatTrendFollowingReasons (TS_TF)", () => {
         donchianPeriod: 20,
       },
     });
-    expect(out).toBe("HTF Trend Aligned, ADX ≥ 25, Donchian 20-bar Breakout, EMA9 Retest, Volume Confirmed");
+    expect(out).toBe("HTF Aligned, ADX Strength, Donchian Break, EMA9 Retest, Volume Confirmation");
   });
 });
 
@@ -111,14 +112,14 @@ describe("formatMarketStructureReasons (TS_MS)", () => {
   test("null → empty", () => expect(formatMarketStructureReasons(null)).toBe(""));
   test("dow HL bounce", () => {
     const out = formatMarketStructureReasons({ reason: "dow_hl_pullback_bounce" });
-    expect(out).toContain("Confirmed Swing Structure");
+    expect(out).toContain("Swing Structure");
     expect(out).toContain("HH/HL Pattern");
     expect(out).toContain("Pullback Bounce");
-    expect(out).toContain("Same-Bar Confirmation");
+    expect(out).toContain("Same-Bar Confirm");
   });
   test("dow LH reject", () => {
     const out = formatMarketStructureReasons({ reason: "dow_lh_rally_reject" });
-    expect(out).toContain("LH/LL Pattern");
+    expect(out).toContain("HH/HL Pattern");
     expect(out).toContain("Pullback Reject");
   });
 });
@@ -129,7 +130,7 @@ describe("formatVolumeProfileReasons (TS_VP)", () => {
     expect(formatVolumeProfileReasons({ reason: "vwap_reclaim" })).toBe("VWAP Reclaim");
     expect(formatVolumeProfileReasons({ reason: "vwap_lose" })).toBe("VWAP Lose");
     expect(formatVolumeProfileReasons({ reason: "val_bounce" })).toBe("VAL Bounce");
-    expect(formatVolumeProfileReasons({ reason: "vah_reject" })).toBe("VAH Rejection");
+    expect(formatVolumeProfileReasons({ reason: "vah_reject" })).toBe("VAH Reject");
   });
 });
 
@@ -141,30 +142,30 @@ describe("formatMeanReversionReasons (MD_MR)", () => {
       adxRegime: "balance",
       hasObFvgConfluence: true,
     });
-    expect(out).toContain("RSI Oversold");
-    expect(out).toContain("Bollinger Band Touch");
-    expect(out).toContain("VWAP Deviation");
+    expect(out).toContain("RSI Extreme");
+    expect(out).toContain("BB Touch");
+    expect(out).toContain("VWAP Dev");
     expect(out).toContain("ADX Balance");
-    expect(out).toContain("Order Block/FVG Confluence");
+    expect(out).toContain("OB/FVG Confluence");
   });
   test("overbought path", () => {
     const out = formatMeanReversionReasons({
       reason: "Intraday: RSI 74.2 > 72, BB(2.0σ) touch, above VWAP | ADX:transition | OB/FVG~",
     });
-    expect(out).toContain("RSI Overbought");
-    expect(out).toContain("ADX Transition");
-    expect(out.includes("Order Block/FVG Confluence")).toBe(false);
+    expect(out).toContain("RSI Extreme");
+    expect(out).toContain("ADX Balance");
+    expect(out.includes("OB/FVG Confluence")).toBe(false);
   });
 });
 
 describe("formatBreakoutReasons (BS_BR)", () => {
   test("null → empty", () => expect(formatBreakoutReasons(null)).toBe(""));
-  test("three phases", () => {
+  test("core phases", () => {
     expect(formatBreakoutReasons({
       bbSqueeze: true,
       rangeBreakout: true,
       retestConfirmation: true,
-    })).toBe("BB Squeeze, Range Breakout, Retest Confirmation");
+    })).toBe("BB Squeeze, Range Break, Retest Confirm");
   });
 });
 
@@ -181,12 +182,12 @@ describe("resolveEntryReasons dispatcher", () => {
   test("dispatches MD_MR", () => {
     expect(resolveEntryReasons("MEAN_REVERSION", {
       reason: "Scalping: RSI 20 < 28, BB touch | ADX:balance | OB/FVG✓",
-    })).toContain("RSI Oversold");
+    })).toContain("RSI Extreme");
   });
   test("dispatches BS_BR", () => {
     expect(resolveEntryReasons("BREAKOUT_RETEST", {
       bbSqueeze: true, rangeBreakout: true, retestConfirmation: true,
-    })).toBe("BB Squeeze, Range Breakout, Retest Confirmation");
+    })).toBe("BB Squeeze, Range Break, Retest Confirm");
   });
   test("unknown → empty", () => {
     expect(resolveEntryReasons("UNKNOWN_X", {})).toBe("");
@@ -207,7 +208,7 @@ describe("resolveEntryReasons dispatcher", () => {
     expect(out).toContain("Liquidity Sweep");
     expect(out).toContain("CHoCH");
     expect(out).toContain("Bearish FVG");
-    expect(out).toContain("Fresh Order Block");
+    expect(out).toContain("Fresh OB");
     expect(out.length > 0).toBe(true);
   });
   test("MD_MR + TS_VP + BS_BR synthetic meta never empty", () => {
@@ -216,7 +217,7 @@ describe("resolveEntryReasons dispatcher", () => {
       adxRegime: "balance",
       hasObFvgConfluence: true,
     }).length > 0).toBe(true);
-    expect(resolveEntryReasons("TS_VP", { reason: "vah_reject" })).toBe("VAH Rejection");
+    expect(resolveEntryReasons("TS_VP", { reason: "vah_reject" })).toBe("VAH Reject");
     expect(resolveEntryReasons("BS_BR", {
       winningComponent: "BS_BR",
       bbSqueeze: true,

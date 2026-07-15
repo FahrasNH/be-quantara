@@ -98,13 +98,19 @@ function formatSmcReasons(meta) {
   const reasons = [];
   if (Number.isFinite(seq.sweepIdx) && seq.sweepIdx >= 0) reasons.push("Liquidity Sweep");
   if (Number.isFinite(seq.chochIdx) && seq.chochIdx >= 0) reasons.push("CHoCH");
+  if (seq.obConfluence || seq.freshOb || seq.ob) reasons.push("Fresh OB");
   if (seq.fvg) {
     const t = String(seq.fvg.type || "").toLowerCase();
     if (t.includes("bull")) reasons.push("Bullish FVG");
     else if (t.includes("bear")) reasons.push("Bearish FVG");
     else reasons.push("FVG");
   }
-  if (seq.obConfluence) reasons.push("Fresh Order Block");
+  if (seq.dispIdx != null || seq.displacement || seq.hasDisplacement) {
+    reasons.push("Displacement");
+  }
+  if (seq.mitigation || seq.mitigated || seq.mitigationDepth != null) {
+    reasons.push("Mitigation");
+  }
   return reasons.join(", ");
 }
 
@@ -137,12 +143,14 @@ function formatWyckoffReasons(meta) {
       const side = meta.vote || meta.meta?.entry?.side || meta.direction;
       reasons.push(String(side).toUpperCase() === "SHORT" ? "SOW" : "SOS");
     }
-    if (checklist.manipulation) reasons.push("Manipulation");
-    if (checklist.reclaimOrReject) reasons.push("Reclaim/Reject");
-    if (checklist.volumeConfirm) reasons.push("Volume Confirmation");
     if (checklist.lpsOrLpsy) {
       if (!reasons.includes("LPS") && !reasons.includes("LPSY")) reasons.push("LPS/LPSY");
     }
+    if (checklist.volumeConfirm || checklist.volumeClimax || /climax/i.test(String(raw))) {
+      reasons.push("Volume Climax");
+    }
+  } else if (/climax/i.test(String(raw))) {
+    reasons.push("Volume Climax");
   }
 
   if (reasons.length === 0 && raw) return titleCaseSnake(raw);
@@ -158,31 +166,22 @@ const VSA_REASON_MAP = {
   vsa_no_supply: "No-Supply",
 };
 
-function _vsaLocationLabel(nearSwing) {
-  if (!nearSwing) return null;
-  const t = String(nearSwing.type || nearSwing.swingType || "").toLowerCase();
-  if (t === "high" || t.includes("high")) return "near Swing High";
-  if (t === "low" || t.includes("low")) return "near Swing Low";
-  if (t === "mid" || t.includes("mid")) return "Mid-Range";
-  return null;
-}
-
 function formatVsaReasons(meta) {
   if (!meta) return "";
   const raw = meta.reason || meta.meta?.reason || "";
   const pattern = VSA_REASON_MAP[raw];
   const nearSwing = meta.meta?.nearSwing || meta.nearSwing || null;
-  const loc = _vsaLocationLabel(nearSwing);
+  const reasons = [];
 
-  if (pattern) return loc ? `${pattern} ${loc}` : pattern;
-  if (!raw) return "";
-  if (/stopping_volume/i.test(raw)) {
-    const base = "Stopping Volume";
-    return loc ? `${base} ${loc}` : base;
-  }
-  if (/no_demand/i.test(raw)) return loc ? `No-Demand ${loc}` : "No-Demand";
-  if (/no_supply/i.test(raw)) return loc ? `No-Supply ${loc}` : "No-Supply";
-  return titleCaseSnake(raw);
+  if (pattern) reasons.push(pattern);
+  else if (/stopping_volume/i.test(raw)) reasons.push("Stopping Volume");
+  else if (/no_demand/i.test(raw)) reasons.push("No-Demand");
+  else if (/no_supply/i.test(raw)) reasons.push("No-Supply");
+
+  if (nearSwing) reasons.push("Swing Proximity");
+
+  if (reasons.length === 0 && raw) return titleCaseSnake(raw);
+  return reasons.join(", ");
 }
 
 // ─── 4. TS_TF ────────────────────────────────────────────────────────────────
@@ -192,22 +191,21 @@ function formatTrendFollowingReasons(meta) {
   if (!meta) return "";
   const flags = meta.entryChecklist || meta;
   const adxMin = meta.adxMinStrength ?? flags.adxMinStrength ?? 25;
-  const donchianPeriod = meta.donchianPeriod ?? flags.donchianPeriod ?? 20;
   const reasons = [];
 
-  if (flags.htfTrendAligned || flags.htfTrendConfirmed) reasons.push("HTF Trend Aligned");
+  if (flags.htfTrendAligned || flags.htfTrendConfirmed) reasons.push("HTF Aligned");
   if (flags.adxPassed || (flags.adxStrength != null && flags.adxStrength >= adxMin)) {
-    reasons.push(`ADX ≥ ${adxMin}`);
+    reasons.push("ADX Strength");
   }
-  if (flags.donchianBroken) reasons.push(`Donchian ${donchianPeriod}-bar Breakout`);
+  if (flags.donchianBroken) reasons.push("Donchian Break");
   if (flags.ema9Retest || flags.emaRetestHeld) reasons.push("EMA9 Retest");
-  if (flags.volumeConfirmed) reasons.push("Volume Confirmed");
+  if (flags.volumeConfirmed) reasons.push("Volume Confirmation");
 
   // Signal fired ⇒ all hard gates passed even if flags were not snapshotted.
   if (reasons.length === 0 && (meta.winningComponent === "TS_TF" || meta.component === "TS_TF")) {
-    if (meta.htfTrendConfirmed) reasons.push("HTF Trend Aligned");
-    if (meta.adxStrength != null) reasons.push(`ADX ≥ ${adxMin}`);
-    if (meta.donchianBroken) reasons.push(`Donchian ${donchianPeriod}-bar Breakout`);
+    if (meta.htfTrendConfirmed) reasons.push("HTF Aligned");
+    if (meta.adxStrength != null) reasons.push("ADX Strength");
+    if (meta.donchianBroken) reasons.push("Donchian Break");
   }
   return reasons.join(", ");
 }
@@ -228,7 +226,7 @@ function formatMarketStructureReasons(meta) {
     structure === "uptrend" ||
     structure === "downtrend"
   ) {
-    labels.push("Confirmed Swing Structure");
+    labels.push("Swing Structure");
   }
 
   if (
@@ -242,12 +240,12 @@ function formatMarketStructureReasons(meta) {
     structure === "downtrend" ||
     reason.includes("structure_downtrend")
   ) {
-    labels.push("LH/LL Pattern");
+    labels.push("HH/HL Pattern");
   }
 
   if (/bounce/i.test(reason)) labels.push("Pullback Bounce");
   if (/reject/i.test(reason)) labels.push("Pullback Reject");
-  if (reason.startsWith("dow_")) labels.push("Same-Bar Confirmation");
+  if (reason.startsWith("dow_")) labels.push("Same-Bar Confirm");
 
   if (labels.length === 0 && reason) return titleCaseSnake(reason);
   return [...new Set(labels)].join(", ");
@@ -259,7 +257,7 @@ const VP_REASON_MAP = {
   vwap_reclaim: "VWAP Reclaim",
   vwap_lose: "VWAP Lose",
   val_bounce: "VAL Bounce",
-  vah_reject: "VAH Rejection",
+  vah_reject: "VAH Reject",
   vwap_retest: "VWAP Retest",
   poc_retest: "POC Retest",
 };
@@ -279,22 +277,28 @@ function formatMeanReversionReasons(meta) {
   const reason = String(meta.reason || "");
   const labels = [];
 
-  if (/RSI\s+[\d.]+\s*</i.test(reason) || /oversold/i.test(reason)) labels.push("RSI Oversold");
-  if (/RSI\s+[\d.]+\s*>/i.test(reason) || /overbought/i.test(reason)) labels.push("RSI Overbought");
-  if (/\bBB\b/i.test(reason) || /bollinger/i.test(reason)) labels.push("Bollinger Band Touch");
-  if (/VWAP/i.test(reason)) labels.push("VWAP Deviation");
+  if (
+    /RSI\s+[\d.]+\s*[<>]/i.test(reason)
+    || /oversold/i.test(reason)
+    || /overbought/i.test(reason)
+  ) {
+    labels.push("RSI Extreme");
+  }
+  if (/\bBB\b/i.test(reason) || /bollinger/i.test(reason)) labels.push("BB Touch");
+  if (/VWAP/i.test(reason)) labels.push("VWAP Dev");
 
   const adxRegime = meta.adxRegime || (reason.match(/ADX:(\w+)/i) || [])[1];
   if (adxRegime) {
     const r = String(adxRegime).toLowerCase();
-    if (r === "balance") labels.push("ADX Balance");
-    else if (r === "transition") labels.push("ADX Transition");
-    else if (r === "imbalance") labels.push("ADX Imbalance");
-    else labels.push(`ADX ${titleCaseSnake(adxRegime)}`);
+    if (r === "balance" || r === "transition" || r === "imbalance") {
+      labels.push("ADX Balance");
+    } else {
+      labels.push(`ADX ${titleCaseSnake(adxRegime)}`);
+    }
   }
 
   if (meta.hasObFvgConfluence === true || /OB\/FVG✓/.test(reason)) {
-    labels.push("Order Block/FVG Confluence");
+    labels.push("OB/FVG Confluence");
   } else if (/OB\/FVG~/.test(reason)) {
     // soft miss — omit confluence label
   }
@@ -320,14 +324,21 @@ function formatBreakoutReasons(meta) {
     reasons.push("BB Squeeze");
   }
   if (meta.rangeBreakout || meta.breakoutConfirmed) {
-    reasons.push("Range Breakout");
+    reasons.push("Range Break");
+  }
+  if (
+    meta.volumeSpike
+    || meta.breakoutVolumeConfirmed
+    || (meta.breakoutVolumeRatio != null && Number(meta.breakoutVolumeRatio) > 1)
+  ) {
+    reasons.push("Volume Spike");
   }
   if (meta.retestConfirmation || meta.retestConfirmed) {
-    reasons.push("Retest Confirmation");
+    reasons.push("Retest Confirm");
   }
-  // Signal path always completes all three phases when meta is set on fill.
+  // Signal path always completes core phases when meta is set on fill.
   if (reasons.length === 0 && (meta.winningComponent === "BS_BR" || meta.component === "BS_BR")) {
-    return "BB Squeeze, Range Breakout, Retest Confirmation";
+    return "BB Squeeze, Range Break, Volume Spike, Retest Confirm";
   }
   return reasons.join(", ");
 }
@@ -338,29 +349,40 @@ function formatSupplyDemandReasons(meta) {
   if (!meta) return "";
   const labels = [];
   const zt = meta.zoneType || "";
-  if (/demand/i.test(zt) || /demand/i.test(meta.reason || "")) labels.push("Demand Zone Retest");
-  if (/supply/i.test(zt) || /supply/i.test(meta.reason || "")) labels.push("Supply Zone Retest");
-  if (/fvg/i.test(zt) || /fvg/i.test(meta.reason || "")) labels.push("FVG Imbalance");
-  if (/ob/i.test(zt) || /order.?block/i.test(meta.reason || "")) labels.push("Order Block");
-  if (labels.length === 0 && (meta.winningComponent === "MD_SD" || meta.component === "MD_SD")) {
-    return "Supply and Demand Retest";
+  const reason = meta.reason || "";
+  if (/demand/i.test(zt) || /demand/i.test(reason)) labels.push("Demand Retest");
+  if (/supply/i.test(zt) || /supply/i.test(reason)) labels.push("Supply Retest");
+  if (/fvg/i.test(zt) || /fvg/i.test(reason) || /ob/i.test(zt) || /order.?block/i.test(reason)) {
+    labels.push("OB/FVG Structure");
   }
-  return labels.join(", ");
+  if (labels.length === 0 && (meta.winningComponent === "MD_SD" || meta.component === "MD_SD")) {
+    return "Demand Retest, Supply Retest, OB/FVG Structure";
+  }
+  return [...new Set(labels)].join(", ");
 }
 
 // ─── 10. MD_SA ───────────────────────────────────────────────────────────────
 
 function formatStatisticalArbitrageReasons(meta) {
   if (!meta) return "";
-  const labels = ["Statistical Arbitrage v1"];
-  if (meta.zScore != null && Number.isFinite(meta.zScore)) {
-    labels.push(`Z-Score ${Number(meta.zScore).toFixed(2)}`);
+  const labels = [];
+  if (
+    meta.zScore != null && Number.isFinite(meta.zScore)
+    || /z.?score/i.test(meta.reason || "")
+  ) {
+    labels.push("Z-Score Extreme");
   }
-  if (meta.saMode) labels.push(titleCaseSnake(meta.saMode));
-  if (labels.length === 1 && meta.reason) {
-    return `${labels[0]}, ${titleCaseSnake(meta.reason)}`;
+  if (meta.meanDevBand || meta.meanDeviation || /mean.?dev/i.test(meta.reason || "")) {
+    labels.push("Mean Dev Band");
   }
-  return labels.join(", ");
+  if (meta.stdThreshold != null || /std/i.test(meta.reason || "") || meta.saMode) {
+    labels.push("Std Threshold");
+  }
+  if (labels.length === 0 && (meta.winningComponent === "MD_SA" || meta.component === "MD_SA")) {
+    return "Z-Score Extreme, Mean Dev Band, Std Threshold";
+  }
+  if (labels.length === 0 && meta.reason) return titleCaseSnake(meta.reason);
+  return [...new Set(labels)].join(", ");
 }
 
 // ─── 11. BS_ICT ──────────────────────────────────────────────────────────────
@@ -368,20 +390,23 @@ function formatStatisticalArbitrageReasons(meta) {
 function formatIctStyleReasons(meta) {
   if (!meta) return "";
   const labels = [];
-  if (meta.killZone?.active || /kz|kill_zone|london|ny_open/i.test(meta.reason || "")) {
+  const reason = meta.reason || "";
+  if (meta.killZone?.active || /kz|kill_zone|london|ny_open/i.test(reason)) {
     labels.push("Kill Zone");
-    if (meta.killZone?.zone) labels.push(titleCaseSnake(meta.killZone.zone));
   }
-  if (meta.raid?.detected || /raid/i.test(meta.reason || "")) {
-    labels.push("Liquidity Raid");
-    if (meta.raid?.direction === "LONG" || /raid_low/i.test(meta.reason || "")) {
-      labels.push("Raid Low → Long");
-    } else if (meta.raid?.direction === "SHORT" || /raid_high/i.test(meta.reason || "")) {
-      labels.push("Raid High → Short");
+  if (meta.raid?.detected || /raid/i.test(reason)) {
+    if (meta.raid?.direction === "LONG" || /raid_low/i.test(reason)) {
+      labels.push("Liquidity Raid (Lo→Long)");
+    } else if (meta.raid?.direction === "SHORT" || /raid_high/i.test(reason)) {
+      labels.push("Liquidity Raid (Hi→Short)");
+    } else {
+      labels.push("Liquidity Raid");
     }
   }
+  if (meta.mss || /mss|market.?structure.?shift/i.test(reason)) labels.push("MSS");
+  if (meta.ote || /ote|optimal.?trade/i.test(reason)) labels.push("OTE");
   if (labels.length === 0 && (meta.winningComponent === "BS_ICT" || meta.component === "BS_ICT")) {
-    return "ICT Kill Zone, Liquidity Raid";
+    return "Kill Zone, Liquidity Raid, MSS, OTE";
   }
   return labels.join(", ");
 }
@@ -391,22 +416,28 @@ function formatIctStyleReasons(meta) {
 function formatLiquidationSqueezeReasons(meta) {
   if (!meta) return "";
   const labels = [];
-  if (meta.wick?.detected || /liquidation_wick|ls_/i.test(meta.reason || "")) {
-    labels.push("Liquidation Wick");
+  const reason = meta.reason || "";
+  if (meta.wick?.detected || /liquidation_wick|ls_/i.test(reason)) {
+    const dir = String(meta.wick?.side || meta.side || meta.direction || "").toUpperCase();
+    if (dir === "LONG" || /bounce/i.test(reason)) labels.push("Liquidation Wick (Bounce)");
+    else if (dir === "SHORT" || /reject/i.test(reason)) labels.push("Liquidation Wick (Reject)");
+    else labels.push("Liquidation Wick");
   }
-  if (meta.funding != null && Number.isFinite(meta.funding)) {
-    labels.push("Funding Extreme");
-  }
-  if (meta.oiChange != null && Number.isFinite(meta.oiChange)) {
-    labels.push("OI Change");
+  if (meta.squeeze || /squeeze/i.test(reason)) labels.push("Squeeze");
+  if (
+    (meta.funding != null && Number.isFinite(meta.funding))
+    || (meta.oiChange != null && Number.isFinite(meta.oiChange))
+    || /funding|oi/i.test(reason)
+  ) {
+    labels.push("OI/Funding Proxy");
   }
   if (meta.dataAvailable === false) {
-    labels.push("OI/Funding Unavailable (Fail-Open)");
+    labels.push("OI/Funding Proxy");
   }
   if (labels.length === 0 && (meta.winningComponent === "BS_LS" || meta.component === "BS_LS")) {
-    return "Liquidation/Squeeze Signal";
+    return "Liquidation Wick, Squeeze, OI/Funding Proxy";
   }
-  return labels.join(", ");
+  return [...new Set(labels)].join(", ");
 }
 
 /**
@@ -466,45 +497,25 @@ function resolveEntryReasons(strategyKey, meta) {
   }
 }
 
-// ─── Per-strategy CSV column schema ─────────────────────────────────────────
-// Universal columns are always exported. Strategy-specific columns are included
-// only when that component appears in the export batch (or single-trade context).
+// ─── CORE CSV column schema ─────────────────────────────────────────────────
+// Human-readable export is strategy-agnostic CORE columns. Strategy-specific
+// narrative lives in `entryReasons` — no per-strategy numeric extras.
 
 /** @type {readonly string[]} */
 const UNIVERSAL_CSV_COLUMN_KEYS = [
-  "id", "sessionId", "symbol", "side", "strategy", "status",
-  "entryPrice", "exitPrice", "sl", "tp", "size",
-  "pnl", "fee", "funding", "pnlNet", "pnlPct",
-  "plannedRR", "actualRR", "duration",
-  "reason", "exitReason", "entryReasons",
-  "confidence", "marketCond", "htfTrend", "dailyRegime",
-  "component", "tradeType", "atr", "entryRsi",
-  "hourUtc", "holdHours",
-  "fundingRateAtEntry", "fundingForecast24h",
-  "dryRun", "mode", "exchange", "openTime", "closeTime", "isPartial", "result",
+  "id", "symbol", "side", "strategy", "component",
+  "entryPrice", "exitPrice", "pnl", "fee", "pnlNet", "result",
+  "confidence", "htfTrend", "dailyRegime", "atr",
+  "entryReasons", "exitReason", "duration",
+  "openTime", "closeTime", "mode", "exchange", "dryRun",
 ];
 
 /**
- * Extra export columns per winning component (beyond universal).
- * Empty array = universal columns only.
+ * Extra export columns per winning component (beyond CORE).
+ * Intentionally empty — stale ML numerics were dropped from CSV reports.
  * @type {Record<string, readonly string[]>}
  */
-const STRATEGY_CSV_SCHEMA = {
-  AF_SMC: [
-    "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct", "htfAdx",
-    "confSweepStrength", "confFvgSize", "confDisplacementPct", "confHtfAlignment",
-    "confMitigationDepth", "confObConfluence",
-  ],
-  BS_BR: [
-    "bbWidth", "volumeRatio",
-    "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr",
-    "rejectionWickPct", "consolidationBars", "breakoutCandleAtr",
-  ],
-  BS_ICT: ["bbWidth", "volumeRatio"],
-  BS_LS: ["bbWidth", "volumeRatio"],
-  TS_TF: ["volumeRatio", "bbWidth", "htfAdx"],
-  MD_MR: ["volumeRatio", "bbWidth"],
-};
+const STRATEGY_CSV_SCHEMA = {};
 
 function strategyCsvColumnKeys(componentOrStrategy) {
   const key = normalizeStrategyKey(componentOrStrategy);
