@@ -53,6 +53,22 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       lastIdx,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
+    const z = result.zScore;
+    let bandTouch = "NONE";
+    if (z != null) {
+      if (z >= 2) bandTouch = "UPPER";
+      else if (z <= -2) bandTouch = "LOWER";
+    }
+    // Sprint 15: flat sa* ML fields
+    const saFields = {
+      saZScore: z ?? null,
+      saMaValue: result.mean ?? null,
+      saStdDev: result.std ?? null,
+      saUpperBand: result.upperBand ?? null,
+      saLowerBand: result.lowerBand ?? null,
+      saBandTouch: bandTouch,
+      saMeanRevertBars: null, // populated post-exit when available; entry-time N/A
+    };
     this._lastSignalMeta = {
       component: "MD_SA",
       winningComponent: result.signal ? "MD_SA" : null,
@@ -62,6 +78,9 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       reason: result.reason,
       zScore: result.zScore,
       saMode: result.mode,
+      mean: result.mean,
+      std: result.std,
+      ...saFields,
     };
     return result.signal || null;
   }

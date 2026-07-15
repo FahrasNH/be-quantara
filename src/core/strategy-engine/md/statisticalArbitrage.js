@@ -135,14 +135,48 @@ function evaluateStatisticalArbitrageEntry({
       z = 0.7 * z + 0.3 * vDev;
       mode = "rolling_mean_vwap_blend";
     }
+
+    let signal = null;
+    if (z <= -entryZ) signal = "LONG";
+    else if (z >= entryZ) signal = "SHORT";
+
+    if (!signal) {
+      return {
+        signal: null, confidence: 0, reason: "z_inside_band", zScore: z, mode,
+        mean: stats.mean, std: stats.std,
+        upperBand: stats.mean + 2 * stats.std,
+        lowerBand: stats.mean - 2 * stats.std,
+      };
+    }
+
+    const excess = Math.abs(z) - entryZ;
+    const confidence = Math.min(maxConf, baseConf + excess * zBoost);
+    return {
+      signal,
+      confidence,
+      reason: `sa_v1_${mode}_z${z.toFixed(2)}_${signal.toLowerCase()}`,
+      zScore: z,
+      mode,
+      mean: stats.mean,
+      std: stats.std,
+      upperBand: stats.mean + 2 * stats.std,
+      lowerBand: stats.mean - 2 * stats.std,
+    };
   }
 
+  // Benchmark residual path — still compute rolling bands for export
+  const stats = _rollingMeanStd(closes, lastIdx, lookback);
   let signal = null;
   if (z <= -entryZ) signal = "LONG";
   else if (z >= entryZ) signal = "SHORT";
 
   if (!signal) {
-    return { signal: null, confidence: 0, reason: "z_inside_band", zScore: z, mode };
+    return {
+      signal: null, confidence: 0, reason: "z_inside_band", zScore: z, mode,
+      mean: stats?.mean ?? null, std: stats?.std ?? null,
+      upperBand: stats ? stats.mean + 2 * stats.std : null,
+      lowerBand: stats ? stats.mean - 2 * stats.std : null,
+    };
   }
 
   const excess = Math.abs(z) - entryZ;
@@ -154,6 +188,10 @@ function evaluateStatisticalArbitrageEntry({
     reason: `sa_v1_${mode}_z${z.toFixed(2)}_${signal.toLowerCase()}`,
     zScore: z,
     mode,
+    mean: stats?.mean ?? null,
+    std: stats?.std ?? null,
+    upperBand: stats ? stats.mean + 2 * stats.std : null,
+    lowerBand: stats ? stats.mean - 2 * stats.std : null,
   };
 }
 

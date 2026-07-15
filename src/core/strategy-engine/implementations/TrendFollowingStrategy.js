@@ -662,6 +662,16 @@ class TrendFollowingStrategy extends StrategyBase {
     else if (bars > 40) confidence += 2;
     confidence = Math.max(40, Math.min(95, Math.round(confidence)));
 
+    // Sprint 15: flat tf* ML fields for Dynamic ML multi-sheet export
+    const tfFields = {
+      tfAdxStrength: this._trendState.htfAdxStrength ?? null,
+      tfDonchianPeriod: donchianPeriod ?? null,
+      tfBarsInTrend: this._trendState.barsInTrend ?? null,
+      tfVolRatio: volRatio ?? null,
+      tfHtfTrendConfirmed: Boolean(this._trendState.htfTrendConfirmed),
+      tfEmaCrossover: Boolean(checklist.ema9Retest ?? false),
+    };
+
     return {
       // Racer identity — trade-type (Intraday/Swing) is stamped by the multi-TF harness.
       // Hardcoding "Swing" painted every TF fill as Swing and broke AMT/TF type stats.
@@ -683,11 +693,13 @@ class TrendFollowingStrategy extends StrategyBase {
         donchianBroken: checklist.donchianBroken ?? this._trendState.donchianBroken,
         ema9Retest: checklist.ema9Retest ?? false,
         volumeConfirmed: checklist.volumeConfirmed ?? false,
+        volRatio,
         adxMinStrength,
         donchianPeriod,
       },
       adxMinStrength,
       donchianPeriod,
+      ...tfFields,
     };
   }
 

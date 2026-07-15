@@ -90,12 +90,46 @@ class WyckoffStrategy extends StrategyBase {
       { lastSignalIdx: this._lastSignalIdx },
     );
 
+    const nested = result.meta || {};
+    const range = nested.range || {};
+    const spring = nested.spring || {};
+    const upthrust = nested.upthrust || {};
+    const entry = nested.entry || {};
+    const checklist = entry.checklist || {};
+    const reason = String(result.reason || "");
+    let patternType = null;
+    if (spring.detected || reason.toLowerCase().includes("spring")) patternType = "SPRING";
+    else if (upthrust.detected || reason.toLowerCase().includes("upthrust") || reason.includes("utad")) {
+      patternType = "UPTHRUST";
+    }
+    const event = spring.detected ? spring : (upthrust.detected ? upthrust : null);
+    let sosOrSow = null;
+    if (checklist.sosOrSow) sosOrSow = patternType === "SPRING" ? "SOS" : "SOW";
+    else if (reason.includes("sos")) sosOrSow = "SOS";
+    else if (reason.includes("sow")) sosOrSow = "SOW";
+    // Sprint 15: flat wy* ML fields
+    const wyFields = {
+      wyPatternType: patternType,
+      wyAccumulationBars: range.bars
+        ?? (range.rangeEndIdx != null && range.rangeStartIdx != null
+          ? range.rangeEndIdx - range.rangeStartIdx
+          : null),
+      wyFakeBreakDepthAtr: event?.depthAtr ?? event?.penetrationAtr ?? null,
+      wyReclameBars: event?.reclaimBars ?? entry.reclaimBars ?? null,
+      wyVolumeRatio: event?.volRatio ?? entry.volRatio ?? null,
+      wySosOrSow: sosOrSow,
+      wyLpsLevel: entry.lpsLevel ?? nested.lpsLevel
+        ?? (patternType === "SPRING" ? range.rangeLow : range.rangeHigh) ?? null,
+    };
     this._lastSignalMeta = {
       component: "AF_WYCKOFF",
+      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "AF_WYCKOFF" : null,
+      strategyLabel: "Wyckoff Method (Spring/Upthrust)",
       vote: result.vote,
       confidence: result.confidence,
       reason: result.reason,
       meta: result.meta || null,
+      ...wyFields,
     };
 
     if (result.vote === "LONG" || result.vote === "SHORT") {
@@ -117,7 +151,34 @@ class WyckoffStrategy extends StrategyBase {
     );
     this._lastSignalMeta = {
       component: "AF_WYCKOFF",
+      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "AF_WYCKOFF" : null,
+      strategyLabel: "Wyckoff Method (Spring/Upthrust)",
       ...result,
+      ...(() => {
+        const nested = result.meta || {};
+        const range = nested.range || {};
+        const spring = nested.spring || {};
+        const upthrust = nested.upthrust || {};
+        const entry = nested.entry || {};
+        const reason = String(result.reason || "");
+        let patternType = null;
+        if (spring.detected || reason.toLowerCase().includes("spring")) patternType = "SPRING";
+        else if (upthrust.detected || reason.includes("upthrust") || reason.includes("utad")) patternType = "UPTHRUST";
+        const event = spring.detected ? spring : (upthrust.detected ? upthrust : null);
+        return {
+          wyPatternType: patternType,
+          wyAccumulationBars: range.bars
+            ?? (range.rangeEndIdx != null && range.rangeStartIdx != null
+              ? range.rangeEndIdx - range.rangeStartIdx : null),
+          wyFakeBreakDepthAtr: event?.depthAtr ?? event?.penetrationAtr ?? null,
+          wyReclameBars: event?.reclaimBars ?? entry.reclaimBars ?? null,
+          wyVolumeRatio: event?.volRatio ?? entry.volRatio ?? null,
+          wySosOrSow: entry.checklist?.sosOrSow
+            ? (patternType === "SPRING" ? "SOS" : "SOW") : null,
+          wyLpsLevel: entry.lpsLevel
+            ?? (patternType === "SPRING" ? range.rangeLow : range.rangeHigh) ?? null,
+        };
+      })(),
     };
     if (result.vote === "LONG" || result.vote === "SHORT") {
       this._lastSignalIdx = lastIdx;

@@ -150,18 +150,34 @@ function extractBsBrEnrichment(meta) {
   };
 }
 
-/** Sprint 15: TS_VP enrichment for Dynamic ML multi-sheet export. */
-function extractTsVpEnrichment(meta) {
+const {
+  extractTsVpEnrichment,
+  extractTsTfEnrichment,
+  extractTsMsEnrichment,
+  extractMdMrEnrichment,
+  extractMdSdEnrichment,
+  extractMdSaEnrichment,
+  extractBsIctEnrichment,
+  extractBsLsEnrichment,
+  extractAfVsaEnrichment,
+  extractAfWyckoffEnrichment,
+  ALL_ML_ENRICH_KEYS,
+} = require("../../../shared/csv/strategyMlEnrichment");
+
+/** Sprint 15: collect all strategy ML enrichments from signal meta. */
+function extractStrategyMlEnrichment(meta) {
   if (!meta) return {};
-  const nested = meta.meta && typeof meta.meta === "object" ? meta.meta : {};
-  const reason = meta.reason || nested.reason || null;
   return {
-    vpVwapLevel: meta.vpVwapLevel ?? nested.vwap ?? null,
-    vpVahLevel: meta.vpVahLevel ?? nested.vah ?? null,
-    vpValLevel: meta.vpValLevel ?? nested.val ?? null,
-    vpPocLevel: meta.vpPocLevel ?? nested.poc ?? null,
-    vpTriggerType: meta.vpTriggerType
-      ?? (reason ? String(reason).toUpperCase() : null),
+    ...extractTsTfEnrichment(meta),
+    ...extractTsMsEnrichment(meta),
+    ...extractTsVpEnrichment(meta),
+    ...extractMdMrEnrichment(meta),
+    ...extractMdSdEnrichment(meta),
+    ...extractMdSaEnrichment(meta),
+    ...extractBsIctEnrichment(meta),
+    ...extractBsLsEnrichment(meta),
+    ...extractAfVsaEnrichment(meta),
+    ...extractAfWyckoffEnrichment(meta),
   };
 }
 
@@ -253,7 +269,7 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
     "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr",
     "rejectionWickPct", "consolidationBars", "breakoutCandleAtr",
     "bbWidth", "volumeRatio",
-    "vpVwapLevel", "vpVahLevel", "vpValLevel", "vpPocLevel", "vpTriggerType",
+    ...ALL_ML_ENRICH_KEYS,
   ];
   for (const k of ENRICH_KEYS) {
     if (tradeObj[k] == null && position?.[k] != null) tradeObj[k] = position[k];
@@ -743,6 +759,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       vpValLevel: position.vpValLevel ?? null,
       vpPocLevel: position.vpPocLevel ?? null,
       vpTriggerType: position.vpTriggerType ?? null,
+      // Sprint 15 ML enrichments — spread remaining ALL_ML keys from position
+      ...Object.fromEntries(
+        ALL_ML_ENRICH_KEYS
+          .filter((k) => !k.startsWith("vp"))
+          .map((k) => [k, position[k] ?? null])
+      ),
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
@@ -1056,7 +1078,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         fundingRate: fundingRateNow,
       });
       const brEnrich = extractBsBrEnrichment(meta || lastMeta);
-      const vpEnrich = extractTsVpEnrichment(meta || lastMeta);
+      const mlEnrich = extractStrategyMlEnrichment(meta || lastMeta);
 
       // Open position
       positions.set(componentId, {
@@ -1085,7 +1107,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         winningComponent,
         ...mlFeatures,
         ...brEnrich,
-        ...vpEnrich,
+        ...mlEnrich,
 
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.
@@ -2255,6 +2277,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
             entryMeta: pendingOrder.entryMeta ?? null,
             strategyLabel: pendingOrder.strategyLabel || strategyDisplayName,
             winningComponent: pendingOrder.winningComponent || pendingOrder.component,
+            // Sprint 14/15 ML enrichments carried on the pending order
+            ...Object.fromEntries(
+              ["bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr",
+                "rejectionWickPct", "consolidationBars", "breakoutCandleAtr",
+                "bbWidth", "volumeRatio", ...ALL_ML_ENRICH_KEYS]
+                .map((k) => [k, pendingOrder[k] ?? null])
+            ),
             R: pendingOrder.slDist,
             slCurrent: openSl,
             remainingSize: size,
@@ -2460,7 +2489,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     let brEnrich = {};
-    let vpEnrich = {};
+    let mlEnrich = {};
     if (meta && typeof strategy.calculateRiskConfig === "function") {
 
       // Backtest passes full type names (Scalping/Intraday/Swing), not legacy A/B/C
@@ -2484,7 +2513,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
       confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
       brEnrich = extractBsBrEnrichment(meta);
-      vpEnrich = extractTsVpEnrichment(meta);
+      mlEnrich = extractStrategyMlEnrichment(meta);
     } else {
       slDist = atr * (cfg.atrMultiplier ?? 1.4) * pairSlMult;
       tpDist = slDist * (cfg.riskReward ?? 2);
@@ -2515,7 +2544,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         strategyLabel: tradeLabel,
         winningComponent: meta?.winningComponent || component,
         ...brEnrich,
-        ...vpEnrich,
+        ...mlEnrich,
       };
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -2545,7 +2574,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       strategyLabel: tradeLabel,
       winningComponent: meta?.winningComponent || component,
       ...brEnrich,
-      ...vpEnrich,
+      ...mlEnrich,
       // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
       // slCurrent is the live stop (moves to BEP/+1R after milestones fire),
       // remainingSize shrinks as partials execute; originalSize stays fixed for
@@ -2835,4 +2864,14 @@ module.exports = {
   resolveTradeDisplayName,
   extractBsBrEnrichment,
   extractTsVpEnrichment,
+  extractTsTfEnrichment,
+  extractTsMsEnrichment,
+  extractMdMrEnrichment,
+  extractMdSdEnrichment,
+  extractMdSaEnrichment,
+  extractBsIctEnrichment,
+  extractBsLsEnrichment,
+  extractAfVsaEnrichment,
+  extractAfWyckoffEnrichment,
+  extractStrategyMlEnrichment,
 };

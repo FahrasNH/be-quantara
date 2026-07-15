@@ -255,8 +255,24 @@ class MeanReversionStrategy extends StrategyBase {
       });
     }
 
+    const bbForLevels = bbForTp || bbA;
+    const vwapDev = vwap > 0 ? ((close - vwap) / vwap) * 100 : null;
+    // Sprint 15: flat mr* ML fields
+    const mrFields = {
+      mrRsiValue: rsiNow ?? null,
+      mrBbMidLevel: bbForLevels?.middle ?? null,
+      mrBbUpperLevel: bbForLevels?.upper ?? null,
+      mrBbLowerLevel: bbForLevels?.lower ?? null,
+      mrVwapLevel: vwap ?? null,
+      mrVwapDeviation: vwapDev,
+      mrAdxRegime: adxGate.regime != null
+        ? String(adxGate.regime).toUpperCase()
+        : null,
+    };
     this._lastSignalMeta = {
       component,
+      winningComponent: "MD_MR",
+      strategyLabel: "Mean Reversion",
       componentConfidence: confidence,
       marketCond: "MEAN_REVERT",
       reason,
@@ -267,6 +283,9 @@ class MeanReversionStrategy extends StrategyBase {
       tpOverride: tpTarget.takeProfit,
       nearestFvg: tpTarget.fvg || obFvg.nearestFvg,
       nearestOb: obFvg.nearestOb,
+      _lastBBLevels: this._lastBBLevels,
+      rsiValue: rsiNow,
+      ...mrFields,
     };
     return signal;
   }

@@ -28,6 +28,8 @@ const {
   pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
+  buildDynamicMultiSheetXlsx,
+  normalizeMlStrategyKey,
 } = require("#shared/csv/tradeExportCsv.js");
 const {
   formatExitReason,
@@ -236,6 +238,68 @@ function mapBacktestTrade(trade, ctx, index) {
     vpValLevel: trade.vpValLevel ?? NA,
     vpPocLevel: trade.vpPocLevel ?? NA,
     vpTriggerType: trade.vpTriggerType ?? NA,
+    // Sprint 15 strategy ML columns
+    tfAdxStrength: trade.tfAdxStrength ?? NA,
+    tfDonchianPeriod: trade.tfDonchianPeriod ?? NA,
+    tfBarsInTrend: trade.tfBarsInTrend ?? NA,
+    tfVolRatio: trade.tfVolRatio ?? NA,
+    tfHtfTrendConfirmed: trade.tfHtfTrendConfirmed ?? NA,
+    tfEmaCrossover: trade.tfEmaCrossover ?? NA,
+    msSwingHighPrice: trade.msSwingHighPrice ?? NA,
+    msSwingLowPrice: trade.msSwingLowPrice ?? NA,
+    msPullbackDepthAtr: trade.msPullbackDepthAtr ?? NA,
+    msHhPattern: trade.msHhPattern ?? NA,
+    msLlPattern: trade.msLlPattern ?? NA,
+    msPullbackConfirmed: trade.msPullbackConfirmed ?? NA,
+    mrRsiValue: trade.mrRsiValue ?? NA,
+    mrBbMidLevel: trade.mrBbMidLevel ?? NA,
+    mrBbUpperLevel: trade.mrBbUpperLevel ?? NA,
+    mrBbLowerLevel: trade.mrBbLowerLevel ?? NA,
+    mrVwapLevel: trade.mrVwapLevel ?? NA,
+    mrVwapDeviation: trade.mrVwapDeviation ?? NA,
+    mrAdxRegime: trade.mrAdxRegime ?? NA,
+    sdZoneType: trade.sdZoneType ?? NA,
+    sdZoneLevel: trade.sdZoneLevel ?? NA,
+    sdZoneSizeAtr: trade.sdZoneSizeAtr ?? NA,
+    sdRetestDepthAtr: trade.sdRetestDepthAtr ?? NA,
+    sdVolumeConfirmation: trade.sdVolumeConfirmation ?? NA,
+    sdTimeToRetestBars: trade.sdTimeToRetestBars ?? NA,
+    sdConfluence: trade.sdConfluence ?? NA,
+    saZScore: trade.saZScore ?? NA,
+    saMaValue: trade.saMaValue ?? NA,
+    saStdDev: trade.saStdDev ?? NA,
+    saUpperBand: trade.saUpperBand ?? NA,
+    saLowerBand: trade.saLowerBand ?? NA,
+    saBandTouch: trade.saBandTouch ?? NA,
+    saMeanRevertBars: trade.saMeanRevertBars ?? NA,
+    ictKillZoneHour: trade.ictKillZoneHour ?? NA,
+    ictKillZoneLevel: trade.ictKillZoneLevel ?? NA,
+    ictRaidType: trade.ictRaidType ?? NA,
+    ictRaidDepthAtr: trade.ictRaidDepthAtr ?? NA,
+    ictVolumeRatio: trade.ictVolumeRatio ?? NA,
+    ictReversal: trade.ictReversal ?? NA,
+    ictMssPct: trade.ictMssPct ?? NA,
+    lsOiValue: trade.lsOiValue ?? NA,
+    lsOiPercentile: trade.lsOiPercentile ?? NA,
+    lsBbWidth: trade.lsBbWidth ?? NA,
+    lsBbWidthPercentile: trade.lsBbWidthPercentile ?? NA,
+    lsLiquidationLevel: trade.lsLiquidationLevel ?? NA,
+    lsWickDepthAtr: trade.lsWickDepthAtr ?? NA,
+    lsOiForecast24h: trade.lsOiForecast24h ?? NA,
+    vsaPatternType: trade.vsaPatternType ?? NA,
+    vsaSpread: trade.vsaSpread ?? NA,
+    vsaVolume: trade.vsaVolume ?? NA,
+    vsaAvgSpread: trade.vsaAvgSpread ?? NA,
+    vsaAvgVolume: trade.vsaAvgVolume ?? NA,
+    vsaSwingProximity: trade.vsaSwingProximity ?? NA,
+    vsaReversal: trade.vsaReversal ?? NA,
+    wyPatternType: trade.wyPatternType ?? NA,
+    wyAccumulationBars: trade.wyAccumulationBars ?? NA,
+    wyFakeBreakDepthAtr: trade.wyFakeBreakDepthAtr ?? NA,
+    wyReclameBars: trade.wyReclameBars ?? NA,
+    wyVolumeRatio: trade.wyVolumeRatio ?? NA,
+    wySosOrSow: trade.wySosOrSow ?? NA,
+    wyLpsLevel: trade.wyLpsLevel ?? NA,
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,
@@ -293,8 +357,25 @@ function exportBacktests(records, mode = "trades") {
   return buildTradesCsv(records, { includeSummary: true, adminFormat: true });
 }
 
+/**
+ * Sprint 15 Dynamic ML multi-sheet XLSX export.
+ * @param {object[]} records — backtest archive rows
+ * @param {{ strategies?: string[], adminFormat?: boolean }} [opts]
+ * @returns {Buffer}
+ */
+function exportBacktestsXlsx(records, opts = {}) {
+  const rows = collectTradeRows(records, { adminFormat: opts.adminFormat !== false });
+  const selected = Array.isArray(opts.strategies)
+    ? opts.strategies.map(normalizeMlStrategyKey).filter(Boolean)
+    : null;
+  return buildDynamicMultiSheetXlsx(rows, selected, {
+    adminFormat: opts.adminFormat !== false,
+  });
+}
+
 module.exports = {
   exportBacktests,
+  exportBacktestsXlsx,
   buildSummaryCsv,
   buildTradesCsv,
   mapBacktestTrade,

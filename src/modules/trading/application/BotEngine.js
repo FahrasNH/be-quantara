@@ -2234,13 +2234,27 @@ class BotEngine extends EventEmitter {
             indicatorSnapshot.strategyLabel = attributionLabel;
             indicatorSnapshot.signalComponents = tfMeta.signalComponents || null;
             indicatorSnapshot.tsRace = tfMeta.tsRace || null;
-            // Sprint 15: TS_VP ML metadata → persisted trade.indicators
+            // Sprint 15: per-racer ML metadata → persisted trade.indicators
             if (tfMeta.winningComponent === "TS_VP") {
               indicatorSnapshot.vpVwapLevel = tfMeta.vpVwapLevel ?? null;
               indicatorSnapshot.vpVahLevel = tfMeta.vpVahLevel ?? null;
               indicatorSnapshot.vpValLevel = tfMeta.vpValLevel ?? null;
               indicatorSnapshot.vpPocLevel = tfMeta.vpPocLevel ?? null;
               indicatorSnapshot.vpTriggerType = tfMeta.vpTriggerType ?? null;
+            } else if (tfMeta.winningComponent === "TS_TF") {
+              indicatorSnapshot.tfAdxStrength = tfMeta.tfAdxStrength ?? null;
+              indicatorSnapshot.tfDonchianPeriod = tfMeta.tfDonchianPeriod ?? null;
+              indicatorSnapshot.tfBarsInTrend = tfMeta.tfBarsInTrend ?? null;
+              indicatorSnapshot.tfVolRatio = tfMeta.tfVolRatio ?? null;
+              indicatorSnapshot.tfHtfTrendConfirmed = tfMeta.tfHtfTrendConfirmed ?? null;
+              indicatorSnapshot.tfEmaCrossover = tfMeta.tfEmaCrossover ?? null;
+            } else if (tfMeta.winningComponent === "TS_MS") {
+              indicatorSnapshot.msSwingHighPrice = tfMeta.msSwingHighPrice ?? null;
+              indicatorSnapshot.msSwingLowPrice = tfMeta.msSwingLowPrice ?? null;
+              indicatorSnapshot.msPullbackDepthAtr = tfMeta.msPullbackDepthAtr ?? null;
+              indicatorSnapshot.msHhPattern = tfMeta.msHhPattern ?? null;
+              indicatorSnapshot.msLlPattern = tfMeta.msLlPattern ?? null;
+              indicatorSnapshot.msPullbackConfirmed = tfMeta.msPullbackConfirmed ?? null;
             }
           }
         }
@@ -2251,7 +2265,9 @@ class BotEngine extends EventEmitter {
         const afMeta = (() => {
           try {
             const { strategyRegistry: reg } = require("../../../core/strategy-engine/index");
-            return reg.get("AF_SMC")?.getLastSignalMeta?.() || null;
+            return reg.get("AF_SMC")?.getLastSignalMeta?.()
+              || reg.get(sk)?.getLastSignalMeta?.()
+              || null;
           } catch {
             return null;
           }
@@ -2265,6 +2281,111 @@ class BotEngine extends EventEmitter {
             indicatorSnapshot.signalComponents = afMeta.signalComponents || null;
             indicatorSnapshot.afRace = afMeta.afRace || null;
             if (afMeta.afVotes) indicatorSnapshot.afVotes = afMeta.afVotes;
+            if (afMeta.winningComponent === "AF_VSA") {
+              indicatorSnapshot.vsaPatternType = afMeta.vsaPatternType ?? null;
+              indicatorSnapshot.vsaSpread = afMeta.vsaSpread ?? null;
+              indicatorSnapshot.vsaVolume = afMeta.vsaVolume ?? null;
+              indicatorSnapshot.vsaAvgSpread = afMeta.vsaAvgSpread ?? null;
+              indicatorSnapshot.vsaAvgVolume = afMeta.vsaAvgVolume ?? null;
+              indicatorSnapshot.vsaSwingProximity = afMeta.vsaSwingProximity ?? null;
+              indicatorSnapshot.vsaReversal = afMeta.vsaReversal ?? null;
+            } else if (afMeta.winningComponent === "AF_WYCKOFF") {
+              indicatorSnapshot.wyPatternType = afMeta.wyPatternType ?? null;
+              indicatorSnapshot.wyAccumulationBars = afMeta.wyAccumulationBars ?? null;
+              indicatorSnapshot.wyFakeBreakDepthAtr = afMeta.wyFakeBreakDepthAtr ?? null;
+              indicatorSnapshot.wyReclameBars = afMeta.wyReclameBars ?? null;
+              indicatorSnapshot.wyVolumeRatio = afMeta.wyVolumeRatio ?? null;
+              indicatorSnapshot.wySosOrSow = afMeta.wySosOrSow ?? null;
+              indicatorSnapshot.wyLpsLevel = afMeta.wyLpsLevel ?? null;
+            }
+          }
+        }
+      } else if (
+        sk === "MD_MR" || sk === "MEAN_REVERSION" || sk === "MD_SD" || sk === "MD_SA"
+        || sk === "MEAN_DRIFT"
+      ) {
+        const mdMeta = (() => {
+          try {
+            const { strategyRegistry: reg } = require("../../../core/strategy-engine/index");
+            return reg.get("MD_MR")?.getLastSignalMeta?.()
+              || reg.get(sk)?.getLastSignalMeta?.()
+              || null;
+          } catch {
+            return null;
+          }
+        })();
+        if (mdMeta) {
+          const winner = mdMeta.winningComponent || (sk.startsWith("MD_") ? sk : "MD_MR");
+          attributionKey = winner;
+          attributionLabel = mdMeta.strategyLabel || attributionLabel;
+          if (indicatorSnapshot) {
+            indicatorSnapshot.winningComponent = winner;
+            indicatorSnapshot.strategyLabel = attributionLabel;
+            if (winner === "MD_MR") {
+              indicatorSnapshot.mrRsiValue = mdMeta.mrRsiValue ?? null;
+              indicatorSnapshot.mrBbMidLevel = mdMeta.mrBbMidLevel ?? null;
+              indicatorSnapshot.mrBbUpperLevel = mdMeta.mrBbUpperLevel ?? null;
+              indicatorSnapshot.mrBbLowerLevel = mdMeta.mrBbLowerLevel ?? null;
+              indicatorSnapshot.mrVwapLevel = mdMeta.mrVwapLevel ?? null;
+              indicatorSnapshot.mrVwapDeviation = mdMeta.mrVwapDeviation ?? null;
+              indicatorSnapshot.mrAdxRegime = mdMeta.mrAdxRegime ?? null;
+            } else if (winner === "MD_SD") {
+              indicatorSnapshot.sdZoneType = mdMeta.sdZoneType ?? null;
+              indicatorSnapshot.sdZoneLevel = mdMeta.sdZoneLevel ?? null;
+              indicatorSnapshot.sdZoneSizeAtr = mdMeta.sdZoneSizeAtr ?? null;
+              indicatorSnapshot.sdRetestDepthAtr = mdMeta.sdRetestDepthAtr ?? null;
+              indicatorSnapshot.sdVolumeConfirmation = mdMeta.sdVolumeConfirmation ?? null;
+              indicatorSnapshot.sdTimeToRetestBars = mdMeta.sdTimeToRetestBars ?? null;
+              indicatorSnapshot.sdConfluence = mdMeta.sdConfluence ?? null;
+            } else if (winner === "MD_SA") {
+              indicatorSnapshot.saZScore = mdMeta.saZScore ?? null;
+              indicatorSnapshot.saMaValue = mdMeta.saMaValue ?? null;
+              indicatorSnapshot.saStdDev = mdMeta.saStdDev ?? null;
+              indicatorSnapshot.saUpperBand = mdMeta.saUpperBand ?? null;
+              indicatorSnapshot.saLowerBand = mdMeta.saLowerBand ?? null;
+              indicatorSnapshot.saBandTouch = mdMeta.saBandTouch ?? null;
+              indicatorSnapshot.saMeanRevertBars = mdMeta.saMeanRevertBars ?? null;
+            }
+          }
+        }
+      } else if (
+        sk === "BS_BR" || sk === "BREAKOUT_RETEST" || sk === "BREAKOUT_TRADING"
+        || sk === "BS_ICT" || sk === "BS_LS" || sk === "BREAKOUT_STORM"
+      ) {
+        const bsMeta = (() => {
+          try {
+            const { strategyRegistry: reg } = require("../../../core/strategy-engine/index");
+            return reg.get(sk)?.getLastSignalMeta?.()
+              || getBreakoutRetestMeta?.()
+              || null;
+          } catch {
+            return getBreakoutRetestMeta?.() || null;
+          }
+        })();
+        if (bsMeta) {
+          const winner = bsMeta.winningComponent || (sk.startsWith("BS_") ? sk : "BS_BR");
+          attributionKey = winner;
+          attributionLabel = bsMeta.strategyLabel || attributionLabel;
+          if (indicatorSnapshot) {
+            indicatorSnapshot.winningComponent = winner;
+            indicatorSnapshot.strategyLabel = attributionLabel;
+            if (winner === "BS_ICT") {
+              indicatorSnapshot.ictKillZoneHour = bsMeta.ictKillZoneHour ?? null;
+              indicatorSnapshot.ictKillZoneLevel = bsMeta.ictKillZoneLevel ?? null;
+              indicatorSnapshot.ictRaidType = bsMeta.ictRaidType ?? null;
+              indicatorSnapshot.ictRaidDepthAtr = bsMeta.ictRaidDepthAtr ?? null;
+              indicatorSnapshot.ictVolumeRatio = bsMeta.ictVolumeRatio ?? null;
+              indicatorSnapshot.ictReversal = bsMeta.ictReversal ?? null;
+              indicatorSnapshot.ictMssPct = bsMeta.ictMssPct ?? null;
+            } else if (winner === "BS_LS") {
+              indicatorSnapshot.lsOiValue = bsMeta.lsOiValue ?? null;
+              indicatorSnapshot.lsOiPercentile = bsMeta.lsOiPercentile ?? null;
+              indicatorSnapshot.lsBbWidth = bsMeta.lsBbWidth ?? null;
+              indicatorSnapshot.lsBbWidthPercentile = bsMeta.lsBbWidthPercentile ?? null;
+              indicatorSnapshot.lsLiquidationLevel = bsMeta.lsLiquidationLevel ?? null;
+              indicatorSnapshot.lsWickDepthAtr = bsMeta.lsWickDepthAtr ?? null;
+              indicatorSnapshot.lsOiForecast24h = bsMeta.lsOiForecast24h ?? null;
+            }
           }
         }
       }
