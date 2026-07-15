@@ -34,6 +34,7 @@ const {
   positionFromDbTrade,
 } = require("../../../core/execution-engine");
 const { checkEntryRiskGates, checkAtrRangeGate } = require("../../../core/risk-engine/entryRiskGates");
+const { applyBsBrSnapshotFields } = require("../../../shared/csv/strategyMlEnrichment");
 
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
 // Lazy-import Prisma (singleton bersama) agar tidak circular dengan db module
@@ -1484,6 +1485,7 @@ class BotEngine extends EventEmitter {
                 indicatorSnapshot.breakoutLevel = brMeta.breakoutLevel ?? null;
                 indicatorSnapshot.retestExtreme = brMeta.retestExtreme ?? null;
                 indicatorSnapshot.barsSinceBreakout = brMeta.barsSinceBreakout ?? null;
+                applyBsBrSnapshotFields(indicatorSnapshot, brMeta);
                 this._log("info",
                   `[BR] RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}` +
                   ` | wait ${brMeta.barsSinceBreakout ?? "?"} bars | tpMode ${signalOptions.tpMode}`
@@ -2369,7 +2371,13 @@ class BotEngine extends EventEmitter {
           if (indicatorSnapshot) {
             indicatorSnapshot.winningComponent = winner;
             indicatorSnapshot.strategyLabel = attributionLabel;
-            if (winner === "BS_ICT") {
+            if (
+              winner === "BS_BR"
+              || winner === "BREAKOUT_RETEST"
+              || winner === "BREAKOUT_TRADING"
+            ) {
+              applyBsBrSnapshotFields(indicatorSnapshot, bsMeta);
+            } else if (winner === "BS_ICT") {
               indicatorSnapshot.ictKillZoneHour = bsMeta.ictKillZoneHour ?? null;
               indicatorSnapshot.ictKillZoneLevel = bsMeta.ictKillZoneLevel ?? null;
               indicatorSnapshot.ictRaidType = bsMeta.ictRaidType ?? null;

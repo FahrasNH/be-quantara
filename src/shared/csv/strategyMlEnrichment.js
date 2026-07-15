@@ -283,6 +283,24 @@ function extractAfWyckoffEnrichment(meta) {
   };
 }
 
+/**
+ * Copy BS_BR ML fields onto a live trade indicator snapshot (BotEngine).
+ * Mirrors extractBsBrEnrichment keys used by backtest → CSV.
+ */
+function applyBsBrSnapshotFields(snapshot, meta) {
+  if (!snapshot || !meta) return snapshot;
+  snapshot.bbSqueezeWidthAtr = meta.bbSqueezeWidthAtr ?? null;
+  snapshot.breakoutVolumeRatio = meta.breakoutVolumeRatio ?? null;
+  snapshot.retestDepthAtr = meta.retestDepthAtr ?? null;
+  snapshot.rejectionWickPct = meta.rejectionWickPct ?? null;
+  snapshot.consolidationBars = meta.consolidationBars ?? null;
+  snapshot.breakoutCandleAtr = meta.breakoutCandleAtr ?? null;
+  snapshot.bbWidth = meta.bbWidth ?? meta.squeezeWidthPct ?? null;
+  snapshot.volumeRatio = meta.volumeRatio ?? meta.breakoutVolumeRatio
+    ?? snapshot.volumeRatio ?? null;
+  return snapshot;
+}
+
 /** Merge all strategy enrichments from a meta blob (winner-aware). */
 function extractAllStrategyEnrichment(meta) {
   if (!meta) return {};
@@ -329,6 +347,7 @@ module.exports = {
   extractBsLsEnrichment,
   extractAfVsaEnrichment,
   extractAfWyckoffEnrichment,
+  applyBsBrSnapshotFields,
   extractAllStrategyEnrichment,
   ALL_ML_ENRICH_KEYS,
 };
