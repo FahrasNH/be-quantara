@@ -32,8 +32,8 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const { runTripleTypeBacktest } = require("../src/server/services/RealStrategyBacktestService");
-const { toCsv, TRADE_EXPORT_COLUMNS } = require("../src/domain/tradeExportCsv");
-const { STRATEGIES } = require("../src/domain/legacyStrategies");
+const { toCsv, TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
+const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 const args = process.argv.slice(2);
 const get = (flag, def) => {

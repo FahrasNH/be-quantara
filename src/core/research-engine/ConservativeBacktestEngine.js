@@ -14,7 +14,7 @@
  */
 
 const CONSERVATIVE_DISCOUNT = 0.9; // -10% on positive scores
-const { isRagBacktestAllowed } = require("../config/ragBacktestEnv");
+const { isRagBacktestAllowed } = require("#config/ragBacktestEnv.js");
 
 class ConservativeBacktestEngine {
   /**

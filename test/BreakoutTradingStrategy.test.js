@@ -12,7 +12,7 @@
 
 const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
 const assert = require("assert");
-const BreakoutTradingStrategy = require("../src/domain/strategy/implementations/BreakoutTradingStrategy");
+const BreakoutTradingStrategy = require("#core/strategy-engine/implementations/BreakoutTradingStrategy.js");
 
 describe("BreakoutTradingStrategy", () => {
   let strategy;

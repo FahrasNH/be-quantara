@@ -1,7 +1,7 @@
 /**
  * tierConfig capitalAllocation + maxPositionsPerSymbol — unit tests (TASK 2.4).
  */
-const { TIER_CONFIG, TIER_ORDER } = require("../src/domain/tierConfig");
+const { TIER_CONFIG, TIER_ORDER } = require("#core/risk-engine/tierConfig.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

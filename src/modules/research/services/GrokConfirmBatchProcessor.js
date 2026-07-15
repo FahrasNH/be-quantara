@@ -2,7 +2,7 @@
  * Shared Grok Confirm batch processing for sync endpoint and async backtest jobs.
  */
 
-const { STRATEGIES } = require("../../../domain/legacyStrategies");
+const { STRATEGIES } = require("#config/strategyDefaults.js");
 const GrokConfirmService = require("./GrokConfirmService");
 const cfg = require("../../../config/env");
 

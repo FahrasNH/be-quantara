@@ -46,7 +46,7 @@ const {
   _computeMetrics,
   _rangeValues,
   SEARCH_SPACE,
-} = require("../src/domain/WalkForwardOptimizer");
+} = require("#core/research-engine/WalkForwardOptimizer.js");
 
 const { WalkForwardJob } = require("../src/infrastructure/jobs/WalkForwardJob");
 const { ParameterDeployService, isAutoTuningEnabled } = require("../src/server/services/ParameterDeployService");
@@ -420,7 +420,7 @@ group("F — Regression", () => {
   // 76: MetaSelectorEngine still loads
   let metaLoaded = false;
   try {
-    const meta = require("../src/domain/MetaSelectorEngine");
+    const meta = require("#core/research-engine/MetaSelectorEngine.js");
     metaLoaded = !!meta;
   } catch (_e) { /* */ }
   assert(metaLoaded, "T76: MetaSelectorEngine still loads");
@@ -436,7 +436,7 @@ group("F — Regression", () => {
   // 78: RegimeClassifierEngine still loads
   let rcLoaded = false;
   try {
-    const rc = require("../src/domain/RegimeClassifierEngine");
+    const rc = require("#core/signal-engine/RegimeClassifierEngine.js");
     rcLoaded  = typeof rc.classify === "function" || typeof rc === "object";
   } catch (_e) { /* */ }
   assert(rcLoaded, "T78: RegimeClassifierEngine still loads");

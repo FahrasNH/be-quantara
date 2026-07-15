@@ -113,10 +113,10 @@ function makeShadowLogs(n = 100, aucTarget = 0.70) {
 
 // ── Module loading ────────────────────────────────────────────────────────────
 
-const CBE  = require("../src/domain/ConservativeBacktestEngine");
-const WFB  = require("../src/domain/WalkForwardBacktest");
-const BQR  = require("../src/domain/BiasQuantificationReport");
-const ABL  = require("../src/domain/AblationTest");
+const CBE  = require("#core/research-engine/ConservativeBacktestEngine.js");
+const WFB  = require("#core/research-engine/WalkForwardBacktest.js");
+const BQR  = require("#core/research-engine/BiasQuantificationReport.js");
+const ABL  = require("#core/research-engine/AblationTest.js");
 
 // MLShadowService needs prisma — use minimal mock
 const { MLShadowServiceMock } = (() => {

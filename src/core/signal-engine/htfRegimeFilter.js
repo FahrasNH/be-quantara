@@ -1,5 +1,5 @@
 /**
- * htfRegimeFilter.js  (src/domain/htfRegimeFilter.js)
+ * htfRegimeFilter.js  (core/signal-engine)
  *
  *   MEAN_REVERSION akan terus counter-trend jika tidak ada HTF filter.
  *   Di strong bull market → SHORT terus kena SL.

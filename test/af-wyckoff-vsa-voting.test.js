@@ -14,28 +14,28 @@ const {
   percentileRank,
   bbWidthSeries,
   checkSwingProximity,
-} = require("../src/domain/strategy/af/volumeAnalysisUtils");
+} = require("#core/strategy-engine/af/volumeAnalysisUtils.js");
 const {
   detectTradingRange,
   detectSpring,
   detectUpthrust,
   evaluateWyckoffComponent,
-} = require("../src/domain/strategy/af/wyckoffComponent");
+} = require("#core/strategy-engine/af/wyckoffComponent.js");
 const {
   detectVSAPattern,
   detectEffortResultMismatch,
   evaluateVSAComponent,
   calculateCLV: vsaCLV,
   relativeVolume: vsaRelVol,
-} = require("../src/domain/strategy/af/vsaComponent");
+} = require("#core/strategy-engine/af/vsaComponent.js");
 const {
   resolveVoteThreshold,
   aggregateAfVotes,
   checkVoteCorrelation,
   pearsonCorrelation,
-} = require("../src/domain/strategy/af/afVoting");
-const AdaptiveFusionUmbrella = require("../src/domain/strategy/umbrellas/AdaptiveFusionUmbrella");
-const { strategyRegistry } = require("../src/domain/strategy");
+} = require("#core/strategy-engine/af/afVoting.js");
+const AdaptiveFusionUmbrella = require("#core/strategy-engine/umbrellas/AdaptiveFusionUmbrella.js");
+const { strategyRegistry } = require("#core/strategy-engine/index.js");
 
 let passed = 0;
 let failed = 0;
@@ -757,7 +757,7 @@ test("GROK_AI_TRADING is experimental identity, not migrated to AF/TS", () => {
 });
 
 test("REGRESSION: WyckoffStrategy default entryModel fires on mature spring (not moderate)", () => {
-  const WyckoffStrategy = require("../src/domain/strategy/implementations/WyckoffStrategy");
+  const WyckoffStrategy = require("#core/strategy-engine/implementations/WyckoffStrategy.js");
   const c = makeMatureRangeWithSpring({ spring: true });
   const indicators = {
     opens: c.opens, highs: c.highs, lows: c.lows,

@@ -2,7 +2,7 @@
  * AccountCoordinator unit tests (#5 — koordinasi margin lintas-bot).
  * Standalone runner: exit code != 0 bila ada yang gagal.
  */
-const AC = require("../src/domain/AccountCoordinator");
+const AC = require("#modules/trading/domain/AccountCoordinator.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

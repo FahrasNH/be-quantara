@@ -113,8 +113,8 @@ function clearMock() { _savedRecs = []; _prismaCreateCount = 0; }
 // Isolated MetaSelectorEngine factory (mocked DB + StrategyPerf)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { MetaSelectorEngine } = require("../src/domain/MetaSelectorEngine");
-const regimeEngine = require("../src/domain/RegimeClassifierEngine");
+const { MetaSelectorEngine } = require("#core/research-engine/MetaSelectorEngine.js");
+const regimeEngine = require("#core/signal-engine/RegimeClassifierEngine.js");
 
 function buildEngine(perfMap = {}, mode = "shadow") {
   const engine = new MetaSelectorEngine();
@@ -828,7 +828,7 @@ _promises.push(t("#95 [G] router contains /promote route", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 _promises.push(t("#96 [H] RegimeClassifierEngine.classify() still deterministic", () => {
-  const rce  = require("../src/domain/RegimeClassifierEngine");
+  const rce  = require("#core/signal-engine/RegimeClassifierEngine.js");
   const inds = { ema9:110, ema21:100, ema50:90, adx:30, atr:2, atrAvg:1.5, volume:1500, volAvg:1000 };
   const r1   = rce.classify(inds, "BTCUSDT_REGRESSION_96a", "1h");
   const r2   = rce.classify(inds, "BTCUSDT_REGRESSION_96a", "1h");
@@ -836,7 +836,7 @@ _promises.push(t("#96 [H] RegimeClassifierEngine.classify() still deterministic"
 }));
 
 _promises.push(t("#97 [H] RegimeClassifierEngine returns primary + composite + confidence", () => {
-  const rce  = require("../src/domain/RegimeClassifierEngine");
+  const rce  = require("#core/signal-engine/RegimeClassifierEngine.js");
   const inds = { ema9:110, ema21:100, ema50:90, adx:30, atr:2, atrAvg:1.5, volume:1500, volAvg:1000 };
   const r    = rce.classify(inds, "ETHUSDT_REGRESSION_97", "4h");
   assert(r.primary !== undefined && r.composite !== undefined && typeof r.confidence === "number", "Missing fields");
@@ -855,8 +855,8 @@ _promises.push(t("#99 [H] StrategyPerformanceService._helpers still exported", (
 }));
 
 _promises.push(t("#100 [H] MetaSelectorEngine import does not corrupt RegimeClassifierEngine", () => {
-  const ms  = require("../src/domain/MetaSelectorEngine");
-  const rce = require("../src/domain/RegimeClassifierEngine");
+  const ms  = require("#core/research-engine/MetaSelectorEngine.js");
+  const rce = require("#core/signal-engine/RegimeClassifierEngine.js");
   const inds = { ema9:110, ema21:100, ema50:90, adx:30, atr:2, atrAvg:1.5 };
   const r = rce.classify(inds, "BTCUSDT_REGRESSION_100", "1h");
   assert(r.primary !== undefined && r.composite !== undefined, "RegimeClassifier broken after MetaSelector import");

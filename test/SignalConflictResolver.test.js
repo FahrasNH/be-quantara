@@ -4,7 +4,7 @@
  *
  * Mengacu ke acceptance criteria AC-05 dan test case TC-001.
  */
-const { resolveConflicts, normalizeDirection } = require("../src/domain/SignalConflictResolver");
+const { resolveConflicts, normalizeDirection } = require("#core/signal-engine/SignalConflictResolver.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

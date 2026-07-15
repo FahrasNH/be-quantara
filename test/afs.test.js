@@ -11,9 +11,9 @@
  * ─────────────────────────────────────────────
  */
 
-const StrategyBase = require("../src/domain/strategy/base/StrategyBase");
-const { strategyRegistry } = require("../src/domain/strategy");
-const PositionManager = require("../src/domain/PositionManager");
+const StrategyBase = require("#core/strategy-engine/base/StrategyBase.js");
+const { strategyRegistry } = require("#core/strategy-engine/index.js");
+const PositionManager = require("#core/position-engine/PositionManager.js");
 const AdaptiveStrategyEngine = require("../src/application/AdaptiveStrategyEngine");
 
 console.log("🧪 TESTING ADAPTIVE FUSION STRATEGY SYSTEM (v2.0 Umbrella)\n");

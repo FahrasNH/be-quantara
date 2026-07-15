@@ -2,11 +2,11 @@
  * Multi-Strategy per Coin — ACCEPTANCE test (TASK 4.1).
  * Pemetaan eksplisit TC-001..TC-008 dari plan ke implementasi, tanpa exchange/DB.
  */
-const { resolveConflicts } = require("../src/domain/SignalConflictResolver");
-const { buildTradeAttribution } = require("../src/domain/tradeAttribution");
+const { resolveConflicts } = require("#core/signal-engine/SignalConflictResolver.js");
+const { buildTradeAttribution } = require("#modules/analytics/domain/tradeAttribution.js");
 const { filterStrategiesByMode, isStrategyLiveReady } = require("../src/services/entitlement");
 const { strategyGuard, DRY_RUN_ONLY_STRATEGIES } = require("../src/middleware/strategyGuard");
-const AccountCoordinator = require("../src/domain/AccountCoordinator");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 const MultiStrategyCoordinator = require("../src/application/MultiStrategyCoordinator");
 
 let pass = 0, fail = 0;

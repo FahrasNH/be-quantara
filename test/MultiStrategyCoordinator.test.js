@@ -6,7 +6,7 @@
  * tanpa exchange / DB. Mencakup AC-02, AC-03, AC-05, AC-06, TC-002, TC-003.
  */
 const MultiStrategyCoordinator = require("../src/application/MultiStrategyCoordinator");
-const AccountCoordinator = require("../src/domain/AccountCoordinator");
+const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 
 let pass = 0, fail = 0;
 const t = (name, cond) => {

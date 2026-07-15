@@ -4,7 +4,7 @@
 // Runs AFTER authMiddleware (req.userId set). Resolves the user's CURRENT tier
 // via entitlement.getUserTier() — which reads the active Subscription first and
 // returns FOUNDRY when a subscription has expired/cancelled — then checks the
-// requested feature against domain/tierConfig.
+// requested feature against core/risk-engine/tierConfig.
 //
 // Use as a route guard factory:
 //   router.post("/auto-select", authMiddleware, requireFeature("autoSelector"), handler)

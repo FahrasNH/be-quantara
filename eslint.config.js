@@ -29,7 +29,7 @@ module.exports = [
         { type: "shared", pattern: "src/shared/**" },
         { type: "infra", pattern: "src/infrastructure/**" },
         { type: "config", pattern: "src/config/**" },
-        { type: "app", pattern: "src/{application,server,domain,services,middleware}/**" },
+        { type: "app", pattern: "src/{application,server,services,middleware}/**" },
       ],
       "boundaries/include": ["src/**/*.js"],
     },
@@ -61,7 +61,7 @@ module.exports = [
           {
             from: "shared",
             disallow: ["app"],
-            message: "shared/ must not import application/server/domain legacy layers — use modules/ or core/",
+            message: "shared/ must not import application/server legacy layers — use modules/ or core/",
           },
         ],
       }],

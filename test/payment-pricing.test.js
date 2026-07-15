@@ -4,7 +4,7 @@
  * quote, computeEndDate — the server-side money logic the client cannot forge.
  */
 const assert = require("assert");
-const pricing = require("../src/domain/pricing");
+const pricing = require("#modules/payment/domain/pricing.js");
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {

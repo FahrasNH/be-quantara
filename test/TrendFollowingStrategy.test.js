@@ -4,7 +4,7 @@
  */
 
 const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
-const TrendFollowingStrategy = require("../src/domain/strategy/implementations/TrendFollowingStrategy");
+const TrendFollowingStrategy = require("#core/strategy-engine/implementations/TrendFollowingStrategy.js");
 
 describe("TrendFollowingStrategy", () => {
   let strategy;
@@ -186,7 +186,7 @@ describe("TrendFollowingStrategy", () => {
     // mathematically impossible (close <= high <= upper; close >= low >= lower)
     // — TS_TF could never produce a signal, in live OR backtest, regardless of
     // data. Fixed by comparing against the PRIOR bar's channel.
-    const { calcIndicators } = require("../src/domain/indicators");
+    const { calcIndicators } = require("#core/analytics-engine/indicators.js");
 
     // Regime-cycling generator (oscillates trend/pullback so RSI/volume gates can
     // stay inside their healthy bands, unlike a straight monotonic line which

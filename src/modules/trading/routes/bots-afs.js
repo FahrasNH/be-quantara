@@ -1530,7 +1530,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get("/strategies/info/:key", (req, res) => {
     const { key } = req.params;
-    const { STRATEGIES } = require("../../../domain/legacyStrategies");
+    const { STRATEGIES } = require("#config/strategyDefaults.js");
 
     const strategyConfig = STRATEGIES[key];
 

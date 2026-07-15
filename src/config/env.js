@@ -5,7 +5,7 @@
 // CATATAN PENTING:
 //   Konfigurasi TRADING (dryRun, strategy, capital, leverage, EMA/RSI/ATR, dll)
 //   TIDAK lagi dibaca dari .env. Sumbernya sekarang:
-//     • Parameter teknikal  → definisi strategi (src/domain/legacyStrategies.js)
+//     • Parameter teknikal  → definisi strategi (src/config/strategyDefaults.js)
 //     • Pilihan per-bot      → database (tabel Bot) via Settings/UI
 //   .env hanya menyimpan konfigurasi level-server & kredensial infrastruktur.
 // ─────────────────────────────────────────────────────────────────────────────

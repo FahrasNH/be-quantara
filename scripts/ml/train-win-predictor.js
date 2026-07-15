@@ -21,13 +21,13 @@ require("dotenv").config();
 const path           = require("path");
 const fs             = require("fs");
 const prisma         = require("../../src/infrastructure/db/prismaClient");
-const FeatureEngineer = require("../../src/domain/FeatureEngineer");
-const WinPredictor   = require("../../src/domain/WinPredictor");
+const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
+const WinPredictor   = require("#modules/ml/domain/WinPredictor.js");
 const { _pool }      = require("../../src/infrastructure/db/database");
 const {
   fetchClosedEngineTrades,
   buildMlArtifactsFromEngineRows,
-} = require("../../src/domain/engineTradeMlAdapter");
+} = require("#modules/analytics/domain/engineTradeMlAdapter.js");
 
 const MODEL_PATH   = path.join(__dirname, "../../data/models/win-predictor.json");
 const REPORT_PATH  = path.join(__dirname, "../../data/models/training-report.json");

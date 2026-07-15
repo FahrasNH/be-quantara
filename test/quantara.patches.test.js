@@ -3,9 +3,9 @@
  *
  * Unit test untuk semua patch Quantara Patch v1.0:
  *   FIX-1 strategyGuard         (src/middleware/strategyGuard.js)
- *   FIX-3 signalIdempotency     (src/domain/signalIdempotency.js)
- *   FIX-4 htfRegimeFilter       (src/domain/htfRegimeFilter.js)
- *   FIX-2 analyzeStrategyFit     (src/domain/strategyAnalysis.js)
+ *   FIX-3 signalIdempotency     (src/core/signal-engine/signalIdempotency.js)
+ *   FIX-4 htfRegimeFilter       (src/core/signal-engine/htfRegimeFilter.js)
+ *   FIX-2 analyzeStrategyFit     (src/core/analytics-engine/strategyAnalysis.js)
  *
  * Repo Quantara TIDAK memakai mocha — test dijalankan sebagai script Node biasa
  * (`node test/quantara.patches.test.js`). Karena itu file ini menyertakan harness
@@ -71,9 +71,9 @@ async function run() {
 
 // ─── Import patch modules (path sesuai struktur repo Quantara) ────────────────
 const { strategyGuard, BLOCKED_STRATEGIES }            = require('../src/middleware/strategyGuard');
-const { isDuplicate, makeSignalKey, _resetForTests }   = require('../src/domain/signalIdempotency');
-const { meanReversionRegimeFilter, classifyHTFRegime } = require('../src/domain/htfRegimeFilter');
-const { analyzeStrategyFit }                           = require('../src/domain/strategyAnalysis');
+const { isDuplicate, makeSignalKey, _resetForTests }   = require('#core/signal-engine/signalIdempotency.js');
+const { meanReversionRegimeFilter, classifyHTFRegime } = require('#core/signal-engine/htfRegimeFilter.js');
+const { analyzeStrategyFit }                           = require('#core/analytics-engine/strategyAnalysis.js');
 
 // ─── Helper: mock req/res/next ───────────────────────────────────────────────
 function mockRes() {

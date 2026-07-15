@@ -1,5 +1,5 @@
 /**
- * strategyAnalysis.js  (src/domain/strategyAnalysis.js)
+ * strategyAnalysis.js  (core/analytics-engine)
  *
  *   FE memanggil GET /bots/:symbol/strategy-analysis tapi endpoint ini
  *   tidak ada di BE (gap dari §5 ARCHITECTURE.md). Fix: tambahkan handler + route.

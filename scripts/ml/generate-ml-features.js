@@ -16,7 +16,7 @@ require("dotenv").config();
 const path           = require("path");
 const fs             = require("fs");
 const prisma         = require("../../src/infrastructure/db/prismaClient");
-const FeatureEngineer = require("../../src/domain/FeatureEngineer");
+const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
 const VectorStore    = require("../../src/infrastructure/db/VectorStore");
 const { _pool }      = require("../../src/infrastructure/db/database");
 

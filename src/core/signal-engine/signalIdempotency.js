@@ -1,5 +1,5 @@
 /**
- * signalIdempotency.js  (src/domain/signalIdempotency.js)
+ * signalIdempotency.js  (core/signal-engine)
  *
  *   Jika WebSocket reconnect atau candle-close event diterima 2x,
  *   BotEngine bisa open 2 positions untuk sinyal yang sama.

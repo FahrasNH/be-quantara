@@ -14,7 +14,7 @@ const XaiClient = require("../../../infrastructure/xai/XaiClient");
 const db = require("../../../infrastructure/db/database");
 const { getUserTier } = require("../../users/services/entitlement");
 const { getTierConfig } = require("../../../core/risk-engine/tierConfig");
-const { STRATEGIES } = require("../../../domain/legacyStrategies");
+const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 const SYSTEM_PROMPT = `You are a quant trading analyst for Quantara (a crypto futures bot platform).
 Your job is to analyze backtest/live-trade metrics and give SPECIFIC, strategy-aware parameter recommendations.
