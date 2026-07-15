@@ -1,5 +1,5 @@
 /**
- * StatisticalArbitrageStrategy.js — MD_SA (Statistical Arbitrage v1)
+ * StatisticalArbitrageStrategy.js — STATISTICAL_ARBITRAGE (Statistical Arbitrage v1)
  * MEAN_DRIFT race participant #2.
  */
 
@@ -14,7 +14,7 @@ const {
 class StatisticalArbitrageStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "MD_SA",
+      name: "STATISTICAL_ARBITRAGE",
       label: "Statistical Arbitrage",
       description:
         "MD race participant: Statistical Arbitrage v1 — z-score mean reversion " +
@@ -31,7 +31,7 @@ class StatisticalArbitrageStrategy extends StrategyBase {
     let score = 50;
     if (trend_strength < 0.35) score += 20;
     return [{
-      key: "MD_SA",
+      key: "STATISTICAL_ARBITRAGE",
       label: this.config.label,
       score: Math.max(0, Math.min(100, score)),
       reason: "sa_affinity",
@@ -70,8 +70,8 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       saMeanRevertBars: null, // populated post-exit when available; entry-time N/A
     };
     this._lastSignalMeta = {
-      component: "MD_SA",
-      winningComponent: result.signal ? "MD_SA" : null,
+      component: "STATISTICAL_ARBITRAGE",
+      winningComponent: result.signal ? "STATISTICAL_ARBITRAGE" : null,
       strategyLabel: "Statistical Arbitrage",
       componentConfidence: result.signal ? Math.round(result.confidence * 100) : 0,
       confidence: result.confidence,

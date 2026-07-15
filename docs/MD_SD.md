@@ -1,9 +1,9 @@
-# MD_SD — Entry Triggers (AS-IS)
+# SUPPLY_AND_DEMAND — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an MD_SD entry and the signal labels emitted on fill.  
-**Strategy key**: `MD_SD` (`SupplyDemandStrategy`, v1.0) — Mean Drift racer #1  
+**Scope**: What triggers an SUPPLY_AND_DEMAND entry and the signal labels emitted on fill.  
+**Strategy key**: `SUPPLY_AND_DEMAND` (`SupplyDemandStrategy`, v1.0) — Mean Drift racer #1  
 **Engine SSOT**: `supplyDemandEntry.js` → `evaluateSupplyDemandEntry`  
-**Config SSOT**: `strategyDefaults.js` → `MD_SD` (inherits `MEAN_REVERSION`) + component DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `SUPPLY_AND_DEMAND` (inherits `MEAN_REVERSION`) + component DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline. Risk/SL/TP dari **`MD_SD`** preset (= Mean Reversion geometry); S&D-specific knobs dari **component DEFAULTS**.
+Sprint 14 baseline. Risk/SL/TP dari **`SUPPLY_AND_DEMAND`** preset (= Mean Reversion geometry); S&D-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -42,17 +42,17 @@ Sprint 14 baseline. Risk/SL/TP dari **`MD_SD`** preset (= Mean Reversion geometr
 
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
-| *(implicit)* | race | MD_MR / MD_SD / MD_SA race independently |
+| *(implicit)* | race | MEAN_REVERSION / SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE race independently |
 
 ### Per trade type overrides
 
-Tidak ada pada preset `MD_SD`.
+Tidak ada pada preset `SUPPLY_AND_DEMAND`.
 
 ---
 
 ## What triggers an entry
 
-MD_SD enters on **retest of a demand or supply zone** with a reversal candle confirmation.
+SUPPLY_AND_DEMAND enters on **retest of a demand or supply zone** with a reversal candle confirmation.
 
 ```
 Scan OB/FVG-style Zones → Price Retest in Zone → Reversal Candle → signal
@@ -106,7 +106,7 @@ Labels come from `entryMeta.zoneType` + `entryMeta.reason`.
 
 Only **one** of Demand/Supply Retest appears per fill (direction-specific).
 
-**Formatter fallback quirk**: If no zone fields match but `winningComponent === "MD_SD"`, formatter returns all three labels — sparse meta only; normal fills include `zoneType`.
+**Formatter fallback quirk**: If no zone fields match but `winningComponent === "SUPPLY_AND_DEMAND"`, formatter returns all three labels — sparse meta only; normal fills include `zoneType`.
 
 ### Typical examples
 
@@ -121,7 +121,7 @@ Only **one** of Demand/Supply Retest appears per fill (direction-specific).
 
 ## AS-IS quirks
 
-- **MINT umbrella**: MD_SD wins stamp `winningComponent: "MD_SD"`.
+- **MINT umbrella**: SUPPLY_AND_DEMAND wins stamp `winningComponent: "SUPPLY_AND_DEMAND"`.
 - **Reversal candle is a gate**: no separate label for reversal confirmation.
 - **Formatter fallback**: can emit all three labels when meta is sparse — not typical on real fills.
 

@@ -1,5 +1,5 @@
 /**
- * SupplyDemandStrategy.js — MD_SD (Supply and Demand)
+ * SupplyDemandStrategy.js — SUPPLY_AND_DEMAND (Supply and Demand)
  * MEAN_DRIFT race participant #1.
  */
 
@@ -11,7 +11,7 @@ const { evaluateSupplyDemandEntry, DEFAULTS } = require("../md/supplyDemandEntry
 class SupplyDemandStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "MD_SD",
+      name: "SUPPLY_AND_DEMAND",
       label: "Supply and Demand",
       description:
         "MD race participant: retest of demand/supply zones (OB/FVG structure under S&D).",
@@ -28,7 +28,7 @@ class SupplyDemandStrategy extends StrategyBase {
     if (trend_strength < 0.4) score += 15;
     if (volatility > 0.3 && volatility < 0.8) score += 10;
     return [{
-      key: "MD_SD",
+      key: "SUPPLY_AND_DEMAND",
       label: this.config.label,
       score: Math.max(0, Math.min(100, score)),
       reason: "sd_affinity",
@@ -78,8 +78,8 @@ class SupplyDemandStrategy extends StrategyBase {
       ),
     };
     this._lastSignalMeta = {
-      component: "MD_SD",
-      winningComponent: result.signal ? "MD_SD" : null,
+      component: "SUPPLY_AND_DEMAND",
+      winningComponent: result.signal ? "SUPPLY_AND_DEMAND" : null,
       strategyLabel: "Supply and Demand",
       componentConfidence: result.signal ? Math.round(result.confidence * 100) : 0,
       confidence: result.confidence,

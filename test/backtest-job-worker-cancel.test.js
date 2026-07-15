@@ -33,7 +33,7 @@ async function waitFor(predicate, message, timeoutMs = 3000) {
 function create(mode) {
   return BacktestJobService.createJob("worker-cancel-test", {
     sym: "BTCUSDT",
-    strategyKey: "AF_VSA",
+    strategyKey: "VOLUME_SPREAD_ANALYSIS",
     strategyCfg: { label: "VSA", interval: "15m" },
     periodId: "3m",
     capital: 1000,

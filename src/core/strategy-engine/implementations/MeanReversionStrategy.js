@@ -1,5 +1,5 @@
 /**
- * MeanReversionStrategy.js — MD_MR thin orchestrator
+ * MeanReversionStrategy.js — MEAN_REVERSION thin orchestrator
  *
  * Entry logic lives in md/meanReversionEntry.js (Sprint 15 structure refactor).
  */
@@ -15,7 +15,7 @@ class MeanReversionStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
       name: "MEAN_REVERSION",
-      label: "Mean Reversion (Mean Drift - MD_MR)",
+      label: "Mean Reversion (Mean Drift - MEAN_REVERSION)",
       description:
         "Layered mean reversion: BB+RSI entry → ADX regime gate → OB/FVG precision. " +
         "Scalping (5m): RSI<28, BB(1.5σ). Intraday (15m): RSI<32, BB(2.0σ). " +

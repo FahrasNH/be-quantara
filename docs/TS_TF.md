@@ -1,9 +1,9 @@
-# TS_TF — Entry Triggers (AS-IS)
+# TREND_FOLLOWING — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a TS_TF entry and the signal labels emitted on fill.  
-**Strategy key**: `TS_TF` (`TrendFollowingStrategy`)  
+**Scope**: What triggers a TREND_FOLLOWING entry and the signal labels emitted on fill.  
+**Strategy key**: `TREND_FOLLOWING` (`TrendFollowingStrategy`)  
 **Engine SSOT**: `TrendFollowingStrategy.js` → `detectSignal`  
-**Config SSOT**: `strategyDefaults.js` → `TREND_FOLLOWING` / `TS_TF` (+ ctor `TrendFollowingStrategy.js`)  
+**Config SSOT**: `strategyDefaults.js` → `TREND_FOLLOWING` / `TREND_FOLLOWING` (+ ctor `TrendFollowingStrategy.js`)  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -43,10 +43,10 @@ Nilai di bawah dari **`strategyDefaults.js`**; beberapa knob runtime dari **engi
 
 | Parameter | Default | Efek jika `true` |
 | --- | --- | --- |
-| `tfHtfLayerEnabled` | `true` | HTF trend + ADX layer aktif (core TS_TF) |
-| `tsUseStructureGate` | `false` | Dow structure gate (TS_MS overlay) |
-| `tsUseVwapPrecision` | `false` | VWAP/VA precision gate (TS_VP overlay) |
-| `tsCombinationMode` | `"race"` | TS_TF / TS_MS / TS_VP race independently |
+| `tfHtfLayerEnabled` | `true` | HTF trend + ADX layer aktif (core TREND_FOLLOWING) |
+| `tsUseStructureGate` | `false` | Dow structure gate (MARKET_STRUCTURE overlay) |
+| `tsUseVwapPrecision` | `false` | VWAP/VA precision gate (AUCTION_MARKET_THEORY overlay) |
+| `tsCombinationMode` | `"race"` | TREND_FOLLOWING / MARKET_STRUCTURE / AUCTION_MARKET_THEORY race independently |
 
 ### Per trade type overrides
 
@@ -62,7 +62,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-TS_TF is a **three-layer trend-following checklist**. Every layer must pass before `detectSignal` returns LONG or SHORT.
+TREND_FOLLOWING is a **three-layer trend-following checklist**. Every layer must pass before `detectSignal` returns LONG or SHORT.
 
 ```
 HTF Trend Align → Donchian Breakout → Entry-TF Pullback (EMA9 retest + ADX + volume) → signal
@@ -90,7 +90,7 @@ All checklist flags are set **true** on every fill (`_lastEntryChecklist`). Gate
 | Intraday | 15m / 1h / 4h | Yes |
 | Swing | 4h / 1d / 1w | Yes |
 
-`getLastSignalMeta()` stamps `component: "TS_TF"`; trade type comes from the multi-TF harness.
+`getLastSignalMeta()` stamps `component: "TREND_FOLLOWING"`; trade type comes from the multi-TF harness.
 
 Signal labels are **nearly identical across all fills and trade types**.
 
@@ -112,13 +112,13 @@ Labels come from `entryMeta.entryChecklist` on fill.
 
 ### When each label actually appears
 
-Because **all five gates are hard prerequisites**, nearly every TS_TF fill shows the full set:
+Because **all five gates are hard prerequisites**, nearly every TREND_FOLLOWING fill shows the full set:
 
 `HTF Aligned, ADX Strength, Donchian Break, EMA9 Retest, Volume Confirmation`
 
 **Variance is very low.** Direction (LONG vs SHORT) is not reflected in signal labels.
 
-**Sparse edge case**: If `entryChecklist` is missing but `winningComponent === "TS_TF"`, formatter falls back to partial labels from top-level flags only.
+**Sparse edge case**: If `entryChecklist` is missing but `winningComponent === "TREND_FOLLOWING"`, formatter falls back to partial labels from top-level flags only.
 
 ### Typical examples
 
@@ -132,7 +132,7 @@ Because **all five gates are hard prerequisites**, nearly every TS_TF fill shows
 
 ## AS-IS quirks
 
-- **FORGE umbrella**: TS_TF race wins stamp `winningComponent: "TS_TF"`. TS_MS / TS_VP wins use their own label vocabularies.
+- **FORGE umbrella**: TREND_FOLLOWING race wins stamp `winningComponent: "TREND_FOLLOWING"`. MARKET_STRUCTURE / AUCTION_MARKET_THEORY wins use their own label vocabularies.
 - **Checklist = all-or-nothing**: every layer is a hard gate, so label variance is minimal.
 - **Direction omitted**: LONG vs SHORT not shown in signal labels.
 

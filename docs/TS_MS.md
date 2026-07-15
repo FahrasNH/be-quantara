@@ -1,9 +1,9 @@
-# TS_MS — Entry Triggers (AS-IS)
+# MARKET_STRUCTURE — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a TS_MS entry and the signal labels emitted on fill.  
-**Strategy key**: `TS_MS` (`MarketStructureStrategy`, v2.0)  
+**Scope**: What triggers a MARKET_STRUCTURE entry and the signal labels emitted on fill.  
+**Strategy key**: `MARKET_STRUCTURE` (`MarketStructureStrategy`, v2.0)  
 **Engine SSOT**: `marketStructureComponent.js` → `evaluateMarketStructureEntry`  
-**Config SSOT**: `strategyDefaults.js` → `TS_MS` (inherits `TREND_FOLLOWING`) + component DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `MARKET_STRUCTURE` (inherits `TREND_FOLLOWING`) + component DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`TS_MS`** preset (= Trend Following geometry); Dow-specific knobs dari **component DEFAULTS**.
+Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`MARKET_STRUCTURE`** preset (= Trend Following geometry); Dow-specific knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -39,7 +39,7 @@ Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`TS_MS`** preset (
 
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
-| `tsCombinationMode` | `"race"` | TS_TF / TS_MS / TS_VP race independently |
+| `tsCombinationMode` | `"race"` | TREND_FOLLOWING / MARKET_STRUCTURE / AUCTION_MARKET_THEORY race independently |
 
 ### Per trade type overrides
 
@@ -49,7 +49,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-TS_MS (Dow Theory) trades **pullbacks to established swing structure** on the HTF series.
+MARKET_STRUCTURE (Dow Theory) trades **pullbacks to established swing structure** on the HTF series.
 
 ```
 Classify Structure (uptrend/downtrend) → Pullback to HL/LH zone → Bounce/Reject confirm → signal
@@ -117,7 +117,7 @@ Labels come from `entryMeta.reason` + `entryMeta.meta.structure`.
 
 ## AS-IS quirks
 
-- **FORGE umbrella**: TS_MS wins stamp `winningComponent: "TS_MS"`.
+- **FORGE umbrella**: MARKET_STRUCTURE wins stamp `winningComponent: "MARKET_STRUCTURE"`.
 - **Pullback step has no label**: pullback to swing is a gate but not a separate signal label.
 - **HH/HL Pattern label**: same text used for both uptrend and downtrend structure.
 

@@ -373,7 +373,7 @@ module.exports = function createAnalyticsRouter() {
       try {
         if (engines?.fe) {
           const tFe = Date.now();
-          engines.fe.buildFeatureVector({ regime: "ranging" }, { strategyKey: "AF_SMC", symbol: "BTCUSDT" });
+          engines.fe.buildFeatureVector({ regime: "ranging" }, { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTCUSDT" });
           featureExtractionLatency = Date.now() - tFe;
         }
       } catch { /* ignore */ }
@@ -382,7 +382,7 @@ module.exports = function createAnalyticsRouter() {
       try {
         if (engines?.cbe?.winPredictor?.model && engines?.fe) {
           const tLgb = Date.now();
-          const features = engines.fe.buildFeatureVector({ regime: "ranging" }, { strategyKey: "AF_SMC", symbol: "BTCUSDT" });
+          const features = engines.fe.buildFeatureVector({ regime: "ranging" }, { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTCUSDT" });
           engines.cbe.winPredictor.predict(features);
           lgbInferenceLatency = Date.now() - tLgb;
         }

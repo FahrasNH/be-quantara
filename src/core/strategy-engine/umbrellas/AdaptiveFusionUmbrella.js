@@ -1,13 +1,13 @@
 /**
  * AdaptiveFusionUmbrella.js — FOUNDRY Tier umbrella strategy
  *
- * Umbrella key : AF_SMC (tier access bag — not a fusion mechanism)
- * Components   : AF_SMC (Smart Money Concepts) · AF_WYCKOFF · AF_VSA
+ * Umbrella key : SMART_MONEY_CONCEPTS (tier access bag — not a fusion mechanism)
+ * Components   : SMART_MONEY_CONCEPTS (Smart Money Concepts) · WYCKOFF · VOLUME_SPREAD_ANALYSIS
  *
  * ARCHITECTURE DECISION (Fahras, 10 Jul 2026) — AF-SUB-03 rescope:
  *   Race-to-Confirm replaces Sprint 8 2/3 voting. Each unlocked component is an
  *   independent signal generator. Same-bar winner = highest confidence; ties
- *   break AF_SMC → AF_WYCKOFF → AF_VSA. Trade attribution = winning component
+ *   break SMART_MONEY_CONCEPTS → WYCKOFF → VOLUME_SPREAD_ANALYSIS. Trade attribution = winning component
  *   only (never joined "SMC + Wyckoff + VSA").
  *
  * Rollback:
@@ -22,11 +22,11 @@ const VsaStrategy                = require("../implementations/VsaStrategy");
 const { aggregateAfVotes }       = require("../af/afVoting");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
-const RACER_PRIORITY = ["AF_SMC", "AF_WYCKOFF", "AF_VSA"];
+const RACER_PRIORITY = ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"];
 const RACER_LABELS = {
-  AF_SMC:     "Smart Money Concepts",
-  AF_WYCKOFF: "Wyckoff Method",
-  AF_VSA:     "Volume Spread Analysis",
+  SMART_MONEY_CONCEPTS:     "Smart Money Concepts",
+  WYCKOFF: "Wyckoff Method",
+  VOLUME_SPREAD_ANALYSIS:     "Volume Spread Analysis",
 };
 
 function smcVoteFromMulti(multi) {
@@ -50,7 +50,7 @@ function smcVoteFromMulti(multi) {
 class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   constructor() {
     super({
-      name:        "AF_SMC",
+      name:        "SMART_MONEY_CONCEPTS",
       label:       "Adaptive Fusion",
       description:
         "FOUNDRY umbrella (tier access): Smart Money Concepts, Wyckoff, and VSA race independently — highest confirmation wins.",
@@ -64,9 +64,9 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     this._wyckoff = new WyckoffStrategy();
     this._vsa     = new VsaStrategy();
 
-    this.addComponent("AF_SMC",     this._smc);
-    this.addComponent("AF_WYCKOFF", this._wyckoff);
-    this.addComponent("AF_VSA",     this._vsa);
+    this.addComponent("SMART_MONEY_CONCEPTS",     this._smc);
+    this.addComponent("WYCKOFF", this._wyckoff);
+    this.addComponent("VOLUME_SPREAD_ANALYSIS",     this._vsa);
 
     this._lastVoteMeta = null;
     this._lastRaceMeta = null;
@@ -97,12 +97,12 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const active = new Set();
     for (const c of raw) {
       const k = normalizeStrategyKey(String(c || "").toUpperCase());
-      if (k === "AF_SMC" || String(c || "").toUpperCase() === "SMC") {
-        active.add("AF_SMC");
-      } else if (k === "AF_WYCKOFF" || String(c || "").toUpperCase() === "WYCKOFF") {
-        active.add("AF_WYCKOFF");
-      } else if (k === "AF_VSA" || k === "VSA") {
-        active.add("AF_VSA");
+      if (k === "SMART_MONEY_CONCEPTS" || String(c || "").toUpperCase() === "SMC") {
+        active.add("SMART_MONEY_CONCEPTS");
+      } else if (k === "WYCKOFF" || String(c || "").toUpperCase() === "WYCKOFF") {
+        active.add("WYCKOFF");
+      } else if (k === "VOLUME_SPREAD_ANALYSIS" || k === "VSA") {
+        active.add("VOLUME_SPREAD_ANALYSIS");
       }
     }
     if (active.size === 0) return new Set(RACER_PRIORITY);
@@ -114,9 +114,9 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const active = this._resolveActiveRacers(config);
     // Vote-mode collectComponentVotes also checks short aliases SMC/WYCKOFF/VSA
     const withAliases = new Set(active);
-    if (active.has("AF_SMC")) { withAliases.add("SMC"); }
-    if (active.has("AF_WYCKOFF")) { withAliases.add("WYCKOFF"); }
-    if (active.has("AF_VSA")) { withAliases.add("VSA"); }
+    if (active.has("SMART_MONEY_CONCEPTS")) { withAliases.add("SMC"); }
+    if (active.has("WYCKOFF")) { withAliases.add("WYCKOFF"); }
+    if (active.has("VOLUME_SPREAD_ANALYSIS")) { withAliases.add("VSA"); }
     return withAliases;
   }
 
@@ -146,7 +146,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const votes = [];
     const active = this._resolveActiveVoters(config);
 
-    if (active.has("AF_SMC") || active.has("SMC")) {
+    if (active.has("SMART_MONEY_CONCEPTS") || active.has("SMC")) {
       let smc;
       if (precomputedMulti) {
         smc = smcVoteFromMulti(precomputedMulti);
@@ -172,7 +172,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       votes.push({ key: "SMC", ...smc });
     }
 
-    if (active.has("AF_WYCKOFF") || active.has("WYCKOFF")) {
+    if (active.has("WYCKOFF") || active.has("WYCKOFF")) {
       let wyResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
       try {
         wyResult = this._wyckoff.evaluate(indicators, lastIdx, config);
@@ -187,7 +187,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       });
     }
 
-    if (active.has("AF_VSA") || active.has("VSA")) {
+    if (active.has("VOLUME_SPREAD_ANALYSIS") || active.has("VSA")) {
       let vsaResult = { vote: "NEUTRAL", confidence: 0, reason: "unevaluated" };
       try {
         vsaResult = this._vsa.evaluate(indicators, lastIdx, config);
@@ -234,7 +234,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const evaluations = {};
 
     let smcMulti = precomputedMulti;
-    if (active.has("AF_SMC")) {
+    if (active.has("SMART_MONEY_CONCEPTS")) {
       let signal = null;
       let confidence = 0;
       let reason = "smc_no_signal";
@@ -260,11 +260,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       } catch (err) {
         reason = `smc_error:${err.message}`;
       }
-      evaluations.AF_SMC = { signal, confidence, reason };
+      evaluations.SMART_MONEY_CONCEPTS = { signal, confidence, reason };
       if (signal === "LONG" || signal === "SHORT") {
         candidates.push({
-          key: "AF_SMC",
-          label: RACER_LABELS.AF_SMC,
+          key: "SMART_MONEY_CONCEPTS",
+          label: RACER_LABELS.SMART_MONEY_CONCEPTS,
           signal,
           confidence,
           reason,
@@ -272,7 +272,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       }
     }
 
-    if (active.has("AF_WYCKOFF")) {
+    if (active.has("WYCKOFF")) {
       let signal = null;
       let confidence = 0;
       let reason = "wyckoff_no_signal";
@@ -284,11 +284,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       } catch (err) {
         reason = `wyckoff_error:${err.message}`;
       }
-      evaluations.AF_WYCKOFF = { signal, confidence, reason };
+      evaluations.WYCKOFF = { signal, confidence, reason };
       if (signal === "LONG" || signal === "SHORT") {
         candidates.push({
-          key: "AF_WYCKOFF",
-          label: RACER_LABELS.AF_WYCKOFF,
+          key: "WYCKOFF",
+          label: RACER_LABELS.WYCKOFF,
           signal,
           confidence,
           reason,
@@ -296,7 +296,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       }
     }
 
-    if (active.has("AF_VSA")) {
+    if (active.has("VOLUME_SPREAD_ANALYSIS")) {
       let signal = null;
       let confidence = 0;
       let reason = "vsa_no_signal";
@@ -308,11 +308,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       } catch (err) {
         reason = `vsa_error:${err.message}`;
       }
-      evaluations.AF_VSA = { signal, confidence, reason };
+      evaluations.VOLUME_SPREAD_ANALYSIS = { signal, confidence, reason };
       if (signal === "LONG" || signal === "SHORT") {
         candidates.push({
-          key: "AF_VSA",
-          label: RACER_LABELS.AF_VSA,
+          key: "VOLUME_SPREAD_ANALYSIS",
+          label: RACER_LABELS.VOLUME_SPREAD_ANALYSIS,
           signal,
           confidence,
           reason,
@@ -344,9 +344,9 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       winningComponent: winner.key,
       strategyLabel: winner.label,
       signalComponents: {
-        AF_SMC: evaluations.AF_SMC?.signal || (active.has("AF_SMC") ? "NEUTRAL" : "DISABLED"),
-        AF_WYCKOFF: evaluations.AF_WYCKOFF?.signal || (active.has("AF_WYCKOFF") ? "NEUTRAL" : "DISABLED"),
-        AF_VSA: evaluations.AF_VSA?.signal || (active.has("AF_VSA") ? "NEUTRAL" : "DISABLED"),
+        SMART_MONEY_CONCEPTS: evaluations.SMART_MONEY_CONCEPTS?.signal || (active.has("SMART_MONEY_CONCEPTS") ? "NEUTRAL" : "DISABLED"),
+        WYCKOFF: evaluations.WYCKOFF?.signal || (active.has("WYCKOFF") ? "NEUTRAL" : "DISABLED"),
+        VOLUME_SPREAD_ANALYSIS: evaluations.VOLUME_SPREAD_ANALYSIS?.signal || (active.has("VOLUME_SPREAD_ANALYSIS") ? "NEUTRAL" : "DISABLED"),
       },
       smcMulti: smcMulti || null,
     };
@@ -364,11 +364,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       ...this._lastVoteMeta,
       winningComponent: aggregated.signal
         ? (componentVotes.find((v) => v.vote === aggregated.signal)?.key === "SMC"
-          ? "AF_SMC"
+          ? "SMART_MONEY_CONCEPTS"
           : componentVotes.find((v) => v.vote === aggregated.signal)?.key === "WYCKOFF"
-            ? "AF_WYCKOFF"
+            ? "WYCKOFF"
             : componentVotes.find((v) => v.vote === aggregated.signal)?.key === "VSA"
-              ? "AF_VSA"
+              ? "VOLUME_SPREAD_ANALYSIS"
               : null)
         : null,
       strategyLabel: aggregated.signal ? "Adaptive Fusion (vote)" : null,
@@ -379,7 +379,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   detectSignal(indicators, lastIdx, config = {}) {
     const mode = this._resolveMode(config);
     if (mode === "smc_only") {
-      this._lastRaceMeta = { mode: "smc_only", winningComponent: "AF_SMC", strategyLabel: RACER_LABELS.AF_SMC };
+      this._lastRaceMeta = { mode: "smc_only", winningComponent: "SMART_MONEY_CONCEPTS", strategyLabel: RACER_LABELS.SMART_MONEY_CONCEPTS };
       return this._smc.detectSignal(indicators, lastIdx, config);
     }
     if (mode === "vote") {
@@ -390,7 +390,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
 
   /**
    * Multi-position: race winner drives type legs.
-   * - AF_SMC wins → SMC type legs filtered to winner direction
+   * - SMART_MONEY_CONCEPTS wins → SMC type legs filtered to winner direction
    * - Wyckoff/VSA wins → promote direction to all type legs (standalone racer)
    * Vote mode keeps Sprint 8 gating behaviour.
    */
@@ -401,8 +401,8 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     if (mode === "smc_only") {
       this._lastRaceMeta = {
         mode: "smc_only",
-        winningComponent: "AF_SMC",
-        strategyLabel: RACER_LABELS.AF_SMC,
+        winningComponent: "SMART_MONEY_CONCEPTS",
+        strategyLabel: RACER_LABELS.SMART_MONEY_CONCEPTS,
       };
       return multi;
     }
@@ -444,7 +444,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
 
     const dir = aggregated.signal;
     const voters = this._resolveActiveVoters(config);
-    const smcActive = voters.has("AF_SMC") || voters.has("SMC");
+    const smcActive = voters.has("SMART_MONEY_CONCEPTS") || voters.has("SMC");
     if (!smcActive) {
       return {
         Scalping: dir,
@@ -510,10 +510,10 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const winnerKey = race.winningComponent;
 
     // Non-SMC racers: promote into AF-supported type legs only (Scalping + Swing).
-    // Do NOT paint Intraday — AF_WYCKOFF/AF_VSA are not Intraday strategies, and
+    // Do NOT paint Intraday — WYCKOFF/VOLUME_SPREAD_ANALYSIS are not Intraday strategies, and
     // painting all three legs caused false Intraday type attribution when the
     // multi-position engine ran without per-type activeComponents filtering.
-    if (winnerKey === "AF_WYCKOFF" || winnerKey === "AF_VSA") {
+    if (winnerKey === "WYCKOFF" || winnerKey === "VOLUME_SPREAD_ANALYSIS") {
       return {
         Scalping: dir,
         Intraday: null,
@@ -548,9 +548,9 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
   getLastSignalMeta() {
     const winnerKey = this._lastRaceMeta?.winningComponent;
     let baseMeta = null;
-    if (winnerKey === "AF_WYCKOFF" && typeof this._wyckoff.getLastSignalMeta === "function") {
+    if (winnerKey === "WYCKOFF" && typeof this._wyckoff.getLastSignalMeta === "function") {
       baseMeta = this._wyckoff.getLastSignalMeta();
-    } else if (winnerKey === "AF_VSA" && typeof this._vsa.getLastSignalMeta === "function") {
+    } else if (winnerKey === "VOLUME_SPREAD_ANALYSIS" && typeof this._vsa.getLastSignalMeta === "function") {
       baseMeta = this._vsa.getLastSignalMeta();
     } else if (typeof this._smc.getLastSignalMeta === "function") {
       baseMeta = this._smc.getLastSignalMeta();
@@ -561,7 +561,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
 
     return {
       ...(baseMeta || {}),
-      component: winnerKey || baseMeta?.component || "AF_SMC",
+      component: winnerKey || baseMeta?.component || "SMART_MONEY_CONCEPTS",
       winningComponent: winnerKey || null,
       strategyLabel: label,
       afRace: this._lastRaceMeta,
@@ -592,10 +592,10 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {
     const winner = this._lastRaceMeta?.winningComponent || component;
-    if (winner === "AF_WYCKOFF" && typeof this._wyckoff.calculateRiskConfig === "function") {
+    if (winner === "WYCKOFF" && typeof this._wyckoff.calculateRiskConfig === "function") {
       return this._wyckoff.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
-    if (winner === "AF_VSA" && typeof this._vsa.calculateRiskConfig === "function") {
+    if (winner === "VOLUME_SPREAD_ANALYSIS" && typeof this._vsa.calculateRiskConfig === "function") {
       return this._vsa.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
     if (typeof this._smc.calculateRiskConfig === "function") {

@@ -22,7 +22,7 @@ const BacktestJobService = require("../services/BacktestJobService");
 const cfg = require("../../../config/env");
 
 // Gen2 canonical engines for picker/list APIs (legacy aliases accepted at ingress via normalize).
-const USER_STRATEGY_KEYS = ["AF_SMC", "TS_TF", "MD_MR", "BS_BR"];
+const USER_STRATEGY_KEYS = ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const GROK_CONFIRM_MAX_SIGNALS = 500;
 
 function validateGrokConfirmPayload(body) {
@@ -43,7 +43,7 @@ function validateGrokConfirmPayload(body) {
     return {
       error: {
         status: 400,
-        message: "Grok Confirm Gate hanya untuk strategi Adaptive Fusion, Trend Surge (TS_TF), Mean Drift (MD_MR), dan Breakout (BS_BR)",
+        message: "Grok Confirm Gate hanya untuk strategi Adaptive Fusion, Trend Surge (TREND_FOLLOWING), Mean Drift (MEAN_REVERSION), dan Breakout (BREAKOUT_RETEST)",
       },
     };
   }
@@ -137,8 +137,8 @@ function normalizeMetrics(stats) {
 
 /** Phase 3 — simplified server-side backtest using shared simulator.js */
 function runSimpleServerBacktest(candles, strategyKey, parameters = {}, options = {}) {
-  const canonical = normalizeStrategyKey(strategyKey) || "MD_MR";
-  const strat = STRATEGIES[canonical] || STRATEGIES.MD_MR;
+  const canonical = normalizeStrategyKey(strategyKey) || "MEAN_REVERSION";
+  const strat = STRATEGIES[canonical] || STRATEGIES.MEAN_REVERSION;
   const atrMult = (parameters.atrMult ?? strat.atrMultiplier ?? 1.4) * (parameters.slMultiplier ?? 1);
   const riskReward = parameters.riskReward ?? strat.riskReward ?? 2;
   const capital0 = parameters.capital ?? 500;
@@ -560,7 +560,7 @@ module.exports = function createBacktestRouter(context) {
   /**
    * GET /api/v1/backtest/:id/export
    * Dynamic ML XLSX (or CSV) for a single backtest run.
-   * Query: format=xlsx|csv, strategies=AF_SMC,TS_TF
+   * Query: format=xlsx|csv, strategies=SMART_MONEY_CONCEPTS,TREND_FOLLOWING
    */
   router.get("/:id/export", asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -1205,7 +1205,7 @@ module.exports = function createBacktestRouter(context) {
    * Bukan replika BotEngine penuh; untuk validasi silang & future migration.
    */
   router.post("/run-server", asyncHandler(async (req, res) => {
-    const { candles, strategyKey = "MD_MR", parameters = {}, options = {} } = req.body;
+    const { candles, strategyKey = "MEAN_REVERSION", parameters = {}, options = {} } = req.body;
     if (!Array.isArray(candles) || candles.length < 50) {
       return res.status(400).json({ ok: false, error: "Minimal 50 candles diperlukan" });
     }
@@ -1272,7 +1272,7 @@ module.exports = function createBacktestRouter(context) {
     }
 
     const strategyCfg = STRATEGIES[strategyKey] || STRATEGIES["ADAPTIVE_FUSION"];
-    if (!strategyCfg && !["AF_SMC"].includes(strategyKey)) {
+    if (!strategyCfg && !["SMART_MONEY_CONCEPTS"].includes(strategyKey)) {
       return res.status(400).json({ ok: false, error: `Unknown strategy: ${strategyKey}` });
     }
 

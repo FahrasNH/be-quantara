@@ -1,5 +1,5 @@
 /**
- * Statistical Arbitrage v1 (MD_SA) — MEAN_DRIFT race participant.
+ * Statistical Arbitrage v1 (STATISTICAL_ARBITRAGE) — MEAN_DRIFT race participant.
  *
  * Pragmatic single-symbol design for the existing backtest pipeline:
  *   residual / z-score of close vs its own rolling mean (and optional VWAP).

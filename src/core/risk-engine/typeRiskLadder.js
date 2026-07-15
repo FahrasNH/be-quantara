@@ -8,10 +8,10 @@
 //   v3.2 weights:  Scalping 2 : Intraday 3 : Swing 4
 //   Allocation:    1% + 1.5% + 2% = 4.5% combined cap
 //
-//   AF_SMC  combined 0.045 → 1% (Scalping RR 2.0) / 1.5% (Intraday) / 2% (Swing)
+//   SMART_MONEY_CONCEPTS  combined 0.045 → 1% (Scalping RR 2.0) / 1.5% (Intraday) / 2% (Swing)
 //           (Previously v3.1: 0.5% / 1.5% / 2% — Scalping +0.5% RR fix)
-//   TS_TF   combined 0.03  → 1% (Intraday) / 2% (Swing) [unchanged]
-//   MD_MR   combined 0.015 → 0.5% (Scalping) / 1% (Intraday) [unchanged]
+//   TREND_FOLLOWING   combined 0.03  → 1% (Intraday) / 2% (Swing) [unchanged]
+//   MEAN_REVERSION   combined 0.015 → 0.5% (Scalping) / 1% (Intraday) [unchanged]
 //
 // Used by BOTH RealStrategyBacktestService (runTripleTypeBacktest /
 // runMultiTypeBacktest) and live BotEngine._handleMultiPositionSignal — single

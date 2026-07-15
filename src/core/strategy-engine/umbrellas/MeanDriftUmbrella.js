@@ -1,13 +1,13 @@
 /**
  * MeanDriftUmbrella.js — MINT Tier umbrella strategy
  *
- * Umbrella key : MD_MR (tier access bag — not a fusion mechanism)
- * Components   : MD_MR (Mean Reversion) · MD_SD (Supply and Demand) · MD_SA (Statistical Arbitrage)
+ * Umbrella key : MEAN_REVERSION (tier access bag — not a fusion mechanism)
+ * Components   : MEAN_REVERSION (Mean Reversion) · SUPPLY_AND_DEMAND (Supply and Demand) · STATISTICAL_ARBITRAGE (Statistical Arbitrage)
  *
  * Sprint 10: race-to-confirm among independent racers.
- * ADX Trend Strength Filter (MD-SUB-01) remains an overlay inside MD_MR — not a racer.
+ * ADX Trend Strength Filter (MD-SUB-01) remains an overlay inside MEAN_REVERSION — not a racer.
  *
- * Rollback: set `mdCombinationMode: "pipeline"` to run MD_MR only (legacy layered).
+ * Rollback: set `mdCombinationMode: "pipeline"` to run MEAN_REVERSION only (legacy layered).
  */
 
 const UmbrellaStrategy = require("../base/UmbrellaStrategy");
@@ -16,17 +16,17 @@ const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer"
 const SupplyDemandStrategy = require("../implementations/SupplyDemandStrategy");
 const StatisticalArbitrageStrategy = require("../implementations/StatisticalArbitrageStrategy");
 
-const RACER_PRIORITY = ["MD_MR", "MD_SD", "MD_SA"];
+const RACER_PRIORITY = ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"];
 const RACER_LABELS = {
-  MD_MR: "Mean Reversion",
-  MD_SD: "Supply and Demand",
-  MD_SA: "Statistical Arbitrage",
+  MEAN_REVERSION: "Mean Reversion",
+  SUPPLY_AND_DEMAND: "Supply and Demand",
+  STATISTICAL_ARBITRAGE: "Statistical Arbitrage",
 };
 
 class MeanDriftUmbrella extends UmbrellaStrategy {
   constructor() {
     super({
-      name: "MD_MR",
+      name: "MEAN_REVERSION",
       label: "Mean Drift",
       description:
         "MINT umbrella (tier access): Mean Reversion, Supply and Demand, and Statistical Arbitrage race independently — highest confirmation wins.",
@@ -39,9 +39,9 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     this._sd = new SupplyDemandStrategy();
     this._sa = new StatisticalArbitrageStrategy();
 
-    this.addComponent("MD_MR", this._mr);
-    this.addComponent("MD_SD", this._sd);
-    this.addComponent("MD_SA", this._sa);
+    this.addComponent("MEAN_REVERSION", this._mr);
+    this.addComponent("SUPPLY_AND_DEMAND", this._sd);
+    this.addComponent("STATISTICAL_ARBITRAGE", this._sa);
 
     this._lastLayerMeta = null;
     this._lastRaceMeta = null;
@@ -55,9 +55,9 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     const active = new Set();
     for (const c of raw) {
       const k = normalizeStrategyKey(String(c || "").toUpperCase());
-      if (k === "MD_MR") active.add("MD_MR");
-      else if (k === "MD_SD" || k === "SUPPLY_AND_DEMAND" || k === "SUPPLY_DEMAND") active.add("MD_SD");
-      else if (k === "MD_SA" || k === "STATISTICAL_ARBITRAGE" || k === "STAT_ARB") active.add("MD_SA");
+      if (k === "MEAN_REVERSION") active.add("MEAN_REVERSION");
+      else if (k === "SUPPLY_AND_DEMAND" || k === "SUPPLY_AND_DEMAND" || k === "SUPPLY_DEMAND") active.add("SUPPLY_AND_DEMAND");
+      else if (k === "STATISTICAL_ARBITRAGE" || k === "STATISTICAL_ARBITRAGE" || k === "STAT_ARB") active.add("STATISTICAL_ARBITRAGE");
     }
     if (active.size === 0) return new Set(RACER_PRIORITY);
     return active;
@@ -106,9 +106,9 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     const candidates = [];
     const evaluations = {};
     const map = {
-      MD_MR: this._mr,
-      MD_SD: this._sd,
-      MD_SA: this._sa,
+      MEAN_REVERSION: this._mr,
+      SUPPLY_AND_DEMAND: this._sd,
+      STATISTICAL_ARBITRAGE: this._sa,
     };
 
     for (const key of RACER_PRIORITY) {
@@ -150,23 +150,23 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
       winningComponent: winner.key,
       strategyLabel: winner.label,
       signalComponents: {
-        MD_MR: evaluations.MD_MR?.signal || (active.has("MD_MR") ? "NEUTRAL" : "DISABLED"),
-        MD_SD: evaluations.MD_SD?.signal || (active.has("MD_SD") ? "NEUTRAL" : "DISABLED"),
-        MD_SA: evaluations.MD_SA?.signal || (active.has("MD_SA") ? "NEUTRAL" : "DISABLED"),
+        MEAN_REVERSION: evaluations.MEAN_REVERSION?.signal || (active.has("MEAN_REVERSION") ? "NEUTRAL" : "DISABLED"),
+        SUPPLY_AND_DEMAND: evaluations.SUPPLY_AND_DEMAND?.signal || (active.has("SUPPLY_AND_DEMAND") ? "NEUTRAL" : "DISABLED"),
+        STATISTICAL_ARBITRAGE: evaluations.STATISTICAL_ARBITRAGE?.signal || (active.has("STATISTICAL_ARBITRAGE") ? "NEUTRAL" : "DISABLED"),
       },
     };
     this._lastLayerMeta = this._lastRaceMeta;
     return winner.signal;
   }
 
-  /** Legacy: MD_MR layered pipeline only. */
+  /** Legacy: MEAN_REVERSION layered pipeline only. */
   _detectPipeline(indicators, lastIdx, config = {}) {
     const signal = this._mr.detectSignal(indicators, lastIdx, config);
     const meta = this._mr.getLastSignalMeta();
     this._lastRaceMeta = {
       mode: "pipeline",
-      winningComponent: signal ? "MD_MR" : null,
-      strategyLabel: RACER_LABELS.MD_MR,
+      winningComponent: signal ? "MEAN_REVERSION" : null,
+      strategyLabel: RACER_LABELS.MEAN_REVERSION,
       reason: signal ? (meta?.reason || "md_mr_pipeline") : "no_mr_signal",
       mrMeta: meta,
     };
@@ -185,9 +185,9 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
   getLastSignalMeta() {
     const winnerKey = this._lastRaceMeta?.winningComponent;
     let baseMeta = null;
-    if (winnerKey === "MD_SD" && typeof this._sd.getLastSignalMeta === "function") {
+    if (winnerKey === "SUPPLY_AND_DEMAND" && typeof this._sd.getLastSignalMeta === "function") {
       baseMeta = this._sd.getLastSignalMeta();
-    } else if (winnerKey === "MD_SA" && typeof this._sa.getLastSignalMeta === "function") {
+    } else if (winnerKey === "STATISTICAL_ARBITRAGE" && typeof this._sa.getLastSignalMeta === "function") {
       baseMeta = this._sa.getLastSignalMeta();
     } else if (typeof this._mr.getLastSignalMeta === "function") {
       baseMeta = this._mr.getLastSignalMeta();
@@ -198,7 +198,7 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
 
     return {
       ...(baseMeta || {}),
-      component: winnerKey || baseMeta?.component || "MD_MR",
+      component: winnerKey || baseMeta?.component || "MEAN_REVERSION",
       winningComponent: winnerKey || null,
       strategyLabel: label,
       mdRace: this._lastRaceMeta,
@@ -220,10 +220,10 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {
     const winner = this._lastRaceMeta?.winningComponent || component;
-    if (winner === "MD_SD" && typeof this._sd.calculateRiskConfig === "function") {
+    if (winner === "SUPPLY_AND_DEMAND" && typeof this._sd.calculateRiskConfig === "function") {
       return this._sd.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
-    if (winner === "MD_SA" && typeof this._sa.calculateRiskConfig === "function") {
+    if (winner === "STATISTICAL_ARBITRAGE" && typeof this._sa.calculateRiskConfig === "function") {
       return this._sa.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
     if (typeof this._mr.calculateRiskConfig === "function") {

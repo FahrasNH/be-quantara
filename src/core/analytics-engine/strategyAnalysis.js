@@ -36,10 +36,10 @@ function analyzeStrategyFit(marketData, currentStrategy) {
 
   const signals = [];
   const scores  = {
-    AF_SMC:  0,
-    TS_TF:   0,
-    MD_MR:   0,
-    BS_BR:   0,
+    SMART_MONEY_CONCEPTS:  0,
+    TREND_FOLLOWING:   0,
+    MEAN_REVERSION:   0,
+    BREAKOUT_RETEST:   0,
   };
 
   // === Market regime detection ===
@@ -53,54 +53,54 @@ function analyzeStrategyFit(marketData, currentStrategy) {
   const highATR       = atr > atrBaseline * 1.5;
   const ranging       = !emaStrong; // RSI extreme di EMA-flat market = ideal MR setup
 
-  // === AF_SMC score ===
+  // === SMART_MONEY_CONCEPTS score ===
   // Bekerja baik di mixed/uncertain conditions — voting system menyaringnya
-  scores.AF_SMC += rsiNeutral  ? 10 : 0;
-  scores.AF_SMC += !highATR    ? 8  : 0;
-  scores.AF_SMC += highVolume  ? 5  : 0;
-  scores.AF_SMC += emaStrong   ? 7  : 0;
+  scores.SMART_MONEY_CONCEPTS += rsiNeutral  ? 10 : 0;
+  scores.SMART_MONEY_CONCEPTS += !highATR    ? 8  : 0;
+  scores.SMART_MONEY_CONCEPTS += highVolume  ? 5  : 0;
+  scores.SMART_MONEY_CONCEPTS += emaStrong   ? 7  : 0;
 
-  // === TS_TF score ===
+  // === TREND_FOLLOWING score ===
   // Perlu trend kuat + volume support
   if (emaBullish && emaStrong && highVolume && !rsiOverbought) {
-    scores.TS_TF += 25;
+    scores.TREND_FOLLOWING += 25;
     signals.push({ type: 'bullish_momentum', confidence: 'high' });
   }
   if (!emaBullish && emaStrong && highVolume && !rsiOversold) {
-    scores.TS_TF += 20;
+    scores.TREND_FOLLOWING += 20;
     signals.push({ type: 'bearish_momentum', confidence: 'high' });
   }
-  scores.TS_TF += lowVolume ? -15 : 0; // volume lemah = penalty besar
+  scores.TREND_FOLLOWING += lowVolume ? -15 : 0; // volume lemah = penalty besar
 
-  // === MD_MR score ===
+  // === MEAN_REVERSION score ===
   // Perlu ranging market + BB extreme touch
   if (ranging && bbLower && lastClose <= bbLower * 1.01 && rsiOversold) {
-    scores.MD_MR += 30;
+    scores.MEAN_REVERSION += 30;
     signals.push({ type: 'oversold_bb_touch', confidence: 'high' });
   }
   if (ranging && bbUpper && lastClose >= bbUpper * 0.995 && rsiOverbought) {
-    scores.MD_MR += 30;
+    scores.MEAN_REVERSION += 30;
     signals.push({ type: 'overbought_bb_touch', confidence: 'high' });
   }
-  scores.MD_MR += ranging ? 15 : -10;
+  scores.MEAN_REVERSION += ranging ? 15 : -10;
   // Penalti jika trend HTF terlalu kuat — MR berbahaya di strong trend
   if (htfTrend === 'strong_bull' || htfTrend === 'strong_bear') {
-    scores.MD_MR -= 20;
-    signals.push({ type: 'htf_trend_warning', detail: `MD_MR tidak direkomendasikan saat HTF ${htfTrend}` });
+    scores.MEAN_REVERSION -= 20;
+    signals.push({ type: 'htf_trend_warning', detail: `MEAN_REVERSION tidak direkomendasikan saat HTF ${htfTrend}` });
   }
 
-  // === BS_BR score ===
+  // === BREAKOUT_RETEST score ===
   // Cocok saat konsolidasi / volatilitas sedang-tinggi + volume breakout
-  scores.BS_BR += ranging ? 20 : 0;
-  scores.BS_BR += highVolume ? 10 : 0;
-  scores.BS_BR += highATR ? 8 : 0;
+  scores.BREAKOUT_RETEST += ranging ? 20 : 0;
+  scores.BREAKOUT_RETEST += highVolume ? 10 : 0;
+  scores.BREAKOUT_RETEST += highATR ? 8 : 0;
 
   // === Tentukan rekomendasi ===
   const eligible = Object.entries(scores)
     .filter(([, s]) => s > 0)
     .sort(([, a], [, b]) => b - a);
 
-  const recommended = eligible[0]?.[0] ?? 'AF_SMC'; // AF sebagai default safe
+  const recommended = eligible[0]?.[0] ?? 'SMART_MONEY_CONCEPTS'; // AF sebagai default safe
   const confidence  = eligible[0]?.[1] > 20 ? 'high' : eligible[0]?.[1] > 10 ? 'medium' : 'low';
 
   const regime = ranging ? 'ranging'

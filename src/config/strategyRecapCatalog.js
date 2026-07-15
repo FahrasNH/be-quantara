@@ -7,14 +7,14 @@
  */
 
 const LIVE_RECAP_KEYS = [
-  "AF_SMC", "AF_WYCKOFF", "AF_VSA",
-  "TS_TF", "TS_MS", "TS_VP",
-  "MD_MR", "MD_SD", "MD_SA",
-  "BS_BR", "BS_ICT", "BS_LS",
+  "SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS",
+  "TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY",
+  "MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE",
+  "BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE",
 ];
 
 const STRATEGY_RECAP_CATALOG = {
-  AF_SMC: {
+  SMART_MONEY_CONCEPTS: {
     pdfName: "Smart Money Concepts — SMC",
     concept:
       "Liquidity sweeps, BOS/CHoCH, displacement, order blocks, fair value gaps, premium/discount.",
@@ -25,7 +25,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  AF_WYCKOFF: {
+  WYCKOFF: {
     pdfName: "Wyckoff Method",
     concept:
       "Accumulation, markup, distribution, markdown; spring and upthrust detection in trading ranges.",
@@ -36,7 +36,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  AF_VSA: {
+  VOLUME_SPREAD_ANALYSIS: {
     pdfName: "Volume Spread Analysis — VSA",
     concept: "Volume relative to spread and close — effort vs result conviction.",
     indicators: "Volume, candle spread, relative volume ratio.",
@@ -46,7 +46,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  TS_TF: {
+  TREND_FOLLOWING: {
     pdfName: "Trend Following",
     concept: "Follow confirmed trend direction after structure and momentum align.",
     indicators: "EMA/SMA stack, Donchian channel, ADX, ATR.",
@@ -56,7 +56,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  TS_MS: {
+  MARKET_STRUCTURE: {
     pdfName: "Dow Theory / Market Structure",
     concept: "Higher-high/higher-low (or lower-low/lower-high) swing structure pullbacks.",
     indicators: "Price structure, volume, multi-timeframe alignment.",
@@ -66,7 +66,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  TS_VP: {
+  AUCTION_MARKET_THEORY: {
     pdfName: "Auction Market Theory",
     concept: "Balance vs imbalance; trade from value-area edges and session auction.",
     indicators: "Session VWAP, value-area proxy (Market Profile partial).",
@@ -76,7 +76,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  MD_MR: {
+  MEAN_REVERSION: {
     pdfName: "Mean Reversion",
     concept: "Price tends to revert toward mean / fair value after extension.",
     indicators: "VWAP, Bollinger Bands, RSI, z-score (entry-TF).",
@@ -86,7 +86,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  MD_SD: {
+  SUPPLY_AND_DEMAND: {
     pdfName: "Supply and Demand",
     concept: "Buyer/seller imbalance zones — demand/supply retest after displacement.",
     indicators: "OB/FVG-style zones, rejection wicks, volume (base-rally schematic partial).",
@@ -96,7 +96,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  MD_SA: {
+  STATISTICAL_ARBITRAGE: {
     pdfName: "Statistical Arbitrage",
     concept:
       "PDF: cross-asset statistical mean reversion. v1: single-symbol z-score vs rolling mean (+ optional BTC residual).",
@@ -108,7 +108,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  BS_BR: {
+  BREAKOUT_RETEST: {
     pdfName: "Breakout Trading",
     concept:
       "Leave consolidation — breakout from range with volume confirmation; implementation adds retest gate.",
@@ -119,7 +119,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  BS_ICT: {
+  ICT_STYLE_TRADING: {
     pdfName: "ICT-style trading",
     concept: "Liquidity raid, market structure shift, FVG/OTE/kill-zone session entries (subset implemented).",
     indicators: "Session time (kill zones), prior session H/L, FVG, displacement.",
@@ -129,7 +129,7 @@ const STRATEGY_RECAP_CATALOG = {
     recapNotes:
       "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
-  BS_LS: {
+  LIQUIDATION_SQUEEZE: {
     pdfName: "Liquidation/Squeeze Trading",
     concept: "Trade forced liquidation / squeeze dislocations and funding extremes.",
     indicators: "Liquidation proxy (wick displacement), OI, funding rate (fail-open when unavailable).",

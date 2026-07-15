@@ -20,22 +20,22 @@ const prisma = require("../../infrastructure/db/prismaClient");
 // ── Default search spaces per strategy ───────────────────────────────────────
 
 const SEARCH_SPACE = {
-  AF_SMC: {
+  SMART_MONEY_CONCEPTS: {
     confidenceFloor:    { min: 60,   max: 85,   step: 5    },
     slMultiplierScalp:  { min: 0.8,  max: 1.5,  step: 0.1  },
     tpMultiplierScalp:  { min: 3.0,  max: 6.0,  step: 0.5  },
   },
-  TS_TF: {
+  TREND_FOLLOWING: {
     adxMinStrength: { min: 20,  max: 40,  step: 5    },
     slMultiplier:   { min: 1.0, max: 2.5, step: 0.25 },
     tpMultiplier:   { min: 1.5, max: 3.0, step: 0.25 },
   },
-  MD_MR: {
+  MEAN_REVERSION: {
     rsiOversold:   { min: 20,  max: 35,  step: 5    },
     rsiOverbought: { min: 65,  max: 80,  step: 5    },
     bbMultiplier:  { min: 1.5, max: 2.5, step: 0.25 },
   },
-  BS_BR: {
+  BREAKOUT_RETEST: {
     breakoutLookback:         { min: 15,  max: 30,  step: 5    },
     volumeMultiplier:         { min: 1.1, max: 1.8, step: 0.1  },
     consolidationThreshold:   { min: 0.6, max: 0.95, step: 0.05 },
@@ -157,7 +157,7 @@ function applyParamsToTrade(trade, strategyKey, params) {
   const ctx    = trade.entryContext ?? {};
 
   switch (strategyKey) {
-    case "AF_SMC": {
+    case "SMART_MONEY_CONCEPTS": {
       const { confidenceFloor = 70, slMultiplierScalp = 1.0, tpMultiplierScalp = 4.0 } = params;
       const signalConf = ctx.signalConfidence ?? ctx.confidence ?? 75;
       if (signalConf < confidenceFloor) return null; // filtered out
@@ -166,14 +166,14 @@ function applyParamsToTrade(trade, strategyKey, params) {
         : (slMultiplierScalp / 1.0); // reference sl = 1.0
       return won ? Math.abs(pnl) * scaleFactor : -Math.abs(pnl) * scaleFactor;
     }
-    case "TS_TF": {
+    case "TREND_FOLLOWING": {
       const { adxMinStrength = 25, slMultiplier = 1.5, tpMultiplier = 2.0 } = params;
       const adx = ctx.adx ?? ctx.adxValue ?? 30;
       if (adx < adxMinStrength) return null;
       const sf = won ? tpMultiplier / 2.0 : slMultiplier / 1.5;
       return won ? Math.abs(pnl) * sf : -Math.abs(pnl) * sf;
     }
-    case "MD_MR": {
+    case "MEAN_REVERSION": {
       const { rsiOversold = 30, rsiOverbought = 70, bbMultiplier = 2.0 } = params;
       const rsi = ctx.rsi ?? 50;
       const side = trade.side ?? "long";
@@ -182,7 +182,7 @@ function applyParamsToTrade(trade, strategyKey, params) {
       const sf = won ? bbMultiplier / 2.0 : 1.0;
       return won ? Math.abs(pnl) * sf : -Math.abs(pnl);
     }
-    case "BS_BR": {
+    case "BREAKOUT_RETEST": {
       const { breakoutLookback = 20, volumeMultiplier = 1.3, consolidationThreshold = 0.75 } = params;
       const volRatio = ctx.volumeRatio ?? ctx.volume_ratio ?? 1.5;
       const consol   = ctx.consolidationScore ?? ctx.consolidation ?? 0.8;

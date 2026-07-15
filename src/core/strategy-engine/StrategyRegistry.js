@@ -2,12 +2,12 @@
  * StrategyRegistry.js — Factory Pattern for Strategy Management
  *
  * v2.1 — Umbrella architecture (race-to-confirm pools).
- * Canonical engine keys : AF_SMC · TS_TF · MD_MR · BS_BR
- * Component aliases     : AF_WYCKOFF / AF_VSA → AF umbrella instance
- *                         TS_MS / TS_VP → TS umbrella instance
- *                         MD_SD / MD_SA → MD umbrella instance
- *                         BS_ICT / BS_LS → BS umbrella instance
- * Legacy ingress aliases normalize via strategyKeyNormalizer ACL → AF_SMC / TS_TF / MD_MR / BS_BR.
+ * Canonical engine keys : SMART_MONEY_CONCEPTS · TREND_FOLLOWING · MEAN_REVERSION · BREAKOUT_RETEST
+ * Component aliases     : WYCKOFF / VOLUME_SPREAD_ANALYSIS → AF umbrella instance
+ *                         MARKET_STRUCTURE / AUCTION_MARKET_THEORY → TS umbrella instance
+ *                         SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE → MD umbrella instance
+ *                         ICT_STYLE_TRADING / LIQUIDATION_SQUEEZE → BS umbrella instance
+ * Legacy ingress aliases normalize via strategyKeyNormalizer ACL → SMART_MONEY_CONCEPTS / TREND_FOLLOWING / MEAN_REVERSION / BREAKOUT_RETEST.
  *
  * GROK_AI_TRADING — experimental VAULT bonus (LLM entry engine). Registered
  * but NOT part of any tier race pool. Prefer GrokConfirm overlay in production.
@@ -40,24 +40,24 @@ class StrategyRegistry {
     const bs = new BreakoutStormUmbrella();
     const ga = new GrokAiTradingStrategy();
 
-    this.register("AF_SMC",          af);
-    this.register("TS_TF",           ts);
-    this.register("MD_MR",           md);
-    this.register("BS_BR",           bs);
+    this.register("SMART_MONEY_CONCEPTS",          af);
+    this.register("TREND_FOLLOWING",           ts);
+    this.register("MEAN_REVERSION",           md);
+    this.register("BREAKOUT_RETEST",           bs);
     // Experimental — VAULT bonus; see config/strategies.js EXPERIMENTAL_STRATEGIES
     this.register("GROK_AI_TRADING", ga);
 
     // ── Component keys → same umbrella instances (race pools) ─────────────
-    this.strategies.set("AF_WYCKOFF", af);
-    this.strategies.set("AF_VSA",     af);
-    this.strategies.set("TS_MS",      ts);
-    this.strategies.set("TS_VP",      ts);
-    this.strategies.set("MD_SD",      md);
-    this.strategies.set("MD_SA",      md);
-    this.strategies.set("BS_ICT",     bs);
-    this.strategies.set("BS_LS",      bs);
+    this.strategies.set("WYCKOFF", af);
+    this.strategies.set("VOLUME_SPREAD_ANALYSIS",     af);
+    this.strategies.set("MARKET_STRUCTURE",      ts);
+    this.strategies.set("AUCTION_MARKET_THEORY",      ts);
+    this.strategies.set("SUPPLY_AND_DEMAND",      md);
+    this.strategies.set("STATISTICAL_ARBITRAGE",      md);
+    this.strategies.set("ICT_STYLE_TRADING",     bs);
+    this.strategies.set("LIQUIDATION_SQUEEZE",      bs);
 
-    this.defaultKey = "AF_SMC";
+    this.defaultKey = "SMART_MONEY_CONCEPTS";
   }
 
   /**

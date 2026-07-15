@@ -2,7 +2,7 @@
  * strategyGuard.js  (src/middleware/strategyGuard.js)
  * Middleware: blokir strategi yang belum production-ready dari start live/dry-run.
  *
- *   BS_BR: Sprint 14 HALT — 5/5 backtest windows unprofitable
+ *   BREAKOUT_RETEST: Sprint 14 HALT — 5/5 backtest windows unprofitable
  *   (WR 37.1%, PF 0.72, n=267). Live blocked; dry-run/backtest allowed so fixes
  *   can be validated. Re-enable only after ≥4/5 window gate passes.
  *
@@ -28,10 +28,10 @@ const BLOCKED_STRATEGIES = new Set([
 ]);
 
 // Strategi yang hanya boleh dry-run, belum boleh live
-// Set STRATEGY_OVERRIDE=BS_BR di .env untuk izinkan live (dev saja)
+// Set STRATEGY_OVERRIDE=BREAKOUT_RETEST di .env untuk izinkan live (dev saja)
 const DRY_RUN_ONLY_STRATEGIES = new Set([
   'BREAKOUT_TRADING',
-  'BS_BR',
+  'BREAKOUT_RETEST',
   'BREAKOUT_STORM',
 ]);
 

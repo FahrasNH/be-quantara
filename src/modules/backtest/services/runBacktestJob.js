@@ -20,8 +20,8 @@ const {
 } = require("../../../shared/constants/exchangeFeeSchedules");
 
 const AF_SMC_KEYS = new Set([
-  "AF_SMC", "ADAPTIVE_FUSION",
-  "AF_WYCKOFF", "AF_VSA",
+  "SMART_MONEY_CONCEPTS", "ADAPTIVE_FUSION",
+  "WYCKOFF", "VOLUME_SPREAD_ANALYSIS",
 ]);
 
 // Trade-type → timeframe ladder (Sprint 14 factory reset).
@@ -41,15 +41,15 @@ const TYPE_TF = {
 // intersected with STRATEGY_SUPPORTED_TYPES, so this stays the superset.
 const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];
 const MULTI_TYPE_STRATEGY_MAP = {
-  TS_TF: ALL_THREE_TYPES,
-  TS_MS: ALL_THREE_TYPES,
-  TS_VP: ALL_THREE_TYPES,
-  MD_MR: ALL_THREE_TYPES,
-  MD_SD: ALL_THREE_TYPES,
-  MD_SA: ALL_THREE_TYPES,
-  BS_BR: ALL_THREE_TYPES,
-  BS_ICT: ALL_THREE_TYPES,
-  BS_LS: ALL_THREE_TYPES,
+  TREND_FOLLOWING: ALL_THREE_TYPES,
+  MARKET_STRUCTURE: ALL_THREE_TYPES,
+  AUCTION_MARKET_THEORY: ALL_THREE_TYPES,
+  MEAN_REVERSION: ALL_THREE_TYPES,
+  SUPPLY_AND_DEMAND: ALL_THREE_TYPES,
+  STATISTICAL_ARBITRAGE: ALL_THREE_TYPES,
+  BREAKOUT_RETEST: ALL_THREE_TYPES,
+  ICT_STYLE_TRADING: ALL_THREE_TYPES,
+  LIQUIDATION_SQUEEZE: ALL_THREE_TYPES,
 };
 
 const TYPE_MAX_PERIOD = {
@@ -157,34 +157,34 @@ function _normalizeAfRacerKeys(raw) {
   const out = new Set();
   for (const c of raw) {
     const k = normalizeStrategyKey(String(c || "").toUpperCase());
-    if (k === "AF_SMC" || String(c || "").toUpperCase() === "SMC") {
-      out.add("AF_SMC");
-    } else if (k === "AF_WYCKOFF" || k === "WYCKOFF") {
-      out.add("AF_WYCKOFF");
-    } else if (k === "AF_VSA" || k === "VSA") {
-      out.add("AF_VSA");
+    if (k === "SMART_MONEY_CONCEPTS" || String(c || "").toUpperCase() === "SMC") {
+      out.add("SMART_MONEY_CONCEPTS");
+    } else if (k === "WYCKOFF" || k === "WYCKOFF") {
+      out.add("WYCKOFF");
+    } else if (k === "VOLUME_SPREAD_ANALYSIS" || k === "VSA") {
+      out.add("VOLUME_SPREAD_ANALYSIS");
     }
   }
   return [...out];
 }
 
 /**
- * True when the job is a Wyckoff-only AF run — either strategyKey is AF_WYCKOFF, or
- * FE collapsed AF_WYCKOFF → AF_SMC engine with only the Wyckoff racer selected.
+ * True when the job is a Wyckoff-only AF run — either strategyKey is WYCKOFF, or
+ * FE collapsed WYCKOFF → SMART_MONEY_CONCEPTS engine with only the Wyckoff racer selected.
  */
 function _isWyckoffOnlyJob(strategyKey, parameters) {
-  if (strategyKey === "AF_WYCKOFF") return true;
+  if (strategyKey === "WYCKOFF") return true;
   if (!AF_SMC_KEYS.has(strategyKey)) return false;
   const active = _normalizeAfRacerKeys(
     parameters.afActiveRacers || parameters.afActiveVoters || parameters.selectedComponents,
   );
-  return active.length === 1 && active[0] === "AF_WYCKOFF";
+  return active.length === 1 && active[0] === "WYCKOFF";
 }
 
 /** Apply per-strategy defaults before a backtest job runs (exported for tests). */
 function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
   const parameters = { ...(parametersIn || {}) };
-  if (strategyKey === "AF_WYCKOFF" || strategyKey === "AF_VSA") {
+  if (strategyKey === "WYCKOFF" || strategyKey === "VOLUME_SPREAD_ANALYSIS") {
     if (!parameters.afActiveRacers && !parameters.afActiveVoters) {
       parameters.afActiveRacers = [strategyKey];
       if (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length) {
@@ -192,7 +192,7 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
       }
     }
   }
-  // Standalone Wyckoff (incl. FE Advanced collapse AF_WYCKOFF → AF_SMC + afActiveVoters)
+  // Standalone Wyckoff (incl. FE Advanced collapse WYCKOFF → SMART_MONEY_CONCEPTS + afActiveVoters)
   // must use aggressive entryModel. Moderate Syarat checklist remains via explicit override.
   if (_isWyckoffOnlyJob(strategyKey, parameters)
       && parameters.entryModel == null
@@ -201,23 +201,23 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
     parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "aggressive" };
   }
 
-  // Standalone Dow / AMT (incl. FE collapse TS_MS/TS_VP → TS_TF) — pin single-racer isolation.
-  if (strategyKey === "TS_MS" || strategyKey === "TS_VP") {
+  // Standalone Dow / AMT (incl. FE collapse MARKET_STRUCTURE/AUCTION_MARKET_THEORY → TREND_FOLLOWING) — pin single-racer isolation.
+  if (strategyKey === "MARKET_STRUCTURE" || strategyKey === "AUCTION_MARKET_THEORY") {
     if (!parameters.tsActiveRacers
         && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
       parameters.selectedComponents = [strategyKey];
       parameters.tsActiveRacers = [strategyKey];
     }
   }
-  // Standalone MD / BS racers (FE collapse MD_SD/MD_SA → MD_MR, BS_ICT/BS_LS → BS_BR).
-  if (strategyKey === "MD_SD" || strategyKey === "MD_SA") {
+  // Standalone MD / BS racers (FE collapse SUPPLY_AND_DEMAND/STATISTICAL_ARBITRAGE → MEAN_REVERSION, ICT_STYLE_TRADING/LIQUIDATION_SQUEEZE → BREAKOUT_RETEST).
+  if (strategyKey === "SUPPLY_AND_DEMAND" || strategyKey === "STATISTICAL_ARBITRAGE") {
     if (!parameters.mdActiveRacers
         && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
       parameters.selectedComponents = [strategyKey];
       parameters.mdActiveRacers = [strategyKey];
     }
   }
-  if (strategyKey === "BS_ICT" || strategyKey === "BS_LS") {
+  if (strategyKey === "ICT_STYLE_TRADING" || strategyKey === "LIQUIDATION_SQUEEZE") {
     if (!parameters.bsActiveRacers
         && (!Array.isArray(parameters.selectedComponents) || !parameters.selectedComponents.length)) {
       parameters.selectedComponents = [strategyKey];

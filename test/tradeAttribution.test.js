@@ -55,48 +55,48 @@ console.log("\n🏷️  tradeAttribution Unit Tests\n");
   t(
     "winningComponent beats config umbrella",
     resolvePersistedStrategyKey({
-      strategyName: "AF_WYCKOFF",
-      configKey: "AF_SMC",
-      indicators: { winningComponent: "AF_WYCKOFF", firedByStrategy: "AF_WYCKOFF" },
-    }) === "AF_WYCKOFF"
+      strategyName: "WYCKOFF",
+      configKey: "SMART_MONEY_CONCEPTS",
+      indicators: { winningComponent: "WYCKOFF", firedByStrategy: "WYCKOFF" },
+    }) === "WYCKOFF"
   );
   t(
     "winningComponent beats stale umbrella strategyName",
     resolvePersistedStrategyKey({
-      strategyName: "AF_SMC",
-      indicators: { winningComponent: "AF_VSA" },
-    }) === "AF_VSA"
+      strategyName: "SMART_MONEY_CONCEPTS",
+      indicators: { winningComponent: "VOLUME_SPREAD_ANALYSIS" },
+    }) === "VOLUME_SPREAD_ANALYSIS"
   );
   t(
     "firedByStrategy used when strategyName omitted",
     resolvePersistedStrategyKey({
-      indicators: { firedByStrategy: "TS_MS" },
-      configKey: "TS_TF",
-    }) === "TS_MS"
+      indicators: { firedByStrategy: "MARKET_STRUCTURE" },
+      configKey: "TREND_FOLLOWING",
+    }) === "MARKET_STRUCTURE"
   );
   t(
-    "legacy ADAPTIVE_FUSION normalizes to AF_SMC",
-    resolvePersistedStrategyKey({ strategyName: "ADAPTIVE_FUSION" }) === "AF_SMC"
+    "legacy ADAPTIVE_FUSION normalizes to SMART_MONEY_CONCEPTS",
+    resolvePersistedStrategyKey({ strategyName: "ADAPTIVE_FUSION" }) === "SMART_MONEY_CONCEPTS"
   );
   t(
-    "abbrev AF → AF_SMC",
-    resolvePersistedStrategyKey({ strategyName: "AF" }) === "AF_SMC"
+    "abbrev AF → SMART_MONEY_CONCEPTS",
+    resolvePersistedStrategyKey({ strategyName: "AF" }) === "SMART_MONEY_CONCEPTS"
   );
   t(
-    "Gen1 abbrev SAC → AF_SMC via normalizeStrategyKey SSOT",
-    resolvePersistedStrategyKey({ strategyName: "SAC" }) === "AF_SMC"
+    "Gen1 abbrev SAC → SMART_MONEY_CONCEPTS via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "SAC" }) === "SMART_MONEY_CONCEPTS"
   );
   t(
-    "Gen1 abbrev TM → TS_TF via normalizeStrategyKey SSOT",
-    resolvePersistedStrategyKey({ strategyName: "TM" }) === "TS_TF"
+    "Gen1 abbrev TM → TREND_FOLLOWING via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "TM" }) === "TREND_FOLLOWING"
   );
   t(
-    "Gen1 abbrev MR → MD_MR via normalizeStrategyKey SSOT",
-    resolvePersistedStrategyKey({ strategyName: "MR" }) === "MD_MR"
+    "Gen1 abbrev MR → MEAN_REVERSION via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "MR" }) === "MEAN_REVERSION"
   );
   t(
-    "Gen1 abbrev BR → BS_BR via normalizeStrategyKey SSOT",
-    resolvePersistedStrategyKey({ strategyName: "BR" }) === "BS_BR"
+    "Gen1 abbrev BR → BREAKOUT_RETEST via normalizeStrategyKey SSOT",
+    resolvePersistedStrategyKey({ strategyName: "BR" }) === "BREAKOUT_RETEST"
   );
   t(
     "null inputs → null",

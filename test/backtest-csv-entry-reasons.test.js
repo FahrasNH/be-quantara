@@ -1,6 +1,6 @@
 /**
  * backtest-csv-entry-reasons.test.js — mapBacktestTrade prefers trade-close
- * entryReasons and falls back to entryMeta formatters (SMC / MD_MR / TS_VP / BS_BR).
+ * entryReasons and falls back to entryMeta formatters (SMC / MEAN_REVERSION / AUCTION_MARKET_THEORY / BREAKOUT_RETEST).
  * Sprint 14: CORE CSV schema (no stale ML numerics).
  */
 
@@ -49,12 +49,12 @@ describe("mapBacktestTrade entryReasons", () => {
       entry: 61877.6,
       exit: 61000,
       reason: "SL",
-      winningComponent: "AF_SMC",
-      strategyKey: "AF_SMC",
+      winningComponent: "SMART_MONEY_CONCEPTS",
+      strategyKey: "SMART_MONEY_CONCEPTS",
       atr: 512,
       entryRsi: 55,
       entryMeta: {
-        winningComponent: "AF_SMC",
+        winningComponent: "SMART_MONEY_CONCEPTS",
         sequenceMeta: {
           sweepIdx: 8, chochIdx: 11, fvg: { type: "bullish" }, obConfluence: false,
         },
@@ -64,9 +64,9 @@ describe("mapBacktestTrade entryReasons", () => {
     expect(row.entryReasons).not.toBe("N/A");
   });
 
-  test("MD_MR / TS_VP / BS_BR synthetic meta → non-empty", () => {
+  test("MEAN_REVERSION / AUCTION_MARKET_THEORY / BREAKOUT_RETEST synthetic meta → non-empty", () => {
     const mr = mapBacktestTrade({
-      side: "SHORT", entry: 100, exit: 99, reason: "TP", strategyKey: "MD_MR",
+      side: "SHORT", entry: 100, exit: 99, reason: "TP", strategyKey: "MEAN_REVERSION",
       entryMeta: {
         reason: "Intraday: RSI 74.2 > 72, BB(2.0σ) touch, above VWAP | ADX:transition | OB/FVG~",
       },
@@ -75,15 +75,15 @@ describe("mapBacktestTrade entryReasons", () => {
     expect(mr.entryReasons).toContain("BB Touch");
 
     const vp = mapBacktestTrade({
-      side: "LONG", entry: 100, exit: 101, reason: "TP", strategyKey: "TS_VP",
+      side: "LONG", entry: 100, exit: 101, reason: "TP", strategyKey: "AUCTION_MARKET_THEORY",
       entryMeta: { reason: "val_bounce" },
     }, { ...ctx, strategy: "Auction Market Theory" }, 0);
     expect(vp.entryReasons).toBe("VAL Bounce");
 
     const br = mapBacktestTrade({
-      side: "LONG", entry: 100, exit: 102, reason: "TP", strategyKey: "BS_BR",
+      side: "LONG", entry: 100, exit: 102, reason: "TP", strategyKey: "BREAKOUT_RETEST",
       entryMeta: {
-        winningComponent: "BS_BR",
+        winningComponent: "BREAKOUT_RETEST",
         bbSqueeze: true, rangeBreakout: true, retestConfirmation: true,
       },
     }, { ...ctx, strategy: "Breakout Trading" }, 0);
@@ -95,12 +95,12 @@ describe("mapBacktestTrade entryReasons", () => {
   test("tradeType classified by hold duration; hourUtc + holdHours derived", () => {
     const row = mapBacktestTrade({
       side: "LONG", entry: 100, exit: 102, reason: "TP",
-      component: "BS_BR", strategyKey: "BS_BR",
+      component: "BREAKOUT_RETEST", strategyKey: "BREAKOUT_RETEST",
       openTime: "2024-01-01T09:00:00Z",
       closeTime: "2024-01-01T11:00:00Z",
     }, { ...ctx, strategy: "Breakout Trading" }, 0);
     expect(row.tradeType).toBe("Scalping");
-    expect(row.component).toBe("BS_BR");
+    expect(row.component).toBe("BREAKOUT_RETEST");
     expect(row.hourUtc).toBe(9);
     expect(row.holdHours).toBe(2);
   });
@@ -124,10 +124,10 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
 
   test("export includes Entry Reasons and omits all stale ML columns", () => {
     const csv = buildTradesCsv([{
-      id: 1, symbol: "BTCUSDT", strategy_key: "BS_BR",
+      id: 1, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
       trades_data: [{
         ...baseTrade,
-        component: "BS_BR",
+        component: "BREAKOUT_RETEST",
         entryReasons: "BB Squeeze, Range Break, Volume Spike, Retest Confirm",
       }],
     }], { includeSummary: false });
@@ -148,14 +148,14 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     }
   });
 
-  test("AF_SMC and BS_BR share the same CORE columns", () => {
+  test("SMART_MONEY_CONCEPTS and BREAKOUT_RETEST share the same CORE columns", () => {
     const smc = buildTradesCsv([{
-      id: 2, symbol: "BTCUSDT", strategy_key: "AF_SMC",
-      trades_data: [{ ...baseTrade, component: "AF_SMC" }],
+      id: 2, symbol: "BTCUSDT", strategy_key: "SMART_MONEY_CONCEPTS",
+      trades_data: [{ ...baseTrade, component: "SMART_MONEY_CONCEPTS" }],
     }], { includeSummary: false });
     const br = buildTradesCsv([{
-      id: 3, symbol: "BTCUSDT", strategy_key: "BS_BR",
-      trades_data: [{ ...baseTrade, component: "BS_BR" }],
+      id: 3, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
+      trades_data: [{ ...baseTrade, component: "BREAKOUT_RETEST" }],
     }], { includeSummary: false });
     const smcHeader = smc.split("\n")[0];
     const brHeader = br.split("\n")[0];
@@ -166,21 +166,21 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
   });
 
   test("resolveExportColumnKeys returns CORE only (no strategy extras)", () => {
-    const keys = resolveExportColumnKeys(["AF_SMC", "BS_BR"], TRADE_EXPORT_COLUMN_KEYS);
+    const keys = resolveExportColumnKeys(["SMART_MONEY_CONCEPTS", "BREAKOUT_RETEST"], TRADE_EXPORT_COLUMN_KEYS);
     expect(keys).toEqual([...TRADE_EXPORT_COLUMN_KEYS]);
     expect(keys).not.toContain("sweepStrength");
     expect(keys).not.toContain("bbSqueezeWidthAtr");
-    expect(strategyCsvColumnKeys("BS_BR")).toEqual([]);
-    expect(strategyCsvColumnKeys("AF_SMC")).toEqual([]);
+    expect(strategyCsvColumnKeys("BREAKOUT_RETEST")).toEqual([]);
+    expect(strategyCsvColumnKeys("SMART_MONEY_CONCEPTS")).toEqual([]);
     expect(UNIVERSAL_CSV_COLUMN_KEYS).toContain("entryReasons");
   });
 
   test("CORE headers always present for any component", () => {
     const csv = buildTradesCsv([{
-      id: 3, symbol: "BTCUSDT", strategy_key: "BS_BR",
+      id: 3, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
       trades_data: [{
         ...baseTrade,
-        component: "BS_BR",
+        component: "BREAKOUT_RETEST",
         openTime: "2024-01-01T09:00:00Z",
         closeTime: "2024-01-01T11:00:00Z",
       }],

@@ -1,13 +1,13 @@
 /**
  * TrendSurgeUmbrella.js — FORGE Tier umbrella strategy
  *
- * Umbrella key : TS_TF (tier access bag — not a fusion mechanism)
- * Components   : TS_TF (Trend Following) · TS_MS (Dow Theory) · TS_VP (Auction Market Theory)
+ * Umbrella key : TREND_FOLLOWING (tier access bag — not a fusion mechanism)
+ * Components   : TREND_FOLLOWING (Trend Following) · MARKET_STRUCTURE (Dow Theory) · AUCTION_MARKET_THEORY (Auction Market Theory)
  *
  * Sprint 12 ARCHITECTURE DECISION (Fahras, 10 Jul 2026):
  *   Race-to-Confirm — each unlocked component is an independent signal generator.
  *   On the same bar, the highest-confidence confirmation wins; ties break by
- *   priority TS_TF → TS_MS → TS_VP. Trade attribution = winning component only
+ *   priority TREND_FOLLOWING → MARKET_STRUCTURE → AUCTION_MARKET_THEORY. Trade attribution = winning component only
  *   (never "A + B + C" joined labels).
  *
  * Rollback: set `tsCombinationMode: "gate"` to restore Sprint 9 A→B→C layering.
@@ -19,17 +19,17 @@ const MarketStructureStrategy  = require("../implementations/MarketStructureStra
 const VolumeProfileStrategy    = require("../implementations/VolumeProfileStrategy");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
-const RACER_PRIORITY = ["TS_TF", "TS_MS", "TS_VP"];
+const RACER_PRIORITY = ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"];
 const RACER_LABELS = {
-  TS_TF: "Trend Following",
-  TS_MS: "Dow Theory",
-  TS_VP: "Auction Market Theory",
+  TREND_FOLLOWING: "Trend Following",
+  MARKET_STRUCTURE: "Dow Theory",
+  AUCTION_MARKET_THEORY: "Auction Market Theory",
 };
 
 class TrendSurgeUmbrella extends UmbrellaStrategy {
   constructor() {
     super({
-      name:        "TS_TF",
+      name:        "TREND_FOLLOWING",
       label:       "Trend Surge",
       description:
         "FORGE umbrella (tier access): Trend Following, Dow Theory, and Auction Market Theory race independently — first/highest confirmation wins.",
@@ -42,9 +42,9 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
     this._ms = new MarketStructureStrategy();
     this._vp = new VolumeProfileStrategy();
 
-    this.addComponent("TS_TF", this._tf);
-    this.addComponent("TS_MS", this._ms);
-    this.addComponent("TS_VP", this._vp);
+    this.addComponent("TREND_FOLLOWING", this._tf);
+    this.addComponent("MARKET_STRUCTURE", this._ms);
+    this.addComponent("AUCTION_MARKET_THEORY", this._vp);
 
     this._lastLayerMeta = null;
     this._lastRaceMeta = null;
@@ -62,10 +62,10 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
     const active = new Set();
     for (const c of raw) {
       const k = normalizeStrategyKey(String(c || "").toUpperCase());
-      if (k === "TS_TF") active.add("TS_TF");
-      else if (k === "TS_MS" || k === "DOW_THEORY" || k === "MARKET_STRUCTURE") active.add("TS_MS");
-      else if (k === "TS_VP" || k === "AMT" || k === "AUCTION_MARKET_THEORY" || k === "VOLUME_PROFILE") {
-        active.add("TS_VP");
+      if (k === "TREND_FOLLOWING") active.add("TREND_FOLLOWING");
+      else if (k === "MARKET_STRUCTURE" || k === "DOW_THEORY" || k === "MARKET_STRUCTURE") active.add("MARKET_STRUCTURE");
+      else if (k === "AUCTION_MARKET_THEORY" || k === "AMT" || k === "AUCTION_MARKET_THEORY" || k === "VOLUME_PROFILE") {
+        active.add("AUCTION_MARKET_THEORY");
       }
     }
     if (active.size === 0) return new Set(RACER_PRIORITY);
@@ -98,7 +98,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
     const candidates = [];
     const evaluations = {};
 
-    if (active.has("TS_TF")) {
+    if (active.has("TREND_FOLLOWING")) {
       let signal = null;
       let confidence = 0;
       let reason = "tf_no_signal";
@@ -115,11 +115,11 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       } catch (err) {
         reason = `tf_error:${err.message}`;
       }
-      evaluations.TS_TF = { signal, confidence, reason };
+      evaluations.TREND_FOLLOWING = { signal, confidence, reason };
       if (signal === "LONG" || signal === "SHORT") {
         candidates.push({
-          key: "TS_TF",
-          label: RACER_LABELS.TS_TF,
+          key: "TREND_FOLLOWING",
+          label: RACER_LABELS.TREND_FOLLOWING,
           signal,
           confidence,
           reason,
@@ -127,7 +127,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       }
     }
 
-    if (active.has("TS_MS")) {
+    if (active.has("MARKET_STRUCTURE")) {
       let signal = null;
       let confidence = 0;
       let reason = "ms_no_signal";
@@ -139,11 +139,11 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       } catch (err) {
         reason = `ms_error:${err.message}`;
       }
-      evaluations.TS_MS = { signal, confidence, reason };
+      evaluations.MARKET_STRUCTURE = { signal, confidence, reason };
       if (signal === "LONG" || signal === "SHORT") {
         candidates.push({
-          key: "TS_MS",
-          label: RACER_LABELS.TS_MS,
+          key: "MARKET_STRUCTURE",
+          label: RACER_LABELS.MARKET_STRUCTURE,
           signal,
           confidence,
           reason,
@@ -151,7 +151,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       }
     }
 
-    if (active.has("TS_VP")) {
+    if (active.has("AUCTION_MARKET_THEORY")) {
       let signal = null;
       let confidence = 0;
       let reason = "vp_no_signal";
@@ -163,11 +163,11 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       } catch (err) {
         reason = `vp_error:${err.message}`;
       }
-      evaluations.TS_VP = { signal, confidence, reason };
+      evaluations.AUCTION_MARKET_THEORY = { signal, confidence, reason };
       if (signal === "LONG" || signal === "SHORT") {
         candidates.push({
-          key: "TS_VP",
-          label: RACER_LABELS.TS_VP,
+          key: "AUCTION_MARKET_THEORY",
+          label: RACER_LABELS.AUCTION_MARKET_THEORY,
           signal,
           confidence,
           reason,
@@ -199,9 +199,9 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       winningComponent: winner.key,
       strategyLabel: winner.label,
       signalComponents: {
-        TS_TF: evaluations.TS_TF?.signal || (active.has("TS_TF") ? "NEUTRAL" : "DISABLED"),
-        TS_MS: evaluations.TS_MS?.signal || (active.has("TS_MS") ? "NEUTRAL" : "DISABLED"),
-        TS_VP: evaluations.TS_VP?.signal || (active.has("TS_VP") ? "NEUTRAL" : "DISABLED"),
+        TREND_FOLLOWING: evaluations.TREND_FOLLOWING?.signal || (active.has("TREND_FOLLOWING") ? "NEUTRAL" : "DISABLED"),
+        MARKET_STRUCTURE: evaluations.MARKET_STRUCTURE?.signal || (active.has("MARKET_STRUCTURE") ? "NEUTRAL" : "DISABLED"),
+        AUCTION_MARKET_THEORY: evaluations.AUCTION_MARKET_THEORY?.signal || (active.has("AUCTION_MARKET_THEORY") ? "NEUTRAL" : "DISABLED"),
       },
     };
     this._lastLayerMeta = this._lastRaceMeta;
@@ -267,12 +267,12 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       structure,
       precision,
       reason: "ts_layers_passed",
-      winningComponent: "TS_TF",
-      strategyLabel: RACER_LABELS.TS_TF,
+      winningComponent: "TREND_FOLLOWING",
+      strategyLabel: RACER_LABELS.TREND_FOLLOWING,
       signalComponents: {
-        TS_TF: trigger,
-        TS_MS: structure?.vote || (useStructureGate ? "NEUTRAL" : "DISABLED"),
-        TS_VP: precision?.vote || (useVwapPrecision ? "NEUTRAL" : "DISABLED"),
+        TREND_FOLLOWING: trigger,
+        MARKET_STRUCTURE: structure?.vote || (useStructureGate ? "NEUTRAL" : "DISABLED"),
+        AUCTION_MARKET_THEORY: precision?.vote || (useVwapPrecision ? "NEUTRAL" : "DISABLED"),
       },
     };
     this._lastRaceMeta = this._lastLayerMeta;
@@ -320,12 +320,12 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       precision,
       confidence: Math.min(1, confidence),
       reason: "hybrid_tf_base",
-      winningComponent: "TS_TF",
-      strategyLabel: RACER_LABELS.TS_TF,
+      winningComponent: "TREND_FOLLOWING",
+      strategyLabel: RACER_LABELS.TREND_FOLLOWING,
       signalComponents: {
-        TS_TF: trigger,
-        TS_MS: structure?.vote || (useStructure ? "NEUTRAL" : "DISABLED"),
-        TS_VP: precision?.vote || (useVwap ? "NEUTRAL" : "DISABLED"),
+        TREND_FOLLOWING: trigger,
+        MARKET_STRUCTURE: structure?.vote || (useStructure ? "NEUTRAL" : "DISABLED"),
+        AUCTION_MARKET_THEORY: precision?.vote || (useVwap ? "NEUTRAL" : "DISABLED"),
       },
     };
     this._lastRaceMeta = this._lastLayerMeta;
@@ -346,9 +346,9 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
   getLastSignalMeta() {
     const winnerKey = this._lastRaceMeta?.winningComponent || this._lastLayerMeta?.winningComponent;
     let baseMeta = null;
-    if (winnerKey === "TS_MS" && typeof this._ms.getLastSignalMeta === "function") {
+    if (winnerKey === "MARKET_STRUCTURE" && typeof this._ms.getLastSignalMeta === "function") {
       baseMeta = this._ms.getLastSignalMeta();
-    } else if (winnerKey === "TS_VP" && typeof this._vp.getLastSignalMeta === "function") {
+    } else if (winnerKey === "AUCTION_MARKET_THEORY" && typeof this._vp.getLastSignalMeta === "function") {
       baseMeta = this._vp.getLastSignalMeta();
     } else if (typeof this._tf.getLastSignalMeta === "function") {
       baseMeta = this._tf.getLastSignalMeta();
@@ -360,7 +360,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
 
     return {
       ...(baseMeta || {}),
-      component: winnerKey || baseMeta?.component || "TS_TF",
+      component: winnerKey || baseMeta?.component || "TREND_FOLLOWING",
       winningComponent: winnerKey || null,
       strategyLabel: label,
       tsRace: this._lastRaceMeta,
@@ -390,10 +390,10 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {
     const winner = this._lastRaceMeta?.winningComponent || component;
-    if (winner === "TS_MS" && typeof this._ms.calculateRiskConfig === "function") {
+    if (winner === "MARKET_STRUCTURE" && typeof this._ms.calculateRiskConfig === "function") {
       return this._ms.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
-    if (winner === "TS_VP" && typeof this._vp.calculateRiskConfig === "function") {
+    if (winner === "AUCTION_MARKET_THEORY" && typeof this._vp.calculateRiskConfig === "function") {
       return this._vp.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
     if (typeof this._tf.calculateRiskConfig === "function") {

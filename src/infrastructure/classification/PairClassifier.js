@@ -63,33 +63,33 @@ const VOLATILE_PAIRS = new Set([]);
 
 // ─── Strategy Recommendations per Pair Tier ───────────────────────────────────
 // v2.3 spec (PAIR_VOLATILITY.md §6): VOLATILE & SEMI_VOLATILE merekomendasikan
-// MD_MR + TS_TF (dengan regime filter ketat). AF_SMC
+// MEAN_REVERSION + TREND_FOLLOWING (dengan regime filter ketat). SMART_MONEY_CONCEPTS
 // hanya diizinkan di LIQUID/STABLE (diblokir di SEMI_VOLATILE & VOLATILE).
 const STRATEGIES_BY_PAIR_TIER = Object.freeze({
   LIQUID: {
-    recommended: ['ADAPTIVE_FUSION', 'TS_TF', 'MD_MR'],
-    cautious:    ['BS_BR'],
+    recommended: ['ADAPTIVE_FUSION', 'TREND_FOLLOWING', 'MEAN_REVERSION'],
+    cautious:    ['BREAKOUT_RETEST'],
     blocked:     [],
   },
   STABLE: {
-    recommended: ['ADAPTIVE_FUSION', 'MD_MR'],
-    cautious:    ['TS_TF', 'BS_BR'],
+    recommended: ['ADAPTIVE_FUSION', 'MEAN_REVERSION'],
+    cautious:    ['TREND_FOLLOWING', 'BREAKOUT_RETEST'],
     blocked:     [],
   },
   SEMI_VOLATILE: {
-    // Transisi: TS_TF diizinkan (dengan regime filter wajib), AF diblokir karena
-    // voting-nya rentan over-trading di pair transisi. BS_BR masih hati-hati.
-    recommended: ['MD_MR', 'TS_TF'],
-    cautious:    ['BS_BR'],
+    // Transisi: TREND_FOLLOWING diizinkan (dengan regime filter wajib), AF diblokir karena
+    // voting-nya rentan over-trading di pair transisi. BREAKOUT_RETEST masih hati-hati.
+    recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
+    cautious:    ['BREAKOUT_RETEST'],
     blocked:     ['ADAPTIVE_FUSION'],
   },
   VOLATILE: {
-    // MD_MR + TS_TF (dengan HTF regime filter ketat). AF & BS_BR diblokir di altcoin
+    // MEAN_REVERSION + TREND_FOLLOWING (dengan HTF regime filter ketat). AF & BREAKOUT_RETEST diblokir di altcoin
 
     // hanya jika lolos triple-EMA regime filter (regimeFilterRequired=true).
-    recommended: ['MD_MR', 'TS_TF'],
+    recommended: ['MEAN_REVERSION', 'TREND_FOLLOWING'],
     cautious:    [],
-    blocked:     ['ADAPTIVE_FUSION', 'BS_BR'],
+    blocked:     ['ADAPTIVE_FUSION', 'BREAKOUT_RETEST'],
   },
 });
 

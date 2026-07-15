@@ -97,7 +97,7 @@ function fakeTrades(n, winPct = 0.6, pnlScale = 2) {
     pnl:          i < Math.floor(n * winPct) ? pnlScale : -pnlScale,
     pnlPercent:   i < Math.floor(n * winPct) ? pnlScale : -pnlScale,
     entryContext: {
-      strategyKey: "AF_SMC",
+      strategyKey: "SMART_MONEY_CONCEPTS",
       htfRegime:   "trend_up",
       pairTier:    "LIQUID",
       tradeType:   "Intraday",
@@ -222,7 +222,7 @@ promises.push(test("14. profitFactor: 0 losses → 9.99 (not Infinity)", () => {
 promises.push(test("15. sampleSizeValid=false when tradeCount < 20", () => {
   const trades  = fakeTrades(15);
   const record  = H.buildRecord(
-    { strategyKey: "AF_SMC", symbol: "BTCUSDT", regime: "trend_up", tradeType: "Intraday", pairTier: "LIQUID" },
+    { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTCUSDT", regime: "trend_up", tradeType: "Intraday", pairTier: "LIQUID" },
     trades,
     new Date(),
     "daily"
@@ -233,7 +233,7 @@ promises.push(test("15. sampleSizeValid=false when tradeCount < 20", () => {
 promises.push(test("16. sampleSizeValid=true when tradeCount >= 20", () => {
   const trades = fakeTrades(25);
   const record = H.buildRecord(
-    { strategyKey: "AF_SMC", symbol: "BTCUSDT", regime: "trend_up", tradeType: "Intraday", pairTier: "LIQUID" },
+    { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTCUSDT", regime: "trend_up", tradeType: "Intraday", pairTier: "LIQUID" },
     trades,
     new Date(),
     "daily"
@@ -304,7 +304,7 @@ promises.push(test("22. aggregateRolling('all-time'): no date filter", async () 
 promises.push(test("23. buildRecord: PF capped at 9.99 when no losses", () => {
   const trades = fakeTrades(25, 1.0); // all wins
   const rec = H.buildRecord(
-    { strategyKey: "AF_SMC", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
+    { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
     trades, new Date(), "daily"
   );
   assertEqual(rec.profitFactor, 9.99, `PF should be 9.99, got ${rec.profitFactor}`);
@@ -313,7 +313,7 @@ promises.push(test("23. buildRecord: PF capped at 9.99 when no losses", () => {
 promises.push(test("24. buildRecord: avgHoldingHours derived correctly", () => {
   const trades = fakeTrades(20);
   const rec = H.buildRecord(
-    { strategyKey: "AF_SMC", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
+    { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
     trades, new Date(), "daily"
   );
   assert(rec.avgHoldingHours !== null, "Expected non-null avgHoldingHours");
@@ -367,7 +367,7 @@ promises.push(test("28. winners-vs-losers.sql exists", () => {
 
 promises.push(test("29. Edge: division by zero in WR calculation (0 trades) → handled", () => {
   const rec = H.buildRecord(
-    { strategyKey: "AF_SMC", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
+    { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
     [], new Date(), "daily"
   );
   assertEqual(rec.winRate, 0, "winRate should be 0 for empty trades");
@@ -378,7 +378,7 @@ promises.push(test("30. Sprint 1 regression: TradeFeatureCollector.captureEntryF
   const collector = require("../src/server/services/TradeFeatureCollector");
   const ctx = {
     symbol:      "BTCUSDT",
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     indicators:  { ema9: 105, ema21: 102, ema50: 100, adx: 28, atr: 2.0, rsi: 58, volume: 1200 },
     htfTrend:    "BULLISH",
     confidence:  75,
@@ -402,7 +402,7 @@ promises.push(test("31. Sprint 1 regression: StrategyPerformance @@unique preven
 promises.push(test("32. StrategyPerformance legacy fields intact (Sprint 1 compat)", () => {
   const trades = fakeTrades(10, 0.7);
   const rec = H.buildRecord(
-    { strategyKey: "AF_SMC", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
+    { strategyKey: "SMART_MONEY_CONCEPTS", symbol: "BTC", regime: "trend_up", tradeType: null, pairTier: null },
     trades, new Date(), "daily"
   );
   // Sprint 1 fields still present

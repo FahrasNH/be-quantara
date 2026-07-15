@@ -1,11 +1,11 @@
 /**
- * Supply and Demand (MD_SD) — standalone race entry for MEAN_DRIFT.
+ * Supply and Demand (SUPPLY_AND_DEMAND) — standalone race entry for MEAN_DRIFT.
  *
  * Catalog method: Supply and Demand. OB/FVG detection is an implementation
  * detail under S&D (base-rally / base-drop zones + imbalance gaps).
  *
  * Entry: price retests an unfilled demand (LONG) or supply (SHORT) zone with
- * a reversal candle confirmation. Not a refiner of MD_MR.
+ * a reversal candle confirmation. Not a refiner of MEAN_REVERSION.
  */
 
 "use strict";

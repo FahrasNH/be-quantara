@@ -3,7 +3,7 @@
 //
 // Detects whether daily timeframe is in a strong trend or choppy/sideways regime.
 // Used by BOTH backtest engine (RealStrategyBacktestService) and live engine
-// (BotEngine) to gate momentum strategies (TS_TF, BS_BR) and reduce size on choppy days.
+// (BotEngine) to gate momentum strategies (TREND_FOLLOWING, BREAKOUT_RETEST) and reduce size on choppy days.
 //
 // Principle: ADX-proxy = |EMA9−EMA21| / ATR
 //   - Strong trend (>0.8): full trading, all strategies active
@@ -20,7 +20,7 @@ const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
 
 // Thresholds (principle-based, NOT optimized to any period)
 const TREND_STRENGTH_THRESHOLD_STRONG = 0.8;  // trend: full trading
-const TREND_STRENGTH_THRESHOLD_CHOP = 0.5;    // chop: TS_TF/BS_BR disabled, SMC −50%
+const TREND_STRENGTH_THRESHOLD_CHOP = 0.5;    // chop: TREND_FOLLOWING/BREAKOUT_RETEST disabled, SMC −50%
 
 /**
  * Compute daily trend strength for a set of daily candles.
@@ -93,7 +93,7 @@ function getRegimeForDate(date, cache) {
  *
  * @param {Object} params
  *   - signal: "LONG" | "SHORT" | null
- *   - strategyKey: "AF_SMC" | "TS_TF" | "MD_MR" | "BS_BR"
+ *   - strategyKey: "SMART_MONEY_CONCEPTS" | "TREND_FOLLOWING" | "MEAN_REVERSION" | "BREAKOUT_RETEST"
  *   - regime: "STRONG_TREND" | "CHOP" | "TRANSITION" | "UNKNOWN"
  *   - riskPerTrade: base risk %
  *   - blockLongInChop: Sprint 13 — when true, block LONG in CHOP for structure strategies
@@ -108,9 +108,10 @@ function applyRegimeGate(params) {
   }
 
   const key = normalizeStrategyKey(String(strategyKey || "").toUpperCase());
-  const isMomentum = key === "TS_TF" || key === "TS_MS" || key === "TS_VP"
-    || key.startsWith("BS_");
-  const isStructure = key === "AF_SMC" || key === "AF_WYCKOFF" || key === "AF_VSA";
+  const isMomentum = key === "TREND_FOLLOWING" || key === "MARKET_STRUCTURE" || key === "AUCTION_MARKET_THEORY"
+    || key === "BREAKOUT_RETEST" || key === "ICT_STYLE_TRADING" || key === "LIQUIDATION_SQUEEZE"
+    || key === "BREAKOUT_STORM";
+  const isStructure = key === "SMART_MONEY_CONCEPTS" || key === "WYCKOFF" || key === "VOLUME_SPREAD_ANALYSIS";
 
   if (regime === "STRONG_TREND") {
     // Full trading, all strategies enabled

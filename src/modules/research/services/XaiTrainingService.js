@@ -60,7 +60,7 @@ Required JSON format:
  * Keyed by normalized strategy key (aliases resolved in _strategyProfile).
  */
 const STRATEGY_TUNING_PROFILES = {
-  AF_SMC: {
+  SMART_MONEY_CONCEPTS: {
     family: "Smart Money Concepts (price-structure, NOT indicator-based)",
     indicators: "Liquidity sweep, CHoCH/BOS, Fair Value Gap (FVG), Order Block, Displacement, CVD, Volume surge. EMA is used ONLY for higher-timeframe regime bias — there is NO RSI and NO EMA-cross entry.",
     tunable: [
@@ -74,19 +74,19 @@ const STRATEGY_TUNING_PROFILES = {
     ],
     forbidden: "rsiPeriod, rsiLongMin/Max, riskReward, emaFast/emaSlow (SL/TP come from hardcoded per-component ATR multipliers, NOT config)",
   },
-  TS_TF: {
+  TREND_FOLLOWING: {
     family: "Trend Following (Donchian breakout + EMA trend + ATR)",
     indicators: "Donchian channel breakout, EMA trend filter, ADX strength, ATR-based SL/TP.",
     tunable: ["donchianPeriod", "emaFast", "emaSlow", "atrMultiplier", "riskReward", "adxMin"],
     forbidden: "Smart-money structure params (CHoCH, FVG, order block, CVD)",
   },
-  MD_MR: {
+  MEAN_REVERSION: {
     family: "Mean Reversion (VWAP + RSI bands + Bollinger)",
     indicators: "VWAP deviation, RSI oversold/overbought bands, Bollinger Bands, ATR.",
     tunable: ["rsiPeriod", "rsiOversold", "rsiOverbought", "bbPeriod", "bbStdDev", "atrMultiplier", "riskReward"],
     forbidden: "Trend-breakout params (Donchian), smart-money structure params",
   },
-  BS_BR: {
+  BREAKOUT_RETEST: {
     family: "Breakout Retest (range detection + breakout + retest confirmation)",
     indicators: "Range/consolidation detection, breakout level, retest tolerance, volume confirmation, ATR.",
     tunable: ["breakoutLookback", "retestTolerancePct", "volSmaMultiplier", "atrMultiplier", "riskReward"],

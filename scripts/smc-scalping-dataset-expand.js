@@ -2,7 +2,7 @@
 /**
  * smc-scalping-dataset-expand.js — Sprint 13 task 4
  *
- * Batch AF_SMC Scalping backtests across multiple symbols × 12 months to grow
+ * Batch SMART_MONEY_CONCEPTS Scalping backtests across multiple symbols × 12 months to grow
  * the ML / forensic CSV dataset (target 300+ trades).
  *
  * Usage (from be-bot-trading/):
@@ -111,7 +111,7 @@ async function loadCandles(symbol, tf) {
 }
 
 function buildConfig() {
-  const base = { ...(STRATEGIES.ADAPTIVE_FUSION || STRATEGIES.AF_SMC) };
+  const base = { ...(STRATEGIES.ADAPTIVE_FUSION || STRATEGIES.SMART_MONEY_CONCEPTS) };
   const scalp = { ...(base.typeOverrides?.Scalping || {}) };
   if (RELAX) {
     // Research-only denser sample — do NOT use for live promotion.
@@ -121,7 +121,7 @@ function buildConfig() {
   }
   return {
     ...base,
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     typeOverrides: {
       ...(base.typeOverrides || {}),
       Scalping: scalp,
@@ -138,7 +138,7 @@ function mapTradeRow(t, symbol, idx) {
     sessionId: `EXPAND-${symbol}`,
     symbol,
     side: t.side,
-    strategy: "AF_SMC",
+    strategy: "SMART_MONEY_CONCEPTS",
     status: "Closed",
     entryPrice: t.entry,
     exitPrice: t.exit,
@@ -194,7 +194,7 @@ async function runSymbol(symbol, cfg) {
   console.log(`  candles entry=${entry.length} htf=${htf.length} daily=${daily.length}`);
 
   const result = await runTripleTypeBacktest({
-    strategyKey: "AF_SMC",
+    strategyKey: "SMART_MONEY_CONCEPTS",
     capital: CAPITAL,
     enableFees: true,
     enableSlippage: true,
@@ -245,7 +245,7 @@ async function main() {
     targetMet: allRows.length >= 300,
     perSymbol,
     recipe: {
-      strategy: "AF_SMC",
+      strategy: "SMART_MONEY_CONCEPTS",
       entryTf: "15m",
       trendTf: "4h",
       period: "12m (or --days)",

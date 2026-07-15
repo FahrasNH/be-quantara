@@ -1,11 +1,11 @@
 /**
  * BreakoutStormUmbrella.js — VAULT Tier umbrella strategy
  *
- * Umbrella key : BS_BR (tier access bag — not a fusion mechanism)
- * Components   : BS_BR (Breakout Trading) · BS_ICT (ICT-style) · BS_LS (Liquidation/Squeeze)
+ * Umbrella key : BREAKOUT_RETEST (tier access bag — not a fusion mechanism)
+ * Components   : BREAKOUT_RETEST (Breakout Trading) · ICT_STYLE_TRADING (ICT-style) · LIQUIDATION_SQUEEZE (Liquidation/Squeeze)
  *
  * Sprint 11: race-to-confirm among independent racers.
- * Rollback: set `bsCombinationMode: "single"` to run BS_BR only.
+ * Rollback: set `bsCombinationMode: "single"` to run BREAKOUT_RETEST only.
  */
 
 const UmbrellaStrategy = require("../base/UmbrellaStrategy");
@@ -15,23 +15,23 @@ const LiquidationSqueezeStrategy = require("../implementations/LiquidationSqueez
 const { BS_BR_HALTED } = require("../../../config/strategies");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
-const RACER_PRIORITY = ["BS_BR", "BS_ICT", "BS_LS"];
+const RACER_PRIORITY = ["BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"];
 const RACER_LABELS = {
-  BS_BR: "Breakout Trading",
-  BS_ICT: "ICT-style trading",
-  BS_LS: "Liquidation/Squeeze Trading",
+  BREAKOUT_RETEST: "Breakout Trading",
+  ICT_STYLE_TRADING: "ICT-style trading",
+  LIQUIDATION_SQUEEZE: "Liquidation/Squeeze Trading",
 };
 
-/** Default race pool — BS_BR excluded while halted (Sprint 14). */
+/** Default race pool — BREAKOUT_RETEST excluded while halted (Sprint 14). */
 function defaultActiveRacers(config = {}) {
   const halt = config.bsBrHalted !== false && (BS_BR_HALTED || config.bsBrHalted === true);
-  return halt ? new Set(["BS_ICT", "BS_LS"]) : new Set(RACER_PRIORITY);
+  return halt ? new Set(["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"]) : new Set(RACER_PRIORITY);
 }
 
 class BreakoutStormUmbrella extends UmbrellaStrategy {
   constructor() {
     super({
-      name: "BS_BR",
+      name: "BREAKOUT_RETEST",
       label: "Breakout Storm",
       description:
         "VAULT umbrella (tier access): Breakout Trading, ICT-style trading, and Liquidation/Squeeze race independently — highest confirmation wins.",
@@ -44,9 +44,9 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
     this._ict = new IctStyleStrategy();
     this._ls = new LiquidationSqueezeStrategy();
 
-    this.addComponent("BS_BR", this._br);
-    this.addComponent("BS_ICT", this._ict);
-    this.addComponent("BS_LS", this._ls);
+    this.addComponent("BREAKOUT_RETEST", this._br);
+    this.addComponent("ICT_STYLE_TRADING", this._ict);
+    this.addComponent("LIQUIDATION_SQUEEZE", this._ls);
 
     this._lastLayerMeta = null;
     this._lastRaceMeta = null;
@@ -56,28 +56,28 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
     const halt = config.bsBrHalted !== false && (BS_BR_HALTED || config.bsBrHalted === true);
     const raw = config.bsActiveRacers || config.selectedComponents || config.activeStrategyComponents || null;
     if (!Array.isArray(raw) || raw.length === 0) {
-      // Default VAULT race: BS_BR excluded while halted (Sprint 14)
+      // Default VAULT race: BREAKOUT_RETEST excluded while halted (Sprint 14)
       return defaultActiveRacers(config);
     }
     const active = new Set();
     for (const c of raw) {
       const k = normalizeStrategyKey(String(c || "").toUpperCase());
-      if (k === "BS_BR" || String(c || "").toUpperCase() === "BREAKOUT_TRADING") {
+      if (k === "BREAKOUT_RETEST" || String(c || "").toUpperCase() === "BREAKOUT_TRADING") {
         // Explicit selection (dedicated backtest / override) still allowed —
         // live bots blocked by strategyGuard + getTierStrategies filter.
-        active.add("BS_BR");
-      } else if (k === "BS_ICT" || k === "ICT" || k === "ICT_STYLE") {
-        active.add("BS_ICT");
-      } else if (k === "BS_LS" || k === "LIQUIDATION_SQUEEZE" || k === "LIQUIDATION") {
-        active.add("BS_LS");
+        active.add("BREAKOUT_RETEST");
+      } else if (k === "ICT_STYLE_TRADING" || k === "ICT" || k === "ICT_STYLE") {
+        active.add("ICT_STYLE_TRADING");
+      } else if (k === "LIQUIDATION_SQUEEZE" || k === "LIQUIDATION_SQUEEZE" || k === "LIQUIDATION") {
+        active.add("LIQUIDATION_SQUEEZE");
       }
     }
     // If caller only picked the halted racer under default halt+implicit race,
     // keep it (explicit). Empty after filter → fall back to non-halted default.
     if (active.size === 0) return defaultActiveRacers(config);
-    if (halt && active.has("BS_BR") && active.size > 1) {
-      // Multi-racer race pool: drop BS_BR so ICT/LS compete without the broken leg
-      active.delete("BS_BR");
+    if (halt && active.has("BREAKOUT_RETEST") && active.size > 1) {
+      // Multi-racer race pool: drop BREAKOUT_RETEST so ICT/LS compete without the broken leg
+      active.delete("BREAKOUT_RETEST");
     }
     if (active.size === 0) return defaultActiveRacers(config);
     return active;
@@ -126,9 +126,9 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
     const candidates = [];
     const evaluations = {};
     const map = {
-      BS_BR: this._br,
-      BS_ICT: this._ict,
-      BS_LS: this._ls,
+      BREAKOUT_RETEST: this._br,
+      ICT_STYLE_TRADING: this._ict,
+      LIQUIDATION_SQUEEZE: this._ls,
     };
 
     for (const key of RACER_PRIORITY) {
@@ -170,9 +170,9 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
       winningComponent: winner.key,
       strategyLabel: winner.label,
       signalComponents: {
-        BS_BR: evaluations.BS_BR?.signal || (active.has("BS_BR") ? "NEUTRAL" : "DISABLED"),
-        BS_ICT: evaluations.BS_ICT?.signal || (active.has("BS_ICT") ? "NEUTRAL" : "DISABLED"),
-        BS_LS: evaluations.BS_LS?.signal || (active.has("BS_LS") ? "NEUTRAL" : "DISABLED"),
+        BREAKOUT_RETEST: evaluations.BREAKOUT_RETEST?.signal || (active.has("BREAKOUT_RETEST") ? "NEUTRAL" : "DISABLED"),
+        ICT_STYLE_TRADING: evaluations.ICT_STYLE_TRADING?.signal || (active.has("ICT_STYLE_TRADING") ? "NEUTRAL" : "DISABLED"),
+        LIQUIDATION_SQUEEZE: evaluations.LIQUIDATION_SQUEEZE?.signal || (active.has("LIQUIDATION_SQUEEZE") ? "NEUTRAL" : "DISABLED"),
       },
     };
     this._lastLayerMeta = this._lastRaceMeta;
@@ -181,13 +181,13 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
 
   _detectSingle(indicators, lastIdx, config = {}) {
     // Explicit single-mode always runs BR engine (used by dedicated backtests).
-    // Live starts of BS_BR are blocked by strategyGuard (DRY_RUN_ONLY).
+    // Live starts of BREAKOUT_RETEST are blocked by strategyGuard (DRY_RUN_ONLY).
     const signal = this._br.detectSignal(indicators, lastIdx, config);
     const meta = this._br.getLastSignalMeta?.() || null;
     this._lastRaceMeta = {
       mode: "single",
-      winningComponent: signal ? "BS_BR" : null,
-      strategyLabel: RACER_LABELS.BS_BR,
+      winningComponent: signal ? "BREAKOUT_RETEST" : null,
+      strategyLabel: RACER_LABELS.BREAKOUT_RETEST,
       reason: signal ? (meta?.reason || "bs_br_single") : "no_br_signal",
       brMeta: meta,
     };
@@ -206,9 +206,9 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
   getLastSignalMeta() {
     const winnerKey = this._lastRaceMeta?.winningComponent;
     let baseMeta = null;
-    if (winnerKey === "BS_ICT" && typeof this._ict.getLastSignalMeta === "function") {
+    if (winnerKey === "ICT_STYLE_TRADING" && typeof this._ict.getLastSignalMeta === "function") {
       baseMeta = this._ict.getLastSignalMeta();
-    } else if (winnerKey === "BS_LS" && typeof this._ls.getLastSignalMeta === "function") {
+    } else if (winnerKey === "LIQUIDATION_SQUEEZE" && typeof this._ls.getLastSignalMeta === "function") {
       baseMeta = this._ls.getLastSignalMeta();
     } else if (typeof this._br.getLastSignalMeta === "function") {
       baseMeta = this._br.getLastSignalMeta();
@@ -219,7 +219,7 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
 
     return {
       ...(baseMeta || {}),
-      component: winnerKey || baseMeta?.component || "BS_BR",
+      component: winnerKey || baseMeta?.component || "BREAKOUT_RETEST",
       winningComponent: winnerKey || null,
       strategyLabel: label,
       bsRace: this._lastRaceMeta,
@@ -240,10 +240,10 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {
     const winner = this._lastRaceMeta?.winningComponent || component;
-    if (winner === "BS_ICT" && typeof this._ict.calculateRiskConfig === "function") {
+    if (winner === "ICT_STYLE_TRADING" && typeof this._ict.calculateRiskConfig === "function") {
       return this._ict.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
-    if (winner === "BS_LS" && typeof this._ls.calculateRiskConfig === "function") {
+    if (winner === "LIQUIDATION_SQUEEZE" && typeof this._ls.calculateRiskConfig === "function") {
       return this._ls.calculateRiskConfig(entryPrice, atr, signal, component, opts);
     }
     if (typeof this._br.calculateRiskConfig === "function") {

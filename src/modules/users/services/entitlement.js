@@ -15,7 +15,7 @@ const prisma = require("../../../infrastructure/db/prismaClient");
 
 /**
  * Apakah strategi sudah siap untuk LIVE trading (bukan dry-run-only)?
- * Pure function — mengacu ke DRY_RUN_ONLY_STRATEGIES (mis. BS_BR).
+ * Pure function — mengacu ke DRY_RUN_ONLY_STRATEGIES (mis. BREAKOUT_RETEST).
  * @param {string} strategyKey
  * @returns {boolean}
  */
@@ -34,7 +34,7 @@ function isStrategyLiveReady(strategyKey) {
  */
 function filterStrategiesByMode(strategies, mode) {
   const list = Array.isArray(strategies) ? strategies : [];
-  // Sprint 14: always drop halted BS_BR from auto multi-strategy pools
+  // Sprint 14: always drop halted BREAKOUT_RETEST from auto multi-strategy pools
   const withoutHalted = list.filter((s) => !isBsBrHaltedKey(s));
   return mode === "live" ? withoutHalted.filter(isStrategyLiveReady) : withoutHalted.slice();
 }
@@ -206,7 +206,7 @@ async function getGrokConfirmEntitlement(userId) {
  * Daftar strategi yang HARUS dijalankan otomatis untuk user (dari tier-nya).
  * Inti fitur "Auto Multi-Strategy Execution per Coin": user tidak memilih strategi;
  * semua strategi tier dijalankan serentak. Dalam mode "live", strategi yang masih
- * dry-run-only (mis. BS_BR) di-exclude agar tidak live trade (AC-07).
+ * dry-run-only (mis. BREAKOUT_RETEST) di-exclude agar tidak live trade (AC-07).
  *
  * @param {string} userId
  * @param {("dry"|"live")} [mode="dry"]

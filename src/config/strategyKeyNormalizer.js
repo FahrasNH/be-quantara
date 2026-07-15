@@ -2,43 +2,70 @@
  * strategyKeyNormalizer.js — Anti-Corruption Layer (ACL) for strategy keys.
  *
  * CONVENTION (Gen2-only internal):
- *   Internal code MUST use Gen2 canonical keys: AF_SMC, TS_TF, MD_MR, BS_BR,
- *   race components (AF_WYCKOFF, TS_MS, …), umbrellas (ADAPTIVE_FUSION,
- *   TREND_SURGE, MEAN_DRIFT, BREAKOUT_STORM), GROK_AI_TRADING.
+ *   Internal code MUST use Gen2 canonical full-word keys: SMART_MONEY_CONCEPTS,
+ *   TREND_FOLLOWING, MEAN_REVERSION, BREAKOUT_RETEST, race components
+ *   (WYCKOFF, MARKET_STRUCTURE, …), umbrellas (ADAPTIVE_FUSION, TREND_SURGE,
+ *   MEAN_DRIFT, BREAKOUT_STORM), GROK_AI_TRADING.
  *
- *   Gen1 legacy keys (SMART_MONEY_CONCEPTS, TREND_FOLLOWING, MEAN_REVERSION,
- *   BREAKOUT_RETEST, SAC, TF, TM, MR, BR) are accepted ONLY at ingress via
+ *   Deprecated Gen2 abbrev keys (AF_SMC, TS_TF, MD_MR, BS_BR, …) and Gen1
+ *   legacy keys (SAC, TF, TM, MR, BR) are accepted ONLY at ingress via
  *   normalizeStrategyKey() / ingressNormalizeStrategyKey().
  *
  *   PDF trade-type keys (A/B/C → AGGRESSIVE_SCALPING/DAY_TRADING/SWING_TRADING)
  *   are a SEPARATE axis — use normalizeTradeTypeKey(), not strategy migration.
  *
- *   Do NOT add Gen1 literals outside this file. Guardrail: test/gen1-literal-guard.test.js
+ *   Do NOT add deprecated abbrev literals outside this file.
+ *   Guardrail: test/gen1-literal-guard.test.js
  */
 
-/** Gen1 descriptor / abbrev → Gen2 canonical engine or component key. */
+/** Ingress alias → Gen2 canonical full-word engine or component key. */
 const STRATEGY_MIGRATION_MAP = Object.freeze({
-  ADAPTIVE_FUSION: "AF_SMC",
-  SAC: "AF_SMC",
-  SMART_MONEY_CONCEPTS: "AF_SMC",
-  TREND_FOLLOWING: "TS_TF",
-  TREND_SURGE: "TS_TF",
-  TF: "TS_TF",
-  TM: "TS_TF",
-  MEAN_REVERSION: "MD_MR",
-  MEAN_DRIFT: "MD_MR",
-  MR: "MD_MR",
-  BREAKOUT_RETEST: "BS_BR",
-  BREAKOUT_STORM: "BS_BR",
-  BR: "BS_BR",
+  // Umbrella → primary engine
+  ADAPTIVE_FUSION: "SMART_MONEY_CONCEPTS",
+  TREND_SURGE: "TREND_FOLLOWING",
+  MEAN_DRIFT: "MEAN_REVERSION",
+  BREAKOUT_STORM: "BREAKOUT_RETEST",
+
+  // Deprecated Gen2 abbrevs → canonical
+  AF_SMC: "SMART_MONEY_CONCEPTS",
+  AF_WYCKOFF: "WYCKOFF",
+  AF_VSA: "VOLUME_SPREAD_ANALYSIS",
+  TS_TF: "TREND_FOLLOWING",
+  TS_MS: "MARKET_STRUCTURE",
+  TS_VP: "AUCTION_MARKET_THEORY",
+  MD_MR: "MEAN_REVERSION",
+  MD_SD: "SUPPLY_AND_DEMAND",
+  MD_SA: "STATISTICAL_ARBITRAGE",
+  BS_BR: "BREAKOUT_RETEST",
+  BS_ICT: "ICT_STYLE_TRADING",
+  BS_LS: "LIQUIDATION_SQUEEZE",
+
+  // Gen1 legacy abbrevs
+  SAC: "SMART_MONEY_CONCEPTS",
+  TF: "TREND_FOLLOWING",
+  TM: "TREND_FOLLOWING",
+  MR: "MEAN_REVERSION",
+  BR: "BREAKOUT_RETEST",
 });
 
-/** Gen1 strategy literals — used by guardrail test (must match STRATEGY_MIGRATION_MAP sources). */
+/** Deprecated abbrev literals — guardrail (must match STRATEGY_MIGRATION_MAP abbrevs). */
+const DEPRECATED_STRATEGY_ABBREVS = Object.freeze([
+  "AF_SMC",
+  "AF_WYCKOFF",
+  "AF_VSA",
+  "TS_TF",
+  "TS_MS",
+  "TS_VP",
+  "MD_MR",
+  "MD_SD",
+  "MD_SA",
+  "BS_BR",
+  "BS_ICT",
+  "BS_LS",
+]);
+
+/** Gen1 short abbrevs — used by guardrail test. */
 const GEN1_STRATEGY_LITERALS = Object.freeze([
-  "SMART_MONEY_CONCEPTS",
-  "TREND_FOLLOWING",
-  "MEAN_REVERSION",
-  "BREAKOUT_RETEST",
   "SAC",
   "TF",
   "TM",
@@ -82,13 +109,13 @@ function _recordGen1Deprecation(rawKey, canonicalKey, hint = {}) {
     const src = hint.source ? ` source=${hint.source}` : "";
     const mode = hint.mode ? ` mode=${hint.mode}` : "";
     console.warn(
-      `[strategyKey ACL] Gen1 deprecation: "${rawKey}" → "${canonicalKey}"${src}${mode}`
+      `[strategyKey ACL] Deprecated alias: "${rawKey}" → "${canonicalKey}"${src}${mode}`
     );
   }
 }
 
 /**
- * Normalize a strategy key (Gen1 → Gen2). Identity / component keys pass through.
+ * Normalize a strategy key (deprecated alias → canonical). Identity keys pass through.
  * @param {string|null|undefined} key
  * @param {{ source?: string, mode?: 'live'|'backtest'|'unknown', ingress?: boolean }} [opts]
  * @returns {string|null|undefined}
@@ -109,7 +136,7 @@ function normalizeStrategyKey(key, opts = {}) {
   return canonical;
 }
 
-/** Ingress boundary helper — always logs Gen1 with caller context. */
+/** Ingress boundary helper — always logs deprecated alias with caller context. */
 function ingressNormalizeStrategyKey(key, context = {}) {
   return normalizeStrategyKey(key, { ...context, ingress: true });
 }
@@ -148,20 +175,20 @@ function resetGen1DeprecationStats() {
   _gen1DeprecationLogCount = 0;
 }
 
-/** Gen2 abbrev for display / CSV (no Gen1 abbrevs). */
+/** Tier abbrev for display / CSV (no deprecated component abbrevs). */
 const STRATEGY_ABBREV = Object.freeze({
-  AF_SMC: "AF",
-  AF_WYCKOFF: "AF",
-  AF_VSA: "AF",
-  TS_TF: "TS",
-  TS_MS: "TS",
-  TS_VP: "TS",
-  MD_MR: "MD",
-  MD_SD: "MD",
-  MD_SA: "MD",
-  BS_BR: "BS",
-  BS_ICT: "BS",
-  BS_LS: "BS",
+  SMART_MONEY_CONCEPTS: "AF",
+  WYCKOFF: "AF",
+  VOLUME_SPREAD_ANALYSIS: "AF",
+  TREND_FOLLOWING: "TS",
+  MARKET_STRUCTURE: "TS",
+  AUCTION_MARKET_THEORY: "TS",
+  MEAN_REVERSION: "MD",
+  SUPPLY_AND_DEMAND: "MD",
+  STATISTICAL_ARBITRAGE: "MD",
+  BREAKOUT_RETEST: "BS",
+  ICT_STYLE_TRADING: "BS",
+  LIQUIDATION_SQUEEZE: "BS",
   GROK_AI_TRADING: "GA",
   ADAPTIVE_FUSION: "AF",
   TREND_SURGE: "TS",
@@ -169,17 +196,17 @@ const STRATEGY_ABBREV = Object.freeze({
   BREAKOUT_STORM: "BS",
 });
 
-/** Abbrev → engine (Gen2 + chart legacy SAC/TM/MR/BR resolved via normalizeStrategyKey). */
+/** Abbrev → engine (resolved via normalizeStrategyKey for legacy SAC/TM/MR/BR). */
 const ABBREV_TO_ENGINE = Object.freeze({
-  AF: "AF_SMC",
-  TS: "TS_TF",
-  MD: "MD_MR",
-  BS: "BS_BR",
+  AF: "SMART_MONEY_CONCEPTS",
+  TS: "TREND_FOLLOWING",
+  MD: "MEAN_REVERSION",
+  BS: "BREAKOUT_RETEST",
   GA: "GROK_AI_TRADING",
-  SAC: "AF_SMC",
-  TM: "TS_TF",
-  MR: "MD_MR",
-  BR: "BS_BR",
+  SAC: "SMART_MONEY_CONCEPTS",
+  TM: "TREND_FOLLOWING",
+  MR: "MEAN_REVERSION",
+  BR: "BREAKOUT_RETEST",
 });
 
 function abbrevToEngine(abbrev) {
@@ -192,6 +219,7 @@ function abbrevToEngine(abbrev) {
 module.exports = {
   STRATEGY_MIGRATION_MAP,
   GEN1_STRATEGY_LITERALS,
+  DEPRECATED_STRATEGY_ABBREVS,
   GEN1_STRATEGY_KEYS,
   LEGACY_TRADE_TYPE_ALIASES,
   STRATEGY_ABBREV,

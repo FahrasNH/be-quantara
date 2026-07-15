@@ -1,5 +1,5 @@
 /**
- * Breakout Trading (BS_BR) — standalone entry for BREAKOUT_STORM.
+ * Breakout Trading (BREAKOUT_RETEST) — standalone entry for BREAKOUT_STORM.
  *
  * Volatility floor → breakout → displacement → true retest pipeline.
  * Extracted from BreakoutTradingStrategy (Sprint 15 structure refactor).
@@ -296,7 +296,7 @@ function countConsolidationBars(closes, highs, lows, resistance, support) {
 }
 
 /**
- * Main BS_BR entry evaluation at lastIdx.
+ * Main BREAKOUT_RETEST entry evaluation at lastIdx.
  *
  * @returns {{ signal: 'LONG'|'SHORT'|null, meta: object|null, state: object, resetState: boolean }}
  */
@@ -467,8 +467,8 @@ function evaluateBreakoutTradingEntry({
         : null;
 
       const meta = {
-        component: "BS_BR",
-        winningComponent: "BS_BR",
+        component: "BREAKOUT_RETEST",
+        winningComponent: "BREAKOUT_RETEST",
         strategyLabel: "Breakout Trading",
         bbSqueeze: consol.squeeze === true,
         rangeBreakout: true,

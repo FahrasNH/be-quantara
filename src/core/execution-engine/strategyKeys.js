@@ -5,14 +5,14 @@
 const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
 
 const GROK_CONFIRM_STRATEGIES = new Set([
-  "AF_SMC",
+  "SMART_MONEY_CONCEPTS",
   "ADAPTIVE_FUSION",
-  "TS_TF",
-  "MD_MR",
-  "BS_BR",
+  "TREND_FOLLOWING",
+  "MEAN_REVERSION",
+  "BREAKOUT_RETEST",
 ]);
 
-const MR_STRATEGY_KEYS = new Set(["MD_MR"]);
+const MR_STRATEGY_KEYS = new Set(["MEAN_REVERSION"]);
 
 function isMeanReversionKey(key) {
   return MR_STRATEGY_KEYS.has(normalizeStrategyKey(String(key || "").toUpperCase()));

@@ -1,9 +1,9 @@
-# BS_LS — Entry Triggers (AS-IS)
+# LIQUIDATION_SQUEEZE — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a BS_LS entry and the signal labels emitted on fill.  
-**Strategy key**: `BS_LS` (`LiquidationSqueezeStrategy`, v1.0) — Breakout Storm racer #2  
+**Scope**: What triggers a LIQUIDATION_SQUEEZE entry and the signal labels emitted on fill.  
+**Strategy key**: `LIQUIDATION_SQUEEZE` (`LiquidationSqueezeStrategy`, v1.0) — Breakout Storm racer #2  
 **Engine SSOT**: `liquidationSqueeze.js` → `evaluateLiquidationSqueezeEntry`  
-**Config SSOT**: `strategyDefaults.js` → `BS_LS` (inherits `BREAKOUT_RETEST`) + component DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `LIQUIDATION_SQUEEZE` (inherits `BREAKOUT_RETEST`) + component DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`BS_LS`** preset (= Breakout geometry); liquidation/squeeze knobs dari **component DEFAULTS**.
+Sprint 14 baseline — `typeOverrides: {}`. Risk/SL/TP dari **`LIQUIDATION_SQUEEZE`** preset (= Breakout geometry); liquidation/squeeze knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -55,7 +55,7 @@ Tidak ada — `typeOverrides: {}`.
 
 ## What triggers an entry
 
-BS_LS combines **liquidation-style wick displacement** with optional **OI / funding** confirmation. OI/funding is **fail-open** — wick-only entries still fire when exchange data is missing.
+LIQUIDATION_SQUEEZE combines **liquidation-style wick displacement** with optional **OI / funding** confirmation. OI/funding is **fail-open** — wick-only entries still fire when exchange data is missing.
 
 ```
 Liquidation Wick (range extreme sweep) → OI/Funding Boost (optional) → signal
@@ -134,7 +134,7 @@ Note: `dataAvailable === false` **still adds** `OI/Funding Proxy` — label mean
 
 ## AS-IS quirks
 
-- **VAULT umbrella**: BS_LS wins stamp `winningComponent: "BS_LS"`.
+- **VAULT umbrella**: LIQUIDATION_SQUEEZE wins stamp `winningComponent: "LIQUIDATION_SQUEEZE"`.
 - **Fail-open OI/funding**: missing exchange data does not block wick entries.
 - **`OI/Funding Proxy` on missing data**: label appears even when no OI/funding was confirmed — means proxy/unavailable path.
 

@@ -26,11 +26,11 @@ const DEFAULT_LIVE_ELIGIBLE_TYPES = ["Intraday", "Swing"];
 // Optional per-strategy overrides (keyed by any strategy/engine key). Empty =
 // use the default set. Populate when a specific strategy validates a leg.
 const PER_STRATEGY_LIVE_ELIGIBLE_TYPES = {
-  // e.g. AF_SMC: ["Intraday", "Swing"],  // Scalping stays backtest-only
+  // e.g. SMART_MONEY_CONCEPTS: ["Intraday", "Swing"],  // Scalping stays backtest-only
 };
 
 /**
- * @param {string} strategyKey - e.g. "AF_SMC" / "TS_TF"
+ * @param {string} strategyKey - e.g. "SMART_MONEY_CONCEPTS" / "TREND_FOLLOWING"
  * @param {string} type - "Scalping" | "Intraday" | "Swing"
  * @returns {boolean} true if this (strategy, type) leg may trade real money.
  */

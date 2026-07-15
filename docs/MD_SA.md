@@ -1,10 +1,10 @@
-# MD_SA — Entry Triggers (AS-IS)
+# STATISTICAL_ARBITRAGE — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an MD_SA entry and the signal labels emitted on fill.  
-**Strategy key**: `MD_SA` (`StatisticalArbitrageStrategy`, v1.0) — Mean Drift racer #2  
+**Scope**: What triggers an STATISTICAL_ARBITRAGE entry and the signal labels emitted on fill.  
+**Strategy key**: `STATISTICAL_ARBITRAGE` (`StatisticalArbitrageStrategy`, v1.0) — Mean Drift racer #2  
 **Display name**: **Statistical Arbitrage** (single-symbol z-score v1; pairs/cointegration is roadmap)  
 **Engine SSOT**: `statisticalArbitrage.js` → `evaluateStatisticalArbitrageEntry`  
-**Config SSOT**: `strategyDefaults.js` → `MD_SA` (inherits `MEAN_REVERSION`) + component DEFAULTS  
+**Config SSOT**: `strategyDefaults.js` → `STATISTICAL_ARBITRAGE` (inherits `MEAN_REVERSION`) + component DEFAULTS  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
 **Doc date**: 2026-07-15
 
@@ -14,7 +14,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline. Risk/SL/TP dari **`MD_SA`** preset (= Mean Reversion geometry); z-score knobs dari **component DEFAULTS**.
+Sprint 14 baseline. Risk/SL/TP dari **`STATISTICAL_ARBITRAGE`** preset (= Mean Reversion geometry); z-score knobs dari **component DEFAULTS**.
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -48,17 +48,17 @@ Sprint 14 baseline. Risk/SL/TP dari **`MD_SA`** preset (= Mean Reversion geometr
 
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
-| *(implicit)* | race | MD_MR / MD_SD / MD_SA race independently |
+| *(implicit)* | race | MEAN_REVERSION / SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE race independently |
 
 ### Per trade type overrides
 
-Tidak ada pada preset `MD_SA`.
+Tidak ada pada preset `STATISTICAL_ARBITRAGE`.
 
 ---
 
 ## What triggers an entry
 
-MD_SA v1 fires when price deviates **statistically** from a rolling mean (or optional BTC residual), beyond a z-score band.
+STATISTICAL_ARBITRAGE v1 fires when price deviates **statistically** from a rolling mean (or optional BTC residual), beyond a z-score band.
 
 ```
 Rolling Mean + Std → Z-Score Extreme → Mean-Revert Direction → signal
@@ -109,7 +109,7 @@ On normal fills, `zScore` and `saMode` are always set → formatter emits **all 
 
 **Variance is very low** — nearly every trade shows the same trio. Direction and exact z-value live in `reason`, not signal labels.
 
-**Formatter fallback**: If labels empty but `winningComponent === "MD_SA"`, same three-label string is returned.
+**Formatter fallback**: If labels empty but `winningComponent === "STATISTICAL_ARBITRAGE"`, same three-label string is returned.
 
 ### Typical examples
 
@@ -123,7 +123,7 @@ On normal fills, `zScore` and `saMode` are always set → formatter emits **all 
 
 ## AS-IS quirks
 
-- **MINT umbrella**: MD_SA wins stamp `winningComponent: "MD_SA"`.
+- **MINT umbrella**: STATISTICAL_ARBITRAGE wins stamp `winningComponent: "STATISTICAL_ARBITRAGE"`.
 - **entryZ = 1.6** (not 2.0) — older docs overstated the threshold.
 - **Not true pairs arb**: v1 is single-symbol z-score; multi-leg cointegration is roadmap.
 

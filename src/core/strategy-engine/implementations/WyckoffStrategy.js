@@ -34,7 +34,7 @@ const STRATEGY_DEFAULTS = {
 class WyckoffStrategy extends StrategyBase {
   constructor(config = {}) {
     super({
-      name: "AF_WYCKOFF",
+      name: "WYCKOFF",
       label: "Wyckoff Method (Spring/Upthrust)",
       description:
         "AF Component B: Wyckoff accumulation/distribution entries " +
@@ -67,7 +67,7 @@ class WyckoffStrategy extends StrategyBase {
     if (trend_strength > 0.6) score -= 20;
     return [
       {
-        key: "AF_WYCKOFF",
+        key: "WYCKOFF",
         label: this.config.label,
         score: Math.max(0, Math.min(100, score)),
         reason: "range_phase_affinity",
@@ -122,8 +122,8 @@ class WyckoffStrategy extends StrategyBase {
         ?? (patternType === "SPRING" ? range.rangeLow : range.rangeHigh) ?? null,
     };
     this._lastSignalMeta = {
-      component: "AF_WYCKOFF",
-      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "AF_WYCKOFF" : null,
+      component: "WYCKOFF",
+      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "WYCKOFF" : null,
       strategyLabel: "Wyckoff Method (Spring/Upthrust)",
       vote: result.vote,
       confidence: result.confidence,
@@ -150,8 +150,8 @@ class WyckoffStrategy extends StrategyBase {
       { lastSignalIdx: this._lastSignalIdx },
     );
     this._lastSignalMeta = {
-      component: "AF_WYCKOFF",
-      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "AF_WYCKOFF" : null,
+      component: "WYCKOFF",
+      winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "WYCKOFF" : null,
       strategyLabel: "Wyckoff Method (Spring/Upthrust)",
       ...result,
       ...(() => {
