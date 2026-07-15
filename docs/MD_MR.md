@@ -13,7 +13,7 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — no `typeOverrides` on MEAN_REVERSION preset. Risk/SL/TP dari **`strategyDefaults.js`**; layer thresholds dari **engine ctor** (merge saat runtime).
+Sprint 14+ baseline — MEAN_REVERSION uses `DEFAULT_LEG_TYPE_OVERRIDES` for `atrMinMult`. Risk/SL/TP dari **`strategyDefaults.js`**; layer thresholds dari **engine ctor** (merge saat runtime).
 
 ### Risk & SL/TP (umbrella preset)
 
@@ -56,7 +56,14 @@ Sprint 14 baseline — no `typeOverrides` on MEAN_REVERSION preset. Risk/SL/TP d
 
 ### Per trade type overrides
 
-Tidak ada pada preset `MEAN_REVERSION`. Scalping vs Intraday legs use ctor A/B thresholds above.
+| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| --- | --- |
+| Scalping | 0.15 |
+| Intraday | 0.4 |
+| Swing | 0.8 |
+
+Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
+
 
 ---
 

@@ -13,8 +13,8 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14 baseline — `typeOverrides: {}` (semua trade type pakai geometri yang sama).  
-Nilai di bawah dari **`strategyDefaults.js`**; gate boolean default **OFF** kecuali disebut.
+Nilai di bawah dari **`strategyDefaults.js`** (SSOT); gate boolean default **OFF** kecuali disebut.  
+Per-leg ATR floors hidup di `typeOverrides` (bukan geometri seragam).
 
 ### Risk & SL/TP
 
@@ -31,7 +31,7 @@ Nilai di bawah dari **`strategyDefaults.js`**; gate boolean default **OFF** kecu
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
 | `smcUseSequenceEngine` | `true` | bool | `false` = legacy single-bar (signal labels biasanya kosong) |
-| `smcMinConfidenceA/B/C` | 60 / 60 / 60 | 0–100 | Floor confidence per Scalping / Intraday / Swing |
+| `smcMinConfidenceScalping/Intraday/Swing` (alias `A/B/C`) | 60 / 60 / 60 | 0–100 | Top-level floors (live). Backtest merges per-leg `typeOverrides` — Scalping **30**, Intraday **45** |
 | `smcSeqWindow` | 60 | bar | Lookback maksimal untuk merakit sweep→CHoCH→FVG |
 | `smcSweepVolMult` | 0.9 | × vol SMA | Volume minimum pada liquidity sweep |
 | `smcFvgMinGap` | 0.0015 | fraksi harga | Gap FVG minimum (0.15%) |
@@ -60,7 +60,13 @@ Nilai di bawah dari **`strategyDefaults.js`**; gate boolean default **OFF** kecu
 
 ### Per trade type overrides
 
-Tidak ada — `typeOverrides: {}`. Scalping / Intraday / Swing memakai threshold di atas; SL/TP per-leg internal (`SUB_STRATEGIES`) bukan knob user.
+| Leg | Defaults (`SMC_LEG_TYPE_OVERRIDES`) |
+| --- | --- |
+| Scalping | `atrMinMult: 0.15`, `smcMinConfidenceScalping/A: 30` |
+| Intraday | `atrMinMult: 0.4`, `smcMinConfidenceIntraday/B: 45` |
+| Swing | `atrMinMult: 0.8` |
+
+Top-level `atrMinMult` / `smcMinConfidence*` stay at 0.8 / 60 for **live** (live does not spread confidence from `typeOverrides` into `detectSignalMulti`). Backtest merges per-leg overrides onto cfg.
 
 ### Yang bisa di-tune di FE Advance
 
