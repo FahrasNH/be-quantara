@@ -1,5 +1,5 @@
 const cfg = require('../src/config/env');
-const { isEmailConfigured } = require('../src/services/EmailService');
+const { isEmailConfigured } = require('../src/modules/auth/services/EmailService');
 
 function test(name, fn) {
   try {
@@ -31,18 +31,18 @@ function setEmailEnv(host, user, pass) {
   process.env.EMAIL_USER = user ?? '';
   process.env.EMAIL_PASS = pass ?? '';
   delete require.cache[require.resolve('../src/config/env')];
-  delete require.cache[require.resolve('../src/services/EmailService')];
+  delete require.cache[require.resolve('../src/modules/auth/services/EmailService')];
 }
 
 if (test('isEmailConfigured false when EMAIL_* empty', () => {
   setEmailEnv('', '', '');
-  const { isEmailConfigured: check } = require('../src/services/EmailService');
+  const { isEmailConfigured: check } = require('../src/modules/auth/services/EmailService');
   assert(check() === false);
 })) passed++; else failed++;
 
 if (test('isEmailConfigured true when all EMAIL_* set', () => {
   setEmailEnv('smtp.gmail.com', 'user@example.com', 'secret');
-  const { isEmailConfigured: check } = require('../src/services/EmailService');
+  const { isEmailConfigured: check } = require('../src/modules/auth/services/EmailService');
   assert(check() === true);
 })) passed++; else failed++;
 
@@ -51,7 +51,7 @@ process.env.EMAIL_HOST = orig.EMAIL_HOST;
 process.env.EMAIL_USER = orig.EMAIL_USER;
 process.env.EMAIL_PASS = orig.EMAIL_PASS;
 delete require.cache[require.resolve('../src/config/env')];
-delete require.cache[require.resolve('../src/services/EmailService')];
+delete require.cache[require.resolve('../src/modules/auth/services/EmailService')];
 
 console.log(`\nemail-config.test.js — ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

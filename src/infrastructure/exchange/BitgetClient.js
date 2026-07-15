@@ -1,3 +1,4 @@
+const log = require("#shared/logger").child({ component: "BitgetClient" });
 // ─────────────────────────────────────────────
 // bitget-ccxt.js — Bitget Client menggunakan CCXT
 // CCXT adalah library unified yang support Bitget V2
@@ -485,7 +486,7 @@ class BitgetCCXTClient {
       if (benign) {
         return { success: true, mode: ccxtMode, note: "unchanged_or_has_position" };
       }
-      console.warn(`setMarginMode gagal: ${err.message}`);
+      log.warn(`setMarginMode gagal: ${err.message}`);
       return { success: false, mode: ccxtMode, error: err.message };
     }
   }
@@ -750,7 +751,7 @@ class BitgetCCXTClient {
     }
 
     const detail = errors.join(" | ");
-    console.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
+    log.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
     return { success: false, message: detail };
   }
 

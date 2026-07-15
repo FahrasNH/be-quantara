@@ -1062,6 +1062,9 @@ db.init()
     // Backup otomatis tiap 24 jam — berjalan di dalam proses Node.js, tanpa cron
     backup.start();
     telegramBot.start();
+    // Weekly/daily StrategyPerformance aggregation + WalkForwardJob (Sunday 23:00 UTC)
+    const performanceAggregationCron = require("../infrastructure/cron/performanceAggregationCron");
+    performanceAggregationCron.start();
     // Purge soft-deleted exchange keys older than 7 days (every 6h)
     const { scheduleKeyPurge } = require("../services/exchangeKeyPurge");
     scheduleKeyPurge();
@@ -1088,6 +1091,9 @@ process.on("SIGTERM", async () => {
   console.log("[SHUTDOWN] SIGTERM received, shutting down gracefully...");
   telegramBot.stop();
   backup.stop();
+  try {
+    require("../infrastructure/cron/performanceAggregationCron").stop();
+  } catch { /* optional */ }
   server.close(async () => {
     await db.close();
     process.exit(0);

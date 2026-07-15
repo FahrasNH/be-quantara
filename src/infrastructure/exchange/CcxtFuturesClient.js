@@ -1,3 +1,4 @@
+const log = require("#shared/logger").child({ component: "CcxtFuturesClient" });
 // ─────────────────────────────────────────────────────────────────────────────
 // CcxtFuturesClient.js — Unified USDT-M perpetual trading via CCXT
 // Dipakai oleh BinanceClient dan OkxClient; interface selaras dengan BitgetClient.
@@ -278,7 +279,7 @@ class CcxtFuturesClient {
       if (benign) {
         return { success: true, mode: ccxtMode, note: "unchanged_or_has_position" };
       }
-      console.warn(`setMarginMode gagal: ${err.message}`);
+      log.warn(`setMarginMode gagal: ${err.message}`);
       return { success: false, mode: ccxtMode, error: err.message };
     }
   }
@@ -468,7 +469,7 @@ class CcxtFuturesClient {
     }
 
     const detail = errors.join(" | ");
-    console.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
+    log.warn(`[setTPSL] Semua pendekatan gagal (${planType}): ${detail}`);
     return { success: false, message: detail };
   }
 

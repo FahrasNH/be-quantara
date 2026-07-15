@@ -13,7 +13,7 @@ const {
   SMC_ML_CSV_COLUMNS,
 } = require("../src/domain/strategy/smc/smcScalpGates");
 const { applyRegimeGate } = require("../src/domain/dailyRegimeGate");
-const SmartMoneyConceptsStrategy = require("../src/domain/strategy/implementations/SmartMoneyConceptsStrategy");
+const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const { TRADE_EXPORT_COLUMNS } = require("../src/domain/tradeExportCsv");
 
 test("GATE-SESSION: blocks 21–22 UTC when enabled, fail-open when off", () => {

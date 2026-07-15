@@ -1,3 +1,4 @@
+const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
 const MeanReversionStrategy = require("../src/domain/strategy/implementations/MeanReversionStrategy");
 
 describe("MeanReversionStrategy (Mean Drift — dual-component)", () => {
@@ -198,3 +199,5 @@ describe("MeanReversionStrategy (Mean Drift — dual-component)", () => {
     });
   });
 });
+
+run();

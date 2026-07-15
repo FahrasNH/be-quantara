@@ -13,7 +13,7 @@
  */
 "use strict";
 
-const BotEngine = require("../src/application/BotEngine");
+const BotEngine = require("../src/modules/trading/application/BotEngine");
 const db        = require("../src/infrastructure/db/database");
 
 let pass = 0, fail = 0;

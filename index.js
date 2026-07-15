@@ -4,14 +4,19 @@
 
 require("dotenv").config();
 
+const logger = require("#shared/logger").child({ component: "bootstrap" });
+
 // Crash-visibility: tanpa handler ini, satu unhandledRejection/uncaughtException
 // membunuh proses TANPA jejak → terlihat seperti "OOM diam-diam". Log dulu sebelum
 // PM2 me-restart, agar akar (crash kode vs OOM) selalu tercatat di err.log.
 process.on("unhandledRejection", (reason) => {
-  console.error("[FATAL] unhandledRejection:", reason instanceof Error ? reason.stack : reason);
+  logger.fatal(
+    { err: reason instanceof Error ? reason : { message: String(reason) } },
+    "unhandledRejection"
+  );
 });
 process.on("uncaughtException", (err) => {
-  console.error("[FATAL] uncaughtException:", err?.stack || err);
+  logger.fatal({ err }, "uncaughtException");
 });
 
 // Diagnostik memori opsional (MEM_DEBUG=1): cetak rincian heap tiap 30 detik agar
@@ -21,7 +26,16 @@ if (process.env.MEM_DEBUG === "1") {
   const mb = (n) => Math.round(n / 1048576) + "M";
   setInterval(() => {
     const m = process.memoryUsage();
-    console.log(`[MEM] rss=${mb(m.rss)} heapUsed=${mb(m.heapUsed)} heapTotal=${mb(m.heapTotal)} external=${mb(m.external)} arrayBuffers=${mb(m.arrayBuffers)}`);
+    logger.info(
+      {
+        rss: mb(m.rss),
+        heapUsed: mb(m.heapUsed),
+        heapTotal: mb(m.heapTotal),
+        external: mb(m.external),
+        arrayBuffers: mb(m.arrayBuffers),
+      },
+      "memory snapshot"
+    );
   }, 30_000).unref();
 }
 
@@ -38,13 +52,13 @@ if (process.env.MEM_DEBUG === "1") {
 
   if (restartCount <= 0) return;
 
-  console.log(`[PM2] Restart count: ${restartCount}/${maxRestarts} (app: ${appName})`);
+  logger.info({ restartCount, maxRestarts, appName }, "PM2 restart count");
 
   if (restartCount >= maxRestarts) {
     const msg =
       `PM2 max_restarts TERLAMPAUI (${restartCount}/${maxRestarts}) untuk ${appName}. ` +
       `Proses mungkin TIDAK akan di-restart lagi setelah crash berikutnya — cek logs segera.`;
-    console.error(`[PM2] ${msg}`);
+    logger.error({ appName, restartCount, maxRestarts }, msg);
     try {
       require("./src/infrastructure/notifications/TelegramNotifier").notifyError(msg);
     } catch { /* notifier opsional */ }
@@ -52,11 +66,11 @@ if (process.env.MEM_DEBUG === "1") {
     const msg =
       `PM2 restart budget hampir habis: ${restartCount}/${maxRestarts} untuk ${appName}. ` +
       `Investigasi crash-loop sebelum proses berhenti total.`;
-    console.warn(`[PM2] ${msg}`);
+    logger.warn({ appName, restartCount, maxRestarts }, msg);
     try {
       require("./src/infrastructure/notifications/TelegramNotifier").notifyError(msg);
     } catch { /* notifier opsional */ }
   }
 })();
 
-require("./src/server/app");
+require("./src/app/bootstrap");

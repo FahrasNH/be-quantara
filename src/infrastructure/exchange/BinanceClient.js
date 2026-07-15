@@ -1,3 +1,4 @@
+const log = require("#shared/logger").child({ component: "BinanceClient" });
 // ─────────────────────────────────────────────────────────────────────────────
 // BinanceClient.js — Binance USDT-M Futures via CCXT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +102,7 @@ class BinanceClient extends CcxtFuturesClient {
     }
 
     const detail = errors.join(" | ");
-    console.warn(`[setTPSL Binance] Semua pendekatan gagal (${planType}): ${detail}`);
+    log.warn(`[setTPSL Binance] Semua pendekatan gagal (${planType}): ${detail}`);
     return { success: false, message: detail };
   }
 

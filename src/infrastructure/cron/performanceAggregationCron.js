@@ -16,6 +16,7 @@
 const StrategyPerformanceService = require("../../server/services/StrategyPerformanceService");
 const telegram = require("../notifications/TelegramNotifier");
 const walkForwardJob = require("../jobs/WalkForwardJob");
+const log = require("#shared/logger").child({ component: "performanceAggregationCron" });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,11 +83,11 @@ async function runDaily() {
   yesterday.setUTCHours(0, 0, 0, 0);
 
   try {
-    console.log("[performanceAggregationCron] Starting daily aggregation for", yesterday.toISOString().slice(0, 10));
+    log.info({ date: yesterday.toISOString().slice(0, 10) }, "Starting daily aggregation");
     const results = await StrategyPerformanceService.aggregateDaily(yesterday);
-    console.log(`[performanceAggregationCron] Daily done — ${results.length} records upserted`);
+    log.info({ records: results.length }, "Daily aggregation done");
   } catch (err) {
-    console.error("[performanceAggregationCron] Daily failed:", err.message);
+    log.error({ err }, "Daily aggregation failed");
     await alertFailure("aggregateDaily", err);
   }
 
@@ -96,7 +97,7 @@ async function runDaily() {
 function scheduleDaily() {
   const delay     = msUntilNextUTC(2, 0);
   const humanDelay = `${(delay / 3600000).toFixed(2)}h`;
-  console.log(`[performanceAggregationCron] Next daily run in ${humanDelay} (02:00 UTC)`);
+  log.info({ delay: humanDelay }, "Next daily run (02:00 UTC)");
   _dailyTimeout = setTimeout(runDaily, delay);
   if (_dailyTimeout.unref) _dailyTimeout.unref();
 }
@@ -104,14 +105,14 @@ function scheduleDaily() {
 // ── Weekly (Sunday 03:00 UTC) ─────────────────────────────────────────────────
 
 async function runWeekly() {
-  console.log("[performanceAggregationCron] Starting weekly rolling aggregations (7d + 30d)");
+  log.info("Starting weekly rolling aggregations (7d + 30d)");
 
   for (const period of ["7d", "30d"]) {
     try {
       const results = await StrategyPerformanceService.aggregateRolling(period);
-      console.log(`[performanceAggregationCron] Weekly ${period} done — ${results.length} records`);
+      log.info({ period, records: results.length }, "Weekly aggregation done");
     } catch (err) {
-      console.error(`[performanceAggregationCron] Weekly ${period} failed:`, err.message);
+      log.error({ err, period }, "Weekly aggregation failed");
       await alertFailure(`aggregateRolling('${period}')`, err);
     }
   }
@@ -121,7 +122,7 @@ async function runWeekly() {
 
 function scheduleWeekly() {
   const delay = msUntilNextSundayUTC(3, 0);
-  console.log(`[performanceAggregationCron] Next weekly run in ${(delay / 3600000).toFixed(2)}h (Sun 03:00 UTC)`);
+  log.info({ delayHours: (delay / 3600000).toFixed(2) }, "Next weekly run (Sun 03:00 UTC)");
   _weeklyTimeout = setTimeout(runWeekly, delay);
   if (_weeklyTimeout.unref) _weeklyTimeout.unref();
 }
@@ -129,13 +130,13 @@ function scheduleWeekly() {
 // ── Monthly (1st of month 04:00 UTC) ─────────────────────────────────────────
 
 async function runMonthly() {
-  console.log("[performanceAggregationCron] Starting monthly all-time aggregation");
+  log.info("Starting monthly all-time aggregation");
 
   try {
     const results = await StrategyPerformanceService.aggregateRolling("all-time");
-    console.log(`[performanceAggregationCron] Monthly all-time done — ${results.length} records`);
+    log.info({ records: results.length }, "Monthly aggregation done");
   } catch (err) {
-    console.error("[performanceAggregationCron] Monthly all-time failed:", err.message);
+    log.error({ err }, "Monthly aggregation failed");
     await alertFailure("aggregateRolling('all-time')", err);
   }
 
@@ -144,7 +145,7 @@ async function runMonthly() {
 
 function scheduleMonthly() {
   const delay = msUntilFirstOfMonthUTC(4, 0);
-  console.log(`[performanceAggregationCron] Next monthly run in ${(delay / 3600000).toFixed(2)}h (1st 04:00 UTC)`);
+  log.info({ delayHours: (delay / 3600000).toFixed(2) }, "Next monthly run (1st 04:00 UTC)");
   _monthlyTimeout = setTimeout(runMonthly, delay);
   if (_monthlyTimeout.unref) _monthlyTimeout.unref();
 }
@@ -152,12 +153,12 @@ function scheduleMonthly() {
 // ── Walk-Forward (Sunday 23:00 UTC) — Sprint 4 / WT-3 ────────────────────────
 
 async function runWalkForward() {
-  console.log("[performanceAggregationCron] Starting walk-forward optimization job");
+  log.info("Starting walk-forward optimization job");
   try {
     const result = await walkForwardJob.run();
-    console.log(`[performanceAggregationCron] Walk-forward done — created=${result.created} skipped=${result.skipped} errors=${result.errors}`);
+    log.info({ created: result.created, skipped: result.skipped, errors: result.errors }, "Walk-forward done");
   } catch (err) {
-    console.error("[performanceAggregationCron] Walk-forward failed:", err.message);
+    log.error({ err }, "Walk-forward failed");
     await alertFailure("WalkForwardJob", err);
   }
   scheduleWalkForward();
@@ -165,7 +166,7 @@ async function runWalkForward() {
 
 function scheduleWalkForward() {
   const delay = msUntilNextSundayUTC(23, 0);
-  console.log(`[performanceAggregationCron] Next walk-forward run in ${(delay / 3600000).toFixed(2)}h (Sun 23:00 UTC)`);
+  log.info({ delayHours: (delay / 3600000).toFixed(2) }, "Next walk-forward run (Sun 23:00 UTC)");
   _walkForwardTimeout = setTimeout(runWalkForward, delay);
   if (_walkForwardTimeout.unref) _walkForwardTimeout.unref();
 }
@@ -174,20 +175,20 @@ function scheduleWalkForward() {
 
 function start() {
   if (_dailyTimeout) {
-    console.warn("[performanceAggregationCron] Already running — call stop() first");
+    log.warn("Already running — call stop() first");
     return;
   }
   scheduleDaily();
   scheduleWeekly();
   scheduleMonthly();
   scheduleWalkForward();
-  console.log("[performanceAggregationCron] Started (daily/weekly/monthly/walk-forward)");
+  log.info("Started (daily/weekly/monthly/walk-forward)");
 }
 
 function stop() {
   [_dailyTimeout, _weeklyTimeout, _monthlyTimeout, _walkForwardTimeout].forEach(t => t && clearTimeout(t));
   _dailyTimeout = _weeklyTimeout = _monthlyTimeout = _walkForwardTimeout = null;
-  console.log("[performanceAggregationCron] Stopped");
+  log.info("Stopped");
 }
 
 module.exports = { start, stop, runDaily, runWeekly, runMonthly, runWalkForward };

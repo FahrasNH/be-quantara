@@ -21,7 +21,7 @@ function test(name, fn) {
 console.log("\n═══ Tick / Pool Hardening ═══");
 
 const engine = fs.readFileSync(
-  path.join(__dirname, "../src/application/BotEngine.js"),
+  path.join(__dirname, "../src/modules/trading/application/BotEngine.js"),
   "utf8"
 );
 const db = fs.readFileSync(

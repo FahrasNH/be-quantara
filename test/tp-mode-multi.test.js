@@ -5,7 +5,7 @@
 "use strict";
 
 const assert = require("assert");
-const BotEngine = require("../src/application/BotEngine");
+const BotEngine = require("../src/modules/trading/application/BotEngine");
 
 function test(name, fn) {
   try {

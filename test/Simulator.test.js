@@ -7,6 +7,7 @@
  * plus edge cases (same-bar SL+TP, timeout, gap-through, wick-only touch).
  */
 
+const { describe, it, test, expect, beforeEach, afterEach, run } = require("./helpers/jest-lite");
 const { simulateTrade } = require("../scripts/lib/simulator");
 
 // candle helper
@@ -104,3 +105,5 @@ describe("simulateTrade", () => {
     });
   });
 });
+
+run();

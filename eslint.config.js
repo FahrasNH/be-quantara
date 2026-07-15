@@ -1,7 +1,13 @@
 const js             = require("@eslint/js");
 const globals        = require("globals");
 const prettierConfig = require("eslint-config-prettier");
+const boundaries     = require("eslint-plugin-boundaries");
 
+/**
+ * Architectural boundary rules (Phase 1 foundation).
+ * Activates meaningfully once Phase 2 populates src/core/**.
+ * Rule: core must never import modules (or express/server routes).
+ */
 module.exports = [
   js.configs.recommended,
 
@@ -13,30 +19,58 @@ module.exports = [
         ...globals.es2021,
       },
     },
+    plugins: {
+      boundaries,
+    },
+    settings: {
+      "boundaries/elements": [
+        { type: "core", pattern: "src/core/**" },
+        { type: "modules", pattern: "src/modules/**" },
+        { type: "shared", pattern: "src/shared/**" },
+        { type: "infra", pattern: "src/infrastructure/**" },
+        { type: "config", pattern: "src/config/**" },
+        { type: "app", pattern: "src/{application,server,domain,services,middleware}/**" },
+      ],
+      "boundaries/include": ["src/**/*.js"],
+    },
     rules: {
-      // Variables — warn saja agar tidak blocker
       "no-unused-vars": ["warn", {
         argsIgnorePattern: "^_",
         varsIgnorePattern: "^_",
-        caughtErrors:      "none",   // catch (e) {} tidak wajib pakai e
+        caughtErrors:      "none",
       }],
 
-      // Best practices
       "no-debugger":          "error",
       "no-eval":              "error",
       "no-process-exit":      "warn",
-      "no-empty":             ["warn", { allowEmptyCatch: true }],  // allow: } catch { /* ok */ }
+      "no-empty":             ["warn", { allowEmptyCatch: true }],
 
-      // Matikan rule yang terlalu strict untuk codebase ini
-      "no-console":           "off",  // bot pakai console.log untuk trade log
-      "preserve-caught-error": "off", // pola: throw new Error(e.message) sudah cukup
+      "no-console":           "off",
+      "preserve-caught-error": "off",
 
-      // Prettier formatting — matikan rule yang bentrok
+      "boundaries/element-types": ["error", {
+        default: "allow",
+        rules: [
+          {
+            from: "core",
+            disallow: ["modules", "app"],
+            message: "core/ must not import modules/ or application/server/routes layers",
+          },
+          // shared may import core/infra/config/modules (middleware needs entitlement etc.)
+          // but should not import legacy application/server route layers directly.
+          {
+            from: "shared",
+            disallow: ["app"],
+            message: "shared/ must not import application/server/domain legacy layers — use modules/ or core/",
+          },
+        ],
+      }],
+
       ...prettierConfig.rules,
     },
   },
 
   {
-    ignores: ["node_modules/**", "quantara.db*", "scripts/**"],
+    ignores: ["node_modules/**", "quantara.db*", "scripts/**", "test/**", "data/**"],
   },
 ];

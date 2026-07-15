@@ -9,7 +9,7 @@
 
 const assert = require("node:assert");
 const { test } = require("node:test");
-const SmartMoneyConceptsStrategy = require("../src/domain/strategy/implementations/SmartMoneyConceptsStrategy");
+const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 
 // Build indicators object from OHLCV arrays + a flat volSMA baseline.
 function ind(o, h, l, c, v, volBase = 100) {

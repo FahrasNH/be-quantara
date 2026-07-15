@@ -394,7 +394,7 @@ promises.push(test("30. Sprint 1 regression: TradeFeatureCollector.captureEntryF
 promises.push(test("31. Sprint 1 regression: StrategyPerformance @@unique prevents duplicates", () => {
   // Verify uniqueKeyFields exist in the service upsert logic
   const src = require("fs").readFileSync(
-    require("path").join(__dirname, "../src/server/services/StrategyPerformanceService.js"), "utf8"
+    require("path").join(__dirname, "../src/modules/analytics/services/StrategyPerformanceService.js"), "utf8"
   );
   assert(src.includes("strategyKey_symbol_regime_tradeType_pairTier_periodDate"), "@@unique constraint not in upsert");
 }));

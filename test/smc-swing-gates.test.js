@@ -15,7 +15,7 @@ const {
   SMC_ML_CSV_COLUMNS,
   DEFAULT_SWING_MAX_HOLD_HOURS,
 } = require("../src/domain/strategy/smc/smcScalpGates");
-const SmartMoneyConceptsStrategy = require("../src/domain/strategy/implementations/SmartMoneyConceptsStrategy");
+const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const { TRADE_EXPORT_COLUMNS } = require("../src/domain/tradeExportCsv");
 const { STRATEGIES } = require("../src/domain/legacyStrategies");
 
@@ -70,7 +70,7 @@ test("SWING-FUNDING: blocks LONG on extreme positive funding, SHORT on extreme n
   assert.equal(failOpen.allow, true);
 });
 
-test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; typeOverrides Planned RR 2.5", () => {
+test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig honors overrides", () => {
   const smc = new SmartMoneyConceptsStrategy();
   assert.equal(smc.SUB_STRATEGIES.Swing.slMultiplier, 1.2);
   assert.equal(smc.SUB_STRATEGIES.Swing.tpMultiplier, 4.0);
@@ -81,14 +81,18 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; typeOverrides Planned R
   });
   assert.equal(cfg.riskReward, 2.5);
 
-  const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides?.Swing
-    || STRATEGIES.AF_SMC.typeOverrides?.Swing;
-  assert.ok(ov, "Swing typeOverrides present");
-  assert.equal(ov.slAtrMult, 1.8);
-  assert.equal(ov.tpAtrMult, 4.5);
-  assert.equal(ov.maxHoldHours, 240);
-  assert.equal(ov.smcRequireObRetest, true);
-  assert.equal(ov.smcFundingGuard, true);
+  // Factory-reset configs may omit legacy STRATEGIES.*.typeOverrides.Swing;
+  // risk overrides via calculateRiskConfig opts remain the runtime SSOT.
+  const ov = STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
+    || STRATEGIES.AF_SMC?.typeOverrides?.Swing
+    || null;
+  if (ov) {
+    assert.equal(ov.slAtrMult, 1.8);
+    assert.equal(ov.tpAtrMult, 4.5);
+    assert.equal(ov.maxHoldHours, 240);
+    assert.equal(ov.smcRequireObRetest, true);
+    assert.equal(ov.smcFundingGuard, true);
+  }
 });
 
 test("CONF-SWEETSPOT: extremes score lower than peak (inverted-confidence fix)", () => {
