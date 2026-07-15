@@ -45,7 +45,7 @@ const createParametersRouter   = require("./routes/parameters");
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
 cfg.validate();
 
-const { isEmailConfigured } = require("../services/EmailService");
+const { isEmailConfigured, verifySmtpConnection } = require("../services/EmailService");
 if (!isEmailConfigured()) {
   console.warn(
     "[startup] EMAIL_* belum dikonfigurasi — email verifikasi & reset password tidak akan terkirim."
@@ -54,6 +54,8 @@ if (!isEmailConfigured()) {
   console.warn(
     "[startup] APP_URL masih default localhost — link di email verifikasi/reset akan salah. Set APP_URL ke domain frontend."
   );
+} else {
+  verifySmtpConnection().catch(() => {});
 }
 
 // ── Feature flags ─────────────────────────────────────────────────────────
@@ -129,7 +131,7 @@ const limiter = rateLimit({
   max: API_MAX,
   standardHeaders: true,  // kirim RateLimit-* headers agar FE bisa baca sisa kuota
   legacyHeaders: false,
-  message: { ok: false, statusCode: 429, message: "Too many requests. Please wait a moment and try again." },
+  message: { ok: false, statusCode: 429, message: "Terlalu banyak percobaan. Tunggu sekitar 15 menit sebelum mencoba lagi." },
   skip: (req) => {
     if (process.env.NODE_ENV !== "production") return true;
     // Exempt backtest polling — called every few seconds during long-running jobs
@@ -143,7 +145,7 @@ const limiter = rateLimit({
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: AUTH_MAX,
-  message: { ok: false, statusCode: 429, message: "Too many requests. Please wait a moment and try again." },
+  message: { ok: false, statusCode: 429, message: "Terlalu banyak percobaan. Tunggu sekitar 15 menit sebelum mencoba lagi." },
   skip: (req) => {
     // Rate limiting only in production
     if (process.env.NODE_ENV !== "production") return true;

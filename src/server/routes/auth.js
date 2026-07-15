@@ -168,11 +168,13 @@ module.exports = function createAuthRoutes() {
       }
       try {
         const result = await AuthService.regenerateVerificationToken(email);
+        let verificationEmailSent = false;
         if (result) {
           const verifyUrl = `${cfg.APP_URL}/verify-email?token=${result.token}`;
           if (isEmailConfigured()) {
             try {
               await sendEmailVerification(result.email, verifyUrl);
+              verificationEmailSent = true;
             } catch (e) {
               console.error('[ResendVerif] Gagal kirim email:', e.message);
             }
@@ -183,7 +185,10 @@ module.exports = function createAuthRoutes() {
         // Always return 200 — don't reveal if email exists
         res.json({
           ok: true,
-          message: 'Jika email terdaftar dan belum diverifikasi, link baru sudah dikirim.',
+          verificationEmailSent,
+          message: verificationEmailSent
+            ? 'Jika email terdaftar dan belum diverifikasi, link baru sudah dikirim.'
+            : 'Permintaan diterima, tapi email verifikasi gagal dikirim. Coba lagi nanti atau hubungi support.',
         });
       } catch (err) {
         const status = err.statusCode || 400;
@@ -310,7 +315,7 @@ module.exports = function createAuthRoutes() {
       res.status(429).json({
         ok: false,
         statusCode: 429,
-        message: 'Too many requests. Please wait 15 minutes before trying again.',
+        message: 'Terlalu banyak percobaan. Tunggu sekitar 15 menit sebelum mencoba lagi.',
       });
     },
   });

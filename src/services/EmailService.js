@@ -7,6 +7,10 @@ function isEmailConfigured() {
   return !!(cfg.EMAIL_HOST && cfg.EMAIL_USER && cfg.EMAIL_PASS);
 }
 
+function normalizedEmailPass() {
+  return String(cfg.EMAIL_PASS || "").replace(/\s+/g, "");
+}
+
 function getTransporter() {
   if (_transporter) return _transporter;
 
@@ -22,11 +26,25 @@ function getTransporter() {
     secure: cfg.EMAIL_PORT === 465,
     auth: {
       user: cfg.EMAIL_USER,
-      pass: cfg.EMAIL_PASS,
+      pass: normalizedEmailPass(),
     },
   });
 
   return _transporter;
+}
+
+/** Verify SMTP credentials at startup (best-effort). */
+async function verifySmtpConnection() {
+  if (!isEmailConfigured()) return false;
+  try {
+    const t = getTransporter();
+    await t.verify();
+    console.log('[EmailService] SMTP connection verified');
+    return true;
+  } catch (err) {
+    console.error('[EmailService] SMTP verify failed:', err.message);
+    return false;
+  }
 }
 
 async function sendPasswordReset(toEmail, resetUrl) {
@@ -175,4 +193,4 @@ async function sendSubscriptionActivated(toEmail, info) {
   });
 }
 
-module.exports = { isEmailConfigured, sendPasswordReset, sendEmailVerification, sendSubscriptionActivated };
+module.exports = { isEmailConfigured, verifySmtpConnection, sendPasswordReset, sendEmailVerification, sendSubscriptionActivated };
