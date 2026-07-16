@@ -194,7 +194,7 @@ from PRD aspirational 1:4.5), `maxHoldHours=6` (TIME_STOP in multi-position BT +
 Helpers: `src/core/strategy-engine/af/smcComponent.js`. CSV adds ML columns
 (`sweepStrength`, `fvgSizeAtr`, …) + confidence component fields.
 `marketCond` ≠ `dailyRegime` — both always exported (entry-TF bucket vs daily ADX-proxy).
-Dataset expand recipe: `scripts/smc-scalping-dataset-expand.js`.
+Dataset expand: `scripts/dataset-expand/<strategy>/scalping.js` (5m/1h; e.g. `smart-money-concepts/scalping.js`).
 
 **Sprint 13 Swing SSOT** (`typeOverrides.Swing`): Planned RR **2.5** (SL 1.8×ATR / TP 4.5×ATR;
 intentional deviation from PRD aspirational 1.2/4.0 ≈ RR 3.33 — fast-fail: 38% of Swing
@@ -204,7 +204,7 @@ trades died &lt;48h on thin 1.2×ATR stops). Also: `maxHoldHours=240` (10d TIME_
 2023 window revalidated after fast-fail fix). Confidence scoring uses ATR-normalized
 sweet-spot curves (fixes inverted conf→WR). Cost model meta on every BT result
 (`meta.costModel`) — Fee=0 only when `enableFees=false`. Dataset expand:
-`scripts/smc-swing-dataset-expand.js` (4h/1w, multi-symbol).
+`scripts/dataset-expand/<strategy>/swing.js` (4h/1w; e.g. `smart-money-concepts/swing.js`).
 
 ### 4.2 Key audit (AF-CONFIG-AUDIT)
 

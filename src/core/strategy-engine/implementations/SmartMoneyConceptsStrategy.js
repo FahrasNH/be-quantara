@@ -181,8 +181,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       atrMinMult: config.atrMinMult ?? 0.8,
       atrMaxMult: config.atrMaxMult ?? 5.0,
       atrGateRelative: config.atrGateRelative === true,
-      atrRelMin: config.atrRelMin ?? 0.6,
-      atrRelMax: config.atrRelMax ?? 3.0,
+      atrRelMin: config.atrRelMin ?? 0.4,
+      atrRelMax: config.atrRelMax ?? 4.0,
     });
     if (!atrGate.valid) {
       return { valid: false, reason: atrGate.reason };

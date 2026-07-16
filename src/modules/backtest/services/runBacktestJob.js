@@ -10,7 +10,7 @@
 "use strict";
 
 const HistoricalKlinesService = require("./HistoricalKlinesService");
-const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest } = require("./RealStrategyBacktestService");
+const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, formatScalpingFunnel, smcAblationApplies } = require("./RealStrategyBacktestService");
 const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../../shared/constants/strategySupportedTypes");
 const { applyDedicatedBsBrBacktestConfig } = require("../../../config/strategies");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
@@ -405,21 +405,17 @@ async function runBacktestJob(job, userId, opts) {
       : await runMultiTypeBacktest(computeOpts, typeOrder);
 
     const scalping = result.perTypeStats?.Scalping;
-    if (scalping?.ablation) {
+    // AF umbrella shares SMC's ablation counters across all racers; only emit the
+    // funnel when SMC is an ACTIVE racer/voter (WYCKOFF/VSA don't trade off the SMC
+    // sequence, incl. the FE collapse WYCKOFF → SMC key + afActiveVoters:["WYCKOFF"]).
+    if (scalping?.ablation && smcAblationApplies(strategyKey, parameters)) {
       const a = scalping.ablation;
-      const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
       job.progress({
         phase: "info",
         type: "AF-SCALP-13-ABLATION",
-        message: `[AF-SCALP-13] Scalping filter funnel:\n` +
-          `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}\n` +
-          `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}%)\n` +
-          `     -> signals after rejection   : ${a.seqSignal}\n` +
-          `  3. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}%)\n` +
-          `  4. - 5m CHoCH validation        : -${a.rejByChoch}\n` +
-          `  5. - Confidence floor           : -${a.rejByConf}\n` +
-          `  = PASSED (tradeable signals)    : ${a.passed}`,
+        message: formatScalpingFunnel(a, scalping.execAblation, `Scalping filter funnel:`),
         ablation: a,
+        execAblation: scalping.execAblation ?? null,
       });
     }
 

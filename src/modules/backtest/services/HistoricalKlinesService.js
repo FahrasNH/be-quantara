@@ -387,6 +387,72 @@ function coverageRatio(candles, startMs, endMs, timeframe) {
   return candles.length / expected;
 }
 
+/** Shared payload builder for session / DB / memory cache hits. */
+function buildKlinesPayload({
+  exchange,
+  sym,
+  timeframe,
+  candles,
+  startMs,
+  endMs,
+  listingMs,
+  barLimit,
+  source,
+  cached = true,
+}) {
+  const validated = dedupeAndValidate(candles);
+  const realBars = validated.length;
+  const expectedBars = estimateBarCount(startMs, endMs, timeframe);
+  const dataCoverage = expectedBars > 0 ? realBars / expectedBars : 1;
+  const gapsBefore = validated.length;
+  const filled = fillGaps(validated, timeframe);
+  const gapsFilled = filled.length - gapsBefore;
+  const meta = EXCHANGE_META[exchange] || EXCHANGE_META.bitget;
+  return {
+    ok: true,
+    exchange,
+    exchangeLabel: meta.label || meta.name || exchange,
+    symbol: sym,
+    timeframe,
+    startMs,
+    endMs,
+    startDate: new Date(startMs).toISOString(),
+    endDate: new Date(endMs).toISOString(),
+    listingMs,
+    listingDate: new Date(listingMs).toISOString(),
+    bars: filled.length,
+    realBars,
+    expectedBars,
+    coverage: Number(dataCoverage.toFixed(4)),
+    estimatedBars: barLimit?.bars,
+    maxBars: MAX_BARS,
+    rangeClamped: barLimit?.clamped ?? false,
+    candles: filled,
+    gapsFilled: Math.max(0, gapsFilled),
+    cached,
+    source,
+  };
+}
+
+async function tryDbCachePayload(exchange, sym, timeframe, startMs, endMs, listingMs, barLimit) {
+  const dbCandles = await loadFromDbCache(exchange, sym, timeframe, startMs, endMs);
+  const cov = coverageRatio(dbCandles, startMs, endMs, timeframe);
+  if (!dbCandles?.length || cov < MIN_CACHE_COVERAGE) return null;
+  BacktestCandleCache.merge(exchange, sym, timeframe, dbCandles, { listingMs });
+  return buildKlinesPayload({
+    exchange,
+    sym,
+    timeframe,
+    candles: dbCandles,
+    startMs,
+    endMs,
+    listingMs,
+    barLimit,
+    source: "db",
+    cached: true,
+  });
+}
+
 /**
  * @returns {Promise<{ok,exchange,exchangeLabel,symbol,timeframe,startMs,endMs,listingMs,bars,candles,gapsFilled,cached,source}>}
  */
@@ -409,6 +475,7 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     onProgress,
     abortSignal,
     exchangeType: exchangeTypeOverride, // Advance: public OHLCV from chosen venue
+    cacheOnly = false, // skip exchange API — DB/session cache only (offline CLI)
   } = opts;
 
   const sym = String(symbol || "").toUpperCase().trim();
@@ -512,7 +579,54 @@ async function fetchHistoricalKlines(userId, opts = {}) {
     return payload;
   }
 
-  await client.loadMarkets();
+  // DB cache BEFORE loadMarkets — local CLI may be network-blocked while UI/server
+  // already populated candle_cache from a prior successful backtest.
+  const preDbHit = await tryDbCachePayload(
+    exchange, sym, timeframe, preBarLimit.startMs, preBarLimit.endMs, preListingMs, preBarLimit,
+  );
+  if (preDbHit) {
+    setMemCached(
+      memCacheKey(exchange, sym, timeframe, preBarLimit.startMs, preBarLimit.endMs),
+      preDbHit,
+    );
+    return preDbHit;
+  }
+
+  if (cacheOnly) {
+    const e = new Error(
+      `No cached klines in DB for ${sym} ${timeframe} (${exchange}, `
+      + `${new Date(preBarLimit.startMs).toISOString().slice(0, 10)}–`
+      + `${new Date(preBarLimit.endMs).toISOString().slice(0, 10)}). `
+      + `Run a UI backtest on the server first (populates candle_cache), or use VPN/network for live fetch.`,
+    );
+    e.statusCode = 404;
+    e.code = "KLINES_CACHE_MISS";
+    throw e;
+  }
+
+  try {
+    await client.loadMarkets();
+  } catch (netErr) {
+    const offlineDb = await tryDbCachePayload(
+      exchange, sym, timeframe, preBarLimit.startMs, preBarLimit.endMs, preListingMs, preBarLimit,
+    );
+    if (offlineDb) {
+      setMemCached(
+        memCacheKey(exchange, sym, timeframe, preBarLimit.startMs, preBarLimit.endMs),
+        offlineDb,
+      );
+      return offlineDb;
+    }
+    const e = new Error(
+      `Exchange API unreachable (${exchange}: ${netErr.message}). `
+      + `Use VPN/proxy, run on server with network, or populate DB cache via UI backtest + `
+      + `DATABASE_URL + --cache-only.`,
+    );
+    e.statusCode = 503;
+    e.code = "EXCHANGE_NETWORK_ERROR";
+    e.cause = netErr;
+    throw e;
+  }
 
   const listingMs = await detectListingTimestamp(exchange, client, marketSymbol, timeframe, sym);
   const clamped = clampDateRange({ startMs, endMs, listingMs, autoListing });

@@ -21,8 +21,9 @@
 
 const assert = require("node:assert");
 const { test } = require("node:test");
-const { STRATEGIES } = require("../src/config/strategyDefaults");
+const { STRATEGIES, DEFAULT_LEG_TYPE_OVERRIDES } = require("../src/config/strategyDefaults");
 const { runTripleTypeBacktest } = require("../src/modules/backtest/services/RealStrategyBacktestService");
+const { evaluateAtrEntryGate, buildAtrBaseline } = require("../src/core/risk-engine/entryRiskGates");
 
 const TF_MS = { "5m": 5 * 60e3, "15m": 15 * 60e3, "1h": 60 * 60e3, "4h": 240 * 60e3, "1w": 7 * 24 * 60 * 60e3 };
 
@@ -111,8 +112,11 @@ test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intrad
   const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides;
   assert.equal(ov.Scalping.atrMinMult, 0.15, "Scalping atrMinMult must be 0.15");
   assert.equal(ov.Scalping.atrGateRelative, true, "Scalping must use adaptive ATR gate");
-  assert.equal(ov.Scalping.atrRelMin, 0.6);
-  assert.equal(ov.Scalping.atrRelMax, 3.0);
+  // Defect A fix (2026-07-16): band widened 0.6–3.0 → 0.4–4.0 so clustered real-vol
+  // SMC setups (rel<0.6 in calm legs / rel>3.0 on displacement spikes) are no longer
+  // blanket-rejected. Shared SSOT → live/dry-run/backtest all move together.
+  assert.equal(ov.Scalping.atrRelMin, 0.4);
+  assert.equal(ov.Scalping.atrRelMax, 4.0);
   assert.equal(ov.Intraday.atrMinMult, 0.4, "Intraday atrMinMult must be 0.4");
   assert.equal(ov.Swing.atrMinMult, 0.8, "Swing atrMinMult must stay 0.8");
   assert.ok(!ov.Intraday.atrGateRelative, "Intraday stays absolute ATR gate");
@@ -121,6 +125,50 @@ test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intrad
   // Top-level floor (what LIVE gating reads) is untouched at 0.8 → live unchanged.
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.atrMinMult, 0.8, "top-level atrMinMult (live) must stay 0.8");
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.smcMinConfidenceB, 60, "top-level confB (live) must stay 60");
+});
+
+test("PARITY: relative ATR band 0.4–4.0 is the SHARED SSOT (gate math == config)", () => {
+  // The gate math default (used by live validateEntry / checkAtrRangeGate) MUST
+  // equal the config band the backtest flattens onto cfg — otherwise live and
+  // backtest would gate real-vol setups differently (parity break).
+  const scalp = DEFAULT_LEG_TYPE_OVERRIDES.Scalping;
+  assert.equal(scalp.atrRelMin, 0.4, "config band min must be 0.4");
+  assert.equal(scalp.atrRelMax, 4.0, "config band max must be 4.0");
+
+  // evaluateAtrEntryGate is the SSOT shared by LIVE and BACKTEST. Same inputs →
+  // same verdict regardless of caller. price=100, baseline=1 → rel == atr.
+  const gate = (atr, cfg = {}) => evaluateAtrEntryGate({
+    atr, price: 100, atrBaseline: 1, atrGateRelative: true,
+    atrRelMin: cfg.atrRelMin ?? scalp.atrRelMin,
+    atrRelMax: cfg.atrRelMax ?? scalp.atrRelMax,
+  });
+
+  // Newly ADMITTED by the widened band (were rejected under 0.6–3.0):
+  assert.ok(gate(0.5).ok, "rel=0.5 (calm SMC leg) must PASS under 0.4 floor");
+  assert.ok(gate(3.5).ok, "rel=3.5 (displacement spike) must PASS under 4.0 cap");
+  // Still REJECTED (dead market / true blowoff):
+  assert.ok(!gate(0.3).ok, "rel=0.3 (flatlined) must still be blocked");
+  assert.ok(!gate(4.5).ok, "rel=4.5 (blowoff) must still be blocked");
+
+  // Gate defaults (no explicit band) resolve to the same widened window → a
+  // caller that omits the band (some live paths) matches the backtest.
+  assert.ok(evaluateAtrEntryGate({ atr: 0.5, price: 100, atrBaseline: 1, atrGateRelative: true }).ok);
+  assert.ok(!evaluateAtrEntryGate({ atr: 0.3, price: 100, atrBaseline: 1, atrGateRelative: true }).ok);
+});
+
+test("PARITY: relative branch does NOT fire on warmup/NaN baseline (no spurious rel rejection)", () => {
+  // During warmup buildAtrBaseline yields null for the first bars. The relative
+  // branch must NOT fire on a null/NaN/≤0 baseline — it falls through to the
+  // absolute floor instead of computing a bogus ratio. Same for live and backtest.
+  const warm = evaluateAtrEntryGate({ atr: 0.5, price: 100, atrBaseline: null, atrGateRelative: true });
+  assert.notEqual(warm.mode, "relative", "null baseline must not use relative mode");
+  const nan = evaluateAtrEntryGate({ atr: 0.5, price: 100, atrBaseline: NaN, atrGateRelative: true });
+  assert.notEqual(nan.mode, "relative", "NaN baseline must not use relative mode");
+  // ATR above the absolute floor + null baseline → passes (relative never rejects it).
+  const ok = evaluateAtrEntryGate({ atr: 1.0, price: 100, atrBaseline: null, atrGateRelative: true });
+  assert.ok(ok.ok && ok.mode === "absolute", "null baseline falls through to absolute floor");
+  const base = buildAtrBaseline([null, null, 1, 1]);
+  assert.equal(base[0], null, "warmup baseline is null before any finite ATR");
 });
 
 test("ENGINE: low-TF legs unblocked out-of-sample; Swing invariant", async () => {

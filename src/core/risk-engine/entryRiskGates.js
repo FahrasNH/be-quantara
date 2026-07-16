@@ -41,8 +41,8 @@ function evaluateAtrEntryGate({
   atrMinMult = 0.8,
   atrMaxMult = 5.0,
   atrGateRelative = false,
-  atrRelMin = 0.6,
-  atrRelMax = 3.0,
+  atrRelMin = 0.4,
+  atrRelMax = 4.0,
 } = {}) {
   if (!(atr && price) || !Number.isFinite(atr) || !Number.isFinite(price) || price <= 0) {
     return { ok: true, valid: true, mode: "skip" };
@@ -183,8 +183,8 @@ function checkAtrRangeGate(atr, price, config = {}) {
     atrMinMult: config.atrMinMult,
     atrMaxMult: config.atrMaxMult,
     atrGateRelative: config.atrGateRelative === true,
-    atrRelMin: config.atrRelMin ?? 0.6,
-    atrRelMax: config.atrRelMax ?? 3.0,
+    atrRelMin: config.atrRelMin ?? 0.4,
+    atrRelMax: config.atrRelMax ?? 4.0,
   });
   if (!gate.ok) return { ok: false, reason: gate.reason };
   return { ok: true };

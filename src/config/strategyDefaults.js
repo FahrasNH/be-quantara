@@ -19,9 +19,21 @@ const {
  * Per-leg ATR gate — absolute floors + Scalping adaptive (atrGateRelative).
  * Relative gate compares ATR to the leg's own rolling baseline so calm 5m
  * markets (ATR% ~0.05–0.12) are not blanket-rejected by a 0.15% absolute floor.
+ *
+ * Band 0.4–4.0 (Defect A fix, 2026-07-16): the old 0.6–3.0 window rejected the
+ * FIRST SMC setup and every subsequent one on real BTC 5m data (0 trades),
+ * because real volatility is CLUSTERED — SMC structure entries (sweeps /
+ * accumulation) form during quiet legs where ATR sits at 40–60% of a 100-bar
+ * SMA that is dragged up by prior expansion clusters (rel < 0.6), while
+ * post-sweep displacement bars can spike to 3–4× that baseline (rel > 3.0).
+ * Mock data has near-constant vol (rel≈1) so the old band never triggered there.
+ * 0.4 still blocks dead/flatlined markets (<40% of avg = no tradeable range) and
+ * 4.0 still blocks true blowoffs (>4× = news/liquidation cascade). This is the
+ * SHARED SSOT read by backtest, dry-run AND live (validateEntry / checkAtrRangeGate)
+ * so all four contexts move together (1:1 parity preserved).
  */
 const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
-  Scalping: { atrMinMult: 0.15, atrGateRelative: true, atrRelMin: 0.6, atrRelMax: 3.0 },
+  Scalping: { atrMinMult: 0.15, atrGateRelative: true, atrRelMin: 0.4, atrRelMax: 4.0 },
   Intraday: { atrMinMult: 0.4 },
   Swing:    { atrMinMult: 0.8 },
 });

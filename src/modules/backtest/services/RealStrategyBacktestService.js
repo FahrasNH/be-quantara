@@ -511,6 +511,28 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const componentCooldown = new Map();
   const componentConsecLoss = new Map();
 
+  // EXECUTION-STAGE ablation — instruments the gap between "signal fired inside
+  // detectSignalMulti" and "position actually opened". The strategy-internal
+  // funnel (SmartMoneyConceptsStrategy._ablation) stops at "passed"; these
+  // counters make every `continue` in the execution loop below visible, so a
+  // "N passed → 0 trades" run can be attributed to a specific execution gate.
+  // Purely observational — does NOT change any gate logic or threshold.
+  const execAbl = {
+    signalBars: 0,     // bars where multiSignal[componentId] was non-null
+    rejRegimeGate: 0,  // applyRegimeGate → allow:false (daily regime hard-block)
+    rejSideRegime: 0,  // applySmcSideRegimeGate → allow:false (Side×Regime)
+    rejFunding: 0,     // Swing funding guard → allow:false
+    rejPositionOpen: 0,// component already has an open position
+    rejCooldown: 0,    // post-loss cooldown still active
+    rejConsecLoss: 0,  // max consecutive losses reached
+    rejDailyTrades: 0, // maxTradesPerDay reached
+    rejDailyLoss: 0,   // maxDailyLossPct (incl floating) reached
+    rejAtrGate: 0,     // ATR relative/absolute range gate
+    rejSlTp: 0,        // sl/tp not finite
+    rejSize: 0,        // computed position size <= 0
+    opened: 0,         // positions.set(...) actually executed
+  };
+
   let capital = startCapital;
   let dayKey = null;
   let dailyTradeCount = 0;
@@ -524,9 +546,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
 
   // live configs don't set atrGateRelative, so live gating is unchanged.
+  // Band defaults 0.4–4.0 mirror strategyDefaults DEFAULT_LEG_TYPE_OVERRIDES.Scalping
+  // (the SSOT the flattened via-api config carries) so backtest == dry-run == live.
   const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
-  const atrRelMin = cfg.atrRelMin ?? 0.6;
-  const atrRelMax = cfg.atrRelMax ?? 3.0;
+  const atrRelMin = cfg.atrRelMin ?? 0.4;
+  const atrRelMax = cfg.atrRelMax ?? 4.0;
   const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
   const riskPerTrade = cfg.riskPerTrade ?? 0.01;
 
@@ -919,6 +943,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     for (const componentId of tradeTypeKeys) {
       const signal = multiSignal[componentId];
       if (!signal) continue;
+      execAbl.signalBars += 1;
 
       // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
       const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
@@ -937,7 +962,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         // Sprint 13: Side×Regime — block LONG in CHOP for Scalping (config flag)
         blockLongInChop: componentId === "Scalping" && scalpFlags.smcBlockLongInChop === true,
       });
-      if (!regimeResult.allow) continue;
+      if (!regimeResult.allow) { execAbl.rejRegimeGate += 1; continue; }
 
       // Redundant explicit check (same gate) so unit tests / future callers that
       // bypass applyRegimeGate still see the Side×Regime contract.
@@ -947,7 +972,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
           dailyRegime,
           enabled: scalpFlags.smcBlockLongInChop === true,
         });
-        if (!sideGate.allow) continue;
+        if (!sideGate.allow) { execAbl.rejSideRegime += 1; continue; }
       }
 
       // Sprint 13 Swing: skip entry on extreme perp funding premium
@@ -959,7 +984,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
           enabled: true,
           maxAbsRate: swingFlags.smcMaxFundingRate,
         });
-        if (!fundGate.allow) continue;
+        if (!fundGate.allow) { execAbl.rejFunding += 1; continue; }
       }
 
       // AF-SWING-V3: confidence/RVOL/ATR-tiered position size (SWING_ENGINE_V3.md
@@ -969,18 +994,18 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const adjustedRiskPerTrade = regimeResult.riskPerTrade * swingV3Mult;
 
       // Skip if component already has open position
-      if (positions.has(componentId)) continue;
+      if (positions.has(componentId)) { execAbl.rejPositionOpen += 1; continue; }
 
       // Skip if component in cooldown (use candle time, not Date.now())
       const cooldown = componentCooldown.get(componentId);
-      if (cooldown && nowMs < cooldown) continue;
+      if (cooldown && nowMs < cooldown) { execAbl.rejCooldown += 1; continue; }
 
       // Skip if component exceeded max consecutive loss
       const compLoss = componentConsecLoss.get(componentId) || 0;
-      if (compLoss >= maxConsecLoss) continue;
+      if (compLoss >= maxConsecLoss) { execAbl.rejConsecLoss += 1; continue; }
 
       // Check daily limits — include floating loss (live BotEngine._checkRiskGates parity)
-      if (dailyTradeCount >= maxTradesPerDay) continue;
+      if (dailyTradeCount >= maxTradesPerDay) { execAbl.rejDailyTrades += 1; continue; }
       const floatingLoss = [...positions.values()].reduce((s, p) => {
         const sz = p.remainingSize ?? p.size ?? 0;
         const u = p.side === "LONG"
@@ -989,7 +1014,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         return u < 0 ? s + Math.abs(u) : s;
       }, 0);
       const dailyBase = dailyStartCapital || capital;
-      if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) continue;
+      if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) { execAbl.rejDailyLoss += 1; continue; }
 
       // Check ATR gate — relative to the leg's own baseline when enabled.
       // Per-leg atrMinMult/atrMaxMult (typeOverrides[componentId]) let the
@@ -1004,8 +1029,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       if (atrBaseline) {
         const base = atrBaseline[i];
         const rel = base > 0 ? atr / base : 1;
-        if (rel < atrRelMin || rel > atrRelMax) continue;
-      } else if (atrPct < compAtrMin || atrPct > compAtrMax) continue;
+        if (rel < atrRelMin || rel > atrRelMax) { execAbl.rejAtrGate += 1; continue; }
+      } else if (atrPct < compAtrMin || atrPct > compAtrMax) { execAbl.rejAtrGate += 1; continue; }
 
       // Calculate risk config for this component. Pass the REAL regime so
       // strongTrendTPMult (let winners run in STRONG_TREND) can fire — it was
@@ -1044,7 +1069,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const sl = signal === "LONG" ? price - slDist : price + slDist;
       const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
-      if (!Number.isFinite(sl) || !Number.isFinite(tp)) continue;
+      if (!Number.isFinite(sl) || !Number.isFinite(tp)) { execAbl.rejSlTp += 1; continue; }
 
       // Calculate position size — risk-based: the loss when SL is hit must equal
       // riskAmt. size = riskAmt / slDist. Dividing by the FULL SL→TP span (as
@@ -1053,7 +1078,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const riskAmt = capital * adjustedRiskPerTrade;
       const size = slDist > 0 ? riskAmt / slDist : 0;
 
-      if (size <= 0) continue;
+      if (size <= 0) { execAbl.rejSize += 1; continue; }
 
       const lastMeta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
       const meta = multiSignal.meta || lastMeta;
@@ -1114,6 +1139,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         m2: false,
         m3: false,
       });
+      execAbl.opened += 1;
 
       dailyTradeCount += 1;
     }
@@ -1155,6 +1181,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     trades,
     equity,
     debugLog: debugLog ?? undefined, // only present when opts.debug=true
+    execAblation: execAbl, // execution-stage funnel (signal → opened position)
     stats: {
       totalTrades: trades.length,
       wins: wins.length,
@@ -1534,6 +1561,90 @@ async function _applyRagGate(trades, ctx = {}) {
 }
 
 /**
+ * Build the Scalping "filter funnel" text — SSOT so the server job, the
+ * dataset-expand CLI and the inline logger all render an IDENTICAL breakdown.
+ *
+ * Two sections:
+ *  A) STRATEGY gates (from SmartMoneyConceptsStrategy._ablation `a`) — now also
+ *     surfaces the previously-hidden OB-retest gate so the setups→signals math
+ *     is fully transparent.
+ *  B) EXECUTION gates (from _runMultiPositionBacktest `execAbl`) — turns
+ *     "N passed → 0 trades" into a precise per-gate breakdown of the loop that
+ *     was previously a blind spot (signal fired vs. position opened).
+ *
+ * @param {Object}  a       strategy ablation counters (may be null)
+ * @param {Object}  execAbl execution-stage counters (may be null)
+ * @param {string}  headerLine  first line, e.g. "Scalping filter funnel (via-api, 0 trades):"
+ * @returns {string}
+ */
+function formatScalpingFunnel(a, execAbl, headerLine) {
+  const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
+  const lines = [headerLine];
+  if (a) {
+    lines.push(
+      `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}`,
+      `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}% of setups)`,
+      `  3. - OB/FVG retest gate        : -${a.rejByObRetest} (${pct(a.rejByObRetest, a.seqCandidate)}% of setups)`,
+      `     -> signals after rejection   : ${a.seqSignal}`,
+      `  4. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}% of signals)`,
+      `  5. - 5m CHoCH validation        : -${a.rejByChoch}`,
+      `  6. - Confidence floor           : -${a.rejByConf}`,
+      `  = PASSED (tradeable signals)    : ${a.passed}`,
+    );
+  }
+  if (execAbl) {
+    lines.push(
+      `  ── Execution stage (PASSED signal → opened position) ──`,
+      `  7.  Signals reaching execution  : ${execAbl.signalBars}`,
+      `  8.  - Daily regime gate         : -${execAbl.rejRegimeGate}`,
+      `  9.  - Side×Regime gate          : -${execAbl.rejSideRegime}`,
+      `  10. - Funding guard (Swing)     : -${execAbl.rejFunding}`,
+      `  11. - Position already open      : -${execAbl.rejPositionOpen}`,
+      `  12. - Cooldown after loss        : -${execAbl.rejCooldown}`,
+      `  13. - Consecutive-loss stop      : -${execAbl.rejConsecLoss}`,
+      `  14. - Max trades/day             : -${execAbl.rejDailyTrades}`,
+      `  15. - Daily-loss limit           : -${execAbl.rejDailyLoss}`,
+      `  16. - ATR range gate             : -${execAbl.rejAtrGate} (${pct(execAbl.rejAtrGate, execAbl.signalBars)}% of signals)`,
+      `  17. - SL/TP not finite           : -${execAbl.rejSlTp}`,
+      `  18. - Position size <= 0         : -${execAbl.rejSize}`,
+      `  = OPENED (positions)            : ${execAbl.opened}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Whether the SMC "Scalping filter funnel" ablation should be emitted/attributed
+ * for this job. SSOT for the 3 funnel print sites (server job, via-api CLI, inline
+ * logger) so attribution is consistent across ablation + backtest + dry-run.
+ *
+ * The AF umbrella shares ONE SMC component instance across all racers: its
+ * detectSignalMulti runs SMC's sequence EVERY bar as a side-effect (incrementing
+ * SMC ablation counters) and getAblation() ALWAYS delegates to SMC — even when the
+ * active racer is WYCKOFF/VSA only. So the counters are real SMC numbers but would
+ * be wrongly attributed to a non-SMC racer. Gate on SMC actually racing:
+ *   - non SMC/AF-umbrella keys (incl. WYCKOFF / VOLUME_SPREAD_ANALYSIS) → never
+ *   - SMC/AF key whose explicit racer/voter set EXCLUDES SMC → no. This closes the
+ *     FE edge case where WYCKOFF is collapsed into strategy_key
+ *     "SMART_MONEY_CONCEPTS" with afActiveRacers/afActiveVoters: ["WYCKOFF"].
+ *   - otherwise (SMC present, or default all-racers) → yes
+ *
+ * @param {string} strategyKey  canonical strategy key
+ * @param {object} [config]     merged job config (afActiveRacers/afActiveVoters/…)
+ * @returns {boolean}
+ */
+function smcAblationApplies(strategyKey, config = {}) {
+  if (strategyKey !== "SMART_MONEY_CONCEPTS" && strategyKey !== "ADAPTIVE_FUSION") return false;
+  const raw = config?.afActiveRacers || config?.afActiveVoters
+    || config?.selectedComponents || config?.activeStrategyComponents || null;
+  if (!Array.isArray(raw) || raw.length === 0) return true; // default: all racers → SMC active
+  return raw.some((c) => {
+    const u = String(c || "").toUpperCase();
+    return u === "SMC" || normalizeStrategyKey(u) === "SMART_MONEY_CONCEPTS";
+  });
+}
+
+/**
  * Run SMART_MONEY_CONCEPTS triple-timeframe backtest:
  * Each trade type (Scalping/Intraday/Swing) runs on its own candle set independently.
  * Results are merged and sorted by open time.
@@ -1649,24 +1760,29 @@ async function runTripleTypeBacktest(opts = {}) {
       wins: typeResult.trades.filter(t => t.result === "win").length,
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
+      // Execution-stage funnel — how PASSED (strategy-gate) signals turn into
+      // opened positions. Surfaces the blind spot between detectSignalMulti and
+      // positions.set (e.g. the ATR relative gate eating every signal on real data).
+      execAblation: typeResult.execAblation ?? null,
     };
 
 
     // exactly how many raw setups each gate removed → identifies the throttle
     // without running an N-way ablation.
-    if (tradeType === "Scalping" && typeof strategy.getAblation === "function") {
+    // The counters live on the SMC component; the AF umbrella runs SMC's sequence
+    // every bar regardless of the active racer, so getAblation() returns SMC's
+    // funnel even for WYCKOFF / VOLUME_SPREAD_ANALYSIS jobs (where SMC gates do
+    // NOT drive the trades). Only report it when SMC is an ACTIVE racer/voter
+    // (also excludes the FE collapse WYCKOFF → SMC key + afActiveRacers:["WYCKOFF"]).
+    const smcApplies = smcAblationApplies(strategyKey, cfg);
+    if (tradeType === "Scalping" && smcApplies && typeof strategy.getAblation === "function") {
       const a = strategy.getAblation();
       if (a) {
-        const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
-        const funnelText =
-          `[AF-SCALP-13] Scalping filter funnel (${entryCandles.length} bars, ${allTrades.length} trades so far):\n` +
-          `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}\n` +
-          `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}% of setups)\n` +
-          `     -> signals after rejection   : ${a.seqSignal}\n` +
-          `  3. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}% of signals)\n` +
-          `  4. - 5m CHoCH validation        : -${a.rejByChoch}\n` +
-          `  5. - Confidence floor           : -${a.rejByConf}\n` +
-          `  = PASSED (tradeable signals)    : ${a.passed}`;
+        const funnelText = formatScalpingFunnel(
+          a,
+          perTypeStats[tradeType].execAblation,
+          `Scalping filter funnel (${entryCandles.length} bars, ${allTrades.length} trades so far):`,
+        );
         console.log(funnelText);
         perTypeStats[tradeType].ablation = a;
 
@@ -1682,13 +1798,24 @@ async function runTripleTypeBacktest(opts = {}) {
               .execSync("git rev-parse --short HEAD", { cwd: process.cwd() })
               .toString().trim();
           } catch { /* git not available — ignore */ }
+          const meta = opts.ablationMeta || {};
+          const header = [
+            `commit: ${commit}`,
+            `symbol: ${opts.symbol ?? "?"}`,
+            `dataSource: ${opts.dataSource ?? "ui-backtest"}`,
+            meta.exchange ? `exchange: ${meta.exchange}` : (opts.exchangeType ? `exchange: ${opts.exchangeType}` : null),
+            meta.entryTf && meta.htfTf ? `timeframes: ${meta.entryTf}/${meta.htfTf}` : null,
+            meta.entryBars != null ? `entryBars: ${meta.entryBars}` : null,
+            meta.htfBars != null ? `htfBars: ${meta.htfBars}` : null,
+            meta.coverage != null ? `coverage: ${meta.coverage}%` : null,
+          ].filter(Boolean).join("\n");
           fs.writeFileSync(
             outPath,
-            `commit: ${commit}\nsymbol: ${opts.symbol ?? "?"}\n\n${funnelText}\n`,
+            `${header}\n\n${funnelText}\n`,
             "utf8",
           );
         } catch (e) {
-          console.log("[AF-SCALP-13] gagal tulis file ablation:", e.message);
+          console.log("gagal tulis file ablation:", e.message);
         }
       }
     }
@@ -1963,9 +2090,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const atrMaxPct = legAtrOv.atrMaxMult ?? cfg.atrMaxMult ?? Infinity;
 
   // live configs don't set atrGateRelative, so live gating is unchanged.
+  // Band defaults 0.4–4.0 mirror strategyDefaults DEFAULT_LEG_TYPE_OVERRIDES.Scalping
+  // (the SSOT the flattened via-api config carries) so backtest == dry-run == live.
   const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
-  const atrRelMin = cfg.atrRelMin ?? 0.6;
-  const atrRelMax = cfg.atrRelMax ?? 3.0;
+  const atrRelMin = cfg.atrRelMin ?? 0.4;
+  const atrRelMax = cfg.atrRelMax ?? 4.0;
   const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
   const riskPerTrade = cfg.riskPerTrade ?? 0.01;
   const higherTf = cfg.higherTf ?? null;
@@ -2732,6 +2861,10 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       wins: typeResult.trades.filter(t => t.result === "win").length,
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
+      // Execution-stage funnel — how PASSED (strategy-gate) signals turn into
+      // opened positions. Surfaces the blind spot between detectSignalMulti and
+      // positions.set (e.g. the ATR relative gate eating every signal on real data).
+      execAblation: typeResult.execAblation ?? null,
     };
   }
 
@@ -2840,6 +2973,8 @@ module.exports = {
   runRealBacktest,
   runTripleTypeBacktest,
   runMultiTypeBacktest,
+  formatScalpingFunnel,
+  smcAblationApplies,
   resolveFeeModel,
   estimateFundingCost,
   _computeTripleStats,
