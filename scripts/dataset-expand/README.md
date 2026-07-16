@@ -1,6 +1,31 @@
 # Dataset Expand
 
-Batch backtest + ablation **1:1 dengan UI Advance** — candle fetch + engine jalan di **BE server** (bukan laptop).
+Batch backtest + ablation **1:1 dengan UI Advance / dry-run / live** — candle fetch + engine jalan di **BE server** (bukan laptop).
+
+## Parity policy (SSOT)
+
+**Sumber kebenaran geometry entry = BE `src/config/strategyDefaults.js`.**
+
+| Context | Bagaimana param diambil |
+|---------|-------------------------|
+| Live / dry-run | `BotEngine` → `getStrategy()` → `strategyDefaults` |
+| UI Advance | FE `defaultParamsFor` **harus mirror** angka BE SSOT; payload digabung di BE |
+| CLI via-api | `buildConfig` **tidak** mengirim override geometry — hanya isolasi racer + `applyStrategyJobDefaults` |
+
+Jangan menambah knobs research-only di FE Advance atau CLI tanpa mengubah BE SSOT dulu.
+
+### Checklist matching (semua 12 strategi)
+
+| Field | UI Advance | CLI via-api | Live / dry-run |
+|-------|------------|-------------|----------------|
+| Strategy key / racer | 1 komponen dipilih | `ensureDatasetComponentIsolation` pin racer folder | `strategyKey` bot + defaults |
+| Entry geometry | FE defaults = BE SSOT | tidak di-override (BE merge) | BE SSOT |
+| `typeOverrides` | jangan kirim `{}` / empty leg | tidak dikirim (non-relax) | BE `DEFAULT_LEG_TYPE_OVERRIDES` / SMC |
+| `activeTypes` | dropdown Advance | satu trade type script | enabledComponents bot |
+| Period / exchange / capital | UI | `--days` / `--exchange` / `--capital` | n/a (live) |
+| Fees / slippage | on (venue schedule) | `enable_fees/slippage: true` | fee model exchange |
+
+**12 keys:** SMC · Wyckoff · VSA · TF · Market Structure · AMT · MR · S&D · Stat Arb · BR · ICT · Liquidation Squeeze.
 
 ## Mengapa lokal gagal?
 
@@ -105,19 +130,7 @@ scripts/dataset-expand/
 ## Catatan
 
 - via-api = engine + klines di **server** → angka harus selaras screenshot UI (± timing window).
-- SMC Scalping mengirim **FE Advance factory geometry** (bukan bare BE SSOT) — kalau CLI hanya isolasi racer, trade count akan lebih tinggi dari UI.
+- Geometry mengikuti **BE SSOT** (bukan FE research-only lama). CLI hanya isolasi komponen.
 - `--mock` over-fires (ratusan trades) — jangan dibanding ke UI.
 - Token JWT expire → refresh dari FE lalu update `.env`.
-
-## Checklist matching UI (SMC Scalping)
-
-| Field | UI Advance | CLI via-api |
-|-------|------------|-------------|
-| `strategy_key` | `SMART_MONEY_CONCEPTS` | sama |
-| Components | hanya Smart Money Concepts | `afActiveRacers/Voters` + `selectedComponents` = SMC |
-| `activeTypes` | `["Scalping"]` | sama |
-| Period | `3m` (90d) | `--days 90` |
-| Exchange | Binance | `--exchange binance` |
-| Capital | $1000 | `--capital 1000` |
-| Fees/slippage | on (Binance 0.04%/0.02%) | `enable_fees/slippage: true` |
-| Geometry | FE defaults (sweep 1.3, OB 1.8, FVG 0.003) | `FE_ADVANCE_SMC_PARAMS` di `buildConfig` |
+- Setelah deploy: spot-check SMC Scalping 90d Binance $1000 — CLI via-api vs UI Advance vs dry-run harus sejalan.

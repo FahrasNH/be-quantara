@@ -319,6 +319,8 @@ function applyRelaxOverrides(legOverride, tradeType) {
  *
  * FE Advance parity: selecting only "Smart Money Concepts" sends
  * selectedComponents: ["SMART_MONEY_CONCEPTS"] (+ afActiveVoters).
+ * Secondary keys are also pinned here so buildConfig is self-contained
+ * even if applyStrategyJobDefaults changes.
  */
 function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
   const params = { ...paramsIn };
@@ -332,66 +334,61 @@ function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
     params.afActiveRacers = ["SMART_MONEY_CONCEPTS"];
     params.afActiveVoters = ["SMART_MONEY_CONCEPTS"];
     params.selectedComponents = ["SMART_MONEY_CONCEPTS"];
+  } else if (strategyKey === "WYCKOFF" && !hasAf) {
+    params.afActiveRacers = ["WYCKOFF"];
+    params.afActiveVoters = ["WYCKOFF"];
+    params.selectedComponents = ["WYCKOFF"];
+  } else if (strategyKey === "VOLUME_SPREAD_ANALYSIS" && !hasAf) {
+    params.afActiveRacers = ["VOLUME_SPREAD_ANALYSIS"];
+    params.afActiveVoters = ["VOLUME_SPREAD_ANALYSIS"];
+    params.selectedComponents = ["VOLUME_SPREAD_ANALYSIS"];
   } else if (strategyKey === "TREND_FOLLOWING" && !hasTs && !hasAf) {
     params.tsActiveRacers = ["TREND_FOLLOWING"];
     params.selectedComponents = ["TREND_FOLLOWING"];
+  } else if (strategyKey === "MARKET_STRUCTURE" && !hasTs && !hasAf) {
+    params.tsActiveRacers = ["MARKET_STRUCTURE"];
+    params.selectedComponents = ["MARKET_STRUCTURE"];
+  } else if (strategyKey === "AUCTION_MARKET_THEORY" && !hasTs && !hasAf) {
+    params.tsActiveRacers = ["AUCTION_MARKET_THEORY"];
+    params.selectedComponents = ["AUCTION_MARKET_THEORY"];
   } else if (strategyKey === "MEAN_REVERSION" && !hasMd && !hasAf) {
     params.mdActiveRacers = ["MEAN_REVERSION"];
     params.selectedComponents = ["MEAN_REVERSION"];
+  } else if (strategyKey === "SUPPLY_AND_DEMAND" && !hasMd && !hasAf) {
+    params.mdActiveRacers = ["SUPPLY_AND_DEMAND"];
+    params.selectedComponents = ["SUPPLY_AND_DEMAND"];
+  } else if (strategyKey === "STATISTICAL_ARBITRAGE" && !hasMd && !hasAf) {
+    params.mdActiveRacers = ["STATISTICAL_ARBITRAGE"];
+    params.selectedComponents = ["STATISTICAL_ARBITRAGE"];
   } else if (strategyKey === "BREAKOUT_RETEST" && !hasBs && !hasAf) {
     params.bsActiveRacers = ["BREAKOUT_RETEST"];
     params.selectedComponents = ["BREAKOUT_RETEST"];
+  } else if (strategyKey === "ICT_STYLE_TRADING" && !hasBs && !hasAf) {
+    params.bsActiveRacers = ["ICT_STYLE_TRADING"];
+    params.selectedComponents = ["ICT_STYLE_TRADING"];
+  } else if (strategyKey === "LIQUIDATION_SQUEEZE" && !hasBs && !hasAf) {
+    params.bsActiveRacers = ["LIQUIDATION_SQUEEZE"];
+    params.selectedComponents = ["LIQUIDATION_SQUEEZE"];
   }
   return params;
 }
 
 /**
- * FE Advance factory defaults for SMART_MONEY_CONCEPTS
- * (`fe-bot-trading/src/constants/backtestStrategies.js` Sprint 14 reset).
+ * Parity policy (2026-07-16): BE `strategyDefaults.js` is the SSOT for entry
+ * geometry across ablation (via-api) · UI Advance · dry-run · live.
  *
- * These OVERRULE BE strategyDefaults SSOT when the UI runs Advance — so a bare
- * via-api payload (isolation only) is NOT 1:1 with the UI. Geometry is stricter
- * than live SSOT (e.g. smcSweepVolMult 1.3 vs BE 0.9) and was the root cause of
- * CLI 77 vs UI ~25 SMC Scalping trades on the same 90d / 25540-bar window.
- *
- * Keep in sync with FE `BUILTIN_STRATEGIES.SMART_MONEY_CONCEPTS.defaults`.
- * Do NOT send empty typeOverrides — BE deep-merge supplies atrGateRelative /
- * per-leg conf floors (SMC_LEG_TYPE_OVERRIDES).
+ * buildConfig deliberately sends NO geometry overrides — mergeBacktestCfg
+ * spreads resolveStrategyDefaults(strategyKey) as base. FE Advance
+ * defaultParamsFor must mirror the same numbers (see FE backtestStrategies.js).
+ * Do NOT reintroduce FE-only stricter/looser research knobs here.
  */
-const FE_ADVANCE_SMC_PARAMS = Object.freeze({
-  smcMinVotes: 1,
-  smcMinConfidenceA: 60,
-  smcMinConfidenceB: 60,
-  smcMinConfidenceC: 60,
-  smcSweepVolMult: 1.3,
-  smcOBDispMult: 1.8,
-  smcFvgMinGap: 0.003,
-  smcDispVolMult: 2.0,
-  vwapLookback: 14,
-  atrMult: 1.5,
-  riskReward: 2.0,
-  riskPerTrade: 0.01,
-  tpMode: "fixed",
-  smcScoreAtrNorm: false,
-  smcPivotStructure: false,
-  smcFvgAutoThreshold: false,
-  smcPremiumDiscountGate: false,
-  smcHtfHardBlock: false,
-  // AF race flags from FE AF_RACE_FLAGS (harmless in single-racer race mode)
-  afCombinationMode: "race",
-  afUseThreeComponentVoting: true,
-  afMinVotes: 2,
-  afRejectOnDissent: true,
-});
-
 function buildConfig(strategyKey, tradeType, relax) {
   // Do NOT send empty typeOverrides — shallow (pre-fix) or even deep merge
   // of `{ Scalping: {} }` is pointless noise. Let BE resolveStrategyDefaults
   // SSOT supply atrGateRelative / atrMinMult / conf floors.
-  const feParity = strategyKey === "SMART_MONEY_CONCEPTS" ? { ...FE_ADVANCE_SMC_PARAMS } : {};
   let params = ensureDatasetComponentIsolation(
     strategyKey,
-    applyStrategyJobDefaults(strategyKey, feParity),
+    applyStrategyJobDefaults(strategyKey, {}),
   );
   if (!relax) return params;
 
@@ -739,7 +736,6 @@ module.exports = {
   parseArgs,
   buildConfig,
   ensureDatasetComponentIsolation,
-  FE_ADVANCE_SMC_PARAMS,
   defaultDaysForType,
   TYPE_TF,
   REPO_ROOT,

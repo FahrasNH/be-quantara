@@ -1,9 +1,6 @@
 /**
- * Regression: smart-money-concepts dataset-expand must pin SMC-only racers
- * AND send FE Advance factory geometry (not bare BE SSOT).
- *
- * Without isolation, AdaptiveFusionUmbrella races all three and VSA floods the CSV.
- * Without FE geometry, CLI over-fires (~77) vs UI Advance (~25) on the same 90d window.
+ * Regression: dataset-expand buildConfig pins single-racer isolation for all 12
+ * keys and does NOT override BE strategyDefaults geometry (SSOT for UI/live/dry-run).
  */
 "use strict";
 
@@ -12,8 +9,27 @@ const { describe, test } = require("node:test");
 const {
   buildConfig,
   ensureDatasetComponentIsolation,
-  FE_ADVANCE_SMC_PARAMS,
 } = require("../scripts/dataset-expand/lib/runDatasetExpand");
+const { DATASET_EXPAND_STRATEGIES } = require("../scripts/dataset-expand/lib/strategyRegistry");
+const { STRATEGIES } = require("../src/config/strategyDefaults");
+
+const PRIMARY_ISOLATION = {
+  SMART_MONEY_CONCEPTS: { af: ["SMART_MONEY_CONCEPTS"] },
+  TREND_FOLLOWING: { ts: ["TREND_FOLLOWING"] },
+  MEAN_REVERSION: { md: ["MEAN_REVERSION"] },
+  BREAKOUT_RETEST: { bs: ["BREAKOUT_RETEST"] },
+};
+
+const SECONDARY_ISOLATION = {
+  WYCKOFF: { af: ["WYCKOFF"] },
+  VOLUME_SPREAD_ANALYSIS: { af: ["VOLUME_SPREAD_ANALYSIS"] },
+  MARKET_STRUCTURE: { ts: ["MARKET_STRUCTURE"] },
+  AUCTION_MARKET_THEORY: { ts: ["AUCTION_MARKET_THEORY"] },
+  SUPPLY_AND_DEMAND: { md: ["SUPPLY_AND_DEMAND"] },
+  STATISTICAL_ARBITRAGE: { md: ["STATISTICAL_ARBITRAGE"] },
+  ICT_STYLE_TRADING: { bs: ["ICT_STYLE_TRADING"] },
+  LIQUIDATION_SQUEEZE: { bs: ["LIQUIDATION_SQUEEZE"] },
+};
 
 describe("ensureDatasetComponentIsolation", () => {
   test("SMART_MONEY_CONCEPTS pins afActiveRacers + afActiveVoters to SMC only", () => {
@@ -32,47 +48,77 @@ describe("ensureDatasetComponentIsolation", () => {
     assert.deepEqual(cfg.selectedComponents, racers);
   });
 
-  test("TREND_FOLLOWING / MEAN_REVERSION / BREAKOUT_RETEST pin primary racer", () => {
-    assert.deepEqual(
-      ensureDatasetComponentIsolation("TREND_FOLLOWING", {}).tsActiveRacers,
-      ["TREND_FOLLOWING"],
-    );
-    assert.deepEqual(
-      ensureDatasetComponentIsolation("MEAN_REVERSION", {}).mdActiveRacers,
-      ["MEAN_REVERSION"],
-    );
-    assert.deepEqual(
-      ensureDatasetComponentIsolation("BREAKOUT_RETEST", {}).bsActiveRacers,
-      ["BREAKOUT_RETEST"],
-    );
+  test("all 12 dataset-expand keys pin their own racer when unset", () => {
+    for (const { key } of DATASET_EXPAND_STRATEGIES) {
+      const cfg = ensureDatasetComponentIsolation(key, {});
+      assert.deepEqual(cfg.selectedComponents, [key], `${key} selectedComponents`);
+      const expect = PRIMARY_ISOLATION[key] || SECONDARY_ISOLATION[key];
+      assert.ok(expect, `missing isolation expectation for ${key}`);
+      if (expect.af) {
+        assert.deepEqual(cfg.afActiveRacers, expect.af, `${key} afActiveRacers`);
+      }
+      if (expect.ts) {
+        assert.deepEqual(cfg.tsActiveRacers, expect.ts, `${key} tsActiveRacers`);
+      }
+      if (expect.md) {
+        assert.deepEqual(cfg.mdActiveRacers, expect.md, `${key} mdActiveRacers`);
+      }
+      if (expect.bs) {
+        assert.deepEqual(cfg.bsActiveRacers, expect.bs, `${key} bsActiveRacers`);
+      }
+    }
   });
 });
 
-describe("buildConfig SMC FE Advance parity", () => {
-  test("non-relax SMART_MONEY_CONCEPTS isolates SMC + mirrors FE geometry", () => {
+describe("buildConfig BE SSOT parity (no FE geometry override)", () => {
+  test("non-relax SMART_MONEY_CONCEPTS isolates only — no smc* overrides", () => {
     const cfg = buildConfig("SMART_MONEY_CONCEPTS", "Scalping", false);
     assert.deepEqual(cfg.afActiveRacers, ["SMART_MONEY_CONCEPTS"]);
     assert.deepEqual(cfg.afActiveVoters, ["SMART_MONEY_CONCEPTS"]);
     assert.deepEqual(cfg.selectedComponents, ["SMART_MONEY_CONCEPTS"]);
-
-    // Lock the knobs that caused CLI 77 ≠ UI 25 (FE Sprint 14 factory reset).
-    assert.equal(cfg.smcSweepVolMult, FE_ADVANCE_SMC_PARAMS.smcSweepVolMult);
-    assert.equal(cfg.smcOBDispMult, FE_ADVANCE_SMC_PARAMS.smcOBDispMult);
-    assert.equal(cfg.smcFvgMinGap, FE_ADVANCE_SMC_PARAMS.smcFvgMinGap);
-    assert.equal(cfg.smcDispVolMult, FE_ADVANCE_SMC_PARAMS.smcDispVolMult);
-    assert.equal(cfg.smcMinConfidenceA, 60);
-    assert.equal(cfg.smcSweepVolMult, 1.3);
-    assert.equal(cfg.smcOBDispMult, 1.8);
-    assert.equal(cfg.smcFvgMinGap, 0.003);
-    // Must NOT wipe BE SSOT atrGateRelative via empty typeOverrides.
+    // Geometry comes from BE resolveStrategyDefaults at job merge — CLI must not
+    // stamp research-only FE knobs (former FE_ADVANCE_SMC_PARAMS).
+    assert.equal(cfg.smcSweepVolMult, undefined);
+    assert.equal(cfg.smcOBDispMult, undefined);
+    assert.equal(cfg.smcFvgMinGap, undefined);
+    assert.equal(cfg.smcDispVolMult, undefined);
     assert.equal(cfg.typeOverrides, undefined);
   });
 
-  test("FE_ADVANCE_SMC_PARAMS stays stricter than bare BE live SSOT geometry", () => {
-    // Document the intentional FE↔BE divergence so a future "sync to SSOT"
-    // change cannot silently break UI parity without updating this test.
-    assert.ok(FE_ADVANCE_SMC_PARAMS.smcSweepVolMult > 0.9, "FE sweep stricter than BE 0.9");
-    assert.ok(FE_ADVANCE_SMC_PARAMS.smcOBDispMult > 1.3, "FE OB disp stricter than BE 1.3");
-    assert.ok(FE_ADVANCE_SMC_PARAMS.smcFvgMinGap > 0.0015, "FE FVG gap stricter than BE 0.0015");
+  test("buildConfig for each of 12 keys isolates + leaves geometry to BE SSOT", () => {
+    for (const { key } of DATASET_EXPAND_STRATEGIES) {
+      const cfg = buildConfig(key, "Scalping", false);
+      assert.deepEqual(cfg.selectedComponents, [key], `${key} isolation`);
+      assert.equal(cfg.typeOverrides, undefined, `${key} must not send typeOverrides`);
+      // Must not poison empty overrides or FE-only geometry stamps.
+      assert.equal(cfg.smcSweepVolMult, undefined, `${key} no smcSweep override`);
+      assert.equal(cfg.maxVolumeRatio, undefined, `${key} no BR floor override`);
+      assert.equal(cfg.bbStdDevA, undefined, `${key} no MR bb override`);
+    }
+  });
+
+  test("BE SSOT entry knobs locked (FE Advance must mirror these)", () => {
+    const smc = STRATEGIES.SMART_MONEY_CONCEPTS;
+    assert.equal(smc.smcSweepVolMult, 0.9);
+    assert.equal(smc.smcOBDispMult, 1.3);
+    assert.equal(smc.smcFvgMinGap, 0.0015);
+    assert.equal(smc.smcDispVolMult, 1.8);
+
+    const tf = STRATEGIES.TREND_FOLLOWING;
+    assert.equal(tf.adxMinStrength, 25);
+    assert.equal(tf.atrMultiplier, 1.5);
+    assert.equal(tf.htfTrendStrengthMin, undefined);
+
+    const mr = STRATEGIES.MEAN_REVERSION;
+    assert.equal(mr.bbStdDevA, 1.5);
+    assert.equal(mr.bbStdDevB, 2.0);
+    assert.equal(mr.minVolRatio, 0.7);
+
+    const br = STRATEGIES.BREAKOUT_RETEST;
+    assert.equal(br.lookbackBars, 20);
+    assert.equal(br.maxVolumeRatio, 3.55);
+    assert.equal(br.minRetestBars, 16);
+    assert.equal(br.minBbWidthPct, 0.0076);
+    assert.equal(br.minAtrPct, 0.25);
   });
 });

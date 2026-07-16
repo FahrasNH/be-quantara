@@ -524,6 +524,8 @@ const STRATEGIES = {
 
   // ─────────────────────────────────────────────
   // SMART_MONEY_CONCEPTS — SMC v3.0 engine (all smc* SSOT)
+  // FE Advance defaultParamsFor MUST mirror these geometry knobs
+  // (ablation CLI does not override — see scripts/dataset-expand).
   // ─────────────────────────────────────────────
   SMART_MONEY_CONCEPTS: {
     ...AF_COMPONENT_BASE,
