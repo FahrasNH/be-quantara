@@ -42,12 +42,28 @@ const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
  * SMC-only per-leg overrides — keep atrGateRelative from DEFAULT, PLUS lower
  * confidence floors. Without these, detectSignalMulti falls back to top-level
  * smcMinConfidence*=60 and Scalping stays ~0 trades on real 5m (Defect A).
+ *
+ * Scalping geometry (Sprint 16 / 5m no-edge fix):
+ *   - Planned RR 2.0 via slAtrMult/tpAtrMult (was hardcoded SUB_STRATEGIES 4.5R —
+ *     a swing target on a 5m leg → multi-hour winners, fast SL losers, −EV).
+ *   - maxHoldHours=2 (120m TIME_STOP) — trader note: force-close unresolved
+ *     scalps at 90–120m; frees the single-slot bottleneck as a side effect.
+ *   - Session / OB-retest / chop-LONG gates ON so the ablation funnel is not
+ *     a row of 0%-firing dead knobs.
+ * Live remains blocked by liveTradeTypeGate.js until walk-forward clears.
  */
 const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
   Scalping: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
-    smcMinConfidenceScalping: 30,
-    smcMinConfidenceA: 30,
+    smcMinConfidenceScalping: 40,
+    smcMinConfidenceA: 40,
+    // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0
+    slAtrMult: 1.5,
+    tpAtrMult: 3.0,
+    maxHoldHours: 2,
+    smcSessionFilter: true,
+    smcBlockLongInChop: true,
+    smcRequireObRetest: true,
   },
   Intraday: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,

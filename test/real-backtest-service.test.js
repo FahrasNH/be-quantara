@@ -53,10 +53,16 @@ test("runs end-to-end and returns stats/trades/equity", async () => {
   assert.strictEqual(r.meta.strategyKey, "ADAPTIVE_FUSION");
 });
 
-test("exits are SL/TP only — no 'Signal' reversal exit (live AF parity)", async () => {
+test("exits are SL/TP/TIME_STOP only — no 'Signal' reversal exit (live AF parity)", async () => {
   const r = await runRealBacktest({ entryCandles: entry, htfCandles: htf, strategyKey: "ADAPTIVE_FUSION", capital: 1000, config: { afMinVotes: 2, volSmaMultiplier: 1.0 } });
   const reasons = new Set(r.trades.map(t => t.reason));
-  for (const reason of reasons) assert.ok(reason === "SL" || reason === "TP", `unexpected exit reason: ${reason}`);
+  // TIME_STOP is live-parity (maxHoldHours on Scalping/Swing); "Signal" reversal is not.
+  for (const reason of reasons) {
+    assert.ok(
+      reason === "SL" || reason === "TP" || reason === "TIME_STOP",
+      `unexpected exit reason: ${reason}`
+    );
+  }
 });
 
 test("SL/TP are component-aware (RR matches a real component, ~2.1–2.5)", async () => {
@@ -67,7 +73,7 @@ test("SL/TP are component-aware (RR matches a real component, ~2.1–2.5)", asyn
       ["A", "B", "C", "D", "Scalping", "Intraday", "Swing"].includes(t.component),
       `bad component ${t.component}`
     );
-    // RR from component presets (factory-reset Scalping can be ~4.5; Intraday ~1.8; Swing ~3.3)
+    // RR from component presets (Scalping Planned RR 2.0; Intraday ~1.8; Swing ~3.3)
     assert.ok(t.plannedRR >= 1.4 && t.plannedRR <= 10.0, `RR out of range: ${t.plannedRR}`);
   }
 });

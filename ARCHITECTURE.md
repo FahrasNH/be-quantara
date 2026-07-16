@@ -187,10 +187,13 @@ default 15. Tick loops use chained `setTimeout` (no overlap). Reconcile is throt
 Trade types for AF: **Scalping / Swing** only (Intraday removed AF-SCALP-19). When a
 non-SMC racer wins, direction is promoted to type legs (standalone racer entry).
 
-**Sprint 13 Scalping SSOT** (`typeOverrides.Scalping` in FE `backtestStrategies.js` + BE
-`strategyDefaults.js`): Planned RR **2.0** (SL 2.2×ATR / TP 4.4×ATR; intentional deviation
-from PRD aspirational 1:4.5), `maxHoldHours=6` (TIME_STOP in multi-position BT + live),
-`smcSessionFilter` (block 21–23 UTC), `smcBlockLongInChop`, `smcRequireObRetest`.
+**Sprint 13 / 16 Scalping SSOT** (`typeOverrides.Scalping` in BE
+`strategyDefaults.js` — FE Advance mirrors via deep-merge, does not hardcode):
+Planned RR **2.0** (SL 1.5×ATR / TP 3.0×ATR; replaces the old 4.5R swing target
+on a 5m leg that produced −EV / multi-hour "scalps"), `maxHoldHours=2` (120m
+TIME_STOP), `smcSessionFilter` (block 21–23 UTC), `smcBlockLongInChop`,
+`smcRequireObRetest`, `smcMinConfidenceScalping=40`. Live remains blocked by
+`liveTradeTypeGate.js` until walk-forward clears (Sprint 14).
 Helpers: `src/core/strategy-engine/af/smcComponent.js`. CSV adds ML columns
 (`sweepStrength`, `fvgSizeAtr`, …) + confidence component fields.
 `marketCond` ≠ `dailyRegime` — both always exported (entry-TF bucket vs daily ADX-proxy).

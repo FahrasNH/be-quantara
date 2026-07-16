@@ -359,14 +359,15 @@ test("SMC-23: HTF blocking — LONG entry blocked when htfTrend=BEARISH", () => 
 
 // ── calculateRiskConfig ───────────────────────────────────────────────────────
 
-test("SMC-24: calculateRiskConfig Component A has tighter SL (1.0× ATR vs B 1.2×)", () => {
+test("SMC-24: calculateRiskConfig Scalping has Planned RR 2.0 (1.5×SL / 3.0×TP)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const rA  = smc.calculateRiskConfig(100, 2.0, "LONG", "A");
   const rB  = smc.calculateRiskConfig(100, 2.0, "LONG", "B");
-  // A SL multiplier (1.0) < B SL multiplier (1.2)
-  assert.ok(rA.slDistance < rB.slDistance, "Scalp should have tighter SL than intraday");
-  assert.equal(rA.stopLoss,   parseFloat((100 - 2.0 * 1.0).toFixed(8)));
-  assert.equal(rA.takeProfit, parseFloat((100 + 2.0 * 4.5).toFixed(8)));
+  // Scalping SL (1.5) > Intraday SL (1.2) — fee-drag lever widens scalp stop
+  assert.ok(rA.slDistance > rB.slDistance, "Scalp SL should be wider than intraday (fee-drag)");
+  assert.equal(rA.stopLoss,   parseFloat((100 - 2.0 * 1.5).toFixed(8)));
+  assert.equal(rA.takeProfit, parseFloat((100 + 2.0 * 3.0).toFixed(8)));
+  assert.equal(rA.riskReward, 2.0);
 });
 
 test("SMC-25: calculateRiskConfig Component C has widest TP (4.0× ATR)", () => {

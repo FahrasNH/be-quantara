@@ -64,14 +64,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     };
 
     // ── Sub-strategy RR/SL/TP multipliers (keyed by type name AND legacy letter) ─
+    // Scalping: Planned RR 2.0 (SL 1.5× / TP 3.0×) — NOT the old 4.5R swing
+    // target bolted onto 5m (negative expectancy; see Notion SMC Scalping
+    // no-edge task). Runtime may still override via typeOverrides.slAtrMult /
+    // tpAtrMult (SMC_LEG_TYPE_OVERRIDES.Scalping is the SSOT).
     this.SUB_STRATEGIES = {
-      Scalping: { name: "SMC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
+      Scalping: { name: "SMC_SCALP",    label: "Scalping",  slMultiplier: 1.5,  tpMultiplier: 3.0  },
       Intraday: { name: "SMC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
       // PRD aspirational: SL 1.2×ATR / TP 4.0×ATR (RR ≈ 3.33). Live/backtest
       // Planned RR comes from typeOverrides.Swing (Sprint 13 fast-fail SSOT).
       Swing:    { name: "SMC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
       // Backward-compat aliases (old code that passes "A"/"B"/"C")
-      A: { name: "SMC_SCALP",    label: "Scalping",  slMultiplier: 1.0,  tpMultiplier: 4.5  },
+      A: { name: "SMC_SCALP",    label: "Scalping",  slMultiplier: 1.5,  tpMultiplier: 3.0  },
       B: { name: "SMC_INTRADAY", label: "Intraday",  slMultiplier: 1.2,  tpMultiplier: 2.16 },
       C: { name: "SMC_SWING",    label: "Swing",     slMultiplier: 1.2,  tpMultiplier: 4.0  },
     };
@@ -250,10 +254,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const isStrong = opts.marketCond === "STRONG_TREND" && mul > 1;
 
 
-    // cfg.tpAtrMult via typeOverrides). Fee-drag lever: Scalping's 1.0×ATR SL
-    // on 5m ≈ 0.28% of price, so the ~0.13% round-trip fee costs 0.42R per
-    // trade and pushes breakeven WR from 18% to 30%. Widening the SL (with TP
-    // scaled to keep RR) shrinks fee-R without touching entry logic.
+    // Fee-drag lever: thin Scalping SL (legacy 1.0×ATR on 5m ≈ 0.28% of price)
+    // made the ~0.13% round-trip fee cost ~0.42R/trade. Default Scalping SL is
+    // now 1.5×ATR (RR 2.0 via 3.0×ATR TP); typeOverrides may still widen further.
     const slMultiplier = opts.slMultiplier ?? sub.slMultiplier;
     const tpMultiplier = opts.tpMultiplier ?? sub.tpMultiplier;
 

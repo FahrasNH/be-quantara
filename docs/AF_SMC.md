@@ -112,6 +112,11 @@ Gates (HTF soft align, session filter, OB retest, dead market, etc.) can **block
 Backtest pairing: Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w**.  
 Live gate: `liveTradeTypeGate.js` — Scalping excluded from real money until promoted.
 
+**Scalping geometry SSOT** (`typeOverrides.Scalping` in `strategyDefaults.js`):
+Planned RR **2.0** (SL 1.5×ATR / TP 3.0×ATR), `maxHoldHours=2` (120m TIME_STOP),
+session filter + OB retest + chop-LONG gates enabled. Do not revert to 4.5R TP
+(swing target on 5m → negative expectancy).
+
 Signal labels are **identical across trade types** for a given sequence; only timeframe and which leg fired differ.
 
 ---

@@ -103,6 +103,31 @@ test("GATE-FLAGS: resolveScalpingGateFlags reads typeOverrides", () => {
   assert.equal(flags.maxHoldHours, 6);
 });
 
+test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + 120m time-stop + gates on", () => {
+  const { STRATEGIES } = require("#config/strategyDefaults.js");
+  const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Scalping;
+  assert.equal(ov.slAtrMult, 1.5);
+  assert.equal(ov.tpAtrMult, 3.0);
+  assert.equal(ov.maxHoldHours, 2);
+  assert.equal(ov.smcSessionFilter, true);
+  assert.equal(ov.smcBlockLongInChop, true);
+  assert.equal(ov.smcRequireObRetest, true);
+  assert.equal(ov.smcMinConfidenceScalping, 40);
+
+  const smc = new SmartMoneyConceptsStrategy();
+  assert.equal(smc.SUB_STRATEGIES.Scalping.slMultiplier, 1.5);
+  assert.equal(smc.SUB_STRATEGIES.Scalping.tpMultiplier, 3.0);
+  const cfg = smc.calculateRiskConfig(100, 1, "LONG", "Scalping");
+  assert.equal(cfg.riskReward, 2.0);
+
+  // typeOverrides path used by backtest / BotEngine
+  const ovCfg = smc.calculateRiskConfig(100, 1, "LONG", "Scalping", {
+    slMultiplier: ov.slAtrMult,
+    tpMultiplier: ov.tpAtrMult,
+  });
+  assert.equal(ovCfg.riskReward, 2.0);
+});
+
 test("CONF-META: _scoreSequence returns components for CSV forensics", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const n = 40;
