@@ -18,6 +18,10 @@ const {
   normalizeExchangeType,
   resolveFeeSchedule,
 } = require("../../../shared/constants/exchangeFeeSchedules");
+const {
+  applyPairTierToBacktestParams,
+  hasExplicitPairTier,
+} = require("../../../shared/backtest/applyPairTierToBacktestParams");
 
 const AF_SMC_KEYS = new Set([
   "SMART_MONEY_CONCEPTS", "ADAPTIVE_FUSION",
@@ -227,6 +231,48 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
   return applyDedicatedBsBrBacktestConfig(parameters);
 }
 
+/**
+ * Stamp PairClassifier overrides when the client did not (CLI via-api / bare API).
+ * FE Advance already sends pairSlMultiplier via applyPairTierOverrides — skip then.
+ * Without this, ablation gets SL×1 while UI Advance gets SL×~1.05 on BTCUSDT LIQUID
+ * → different exit paths → different cooldown/consec-loss cascades → trade-count drift
+ * (MEAN_REVERSION Scalping 180d: CLI 94 vs UI 90).
+ */
+async function ensurePairTierOnParameters(parametersIn, { symbol, strategyKey, exchangeType, job } = {}) {
+  const parameters = { ...(parametersIn || {}) };
+  if (hasExplicitPairTier(parameters) || !symbol) return parameters;
+
+  try {
+    const { createExchangeClient } = require("../../../infrastructure/exchange");
+    const { getPairTierMetrics } = require("../../research/services/MarketSnapshotService");
+    const { pairClassifier } = require("../../../infrastructure/classification/PairClassifier");
+    const ex = normalizeExchangeType(exchangeType) || "binance";
+    const client = createExchangeClient(ex);
+    const metrics = await getPairTierMetrics(client, symbol, { exchange: ex }).catch(() => null);
+    const classification = pairClassifier.classify(symbol, metrics);
+    const { parameters: next, applied } = applyPairTierToBacktestParams(
+      parameters,
+      classification,
+      strategyKey,
+    );
+    if (applied?.slMultiplier != null) {
+      job?.progress?.({
+        phase: "info",
+        message:
+          `Pair tier ${classification.tier || "?"} · SL×${Number(applied.slMultiplier).toFixed(3)} `
+          + `(auto — mirrors UI Advance / live BotEngine)`,
+      });
+    }
+    return next;
+  } catch (err) {
+    job?.progress?.({
+      phase: "warn",
+      message: `Pair tier auto-apply skipped: ${err.message || err}`,
+    });
+    return parameters;
+  }
+}
+
 async function runBacktestJob(job, userId, opts) {
   const {
     sym, strategyKey, strategyCfg,
@@ -237,12 +283,18 @@ async function runBacktestJob(job, userId, opts) {
     exchangeType: exchangeTypeIn,
   } = opts;
 
-  const parameters = applyStrategyJobDefaults(strategyKey, parametersIn);
-
   // Advance: public OHLCV from chosen venue + that venue's fee schedule.
   // Basic: omit override → HistoricalKlinesService uses connected exchange; fees follow fetched venue.
   const exchangeTypeOverride = normalizeExchangeType(exchangeTypeIn);
   const klinesExchangeOpts = exchangeTypeOverride ? { exchangeType: exchangeTypeOverride } : {};
+
+  let parameters = applyStrategyJobDefaults(strategyKey, parametersIn);
+  parameters = await ensurePairTierOnParameters(parameters, {
+    symbol: sym,
+    strategyKey,
+    exchangeType: exchangeTypeOverride,
+    job,
+  });
 
   job.status = "running";
   assertHeapHeadroom(job);
@@ -585,6 +637,7 @@ async function runBacktestJob(job, userId, opts) {
 module.exports = {
   runBacktestJob,
   applyStrategyJobDefaults,
+  ensurePairTierOnParameters,
   getEffectivePeriod,
   enforceTotalEntryBarCap,
   assertHeapHeadroom,

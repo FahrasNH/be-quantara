@@ -21,6 +21,7 @@ Jangan menambah knobs research-only di FE Advance atau CLI tanpa mengubah BE SSO
 | Strategy key / racer | 1 komponen dipilih | `ensureDatasetComponentIsolation` pin racer folder | `strategyKey` bot + defaults |
 | Entry geometry | FE defaults = BE SSOT | tidak di-override (BE merge) | BE SSOT |
 | `typeOverrides` | jangan kirim `{}` / empty leg | tidak dikirim (non-relax) | BE `DEFAULT_LEG_TYPE_OVERRIDES` / SMC |
+| Pair tier (SL×) | `applyPairTierOverrides` → `pairSlMultiplier` | **auto di BE** `ensurePairTierOnParameters` jika client belum kirim | `BotEngine` pairSlMultiplier |
 | `activeTypes` | dropdown Advance | satu trade type script | enabledComponents bot |
 | Period / exchange / capital | UI | `--days` / `--exchange` / `--capital` | n/a (live) |
 | Fees / slippage | on (venue schedule) | `enable_fees/slippage: true` | fee model exchange |
@@ -131,6 +132,8 @@ scripts/dataset-expand/
 
 - via-api = engine + klines di **server** → angka harus selaras screenshot UI (± timing window).
 - Geometry mengikuti **BE SSOT** (bukan FE research-only lama). CLI hanya isolasi komponen.
+- **Pair tier:** UI Advance selalu mengirim `pairSlMultiplier` dari PairClassifier. CLI bare tidak — BE `runBacktestJob` mengisi otomatis agar cooldown/consec-loss (dan trade count) tidak drift.
+- **Bars:** `dataInfo.entryBars` ≈ total candle di window (mis. 51k @5m/180d). Funnel `barsEvaluated` ≈ bar saat flat (tidak ada posisi terbuka) — sering ~setengah entryBars; **bukan** window berbeda.
 - `--mock` over-fires (ratusan trades) — jangan dibanding ke UI.
 - Token JWT expire → refresh dari FE lalu update `.env`.
-- Setelah deploy: spot-check SMC Scalping 90d Binance $1000 — CLI via-api vs UI Advance vs dry-run harus sejalan.
+- Setelah deploy: spot-check MR Scalping 180d Binance $1000 — CLI via-api vs UI Advance harus sejalan (pair tier + geometry).
