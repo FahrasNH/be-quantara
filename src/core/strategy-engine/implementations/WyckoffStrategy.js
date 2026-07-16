@@ -46,7 +46,32 @@ class WyckoffStrategy extends StrategyBase {
     });
     this._lastSignalMeta = null;
     this._lastSignalIdx = null;
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejMinBars", label: "2. - Insufficient bars" },
+      { key: "rejVolume", label: "3. - Volume absent" },
+      { key: "rejCooldown", label: "4. - Cooldown active" },
+      { key: "rejRange", label: "5. - No valid trading range" },
+      { key: "rejPattern", label: "6. - No spring/upthrust" },
+      { key: "rejChecklist", label: "7. - Entry checklist failed" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of WyckoffStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() { return this._ablation; }
+
+  getAblationSchema() { return WyckoffStrategy.ABLATION_SCHEMA; }
 
   _mergedConfig(config = {}) {
     return {
@@ -87,7 +112,7 @@ class WyckoffStrategy extends StrategyBase {
     const result = evaluateWyckoffComponent(
       candles,
       this._mergedConfig(config),
-      { lastSignalIdx: this._lastSignalIdx },
+      { lastSignalIdx: this._lastSignalIdx, ablation: this._ablation },
     );
 
     const nested = result.meta || {};
@@ -147,7 +172,7 @@ class WyckoffStrategy extends StrategyBase {
     const result = evaluateWyckoffComponent(
       candles,
       this._mergedConfig(config),
-      { lastSignalIdx: this._lastSignalIdx },
+      { lastSignalIdx: this._lastSignalIdx, ablation: this._ablation },
     );
     this._lastSignalMeta = {
       component: "WYCKOFF",

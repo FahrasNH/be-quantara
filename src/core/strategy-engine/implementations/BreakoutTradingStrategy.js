@@ -50,7 +50,41 @@ class BreakoutTradingStrategy extends StrategyBase {
 
     this._breakoutStates = new Map();
     this._lastSignalMeta = null;
+
+    // Diagnostic ablation funnel (counting ONLY; never gates logic). Start via
+    // resetAblation(); the entry module increments each stage/rejection so ONE
+    // backtest run reports exactly which gate throttles trade frequency.
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup insufficient" },
+      { key: "rejAtrLookback", label: "3. - ATR/lookback insufficient" },
+      { key: "rejLevels", label: "4. - No S/R levels" },
+      { key: "rejConsolidation", label: "5. - No consolidation/BB squeeze" },
+      { key: "rejBreakout", label: "6. - No breakout bar+volume" },
+      { key: "rejRetestWindow", label: "7. - Outside retest window" },
+      { key: "rejMinBars", label: "8. - Min bars since breakout" },
+      { key: "rejDisplacement", label: "9. - Min displacement ATR" },
+      { key: "rejTrueRetest", label: "10. - Not a true retest+rejection" },
+      { key: "rejMarketCond", label: "11. - Market condition gate" },
+      { key: "rejRrRoom", label: "12. - Insufficient RR room" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of BreakoutTradingStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() { return this._ablation; }
+
+  getAblationSchema() { return BreakoutTradingStrategy.ABLATION_SCHEMA; }
 
   _stateKey(config = {}) {
     return (config.symbol || "default").toUpperCase();

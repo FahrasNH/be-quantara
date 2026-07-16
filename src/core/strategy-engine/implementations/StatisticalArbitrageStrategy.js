@@ -24,6 +24,35 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
+  }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup/lookback insufficient" },
+      { key: "rejResidualZ", label: "3. - Residual-z (benchmark) gate" },
+      { key: "rejRollingZ", label: "4. - Rolling-z unavailable" },
+      { key: "rejVwapBlend", label: "5. - VWAP blend gate" },
+      { key: "rejEntryZ", label: "6. - |z| below entryZ" },
+      { key: "rejConfidence", label: "7. - Confidence floor" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of StatisticalArbitrageStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() {
+    return this._ablation;
+  }
+
+  getAblationSchema() {
+    return StatisticalArbitrageStrategy.ABLATION_SCHEMA;
   }
 
   rankByMarketConditions(marketConditions = {}) {
@@ -52,6 +81,7 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       benchmarkCloses: indicators.benchmarkCloses || indicators.btcCloses || null,
       lastIdx,
       config: { ...DEFAULTS, ...this.config, ...config },
+      ablation: this._ablation,
     });
     const z = result.zScore;
     let bandTouch = "NONE";

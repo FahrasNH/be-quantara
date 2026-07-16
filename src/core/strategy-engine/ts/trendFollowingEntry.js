@@ -211,12 +211,17 @@ function evaluateTrendFollowingEntry({
   trendState = null,
   donchianCache = null,
   defaults = {},
+  ablation = null,
 } = {}) {
   const cfg = { ...DEFAULTS, ...defaults, ...config };
   const state = trendState || freshTrendState();
   const cache = donchianCache || new WeakMap();
 
+  const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
+  _abl("evaluated");
+
   if (lastIdx < 50) {
+    _abl("rejWarmup");
     return { signal: null, trendState: state, entryChecklist: null };
   }
 
@@ -230,6 +235,7 @@ function evaluateTrendFollowingEntry({
   const volumeSMAEntry = indicators.volSMA?.[lastIdx] || 0;
 
   if (!atr || !rsiEntry || !emaFastEntry || !emaMidEntry) {
+    _abl("rejIndicators");
     return { signal: null, trendState: state, entryChecklist: null };
   }
 
@@ -256,6 +262,7 @@ function evaluateTrendFollowingEntry({
 
   if (!htfTrend) {
     state.htfTrendConfirmed = false;
+    _abl("rejHtfTrend");
     return { signal: null, trendState: state, entryChecklist: null };
   }
 
@@ -296,6 +303,7 @@ function evaluateTrendFollowingEntry({
 
   if (longCheck.valid) {
     const volRatio = volumeSMAEntry > 0 ? volumeCurrentEntry / volumeSMAEntry : null;
+    _abl("passed");
     return {
       signal: "LONG",
       trendState: state,
@@ -321,6 +329,7 @@ function evaluateTrendFollowingEntry({
 
   if (shortCheck.valid) {
     const volRatio = volumeSMAEntry > 0 ? volumeCurrentEntry / volumeSMAEntry : null;
+    _abl("passed");
     return {
       signal: "SHORT",
       trendState: state,
@@ -337,6 +346,7 @@ function evaluateTrendFollowingEntry({
     };
   }
 
+  _abl(donchianBroken ? "rejChecklist" : "rejBreakout");
   return { signal: null, trendState: state, entryChecklist: null };
 }
 

@@ -265,7 +265,12 @@ function _pullbackTol(lastSwingHigh, lastSwingLow, atr, cfg) {
  */
 function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
+  const ablation = config.ablation || null;
+  const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
+  _abl("evaluated");
+
   if (!Number.isInteger(lastIdx) || lastIdx < 1) {
+    _abl("rejWarmup");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -278,6 +283,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
   const classified = classifyMarketStructure(highs, lows, lastIdx, cfg);
   const { structure, confidence, meta } = classified;
   if (structure === "unclear") {
+    _abl("rejStructure");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -291,6 +297,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
   const prev = closes?.[lastIdx - 1];
   const open = config.opens?.[lastIdx];
   if (price == null || !Number.isFinite(price)) {
+    _abl("rejPrice");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -305,6 +312,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
   const atr = config.atr ?? null;
   const tol = _pullbackTol(lastSH, lastSL, atr, cfg);
   if (tol == null || !Number.isFinite(tol) || tol <= 0) {
+    _abl("rejPullback");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -326,6 +334,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
     // Edge: enter the HL zone this bar, or bounce while already near.
     const edge = near && (prevDist > tol || bounce);
     if (edge && bounce) {
+      _abl("passed");
       return {
         vote: "LONG",
         signal: "LONG",
@@ -334,6 +343,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
         meta: { ...meta, structure, tol, dist, lastSwingLow: lastSL },
       };
     }
+    _abl("rejBounceReject");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -349,6 +359,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
     const near = dist <= tol;
     const edge = near && (prevDist > tol || reject);
     if (edge && reject) {
+      _abl("passed");
       return {
         vote: "SHORT",
         signal: "SHORT",
@@ -357,6 +368,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
         meta: { ...meta, structure, tol, dist, lastSwingHigh: lastSH },
       };
     }
+    _abl("rejBounceReject");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -366,6 +378,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
     };
   }
 
+  _abl("rejBounceReject");
   return {
     vote: "NEUTRAL",
     signal: null,

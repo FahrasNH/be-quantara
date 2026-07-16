@@ -26,7 +26,33 @@ class VsaStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejMinBars", label: "2. - Insufficient bars" },
+      { key: "rejVolume", label: "3. - Volume zero/missing" },
+      { key: "rejRelVol", label: "4. - Rel-volume vs SMA gate" },
+      { key: "rejAtr", label: "5. - ATR unavailable" },
+      { key: "rejSwingProximity", label: "6. - Swing proximity gate" },
+      { key: "rejClassify", label: "7. - Spread/CLV classify fail" },
+      { key: "rejPattern", label: "8. - No VSA pattern" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of VsaStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() { return this._ablation; }
+
+  getAblationSchema() { return VsaStrategy.ABLATION_SCHEMA; }
 
   rankByMarketConditions(marketConditions = {}) {
     const { volatility = 1.0, volume = 1.0 } = marketConditions;
@@ -61,7 +87,7 @@ class VsaStrategy extends StrategyBase {
     const result = evaluateVSAComponent(
       candles,
       null,
-      { ...DEFAULTS, ...config.vsa, ...config },
+      { ...DEFAULTS, ...config.vsa, ...config, ablation: this._ablation },
     );
     const nested = result.meta || {};
     const spreadType = nested.spreadType || {};

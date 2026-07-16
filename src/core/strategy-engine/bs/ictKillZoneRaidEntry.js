@@ -158,11 +158,15 @@ function evaluateIctStyleEntry({
   volSMA,
   timestamps,
   lastIdx,
+  ablation = null,
   config = {},
 } = {}) {
+  const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   const requireKz = config.bsIctRequireKillZone ?? DEFAULTS.requireKillZone;
   const baseConf = config.bsIctBaseConfidence ?? DEFAULTS.baseConfidence;
   const outsideConf = config.bsIctOutsideKzConfidence ?? DEFAULTS.outsideKzConfidence;
+
+  _abl("evaluated");
 
   const ts = Array.isArray(timestamps) ? timestamps[lastIdx] : timestamps;
   const kz = isKillZone(ts);
@@ -174,6 +178,7 @@ function evaluateIctStyleEntry({
   });
 
   if (!raid.detected) {
+    _abl("rejRaid");
     return {
       signal: null,
       confidence: 0,
@@ -184,6 +189,7 @@ function evaluateIctStyleEntry({
   }
 
   if (requireKz && !kz.active) {
+    _abl("rejHardKillZone");
     return {
       signal: null,
       confidence: 0,
@@ -197,6 +203,7 @@ function evaluateIctStyleEntry({
   if (raid.volOk === false) confidence *= 0.85;
   if (kz.active) confidence = Math.min(1, confidence + 0.1);
 
+  _abl("passed");
   return {
     signal: raid.direction,
     confidence: Math.min(1, confidence),

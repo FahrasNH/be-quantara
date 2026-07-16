@@ -25,7 +25,28 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWick", label: "2. - No liquidation wick" },
+      { key: "rejOiFunding", label: "3. - OI/funding unavailable" },
+      { key: "rejSignalPath", label: "4. - Wick/funding signal path" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of LiquidationSqueezeStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() { return this._ablation; }
+  getAblationSchema() { return LiquidationSqueezeStrategy.ABLATION_SCHEMA; }
 
   rankByMarketConditions(marketConditions = {}) {
     const { volatility = 0.5 } = marketConditions;
@@ -61,6 +82,7 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       volSMA: indicators.volSMA,
       lastIdx,
       exchangeData,
+      ablation: this._ablation,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
     const wick = result.wick || {};

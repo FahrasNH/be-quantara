@@ -176,8 +176,10 @@ function evaluateLiquidationSqueezeEntry({
   volSMA,
   lastIdx,
   exchangeData = {},
+  ablation = null,
   config = {},
 } = {}) {
+  const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   const baseConf = config.bsLsBaseConfidence ?? DEFAULTS.baseConfidence;
   const fundingBoost = config.bsLsFundingBoost ?? DEFAULTS.fundingBoost;
   const oiBoost = config.bsLsOiBoost ?? DEFAULTS.oiBoost;
@@ -187,6 +189,8 @@ function evaluateLiquidationSqueezeEntry({
   const extremeShort = config.bsLsExtremeFundingShort ?? DEFAULTS.extremeFundingShort;
   const oiLookback = config.bsLsOiLookback ?? DEFAULTS.oiLookback;
   const oiConfirm = config.bsLsOiChangeConfirmPct ?? DEFAULTS.oiChangeConfirmPct;
+
+  _abl("evaluated");
 
   const wick = detectLiquidationWick(highs, lows, opens, closes, volumes, volSMA, lastIdx, {
     wickLookback: config.bsLsWickLookback ?? DEFAULTS.wickLookback,
@@ -237,6 +241,9 @@ function evaluateLiquidationSqueezeEntry({
   }
 
   if (!signal) {
+    if (!wick.detected) _abl("rejWick");
+    if (!dataAvailable) _abl("rejOiFunding");
+    _abl("rejSignalPath");
     return {
       signal: null,
       confidence: 0,
@@ -248,6 +255,7 @@ function evaluateLiquidationSqueezeEntry({
     };
   }
 
+  _abl("passed");
   return {
     signal,
     confidence: Math.min(maxConf, confidence),

@@ -20,6 +20,35 @@ class SupplyDemandStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
+  }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup/ATR insufficient" },
+      { key: "rejZones", label: "3. - No FVG/OB zones" },
+      { key: "rejZoneRadius", label: "4. - Nearest zone out of ATR radius" },
+      { key: "rejReversal", label: "5. - No reversal candle" },
+      { key: "rejConflict", label: "6. - Conflict resolution" },
+      { key: "rejRetest", label: "7. - Retest gate" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of SupplyDemandStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() {
+    return this._ablation;
+  }
+
+  getAblationSchema() {
+    return SupplyDemandStrategy.ABLATION_SCHEMA;
   }
 
   rankByMarketConditions(marketConditions = {}) {
@@ -53,6 +82,7 @@ class SupplyDemandStrategy extends StrategyBase {
       atr: indicators.atr?.[lastIdx],
       lastIdx,
       config: { ...DEFAULTS, ...this.config, ...config },
+      ablation: this._ablation,
     });
     const atr = indicators.atr?.[lastIdx];
     const zone = result.nearestZone || {};

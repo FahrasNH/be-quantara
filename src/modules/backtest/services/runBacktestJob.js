@@ -10,7 +10,7 @@
 "use strict";
 
 const HistoricalKlinesService = require("./HistoricalKlinesService");
-const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, formatScalpingFunnel, smcAblationApplies } = require("./RealStrategyBacktestService");
+const { runRealBacktest, runTripleTypeBacktest, runMultiTypeBacktest, formatStrategyFunnel, resolveAblationStrategyKey } = require("./RealStrategyBacktestService");
 const { STRATEGY_SUPPORTED_TYPES, validateTypeOrderForStrategy, expandAllTypes } = require("../../../shared/constants/strategySupportedTypes");
 const { applyDedicatedBsBrBacktestConfig } = require("../../../config/strategies");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
@@ -404,18 +404,20 @@ async function runBacktestJob(job, userId, opts) {
       ? await runTripleTypeBacktest({ ...computeOpts, typeOrder })
       : await runMultiTypeBacktest(computeOpts, typeOrder);
 
-    const scalping = result.perTypeStats?.Scalping;
-    // AF umbrella shares SMC's ablation counters across all racers; only emit the
-    // funnel when SMC is an ACTIVE racer/voter (WYCKOFF/VSA don't trade off the SMC
-    // sequence, incl. the FE collapse WYCKOFF → SMC key + afActiveVoters:["WYCKOFF"]).
-    if (scalping?.ablation && smcAblationApplies(strategyKey, parameters)) {
-      const a = scalping.ablation;
+    // Every strategy owns its OWN indicator funnel. Emit the resolved active
+    // racer's funnel for EACH trade type that has strategy/execution ablation data.
+    for (const tradeType of typeOrder) {
+      const typeStats = result.perTypeStats?.[tradeType];
+      const ablKey = typeStats?.ablationKey || resolveAblationStrategyKey(strategyKey, parameters);
+      if (!ablKey || !(typeStats?.ablation || typeStats?.execAblation)) continue;
       job.progress({
         phase: "info",
-        type: "AF-SCALP-13-ABLATION",
-        message: formatScalpingFunnel(a, scalping.execAblation, `Scalping filter funnel:`),
-        ablation: a,
-        execAblation: scalping.execAblation ?? null,
+        type: `ABLATION-${tradeType.toUpperCase()}`,
+        message: formatStrategyFunnel(ablKey, typeStats.ablation, typeStats.execAblation, `${ablKey} filter funnel (${tradeType}):`),
+        ablation: typeStats.ablation,
+        execAblation: typeStats.execAblation ?? null,
+        ablationKey: ablKey,
+        tradeType,
       });
     }
 

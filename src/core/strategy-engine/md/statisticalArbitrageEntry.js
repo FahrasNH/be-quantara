@@ -97,7 +97,13 @@ function evaluateStatisticalArbitrageEntry({
   benchmarkCloses,
   lastIdx,
   config = {},
+  ablation = null,
 } = {}) {
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
+  _abl("evaluated");
+
   const lookback = config.mdSaLookback ?? DEFAULTS.lookback;
   const entryZ = config.mdSaEntryZ ?? DEFAULTS.entryZ;
   const baseConf = config.mdSaBaseConfidence ?? DEFAULTS.baseConfidence;
@@ -107,6 +113,7 @@ function evaluateStatisticalArbitrageEntry({
   const minBars = config.mdSaMinBars ?? DEFAULTS.minBars;
 
   if (!closes || lastIdx < Math.max(minBars, lookback)) {
+    _abl("rejWarmup");
     return { signal: null, confidence: 0, reason: "warmup", zScore: null, mode: null };
   }
 
@@ -125,6 +132,7 @@ function evaluateStatisticalArbitrageEntry({
   if (z == null) {
     const stats = _rollingMeanStd(closes, lastIdx, lookback);
     if (!stats || !(stats.std > 1e-12)) {
+      _abl("rejRollingZ");
       return { signal: null, confidence: 0, reason: "std_too_small", zScore: null, mode: null };
     }
     z = (closes[lastIdx] - stats.mean) / stats.std;
@@ -142,6 +150,7 @@ function evaluateStatisticalArbitrageEntry({
     else if (z >= entryZ) signal = "SHORT";
 
     if (!signal) {
+      _abl("rejEntryZ");
       return {
         signal: null, confidence: 0, reason: "z_inside_band", zScore: z, mode,
         mean: stats.mean, std: stats.std,
@@ -152,6 +161,7 @@ function evaluateStatisticalArbitrageEntry({
 
     const excess = Math.abs(z) - entryZ;
     const confidence = Math.min(maxConf, baseConf + excess * zBoost);
+    _abl("passed");
     return {
       signal,
       confidence,
@@ -172,6 +182,7 @@ function evaluateStatisticalArbitrageEntry({
   else if (z >= entryZ) signal = "SHORT";
 
   if (!signal) {
+    _abl("rejEntryZ");
     return {
       signal: null, confidence: 0, reason: "z_inside_band", zScore: z, mode,
       mean: stats?.mean ?? null, std: stats?.std ?? null,
@@ -183,6 +194,7 @@ function evaluateStatisticalArbitrageEntry({
   const excess = Math.abs(z) - entryZ;
   const confidence = Math.min(maxConf, baseConf + excess * zBoost);
 
+  _abl("passed");
   return {
     signal,
     confidence,

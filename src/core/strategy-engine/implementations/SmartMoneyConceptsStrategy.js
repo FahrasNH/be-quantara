@@ -91,6 +91,22 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
 
+  // Ordered funnel schema (SSOT for getAblationSchema + generic renderers). SMC's
+  // bespoke formatScalpingFunnel renders the % sub-lines; this mirrors its stages.
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "seqCandidate", label: "1. Raw setups (FVG+mitigation)" },
+      { key: "rejByRejection", label: "2. - Rejection-wick gate" },
+      { key: "rejByObRetest", label: "3. - OB/FVG retest gate" },
+      { key: "seqSignal", label: "   -> signals after rejection" },
+      { key: "rejByRegime", label: "4. - Regime hard-block" },
+      { key: "rejByChoch", label: "5. - 5m CHoCH validation" },
+      { key: "rejBySession", label: "5b. - UTC session filter" },
+      { key: "rejByConf", label: "6. - Confidence floor" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
   resetAblation() {
     this._ablation = {
       seqCandidate: 0,   // bars with an FVG + mitigation (raw setup exists)
@@ -99,14 +115,16 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       seqSignal: 0,      // sequence produced a signal (passed rejection)
       rejByRegime: 0,    // rawA killed by HTF regime hard-block
       rejByChoch: 0,     // rawA killed by 5m CHoCH validation
-      rejBySession: 0,   // Sprint 13: UTC session filter
-      rejByFunding: 0,   // Sprint 13 Swing: extreme funding premium
+      rejBySession: 0,   // Sprint 13: UTC session filter (now surfaced in the funnel)
+      rejByIntradayStructure: 0, // Intraday remap gate (kept a real counter, not NaN)
       rejByConf: 0,      // rawA killed by confidence floor
       passed: 0,         // survived ALL gates → a tradeable Scalping signal
     };
+    return this._ablation;
   }
   getAblation() { return this._ablation; }
-  _abl(key) { if (this._ablation) this._ablation[key]++; }
+  getAblationSchema() { return SmartMoneyConceptsStrategy.ABLATION_SCHEMA; }
+  _abl(key) { if (this._ablation && Object.prototype.hasOwnProperty.call(this._ablation, key)) this._ablation[key]++; }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Public interface (matches AdaptiveFusionStrategy for drop-in compatibility)

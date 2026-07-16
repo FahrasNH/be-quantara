@@ -1577,39 +1577,140 @@ async function _applyRagGate(trades, ctx = {}) {
  * @param {string}  headerLine  first line, e.g. "Scalping filter funnel (via-api, 0 trades):"
  * @returns {string}
  */
+/**
+ * Shared EXECUTION-stage section for the funnel. Handles BOTH engine shapes:
+ *  - multi-position engine (AF): `execAbl.signalBars` + rejBy* counters
+ *  - single-position engine (TS/MD/BS): the `diag` object (`barsEvaluated` + *Block)
+ * so every strategy — not only SMC — gets an execution funnel.
+ * @returns {string[]} lines (empty when execAbl is null/unknown-shape)
+ */
+function formatExecSection(execAbl) {
+  const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
+  if (!execAbl) return [];
+  // Multi-position engine (AF detectSignalMulti → positions).
+  if (Object.prototype.hasOwnProperty.call(execAbl, "signalBars")) {
+    return [
+      `  ── Execution stage (PASSED signal → opened position) ──`,
+      `  - Signals reaching execution : ${execAbl.signalBars}`,
+      `  - Daily regime gate : -${execAbl.rejRegimeGate}`,
+      `  - Side×Regime gate : -${execAbl.rejSideRegime}`,
+      `  - Funding guard (Swing) : -${execAbl.rejFunding}`,
+      `  - Position already open : -${execAbl.rejPositionOpen}`,
+      `  - Cooldown after loss : -${execAbl.rejCooldown}`,
+      `  - Consecutive-loss stop : -${execAbl.rejConsecLoss}`,
+      `  - Max trades/day : -${execAbl.rejDailyTrades}`,
+      `  - Daily-loss limit : -${execAbl.rejDailyLoss}`,
+      `  - ATR range gate : -${execAbl.rejAtrGate} (${pct(execAbl.rejAtrGate, execAbl.signalBars)}% of signals)`,
+      `  - SL/TP not finite : -${execAbl.rejSlTp}`,
+      `  - Position size <= 0 : -${execAbl.rejSize}`,
+      `  - OPENED (positions) : ${execAbl.opened}`,
+    ];
+  }
+  // Single-position engine (strategy.detectSignal → position).
+  if (Object.prototype.hasOwnProperty.call(execAbl, "barsEvaluated")) {
+    return [
+      `  ── Execution stage (signal → opened position) ──`,
+      `  - Bars evaluated : ${execAbl.barsEvaluated}`,
+      `  - HTF unknown skip : -${execAbl.htfUnknownSkip}`,
+      `  - Signal null (no entry) : -${execAbl.signalNull}`,
+      `  - HTF direction block : -${execAbl.htfDirBlock}`,
+      `  - HTF ADX gate : -${execAbl.adxHTFGate ?? 0}`,
+      `  - Cooldown after loss : -${execAbl.cooldownBlock}`,
+      `  - Consecutive-loss stop : -${execAbl.consecLossBlock}`,
+      `  - Max trades/day : -${execAbl.maxTradesBlock}`,
+      `  - Daily-loss limit : -${execAbl.dailyLossBlock}`,
+      `  - ATR range gate : -${execAbl.atrGateBlock} (${pct(execAbl.atrGateBlock, execAbl.barsEvaluated)}% of bars)`,
+      `  - validateEntry block : -${execAbl.validateBlock}`,
+      `  - OPENED (positions) : ${execAbl.opened}`,
+    ];
+  }
+  return [];
+}
+
+function normalizeFunnelLabel(label) {
+  const raw = String(label || "").trim();
+  const noNumber = raw.replace(/^\d+[a-z]?\.\s*/, "");
+  const noArrow = noNumber.replace(/^->\s*/, "");
+  const noEquals = noArrow.replace(/^=\s*/, "");
+  return noEquals.trim();
+}
+
 function formatScalpingFunnel(a, execAbl, headerLine) {
   const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) : "0.0");
   const lines = [headerLine];
   if (a) {
     lines.push(
-      `  1. Raw setups (FVG+mitigation) : ${a.seqCandidate}`,
-      `  2. - Rejection-wick gate       : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}% of setups)`,
-      `  3. - OB/FVG retest gate        : -${a.rejByObRetest} (${pct(a.rejByObRetest, a.seqCandidate)}% of setups)`,
-      `     -> signals after rejection   : ${a.seqSignal}`,
-      `  4. - Regime hard-block          : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}% of signals)`,
-      `  5. - 5m CHoCH validation        : -${a.rejByChoch}`,
-      `  6. - Confidence floor           : -${a.rejByConf}`,
-      `  = PASSED (tradeable signals)    : ${a.passed}`,
+      `  - Raw setups (FVG+mitigation) : ${a.seqCandidate}`,
+      `  - Rejection-wick gate : -${a.rejByRejection} (${pct(a.rejByRejection, a.seqCandidate)}% of setups)`,
+      `  - OB/FVG retest gate : -${a.rejByObRetest} (${pct(a.rejByObRetest, a.seqCandidate)}% of setups)`,
+      `  - Signals after rejection : ${a.seqSignal}`,
+      `  - Regime hard-block : -${a.rejByRegime} (${pct(a.rejByRegime, a.seqSignal)}% of signals)`,
+      `  - 5m CHoCH validation : -${a.rejByChoch}`,
+      `  - UTC session filter : -${a.rejBySession ?? 0}`,
+      `  - Confidence floor : -${a.rejByConf}`,
+      `  - PASSED (tradeable signals) : ${a.passed}`,
     );
   }
-  if (execAbl) {
-    lines.push(
-      `  ── Execution stage (PASSED signal → opened position) ──`,
-      `  7.  Signals reaching execution  : ${execAbl.signalBars}`,
-      `  8.  - Daily regime gate         : -${execAbl.rejRegimeGate}`,
-      `  9.  - Side×Regime gate          : -${execAbl.rejSideRegime}`,
-      `  10. - Funding guard (Swing)     : -${execAbl.rejFunding}`,
-      `  11. - Position already open      : -${execAbl.rejPositionOpen}`,
-      `  12. - Cooldown after loss        : -${execAbl.rejCooldown}`,
-      `  13. - Consecutive-loss stop      : -${execAbl.rejConsecLoss}`,
-      `  14. - Max trades/day             : -${execAbl.rejDailyTrades}`,
-      `  15. - Daily-loss limit           : -${execAbl.rejDailyLoss}`,
-      `  16. - ATR range gate             : -${execAbl.rejAtrGate} (${pct(execAbl.rejAtrGate, execAbl.signalBars)}% of signals)`,
-      `  17. - SL/TP not finite           : -${execAbl.rejSlTp}`,
-      `  18. - Position size <= 0         : -${execAbl.rejSize}`,
-      `  = OPENED (positions)            : ${execAbl.opened}`,
-    );
+  lines.push(...formatExecSection(execAbl));
+  return lines.join("\n");
+}
+
+/**
+ * Resolve the ACTIVE ablation strategy/component key for a job. Umbrella keys
+ * (SMART_MONEY_CONCEPTS/TREND_FOLLOWING/MEAN_REVERSION/BREAKOUT_RETEST/ADAPTIVE_FUSION)
+ * resolve to the active racer (config afActiveRacers/tsActiveRacers/… → highest-priority
+ * present, default primary). Component keys (WYCKOFF, MARKET_STRUCTURE, ICT_STYLE_TRADING, …)
+ * resolve to themselves. Generalizes the SMC-only smcAblationApplies() so EVERY
+ * strategy surfaces its OWN funnel.
+ * @returns {string|null} canonical component key, or null when unknown
+ */
+function resolveAblationStrategyKey(strategyKey, config = {}) {
+  const strat = strategyRegistry.get(strategyKey);
+  if (!strat || typeof strat.getComponentKeys !== "function") {
+    return normalizeStrategyKey(strategyKey) || strategyKey || null;
   }
+  const compKeys = strat.getComponentKeys();
+  const upper = String(strategyKey || "").toUpperCase();
+  // Direct NON-primary component selection wins (e.g. WYCKOFF, LIQUIDATION_SQUEEZE).
+  if (compKeys.includes(upper) && upper !== compKeys[0]) return upper;
+  // Umbrella key → resolve active racers → highest-priority present.
+  let active = null;
+  if (typeof strat._resolveActiveRacers === "function") {
+    try { active = strat._resolveActiveRacers(config); } catch { active = null; }
+  }
+  if (active && active.size) {
+    for (const k of compKeys) if (active.has(k)) return k;
+    const first = [...active][0];
+    if (first) return first;
+  }
+  return compKeys[0] || null;
+}
+
+/** Ordered ablation schema for a resolved component key (via registry → umbrella → component). */
+function getAblationSchemaFor(componentKey) {
+  const strat = strategyRegistry.get(componentKey);
+  if (!strat || typeof strat.getAblationSchema !== "function") return null;
+  try { return strat.getAblationSchema(componentKey); } catch { return null; }
+}
+
+/**
+ * Strategy-dispatching funnel formatter. `componentKey` is the ALREADY-RESOLVED
+ * active component (see resolveAblationStrategyKey). SMC keeps its bespoke,
+ * byte-stable formatter; every other strategy renders from its ordered schema.
+ * The shared execution-stage section is appended for all.
+ */
+function formatStrategyFunnel(componentKey, abl, execAbl, headerLine) {
+  if (componentKey === "SMART_MONEY_CONCEPTS") {
+    return formatScalpingFunnel(abl, execAbl, headerLine);
+  }
+  const schema = getAblationSchemaFor(componentKey);
+  const lines = [headerLine];
+  if (abl && Array.isArray(schema) && schema.length) {
+    for (const step of schema) lines.push(`  - ${normalizeFunnelLabel(step.label)} : ${abl[step.key] ?? 0}`);
+  } else if (abl) {
+    for (const [k, v] of Object.entries(abl)) lines.push(`  - ${normalizeFunnelLabel(k)} : ${v}`);
+  }
+  lines.push(...formatExecSection(execAbl));
   return lines.join("\n");
 }
 
@@ -1721,7 +1822,7 @@ async function runTripleTypeBacktest(opts = {}) {
 
 
     // can report exactly which gate throttles trade frequency in this run.
-    if (tradeType === "Scalping" && typeof strategy.resetAblation === "function") {
+    if (typeof strategy.resetAblation === "function") {
       strategy.resetAblation();
     }
 
@@ -1769,29 +1870,30 @@ async function runTripleTypeBacktest(opts = {}) {
 
     // exactly how many raw setups each gate removed → identifies the throttle
     // without running an N-way ablation.
-    // The counters live on the SMC component; the AF umbrella runs SMC's sequence
-    // every bar regardless of the active racer, so getAblation() returns SMC's
-    // funnel even for WYCKOFF / VOLUME_SPREAD_ANALYSIS jobs (where SMC gates do
-    // NOT drive the trades). Only report it when SMC is an ACTIVE racer/voter
-    // (also excludes the FE collapse WYCKOFF → SMC key + afActiveRacers:["WYCKOFF"]).
-    const smcApplies = smcAblationApplies(strategyKey, cfg);
-    if (tradeType === "Scalping" && smcApplies && typeof strategy.getAblation === "function") {
-      const a = strategy.getAblation();
-      if (a) {
-        const funnelText = formatScalpingFunnel(
+    // Each AF component owns its OWN funnel counters. Resolve the ACTIVE racer
+    // (SMC / WYCKOFF / VSA) so WYCKOFF/VSA jobs now surface THEIR own funnel
+    // instead of SMC's (SMC's sequence still runs every bar as a side-effect, but
+    // we read+attribute the active racer's counters).
+    const ablKey = resolveAblationStrategyKey(strategyKey, typeConfig);
+    if (ablKey && typeof strategy.getAblation === "function") {
+      const a = strategy.getAblation(ablKey);
+      if (a || perTypeStats[tradeType].execAblation) {
+        const funnelText = formatStrategyFunnel(
+          ablKey,
           a,
           perTypeStats[tradeType].execAblation,
-          `Scalping filter funnel (${entryCandles.length} bars, ${allTrades.length} trades so far):`,
+          `${ablKey} filter funnel (${tradeType}, ${entryCandles.length} bars, ${allTrades.length} trades so far):`,
         );
         console.log(funnelText);
         perTypeStats[tradeType].ablation = a;
+        perTypeStats[tradeType].ablationKey = ablKey;
 
 
         // clean file instead of grepping the noisy shared PM2 log. Includes the
         // running commit hash so we can confirm WHICH backend produced it (the
         // prod-vs-staging confusion). Overwritten each run.
         try {
-          const outPath = path.join(process.cwd(), "scalping-ablation.txt");
+          const outPath = path.join(process.cwd(), "ablation.txt");
           let commit = "unknown";
           try {
             commit = require("child_process")
@@ -1801,6 +1903,8 @@ async function runTripleTypeBacktest(opts = {}) {
           const meta = opts.ablationMeta || {};
           const header = [
             `commit: ${commit}`,
+            `strategy: ${ablKey}`,
+            `tradeType: ${tradeType}`,
             `symbol: ${opts.symbol ?? "?"}`,
             `dataSource: ${opts.dataSource ?? "ui-backtest"}`,
             meta.exchange ? `exchange: ${meta.exchange}` : (opts.exchangeType ? `exchange: ${opts.exchangeType}` : null),
@@ -1958,6 +2062,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   } else if (strategy._tf && typeof strategy._tf.resetTrendState === "function") {
     strategy._tf.resetTrendState();
   }
+
+  // Per-strategy ablation counters — reset every run (umbrella resets ALL its
+  // component racers). detectSignal below increments the active racer's OWN funnel.
+  if (typeof strategy.resetAblation === "function") strategy.resetAblation();
+  const ablComponentKey = resolveAblationStrategyKey(strategyKey, cfg);
 
   const indicators = calcIndicators(entryCandles, {
     emaFast: cfg.emaFast ?? 9,
@@ -2721,6 +2830,14 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     trades,
     equity,
     stats: buildStats(trades, startCapital, capital),
+    // Execution-stage funnel (diag) + the active racer's strategy-gate funnel —
+    // parity with the AF multi-position engine so TS/MD/BS strategies are also
+    // diagnosable per strategy when a run produces 0/low trades.
+    execAblation: diag,
+    ablation: (typeof strategy.getAblation === "function")
+      ? strategy.getAblation(ablComponentKey)
+      : null,
+    ablationKey: ablComponentKey,
     meta: {
       strategyKey,
       entryBars: entryCandles.length,
@@ -2862,10 +2979,29 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       entryBars: entryCandles.length,
       htfBars: htfCandles?.length ?? 0,
       // Execution-stage funnel — how PASSED (strategy-gate) signals turn into
-      // opened positions. Surfaces the blind spot between detectSignalMulti and
-      // positions.set (e.g. the ATR relative gate eating every signal on real data).
+      // opened positions. Surfaces the blind spot between detectSignal and the
+      // position open (e.g. the ATR relative gate eating every signal on real data).
       execAblation: typeResult.execAblation ?? null,
+      // Per-strategy (active racer) indicator funnel — TS/MD/BS strategies now
+      // surface THEIR own gate breakdown, mirroring the AF path.
+      ablation: typeResult.ablation ?? null,
+      ablationKey: typeResult.ablationKey ?? null,
     };
+
+    // Inline funnel log for every trade type — parity with runTripleTypeBacktest's
+    // AF site, so single-position strategies (TS/MD/BS) are diagnosable per
+    // strategy on Scalping / Intraday / Swing.
+    if (typeResult.ablationKey
+        && (typeResult.ablation || typeResult.execAblation)) {
+      try {
+        console.log(formatStrategyFunnel(
+          typeResult.ablationKey,
+          typeResult.ablation,
+          typeResult.execAblation,
+          `${typeResult.ablationKey} filter funnel (${tradeType}, ${entryCandles.length} bars, ${allTrades.length} trades so far):`,
+        ));
+      } catch { /* logging must never break a run */ }
+    }
   }
 
   allTrades.sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
@@ -2974,6 +3110,10 @@ module.exports = {
   runTripleTypeBacktest,
   runMultiTypeBacktest,
   formatScalpingFunnel,
+  formatStrategyFunnel,
+  formatExecSection,
+  resolveAblationStrategyKey,
+  getAblationSchemaFor,
   smcAblationApplies,
   resolveFeeModel,
   estimateFundingCost,

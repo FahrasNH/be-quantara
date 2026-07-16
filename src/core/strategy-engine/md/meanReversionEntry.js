@@ -74,10 +74,17 @@ function evaluateMeanReversionEntry({
   config = {},
   defaults = {},
   adxCacheRef = { cache: null },
+  ablation = null,
 } = {}) {
   const cfg = { ...DEFAULTS, ...defaults, ...config };
 
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
+  _abl("evaluated");
+
   if (lastIdx < 50) {
+    _abl("rejWarmup");
     return { signal: null, meta: null, bbLevels: null };
   }
 
@@ -91,6 +98,7 @@ function evaluateMeanReversionEntry({
   const atr = indicators.atr?.[lastIdx];
   const volSMA = indicators.volSMA?.[lastIdx];
   if (!atr || !rsiValues[lastIdx] || !volSMA || volSMA <= 0) {
+    _abl("rejIndicators");
     return { signal: null, meta: null, bbLevels: null };
   }
 
@@ -99,12 +107,14 @@ function evaluateMeanReversionEntry({
   const volRatio = (volumes[lastIdx] || 0) / volSMA;
 
   if (volRatio < cfg.minVolRatio) {
+    _abl("rejVolume");
     return { signal: null, meta: null, bbLevels: null };
   }
 
   const bbA = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevA);
   const bbB = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevB);
   if (!bbA || !bbB) {
+    _abl("rejBb");
     return { signal: null, meta: null, bbLevels: null };
   }
 
@@ -152,6 +162,7 @@ function evaluateMeanReversionEntry({
   }
 
   if (!signal) {
+    _abl("rejTrigger");
     return { signal: null, meta: null, bbLevels };
   }
 
@@ -160,6 +171,7 @@ function evaluateMeanReversionEntry({
     const adxVal = resolveAdx(indicators, lastIdx, cfg, adxCacheRef);
     adxGate = evaluateAdxRegimeGate({ adx: adxVal, config: cfg });
     if (!adxGate.allowed) {
+      _abl("rejAdxRegime");
       return { signal: null, meta: null, bbLevels };
     }
     confidence = Math.round(confidence * adxGate.confidenceMult);
@@ -234,6 +246,7 @@ function evaluateMeanReversionEntry({
     ...mrFields,
   };
 
+  _abl("passed");
   return { signal, meta, bbLevels };
 }
 

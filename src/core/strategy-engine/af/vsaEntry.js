@@ -127,7 +127,15 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const lastIdx = candles?.lastIdx;
 
+  // Ablation funnel (diagnostic counting only — pure guarded side-effect).
+  const ablation = config.ablation;
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
+  _abl("evaluated");
+
   if (lastIdx == null || !candles?.closes || lastIdx < cfg.minBars - 1) {
+    _abl("rejMinBars");
     return { vote: "NEUTRAL", confidence: 0, reason: "insufficient_data" };
   }
 
@@ -136,11 +144,13 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
     if (typeof console !== "undefined" && console.warn) {
       console.warn("[VSA] missing/zero volume at idx", lastIdx);
     }
+    _abl("rejVolume");
     return { vote: "NEUTRAL", confidence: 0, reason: "missing_volume_data" };
   }
 
   const relVol = relativeVolume(candles.volumes, lastIdx, cfg.volumeSmaPeriod);
   if (relVol == null) {
+    _abl("rejRelVol");
     return { vote: "NEUTRAL", confidence: 0, reason: "insufficient_volume_sma" };
   }
 
@@ -148,6 +158,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
     candles.atr?.[lastIdx] ??
     null;
   if (atr == null || atr <= 0) {
+    _abl("rejAtr");
     return { vote: "NEUTRAL", confidence: 0, reason: "no_atr" };
   }
 
@@ -169,6 +180,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
         );
 
   if (!nearSwing.isNear) {
+    _abl("rejSwingProximity");
     return {
       vote: "NEUTRAL",
       confidence: 0,
@@ -192,6 +204,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
   });
 
   if (!signal) {
+    _abl("rejPattern");
     return {
       vote: "NEUTRAL",
       confidence: 0,
@@ -205,6 +218,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
     confidence = Math.max(0, confidence - mismatch.penalty);
   }
 
+  _abl("passed");
   return {
     vote: signal.vote,
     confidence,

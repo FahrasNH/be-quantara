@@ -63,7 +63,28 @@ class TrendFollowingStrategy extends StrategyBase {
     this._trendState = freshTrendState();
     this._lastEntryChecklist = null;
     this._donchianCache = new WeakMap();
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup insufficient" },
+      { key: "rejIndicators", label: "3. - Indicators unavailable" },
+      { key: "rejHtfTrend", label: "4. - HTF trend gate" },
+      { key: "rejBreakout", label: "5. - No Donchian breakout" },
+      { key: "rejChecklist", label: "6. - Entry checklist (ADX/EMA/RSI/vol)" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+  resetAblation() {
+    const a = {};
+    for (const s of TrendFollowingStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+  getAblation() { return this._ablation; }
+  getAblationSchema() { return TrendFollowingStrategy.ABLATION_SCHEMA; }
 
   resetTrendState() {
     this._trendState = freshTrendState();
@@ -94,6 +115,7 @@ class TrendFollowingStrategy extends StrategyBase {
       trendState: this._trendState,
       donchianCache: this._donchianCache,
       defaults: ENTRY_DEFAULTS,
+      ablation: this._ablation,
     });
     this._trendState = result.trendState;
     this._lastEntryChecklist = result.entryChecklist;

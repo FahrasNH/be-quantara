@@ -890,12 +890,21 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const lastIdx = candles?.lastIdx;
 
+  // Ablation funnel (diagnostic counting only — pure guarded side-effect).
+  const ablation = state.ablation;
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
+  _abl("evaluated");
+
   if (lastIdx == null || !candles?.closes || candles.closes.length < cfg.minBars) {
+    _abl("rejMinBars");
     return { vote: "NEUTRAL", confidence: 0, reason: "insufficient_data" };
   }
 
   const vol = candles.volumes?.[lastIdx];
   if (vol == null || vol === 0) {
+    _abl("rejVolume");
     return { vote: "NEUTRAL", confidence: 0, reason: "missing_volume_data" };
   }
 
@@ -903,11 +912,13 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
     state.lastSignalIdx != null &&
     lastIdx - state.lastSignalIdx < cfg.cooldownBars
   ) {
+    _abl("rejCooldown");
     return { vote: "NEUTRAL", confidence: 0, reason: "cooldown_active" };
   }
 
   const range = detectTradingRange(candles, cfg);
   if (!range.isValid) {
+    _abl("rejRange");
     return {
       vote: "NEUTRAL",
       confidence: 0,
@@ -920,6 +931,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
   if (spring.detected) {
     const entry = evaluateEntryChecklist(candles, range, spring, "LONG", cfg);
     if (entry.passed) {
+      _abl("passed");
       return {
         vote: "LONG",
         confidence: entry.confidence,
@@ -935,6 +947,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
       };
     }
     // Fall through to check short only if long checklist failed without spring? No — spring found but gated.
+    _abl("rejChecklist");
     return {
       vote: "NEUTRAL",
       confidence: 0,
@@ -947,6 +960,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
   if (upthrust.detected) {
     const entry = evaluateEntryChecklist(candles, range, upthrust, "SHORT", cfg);
     if (entry.passed) {
+      _abl("passed");
       return {
         vote: "SHORT",
         confidence: entry.confidence,
@@ -961,6 +975,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
         },
       };
     }
+    _abl("rejChecklist");
     return {
       vote: "NEUTRAL",
       confidence: 0,
@@ -983,6 +998,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
       (events.springInd.length > 0 || events.sc.length > 0) &&
       prior.direction === "down"
     ) {
+      _abl("passed");
       return {
         vote: "LONG",
         confidence: 0.7,
@@ -997,6 +1013,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
       (events.utadInd.length > 0 || events.bc.length > 0) &&
       prior.direction === "up"
     ) {
+      _abl("passed");
       return {
         vote: "SHORT",
         confidence: 0.7,
@@ -1006,6 +1023,7 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
     }
   }
 
+  _abl("rejPattern");
   return { vote: "NEUTRAL", confidence: 0, reason: "no_pattern", meta: { range } };
 }
 

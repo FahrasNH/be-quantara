@@ -57,6 +57,36 @@ class MeanReversionStrategy extends StrategyBase {
     this._lastBBLevels = null;
     this._lastSignalMeta = null;
     this._adxCacheRef = { cache: null };
+    this._ablation = null;
+  }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup insufficient" },
+      { key: "rejIndicators", label: "3. - Indicators unavailable" },
+      { key: "rejVolume", label: "4. - Volume floor" },
+      { key: "rejBb", label: "5. - Bollinger not computable" },
+      { key: "rejTrigger", label: "6. - No A/B trigger (RSI+BB+VWAP)" },
+      { key: "rejAdxRegime", label: "7. - ADX regime gate" },
+      { key: "rejObFvg", label: "8. - OB/FVG refine" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of MeanReversionStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() {
+    return this._ablation;
+  }
+
+  getAblationSchema() {
+    return MeanReversionStrategy.ABLATION_SCHEMA;
   }
 
   calculateBollingerBands(closes, period = 20, stdDev = 2.0) {
@@ -70,6 +100,7 @@ class MeanReversionStrategy extends StrategyBase {
       config: { ...this.config, ...config },
       defaults: ENTRY_DEFAULTS,
       adxCacheRef: this._adxCacheRef,
+      ablation: this._ablation,
     });
     this._lastBBLevels = result.bbLevels;
     this._lastSignalMeta = result.meta;

@@ -74,7 +74,13 @@ function evaluateSupplyDemandEntry({
   atr,
   lastIdx,
   config = {},
+  ablation = null,
 } = {}) {
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
+  _abl("evaluated");
+
   const atrMult = config.mdSdConfluenceAtrMult ?? config.confluenceAtrMult ?? DEFAULTS.confluenceAtrMult;
   const volMult = config.mdSdVolConfirmMult ?? config.volConfirmMult ?? DEFAULTS.volConfirmMult;
   const baseConf = config.mdSdBaseConfidence ?? DEFAULTS.baseConfidence;
@@ -83,6 +89,7 @@ function evaluateSupplyDemandEntry({
   const minReversalBodyPct = config.minReversalBodyPct ?? DEFAULTS.minReversalBodyPct;
 
   if (!closes || lastIdx < 30 || atr == null || !(atr > 0)) {
+    _abl("rejWarmup");
     return {
       signal: null,
       confidence: 0,
@@ -184,6 +191,14 @@ function evaluateSupplyDemandEntry({
   }
 
   if (!signal) {
+    const hasZones = demandZones.length > 0 || supplyZones.length > 0;
+    const nearestDist = Math.min(
+      demand.zone ? demand.dist : Infinity,
+      supply.zone ? supply.dist : Infinity
+    );
+    if (!hasZones) _abl("rejZones");
+    else if (!(nearestDist <= radius)) _abl("rejZoneRadius");
+    else _abl("rejReversal");
     return {
       signal: null,
       confidence: 0,
@@ -208,6 +223,7 @@ function evaluateSupplyDemandEntry({
     bbMiddle: null,
   });
 
+  _abl("passed");
   return {
     signal,
     confidence: conf,

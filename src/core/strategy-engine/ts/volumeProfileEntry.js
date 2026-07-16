@@ -395,6 +395,10 @@ function hasUsableSessionTimestamps(timestamps, lastIdx) {
 
 function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
+  const ablation = config.ablation || null;
+  const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
+  _abl("evaluated");
+
   const highs = indicators.highs || [];
   const lows = indicators.lows || [];
   const closes = indicators.closes || [];
@@ -403,6 +407,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const timestamps = indicators.timestamps || indicators.times || indicators.openTimes || null;
 
   if (!Number.isInteger(lastIdx) || lastIdx < 1) {
+    _abl("rejWarmup");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -415,6 +420,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   // Fail closed: without bar timestamps, sessionStartIdx falls back to 0 and treats
   // the entire history as one "session" — not a real AMT auction window.
   if (!hasUsableSessionTimestamps(timestamps, lastIdx)) {
+    _abl("rejSession");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -429,6 +435,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
   if (bars < session.minSessionBars || vwap == null) {
+    _abl("rejVwapBars");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -453,6 +460,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const barLow = lows[lastIdx];
   const barHigh = highs[lastIdx];
   if (price == null || prev == null || !Number.isFinite(price) || !Number.isFinite(prev)) {
+    _abl("rejProfile");
     return {
       vote: "NEUTRAL",
       signal: null,
@@ -482,6 +490,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
 
   // VWAP reclaim / lose (primary AMT entry)
   if (prev < vwap && price >= vwap) {
+    _abl("passed");
     return {
       vote: "LONG",
       signal: "LONG",
@@ -491,6 +500,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     };
   }
   if (prev > vwap && price <= vwap) {
+    _abl("passed");
     return {
       vote: "SHORT",
       signal: "SHORT",
@@ -511,6 +521,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     const touchedVal = barLow <= val + edgeTol;
     const closedAbove = price > val && (open == null || price >= open || price > prev);
     if (touchedVal && closedAbove && price >= vwap - edgeTol) {
+      _abl("passed");
       return {
         vote: "LONG",
         signal: "LONG",
@@ -525,6 +536,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     const touchedVah = barHigh >= vah - edgeTol;
     const closedBelow = price < vah && (open == null || price <= open || price < prev);
     if (touchedVah && closedBelow && price <= vwap + edgeTol) {
+      _abl("passed");
       return {
         vote: "SHORT",
         signal: "SHORT",
@@ -535,6 +547,10 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     }
   }
 
+  // Single terminal "no trigger" exit: neither VWAP reclaim/lose nor VAL/VAH
+  // edge fired. Attributed to the final gate stage (rejValVahReject); rejVwap has
+  // no dedicated early exit because a VWAP non-trigger falls through to this stage.
+  _abl("rejValVahReject");
   return {
     vote: "NEUTRAL",
     signal: null,

@@ -17,7 +17,7 @@ const path = require("path");
 /** be-bot-trading/ — stable regardless of shell cwd */
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 require("dotenv").config({ path: path.join(REPO_ROOT, ".env") });
-const { runTripleTypeBacktest, runMultiTypeBacktest, formatScalpingFunnel, smcAblationApplies } = require("../../../src/server/services/RealStrategyBacktestService");
+const { runTripleTypeBacktest, runMultiTypeBacktest, formatStrategyFunnel, resolveAblationStrategyKey } = require("../../../src/server/services/RealStrategyBacktestService");
 const { toCsv, TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
 const { SMC_ML_CSV_COLUMNS } = require("../../../src/core/strategy-engine/af/smcEntry");
 const {
@@ -412,23 +412,28 @@ async function runSymbolViaApi(symbol, strategyKey, tradeType, cfg, opts) {
   const trades = result.trades || [];
   console.log(`  trades=${trades.length} WR=${result.stats?.winRate} PF=${result.stats?.profitFactor}`);
 
-  // Persist ablation funnel from server job (same file UI/server writes).
-  // Only emit when SMC is an ACTIVE racer/voter; WYCKOFF/VSA share the AF
-  // umbrella's SMC ablation counters but don't trade off them (incl. the FE
-  // collapse WYCKOFF → SMC key + afActiveRacers/afActiveVoters:["WYCKOFF"]).
+  // Persist per-strategy ablation funnel from server job. Resolve the ACTIVE
+  // racer/voter for this job (SMC / WYCKOFF / VSA / TF / MS / AMT / MR / SD / SA /
+  // BR / ICT / LS) and render THAT strategy's own indicator funnel — so 0/low-trade
+  // runs are diagnosable per strategy, not only for SMC.
   const ablation = result.perTypeStats?.[tradeType]?.ablation;
   const execAblation = result.perTypeStats?.[tradeType]?.execAblation;
-  if (ablation && tradeType === "Scalping" && smcAblationApplies(strategyKey, cfg)) {
+  const ablKey = resolveAblationStrategyKey(strategyKey, cfg);
+  if (ablKey && (ablation || execAblation)) {
     try {
-      const funnelText = formatScalpingFunnel(
+      const funnelText = formatStrategyFunnel(
+        ablKey,
         ablation,
         execAblation,
-        `Scalping filter funnel (via-api, ${trades.length} trades):`,
+        `${ablKey} filter funnel (${tradeType}, via-api, ${trades.length} trades):`,
       );
       console.log(funnelText);
+      fs.mkdirSync(DATASET_EXPAND_TMP, { recursive: true });
       fs.writeFileSync(
-        path.join(REPO_ROOT, "scalping-ablation.txt"),
+        path.join(DATASET_EXPAND_TMP, "ablation.txt"),
         [
+          `strategy: ${ablKey}`,
+          `tradeType: ${tradeType}`,
           `dataSource: via-api`,
           `api: ${opts.api}`,
           `symbol: ${symbol}`,
@@ -522,9 +527,12 @@ async function runSymbol(symbol, strategyKey, tradeType, cfg, opts) {
   };
 }
 
+/** be-bot-trading/scripts/dataset-expand/tmp — run artifacts (gitignored), NOT under REPO_ROOT/tmp. */
+const DATASET_EXPAND_TMP = path.join(__dirname, "..", "tmp", "dataset-expand");
+
 function defaultOutDir(strategyKey, tradeType) {
   const slug = SLUG_BY_KEY[strategyKey] || strategyKey.toLowerCase();
-  return path.join(REPO_ROOT, "tmp", "dataset-expand", slug, tradeType.toLowerCase());
+  return path.join(DATASET_EXPAND_TMP, slug, tradeType.toLowerCase());
 }
 
 async function main({ strategyKey, tradeType, argv = process.argv.slice(2) }) {

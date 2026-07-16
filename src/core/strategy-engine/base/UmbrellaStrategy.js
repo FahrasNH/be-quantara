@@ -123,16 +123,33 @@ class UmbrellaStrategy extends StrategyBase {
   }
 
 
-  // The backtest resets/reads these on the umbrella (what the registry returns),
-  // but the counters live on the active component (SMC). Without these the funnel
-  // stayed null even though the leg ran. BUG: registry returns AdaptiveFusionUmbrella.
+  // The backtest resets/reads ablation counters on the umbrella (what the registry
+  // returns), but the counters live on the individual component strategies. Every
+  // component owns its OWN indicator-specific funnel, so reset ALL of them and let
+  // the reader resolve the ACTIVE racer/voter by key (falls back to the primary
+  // component). Zero-cost when a component has no ablation hook.
   resetAblation() {
-    const active = this.getActiveComponent();
-    if (typeof active.resetAblation === "function") active.resetAblation();
+    for (const component of this._components.values()) {
+      if (component && typeof component.resetAblation === "function") component.resetAblation();
+    }
   }
-  getAblation() {
-    const active = this.getActiveComponent();
-    return typeof active.getAblation === "function" ? active.getAblation() : null;
+
+  /** @param {string} [componentKey] active racer key (e.g. "WYCKOFF"); default → primary */
+  _resolveAblationComponent(componentKey) {
+    if (componentKey && this._components.has(componentKey)) {
+      return this._components.get(componentKey);
+    }
+    return this.getActiveComponent();
+  }
+
+  getAblation(componentKey) {
+    const target = this._resolveAblationComponent(componentKey);
+    return target && typeof target.getAblation === "function" ? target.getAblation() : null;
+  }
+
+  getAblationSchema(componentKey) {
+    const target = this._resolveAblationComponent(componentKey);
+    return target && typeof target.getAblationSchema === "function" ? target.getAblationSchema() : null;
   }
 
   // ─── Passthrough for getLastSignalMeta (real-engine component labeling) ───

@@ -27,7 +27,29 @@ class VolumeProfileStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup insufficient" },
+      { key: "rejSession", label: "3. - Session timestamp gate" },
+      { key: "rejVwapBars", label: "4. - Session VWAP bars" },
+      { key: "rejProfile", label: "5. - Volume profile (POC/VAH/VAL)" },
+      { key: "rejVwap", label: "6. - VWAP reclaim/lose" },
+      { key: "rejValVahReject", label: "7. - VAL bounce / VAH reject" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+  resetAblation() {
+    const a = {};
+    for (const s of VolumeProfileStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+  getAblation() { return this._ablation; }
+  getAblationSchema() { return VolumeProfileStrategy.ABLATION_SCHEMA; }
 
   rankByMarketConditions(marketConditions = {}) {
     const { volume = 1.0 } = marketConditions;
@@ -56,6 +78,7 @@ class VolumeProfileStrategy extends StrategyBase {
       ...DEFAULTS,
       ...config.volumeProfile,
       ...config,
+      ablation: this._ablation,
     });
     const nested = result.meta || {};
     // Sprint 15: flat vp* ML fields for Dynamic ML multi-sheet export

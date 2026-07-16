@@ -39,7 +39,28 @@ class MarketStructureStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejWarmup", label: "2. - Warmup insufficient" },
+      { key: "rejStructure", label: "3. - Structure unclassified" },
+      { key: "rejPrice", label: "4. - Price invalid" },
+      { key: "rejPullback", label: "5. - Pullback tolerance" },
+      { key: "rejBounceReject", label: "6. - HL bounce / LH rejection" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+  resetAblation() {
+    const a = {};
+    for (const s of MarketStructureStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+  getAblation() { return this._ablation; }
+  getAblationSchema() { return MarketStructureStrategy.ABLATION_SCHEMA; }
 
   rankByMarketConditions(marketConditions = {}) {
     const { trend_strength = 0.5 } = marketConditions;
@@ -74,6 +95,7 @@ class MarketStructureStrategy extends StrategyBase {
       ...structureConfigFrom(config),
       atr: atrVal,
       opens: indicators.opensHTF || indicators.opens || [],
+      ablation: this._ablation,
     });
     const nested = result.meta || {};
     const lastSH = nested.lastSwingHigh;

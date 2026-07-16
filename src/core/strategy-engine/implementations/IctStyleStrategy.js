@@ -21,7 +21,29 @@ class IctStyleStrategy extends StrategyBase {
       ...config,
     });
     this._lastSignalMeta = null;
+    this._ablation = null;
   }
+
+  static get ABLATION_SCHEMA() {
+    return [
+      { key: "evaluated", label: "1. Bars evaluated" },
+      { key: "rejKillZone", label: "2. - Kill-zone unresolved" },
+      { key: "rejRaid", label: "3. - No liquidity raid" },
+      { key: "rejHardKillZone", label: "4. - Hard kill-zone gate" },
+      { key: "rejConfidence", label: "5. - Confidence floor" },
+      { key: "passed", label: "= PASSED (tradeable signals)" },
+    ];
+  }
+
+  resetAblation() {
+    const a = {};
+    for (const s of IctStyleStrategy.ABLATION_SCHEMA) a[s.key] = 0;
+    this._ablation = a;
+    return this._ablation;
+  }
+
+  getAblation() { return this._ablation; }
+  getAblationSchema() { return IctStyleStrategy.ABLATION_SCHEMA; }
 
   rankByMarketConditions(marketConditions = {}) {
     const { volatility = 0.5 } = marketConditions;
@@ -51,6 +73,7 @@ class IctStyleStrategy extends StrategyBase {
       volSMA: indicators.volSMA,
       timestamps: indicators.timestamps || indicators.times || indicators.openTimes || config.timestamps,
       lastIdx,
+      ablation: this._ablation,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
     const kz = result.killZone || {};

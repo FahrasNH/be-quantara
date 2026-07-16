@@ -583,13 +583,6 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     return this._lastRaceMeta;
   }
 
-  resetAblation() {
-    if (typeof this._smc.resetAblation === "function") this._smc.resetAblation();
-  }
-  getAblation() {
-    return typeof this._smc.getAblation === "function" ? this._smc.getAblation() : null;
-  }
-
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {
     const winner = this._lastRaceMeta?.winningComponent || component;
     if (winner === "WYCKOFF" && typeof this._wyckoff.calculateRiskConfig === "function") {
