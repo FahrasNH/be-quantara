@@ -14,6 +14,10 @@ const PositionManager = require("../../../core/position-engine/PositionManager")
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { calcIndicators, detectHTFTrend } = require("../../../core/analytics-engine/indicators");
 const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency");
+const {
+  buildAtrBaseline,
+  resolveAtrLegOverride,
+} = require("../../../core/risk-engine/entryRiskGates");
 const log = require("#shared/logger").child({ component: "AdaptiveStrategyEngine" });
 
 class AdaptiveStrategyEngine extends BotEngine {
@@ -272,10 +276,26 @@ class AdaptiveStrategyEngine extends BotEngine {
       }
 
       // 7b. RISK GATES — cooldown setelah loss, consec-loss, max trades/hari, daily
-      //     loss, ATR range. Tanpa ini AFS engine re-entry tanpa henti setelah SL
-      //     (bug "open posisi entry sama berulang"). Parent BotEngine._tick() punya
-      //     gate ini di baris ~892; override kita harus memanggilnya sendiri.
-      const riskGate = this._checkRiskGates(atr, price);
+      //     loss, ATR range. Scalping uses atrGateRelative + rolling ATR baseline
+      //     (parity with RealStrategyBacktestService) instead of absolute 0.8%.
+      const sigMetaEarly = typeof this.strategy.getLastSignalMeta === "function"
+        ? this.strategy.getLastSignalMeta()
+        : null;
+      const atrLegOv = resolveAtrLegOverride(
+        this.config,
+        sigMetaEarly?.component || sigMetaEarly?.winningComponent || null,
+      );
+      const atrBaselineArr = atrLegOv.atrGateRelative === true || this.config.atrGateRelative === true
+        ? buildAtrBaseline(indicators.atr)
+        : null;
+      const atrBaselineNow = atrBaselineArr?.[lastIdx] ?? null;
+      const atrGateCfg = {
+        ...this.config,
+        ...atrLegOv,
+        atrBaseline: atrBaselineNow,
+        _atrBaseline: atrBaselineNow,
+      };
+      const riskGate = this._checkRiskGates(atr, price, atrGateCfg);
       if (!riskGate.ok) {
         if (this.state.checkCount % 10 === 1) {
           log.info(`[${this.config.symbol}] 🚫 Skip entry (${this.strategyKey}): ${riskGate.reason}`);
@@ -315,13 +335,15 @@ class AdaptiveStrategyEngine extends BotEngine {
             ? this.strategy.getLastSignalMeta()
             : null;
           const legName = sigMeta?.component || sigMeta?.winningComponent;
-          const legOverride = legName ? (this.config.typeOverrides?.[legName] || {}) : {};
+          const legOverride = legName
+            ? (this.config.typeOverrides?.[legName] || {})
+            : atrLegOv;
           validation = this.strategy.validateEntry(
             price,
             atr,
             candles[lastIdx].volume,
             indicators.volSMA?.[lastIdx] || 0,
-            { ...this.config, ...legOverride }
+            { ...this.config, ...legOverride, _atrBaseline: atrBaselineNow, atrBaseline: atrBaselineNow }
           );
         } catch (e) {
           // Strategi belum implement → jangan blokir, log sekali per beberapa tick

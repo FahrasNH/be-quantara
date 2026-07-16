@@ -6,6 +6,102 @@
  */
 
 /**
+ * Rolling ATR baseline (SMA) — shared by backtest atrGateRelative + live validateEntry.
+ * @param {Array<number|null|undefined>} atrArr
+ * @param {number} [window=100]
+ * @returns {Array<number|null>|null}
+ */
+function buildAtrBaseline(atrArr, window = 100) {
+  if (!Array.isArray(atrArr) || !atrArr.length) return null;
+  const out = new Array(atrArr.length).fill(null);
+  const q = [];
+  let sum = 0;
+  for (let k = 0; k < atrArr.length; k++) {
+    const v = atrArr[k];
+    if (v != null && Number.isFinite(v)) {
+      q.push(v);
+      sum += v;
+      if (q.length > window) sum -= q.shift();
+    }
+    out[k] = q.length ? sum / q.length : null;
+  }
+  return out;
+}
+
+/**
+ * Unified ATR entry gate — absolute % floor OR relative-to-baseline ratio.
+ * Used by checkAtrRangeGate (live risk) and strategy validateEntry (parity).
+ *
+ * @returns {{ ok: boolean, valid: boolean, reason?: string, mode?: string }}
+ */
+function evaluateAtrEntryGate({
+  atr,
+  price,
+  atrBaseline = null,
+  atrMinMult = 0.8,
+  atrMaxMult = 5.0,
+  atrGateRelative = false,
+  atrRelMin = 0.6,
+  atrRelMax = 3.0,
+} = {}) {
+  if (!(atr && price) || !Number.isFinite(atr) || !Number.isFinite(price) || price <= 0) {
+    return { ok: true, valid: true, mode: "skip" };
+  }
+
+  const useRelative = atrGateRelative === true
+    && atrBaseline != null
+    && Number.isFinite(atrBaseline)
+    && atrBaseline > 0;
+
+  if (useRelative) {
+    const rel = atr / atrBaseline;
+    if (rel < atrRelMin || rel > atrRelMax) {
+      return {
+        ok: false,
+        valid: false,
+        mode: "relative",
+        reason: `ATR ratio ${rel.toFixed(2)} outside (${atrRelMin}–${atrRelMax})`,
+      };
+    }
+    return { ok: true, valid: true, mode: "relative" };
+  }
+
+  const atrPct = (atr / price) * 100;
+  const minPct = atrMinMult ?? 0.8;
+  const maxPct = atrMaxMult ?? 5.0;
+  if (atrPct < minPct) {
+    return {
+      ok: false,
+      valid: false,
+      mode: "absolute",
+      reason: `ATR terlalu kecil (${atrPct.toFixed(3)}%) — market terlalu sepi`,
+    };
+  }
+  if (atrPct > maxPct) {
+    return {
+      ok: false,
+      valid: false,
+      mode: "absolute",
+      reason: `ATR terlalu besar (${atrPct.toFixed(3)}%) — volatilitas ekstrem`,
+    };
+  }
+  return { ok: true, valid: true, mode: "absolute" };
+}
+
+/**
+ * Resolve per-leg ATR overrides from interval / component (live parity with TYPE_TF).
+ */
+function resolveAtrLegOverride(config = {}, legName = null) {
+  const ov = config.typeOverrides || {};
+  if (legName && ov[legName]) return ov[legName];
+  const iv = config.interval || config.entryTf || config.entryTimeframe;
+  if (iv === "5m") return ov.Scalping || {};
+  if (iv === "15m") return ov.Intraday || {};
+  if (iv === "4h") return ov.Swing || {};
+  return {};
+}
+
+/**
  * @param {{
  *   state: {
  *     cooldownUntil?: number|null,
@@ -65,25 +161,39 @@ function checkEntryRiskGates(ctx) {
 }
 
 /**
- * ATR range filter (% of price). Kept separate so BotEngine can run it
- * AFTER the account-level coordinator gate (original order).
+ * ATR range filter — absolute % or relative-to-baseline when atrGateRelative.
  *
  * @param {number|null|undefined} atr
  * @param {number|null|undefined} price
- * @param {{ atrMinMult?: number, atrMaxMult?: number }} config
+ * @param {{
+ *   atrMinMult?: number,
+ *   atrMaxMult?: number,
+ *   atrGateRelative?: boolean,
+ *   atrRelMin?: number,
+ *   atrRelMax?: number,
+ *   atrBaseline?: number|null,
+ *   _atrBaseline?: number|null,
+ * }} config
  */
 function checkAtrRangeGate(atr, price, config = {}) {
-  if (!(atr && price)) return { ok: true };
-  const atrPct = (atr / price) * 100;
-  const minPct = config.atrMinMult;
-  const maxPct = config.atrMaxMult;
-  if (atrPct < minPct) {
-    return { ok: false, reason: `ATR terlalu kecil (${atrPct.toFixed(3)}%) — market terlalu sepi` };
-  }
-  if (atrPct > maxPct) {
-    return { ok: false, reason: `ATR terlalu besar (${atrPct.toFixed(3)}%) — volatilitas ekstrem` };
-  }
+  const gate = evaluateAtrEntryGate({
+    atr,
+    price,
+    atrBaseline: config.atrBaseline ?? config._atrBaseline ?? null,
+    atrMinMult: config.atrMinMult,
+    atrMaxMult: config.atrMaxMult,
+    atrGateRelative: config.atrGateRelative === true,
+    atrRelMin: config.atrRelMin ?? 0.6,
+    atrRelMax: config.atrRelMax ?? 3.0,
+  });
+  if (!gate.ok) return { ok: false, reason: gate.reason };
   return { ok: true };
 }
 
-module.exports = { checkEntryRiskGates, checkAtrRangeGate };
+module.exports = {
+  checkEntryRiskGates,
+  checkAtrRangeGate,
+  evaluateAtrEntryGate,
+  buildAtrBaseline,
+  resolveAtrLegOverride,
+};

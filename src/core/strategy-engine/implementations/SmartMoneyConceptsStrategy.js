@@ -18,6 +18,7 @@
 
 const StrategyBase = require("../base/StrategyBase");
 const { calcEMA, calcATR } = require("../../analytics-engine/indicators");
+const { evaluateAtrEntryGate } = require("../../risk-engine/entryRiskGates");
 const {
   applySmcSessionFilter,
   resolveScalpingGateFlags,
@@ -173,13 +174,20 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   validateEntry(price, atr, volume, volSMA, config = {}) {
-    const atrMinMult = config.atrMinMult ?? 0.8;
-    const atrMaxMult = config.atrMaxMult ?? 5.0;
-    const atrPct   = (atr / price) * 100;
-    const volRatio = volSMA > 0 ? volume / volSMA : 0;
-    if (atrPct < atrMinMult || atrPct > atrMaxMult) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside range (${atrMinMult}–${atrMaxMult}%)` };
+    const atrGate = evaluateAtrEntryGate({
+      atr,
+      price,
+      atrBaseline: config._atrBaseline ?? config.atrBaseline ?? null,
+      atrMinMult: config.atrMinMult ?? 0.8,
+      atrMaxMult: config.atrMaxMult ?? 5.0,
+      atrGateRelative: config.atrGateRelative === true,
+      atrRelMin: config.atrRelMin ?? 0.6,
+      atrRelMax: config.atrRelMax ?? 3.0,
+    });
+    if (!atrGate.valid) {
+      return { valid: false, reason: atrGate.reason };
     }
+    const volRatio = volSMA > 0 ? volume / volSMA : 0;
     if (volRatio < 0.5) {
       return { valid: false, reason: `Volume ratio ${volRatio.toFixed(2)}× below threshold (0.5×)` };
     }

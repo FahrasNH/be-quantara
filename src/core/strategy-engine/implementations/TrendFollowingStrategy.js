@@ -5,6 +5,7 @@
  */
 
 const StrategyBase = require("../base/StrategyBase");
+const { evaluateAtrEntryGate } = require("../../risk-engine/entryRiskGates");
 const {
   DEFAULTS: ENTRY_DEFAULTS,
   freshTrendState,
@@ -329,13 +330,20 @@ class TrendFollowingStrategy extends StrategyBase {
     };
   }
 
-  validateEntry(price, atr, volume, volSMA) {
+  validateEntry(price, atr, volume, volSMA, config = {}) {
     if (!price || !atr) return { valid: true, reason: "Data lengkap" };
-    const atrPct = (atr / price) * 100;
+    const atrGate = evaluateAtrEntryGate({
+      atr,
+      price,
+      atrBaseline: config._atrBaseline ?? config.atrBaseline ?? null,
+      atrMinMult: config.atrMinMult ?? 0.25,
+      atrMaxMult: config.atrMaxMult ?? 5.0,
+      atrGateRelative: config.atrGateRelative === true,
+      atrRelMin: config.atrRelMin ?? 0.6,
+      atrRelMax: config.atrRelMax ?? 3.0,
+    });
+    if (!atrGate.valid) return { valid: false, reason: atrGate.reason };
     const volRatio = volSMA > 0 ? volume / volSMA : 1;
-    if (atrPct < 0.25 || atrPct > 5.0) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% out of range` };
-    }
     if (volRatio < 0.7) {
       return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× below threshold` };
     }

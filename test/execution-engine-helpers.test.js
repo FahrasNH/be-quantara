@@ -183,6 +183,20 @@ t("checkAtrRangeGate: quiet / extreme / ok", () => {
   assert.ok(/ATR terlalu besar/.test(wild.reason));
 });
 
+t("checkAtrRangeGate: atrGateRelative uses baseline ratio", () => {
+  const cfg = {
+    atrMinMult: 0.15,
+    atrMaxMult: 5.0,
+    atrGateRelative: true,
+    atrRelMin: 0.6,
+    atrRelMax: 3.0,
+    atrBaseline: 0.12,
+  };
+  // atr%=0.10 absolute would fail 0.15 floor; relative 0.10/0.12≈0.83 passes
+  assert.strictEqual(checkAtrRangeGate(0.10, 100, cfg).ok, true);
+  assert.strictEqual(checkAtrRangeGate(0.05, 100, { ...cfg, atrBaseline: 0.20 }).ok, false);
+});
+
 console.log(`\n── ${pass} passed, ${fail} failed ──\n`);
 if (fail > 0) {
   for (const f of failures) console.error(`FAIL: ${f.name}: ${f.message}`);

@@ -1038,7 +1038,13 @@ class BotEngine extends EventEmitter {
    * Periksa apakah boleh buka trade baru.
    * Returns { ok: true } atau { ok: false, reason: string }
    */
-  _checkRiskGates(atr, price) {
+  /**
+   * @param {number} atr
+   * @param {number} price
+   * @param {object|null} [atrGateCfg] — optional ATR gate config (leg overrides +
+   *   atrBaseline for atrGateRelative). Defaults to this.config.
+   */
+  _checkRiskGates(atr, price, atrGateCfg = null) {
     // Order matters (preserved from pre-2g BotEngine):
     //   per-bot gates → account coordinator (#5) → ATR range.
     const gate = checkEntryRiskGates({
@@ -1055,7 +1061,8 @@ class BotEngine extends EventEmitter {
     }
 
     // 5. ATR range filter (SIDEWAYS dipindah ke _tick() per-strategi)
-    return checkAtrRangeGate(atr, price, this.config);
+    // atrGateCfg lets Scalping pass atrGateRelative + rolling baseline (live/backtest parity).
+    return checkAtrRangeGate(atr, price, atrGateCfg || this.config);
   }
 
   /** Panggil setelah trade ditutup untuk update counter risk */

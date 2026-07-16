@@ -6,6 +6,7 @@
  */
 
 const StrategyBase = require("../base/StrategyBase");
+const { evaluateAtrEntryGate } = require("../../risk-engine/entryRiskGates");
 const {
   DEFAULTS: ENTRY_DEFAULTS,
   evaluateBreakoutTradingEntry,
@@ -190,17 +191,22 @@ class BreakoutTradingStrategy extends StrategyBase {
     };
   }
 
-  validateEntry(price, atr, volume, volSMA) {
-    const atrPct = (atr / price) * 100;
-    const volRatio = volSMA > 0 ? volume / volSMA : 0;
-
-    if (atrPct < 0.2 || atrPct > 5.0) {
-      return {
-        valid: false,
-        reason: `ATR ${atrPct.toFixed(2)}% outside healthy range (0.2-5%)`,
-      };
+  validateEntry(price, atr, volume, volSMA, config = {}) {
+    const atrGate = evaluateAtrEntryGate({
+      atr,
+      price,
+      atrBaseline: config._atrBaseline ?? config.atrBaseline ?? null,
+      atrMinMult: config.atrMinMult ?? 0.2,
+      atrMaxMult: config.atrMaxMult ?? 5.0,
+      atrGateRelative: config.atrGateRelative === true,
+      atrRelMin: config.atrRelMin ?? 0.6,
+      atrRelMax: config.atrRelMax ?? 3.0,
+    });
+    if (!atrGate.valid) {
+      return { valid: false, reason: atrGate.reason };
     }
 
+    const volRatio = volSMA > 0 ? volume / volSMA : 0;
     if (volRatio < 0.8) {
       return {
         valid: false,

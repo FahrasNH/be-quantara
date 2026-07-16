@@ -5,6 +5,7 @@
  */
 
 const StrategyBase = require("../base/StrategyBase");
+const { evaluateAtrEntryGate } = require("../../risk-engine/entryRiskGates");
 const {
   DEFAULTS: ENTRY_DEFAULTS,
   calculateBollingerBands,
@@ -189,13 +190,20 @@ class MeanReversionStrategy extends StrategyBase {
     };
   }
 
-  validateEntry(price, atr, volume, volSMA) {
+  validateEntry(price, atr, volume, volSMA, config = {}) {
     if (!price || !atr) return { valid: true, reason: "Data tidak lengkap — lewati gate" };
-    const atrPct = (atr / price) * 100;
+    const atrGate = evaluateAtrEntryGate({
+      atr,
+      price,
+      atrBaseline: config._atrBaseline ?? config.atrBaseline ?? null,
+      atrMinMult: config.atrMinMult ?? 0.15,
+      atrMaxMult: config.atrMaxMult ?? 4.0,
+      atrGateRelative: config.atrGateRelative === true,
+      atrRelMin: config.atrRelMin ?? 0.6,
+      atrRelMax: config.atrRelMax ?? 3.0,
+    });
+    if (!atrGate.valid) return { valid: false, reason: atrGate.reason };
     const volRatio = volSMA > 0 ? volume / volSMA : 1;
-    if (atrPct < 0.15 || atrPct > 4.0) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% di luar rentang sehat (0.15–4.0%)` };
-    }
     if (volRatio < 0.5) {
       return { valid: false, reason: `Volume ${volRatio.toFixed(2)}× di bawah ambang (0.5×)` };
     }

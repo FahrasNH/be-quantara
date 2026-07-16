@@ -110,8 +110,12 @@ async function tradesByLeg(window, config) {
 test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intraday confB", () => {
   const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides;
   assert.equal(ov.Scalping.atrMinMult, 0.15, "Scalping atrMinMult must be 0.15");
+  assert.equal(ov.Scalping.atrGateRelative, true, "Scalping must use adaptive ATR gate");
+  assert.equal(ov.Scalping.atrRelMin, 0.6);
+  assert.equal(ov.Scalping.atrRelMax, 3.0);
   assert.equal(ov.Intraday.atrMinMult, 0.4, "Intraday atrMinMult must be 0.4");
   assert.equal(ov.Swing.atrMinMult, 0.8, "Swing atrMinMult must stay 0.8");
+  assert.ok(!ov.Intraday.atrGateRelative, "Intraday stays absolute ATR gate");
   assert.equal(ov.Scalping.smcMinConfidenceA, 30, "Scalping confA must be 30");
   assert.equal(ov.Intraday.smcMinConfidenceB, 45, "Intraday confB must be 45");
   // Top-level floor (what LIVE gating reads) is untouched at 0.8 → live unchanged.

@@ -32,6 +32,7 @@ const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefault
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
+const { buildAtrBaseline } = require("../../../core/risk-engine/entryRiskGates");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const {
   resolveScalpingGateFlags,
@@ -417,22 +418,6 @@ function resolveTradeDisplayName(strategyKey, cfg, meta, fallbackDisplayName) {
 // fee+slippage conditions). The relative gate compares each bar's ATR to the
 // leg's OWN recent baseline instead — "market not dead / not panicking" means
 // the same thing on every timeframe.
-function buildAtrBaseline(atrArr, window = 100) {
-  if (!Array.isArray(atrArr) || !atrArr.length) return null;
-  const out = new Array(atrArr.length).fill(null);
-  const q = [];
-  let sum = 0;
-  for (let k = 0; k < atrArr.length; k++) {
-    const v = atrArr[k];
-    if (v != null && Number.isFinite(v)) {
-      q.push(v); sum += v;
-      if (q.length > window) sum -= q.shift();
-    }
-    out[k] = q.length ? sum / q.length : null;
-  }
-  return out;
-}
-
 async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, entryCandles, htfCandles) {
   const strategyKey = opts.strategyKey || "ADAPTIVE_FUSION";
   const startCapital = opts.capital || 1000;
@@ -2483,9 +2468,12 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       try {
         const legName = meta?.component || meta?.winningComponent;
         const legOverride = legName ? (cfg.typeOverrides?.[legName] || {}) : {};
+        const baselineNow = atrBaseline?.[i] ?? null;
         const v = strategy.validateEntry(price, atr, c.volume, indicators.volSMA?.[i] || 0, {
           ...cfg,
           ...legOverride,
+          _atrBaseline: baselineNow,
+          atrBaseline: baselineNow,
         });
         if (v && v.valid === false) { diag.validateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
       } catch { /* degrade open — same as live */ }

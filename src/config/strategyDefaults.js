@@ -15,16 +15,27 @@ const {
   normalizeStrategyKey,
 } = require("./strategyKeyNormalizer");
 
-/** Per-leg ATR% floor — calibrated to 5m / 15m / 4h entry stacks (backtest merge). */
+/**
+ * Per-leg ATR gate — absolute floors + Scalping adaptive (atrGateRelative).
+ * Relative gate compares ATR to the leg's own rolling baseline so calm 5m
+ * markets (ATR% ~0.05–0.12) are not blanket-rejected by a 0.15% absolute floor.
+ */
 const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
-  Scalping: { atrMinMult: 0.15 },
+  Scalping: { atrMinMult: 0.15, atrGateRelative: true, atrRelMin: 0.6, atrRelMax: 3.0 },
   Intraday: { atrMinMult: 0.4 },
   Swing:    { atrMinMult: 0.8 },
 });
 
 /** SMC-only leg overrides (confidence floors stay on SMART_MONEY_CONCEPTS only). */
 const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
-  Scalping: { atrMinMult: 0.15, smcMinConfidenceScalping: 30, smcMinConfidenceA: 30 },
+  Scalping: {
+    atrMinMult: 0.15,
+    atrGateRelative: true,
+    atrRelMin: 0.6,
+    atrRelMax: 3.0,
+    smcMinConfidenceScalping: 30,
+    smcMinConfidenceA: 30,
+  },
   Intraday: { atrMinMult: 0.4, smcMinConfidenceIntraday: 45, smcMinConfidenceB: 45 },
   Swing:    { atrMinMult: 0.8 },
 });

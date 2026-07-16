@@ -174,6 +174,22 @@ test("SMC-05b: validateEntry respects per-leg atrMinMult (Scalping 0.15%)", () =
   assert.equal(smc.validateEntry(100, 0.2, 200, 100, { atrMinMult: 0.15, atrMaxMult: 5.0 }).valid, true);
 });
 
+test("SMC-05c: validateEntry atrGateRelative uses baseline ratio (live/backtest parity)", () => {
+  const smc = new SmartMoneyConceptsStrategy();
+  // atrPct = 0.10% — absolute Scalping floor 0.15 would reject; relative vs baseline passes
+  const cfgRel = {
+    atrMinMult: 0.15,
+    atrMaxMult: 5.0,
+    atrGateRelative: true,
+    atrRelMin: 0.6,
+    atrRelMax: 3.0,
+    _atrBaseline: 0.12, // atr/baseline = 0.10/0.12 ≈ 0.83 → within 0.6–3.0
+  };
+  assert.equal(smc.validateEntry(100, 0.10, 200, 100, cfgRel).valid, true);
+  // Dead market: atr << baseline
+  assert.equal(smc.validateEntry(100, 0.05, 200, 100, { ...cfgRel, _atrBaseline: 0.20 }).valid, false);
+});
+
 test("SMC-06: validateEntry blocks thin volume (ratio < 0.5×)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   // volume=40, volSMA=100 → ratio 0.4×
