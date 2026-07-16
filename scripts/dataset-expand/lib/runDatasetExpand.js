@@ -307,11 +307,51 @@ function applyRelaxOverrides(legOverride, tradeType) {
   }
 }
 
+/**
+ * Pin dataset-expand jobs to the folder's component — not the full umbrella race.
+ *
+ * AdaptiveFusionUmbrella / TrendSurge / … treat empty afActiveRacers as
+ * "all racers" (FOUNDRY/FORGE default). applyStrategyJobDefaults already
+ * isolates secondary keys (WYCKOFF, VSA, MARKET_STRUCTURE, …) but primary
+ * engine keys (SMART_MONEY_CONCEPTS, TREND_FOLLOWING, …) were left open —
+ * so `smart-money-concepts/scalping.js` silently raced VSA+Wyckoff and
+ * produced ~116 trades (mostly VSA) while UI SMC-only showed ~25.
+ *
+ * FE Advance parity: selecting only "Smart Money Concepts" sends
+ * selectedComponents: ["SMART_MONEY_CONCEPTS"].
+ */
+function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
+  const params = { ...paramsIn };
+  const hasAf = params.afActiveRacers || params.afActiveVoters
+    || (Array.isArray(params.selectedComponents) && params.selectedComponents.length);
+  const hasTs = params.tsActiveRacers;
+  const hasMd = params.mdActiveRacers;
+  const hasBs = params.bsActiveRacers;
+
+  if (strategyKey === "SMART_MONEY_CONCEPTS" && !hasAf) {
+    params.afActiveRacers = ["SMART_MONEY_CONCEPTS"];
+    params.selectedComponents = ["SMART_MONEY_CONCEPTS"];
+  } else if (strategyKey === "TREND_FOLLOWING" && !hasTs && !hasAf) {
+    params.tsActiveRacers = ["TREND_FOLLOWING"];
+    params.selectedComponents = ["TREND_FOLLOWING"];
+  } else if (strategyKey === "MEAN_REVERSION" && !hasMd && !hasAf) {
+    params.mdActiveRacers = ["MEAN_REVERSION"];
+    params.selectedComponents = ["MEAN_REVERSION"];
+  } else if (strategyKey === "BREAKOUT_RETEST" && !hasBs && !hasAf) {
+    params.bsActiveRacers = ["BREAKOUT_RETEST"];
+    params.selectedComponents = ["BREAKOUT_RETEST"];
+  }
+  return params;
+}
+
 function buildConfig(strategyKey, tradeType, relax) {
   // Do NOT send empty typeOverrides — shallow (pre-fix) or even deep merge
   // of `{ Scalping: {} }` is pointless noise. Let BE resolveStrategyDefaults
   // SSOT supply atrGateRelative / atrMinMult / conf floors.
-  let params = applyStrategyJobDefaults(strategyKey, {});
+  let params = ensureDatasetComponentIsolation(
+    strategyKey,
+    applyStrategyJobDefaults(strategyKey, {}),
+  );
   if (!relax) return params;
 
   const { resolveStrategyDefaults } = require("../../../src/config/strategyDefaults");
@@ -634,7 +674,7 @@ async function main({ strategyKey, tradeType, argv = process.argv.slice(2) }) {
         : "local HistoricalKlinesService (needs exchange network + optional DB).",
       notes: [
         "Default: --via-api against DATASET_EXPAND_API_URL (1:1 UI). Use --local only when this machine can reach the exchange.",
-        "Uses applyStrategyJobDefaults / activeTypes for component + trade-type isolation.",
+        "Pins afActiveRacers/selectedComponents to the folder strategy (SMC-only, not full AF race). Match UI with the same --days (UI often 90d / period 3m).",
         "Pass --relax for AF research-only denser samples (lower conf floors / session off).",
         "Default --days respects TYPE_MAX_PERIOD cap per entry TF; capital default $1000 (UI parity).",
       ],
@@ -655,6 +695,7 @@ module.exports = {
   main,
   parseArgs,
   buildConfig,
+  ensureDatasetComponentIsolation,
   defaultDaysForType,
   TYPE_TF,
   REPO_ROOT,
