@@ -306,11 +306,18 @@ function evaluateBreakoutTradingEntry({
   config = {},
   breakoutState = null,
   defaults = {},
+  ablation = null,
 } = {}) {
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
   const cfg = { ...DEFAULTS, ...defaults, ...config };
   const state = breakoutState || freshBreakoutState();
 
+  _abl("evaluated");
+
   if (lastIdx < 30) {
+    _abl("rejWarmup");
     return { signal: null, meta: null, state, resetState: false };
   }
 
@@ -330,6 +337,7 @@ function evaluateBreakoutTradingEntry({
   const atr = indicators.atr?.[lastIdx];
 
   if (!atr || closes.length < cfg.lookbackBars) {
+    _abl("rejAtrLookback");
     return { signal: null, meta: null, state, resetState: false };
   }
 
@@ -337,6 +345,7 @@ function evaluateBreakoutTradingEntry({
   const lowsBefore = (lows.length ? lows : closes).slice(0, -1);
   const levels = detectLevels(highsBefore, lowsBefore, cfg);
   if (!levels) {
+    _abl("rejLevels");
     return { signal: null, meta: null, state, resetState: false };
   }
 
@@ -354,6 +363,7 @@ function evaluateBreakoutTradingEntry({
   const breakoutCandleAtr = atr > 0 ? breakoutBarRange / atr : null;
   const consolidationBars = countConsolidationBars(closes, highs, lows, resistance, support);
 
+  let armedThisBar = false;
   const longBreakout = checkLongBreakout(closes, volumes, volSMA, resistance, cfg);
   if (longBreakout.valid && consolidationOK) {
     state.direction = "LONG";
@@ -368,6 +378,7 @@ function evaluateBreakoutTradingEntry({
     state.maxAwayAtr = 0;
     state.retestExtreme = null;
     state.rangeHeight = levels.range;
+    armedThisBar = true;
   }
 
   const shortBreakout = checkShortBreakout(closes, volumes, volSMA, support, cfg);
@@ -384,6 +395,7 @@ function evaluateBreakoutTradingEntry({
     state.maxAwayAtr = 0;
     state.retestExtreme = null;
     state.rangeHeight = levels.range;
+    armedThisBar = true;
   }
 
   if (state.direction && state.breakoutBar != null && state.breakoutBar < lastIdx) {
@@ -391,6 +403,7 @@ function evaluateBreakoutTradingEntry({
     const minBars = cfg.minRetestBars ?? 16;
 
     if (barsSinceBreakout > cfg.retestWindow) {
+      _abl("rejRetestWindow");
       return { signal: null, meta: null, state: freshBreakoutState(), resetState: true };
     }
 
@@ -407,11 +420,13 @@ function evaluateBreakoutTradingEntry({
     }
 
     if (barsSinceBreakout < minBars) {
+      _abl("rejMinBars");
       return { signal: null, meta: null, state, resetState: false };
     }
 
     const minAway = cfg.minDisplacementAtr ?? 0.30;
     if ((state.maxAwayAtr || 0) < minAway) {
+      _abl("rejDisplacement");
       return { signal: null, meta: null, state, resetState: false };
     }
 
@@ -446,6 +461,7 @@ function evaluateBreakoutTradingEntry({
         atrPct,
       );
       if ((cfg.blockedMarketConds || []).includes(marketCond)) {
+        _abl("rejMarketCond");
         return { signal: null, meta: null, state: freshBreakoutState(), resetState: true };
       }
 
@@ -459,6 +475,7 @@ function evaluateBreakoutTradingEntry({
       const slDistExpected = atr * (cfg.slMultiplier ?? 1.7);
       const maxRR = cfg.maxPlannedRR ?? 2.5;
       if (!(rangeHeight > 0) || targetRoom <= 0 || targetRoom > maxRR * slDistExpected) {
+        _abl("rejRrRoom");
         return { signal: null, meta: null, state: freshBreakoutState(), resetState: true };
       }
 
@@ -500,8 +517,18 @@ function evaluateBreakoutTradingEntry({
         maxAwayAtr: state.maxAwayAtr,
       };
 
+      _abl("passed");
       return { signal, meta, state: freshBreakoutState(), resetState: true };
     }
+
+    _abl("rejTrueRetest");
+    return { signal: null, meta: null, state, resetState: false };
+  }
+
+  // No pending retest window: attribute idle bars (skip the arming bar itself).
+  if (!armedThisBar) {
+    if (!consolidationOK) _abl("rejConsolidation");
+    else _abl("rejBreakout");
   }
 
   return { signal: null, meta: null, state, resetState: false };

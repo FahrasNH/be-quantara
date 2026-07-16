@@ -139,6 +139,7 @@ class BreakoutTradingStrategy extends StrategyBase {
       config: merged,
       breakoutState: state,
       defaults: ENTRY_DEFAULTS,
+      ablation: this._ablation,
     });
 
     if (result.resetState) {

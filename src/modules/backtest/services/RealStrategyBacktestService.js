@@ -1651,7 +1651,7 @@ function formatExecSection(execAbl) {
       `  ── Execution stage (signal → opened position) ──`,
       `  - Bars evaluated : ${execAbl.barsEvaluated}`,
       `  - HTF unknown skip : -${execAbl.htfUnknownSkip}`,
-      `  - Signal null (no entry) : -${execAbl.signalNull}`,
+      `  - No signal this bar : -${execAbl.signalNull}`,
       `  - HTF direction block : -${execAbl.htfDirBlock}`,
       `  - HTF ADX gate : -${execAbl.adxHTFGate ?? 0}`,
       `  - Cooldown after loss : -${execAbl.cooldownBlock}`,
