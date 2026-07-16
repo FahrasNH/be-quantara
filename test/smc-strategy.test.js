@@ -167,6 +167,13 @@ test("SMC-05: validateEntry blocks extreme ATR (< 0.8% or > 5%)", () => {
   assert.equal(smc.validateEntry(100, 2.0, 200, 100).valid, true);
 });
 
+test("SMC-05b: validateEntry respects per-leg atrMinMult (Scalping 0.15%)", () => {
+  const smc = new SmartMoneyConceptsStrategy();
+  // atrPct = 0.2% — blocked at default 0.8, passes at Scalping floor
+  assert.equal(smc.validateEntry(100, 0.2, 200, 100).valid, false);
+  assert.equal(smc.validateEntry(100, 0.2, 200, 100, { atrMinMult: 0.15, atrMaxMult: 5.0 }).valid, true);
+});
+
 test("SMC-06: validateEntry blocks thin volume (ratio < 0.5×)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   // volume=40, volSMA=100 → ratio 0.4×

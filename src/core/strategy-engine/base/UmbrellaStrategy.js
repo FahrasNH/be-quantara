@@ -56,8 +56,8 @@ class UmbrellaStrategy extends StrategyBase {
     return this.getActiveComponent().getTimeframeConfig();
   }
 
-  validateEntry(price, atr, volume, volSMA) {
-    return this.getActiveComponent().validateEntry(price, atr, volume, volSMA);
+  validateEntry(price, atr, volume, volSMA, config = {}) {
+    return this.getActiveComponent().validateEntry(price, atr, volume, volSMA, config);
   }
 
   getRiskConfig() {

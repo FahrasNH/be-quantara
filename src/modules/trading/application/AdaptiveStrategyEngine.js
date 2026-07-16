@@ -311,11 +311,17 @@ class AdaptiveStrategyEngine extends BotEngine {
       let validation = { valid: true, reason: "no validateEntry" };
       if (typeof this.strategy.validateEntry === "function") {
         try {
+          const sigMeta = typeof this.strategy.getLastSignalMeta === "function"
+            ? this.strategy.getLastSignalMeta()
+            : null;
+          const legName = sigMeta?.component || sigMeta?.winningComponent;
+          const legOverride = legName ? (this.config.typeOverrides?.[legName] || {}) : {};
           validation = this.strategy.validateEntry(
             price,
             atr,
             candles[lastIdx].volume,
-            indicators.volSMA?.[lastIdx] || 0
+            indicators.volSMA?.[lastIdx] || 0,
+            { ...this.config, ...legOverride }
           );
         } catch (e) {
           // Strategi belum implement → jangan blokir, log sekali per beberapa tick

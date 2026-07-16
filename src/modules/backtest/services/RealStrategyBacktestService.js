@@ -2478,15 +2478,20 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     } else if (atrPct < atrMinPct || atrPct > atrMaxPct) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 7. validateEntry (mirror step 9) ────────────────────────────────────
+    const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
     if (typeof strategy.validateEntry === "function") {
       try {
-        const v = strategy.validateEntry(price, atr, c.volume, indicators.volSMA?.[i] || 0);
+        const legName = meta?.component || meta?.winningComponent;
+        const legOverride = legName ? (cfg.typeOverrides?.[legName] || {}) : {};
+        const v = strategy.validateEntry(price, atr, c.volume, indicators.volSMA?.[i] || 0, {
+          ...cfg,
+          ...legOverride,
+        });
         if (v && v.valid === false) { diag.validateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
       } catch { /* degrade open — same as live */ }
     }
 
     // ── 8. Component-aware SL/TP (mirror step 11d) ──────────────────────────
-    const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
     const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment

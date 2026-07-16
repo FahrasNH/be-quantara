@@ -172,11 +172,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     return this.TRADE_TYPE_TF_CONFIG;
   }
 
-  validateEntry(price, atr, volume, volSMA) {
+  validateEntry(price, atr, volume, volSMA, config = {}) {
+    const atrMinMult = config.atrMinMult ?? 0.8;
+    const atrMaxMult = config.atrMaxMult ?? 5.0;
     const atrPct   = (atr / price) * 100;
     const volRatio = volSMA > 0 ? volume / volSMA : 0;
-    if (atrPct < 0.8 || atrPct > 5.0) {
-      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside range (0.8–5%)` };
+    if (atrPct < atrMinMult || atrPct > atrMaxMult) {
+      return { valid: false, reason: `ATR ${atrPct.toFixed(2)}% outside range (${atrMinMult}–${atrMaxMult}%)` };
     }
     if (volRatio < 0.5) {
       return { valid: false, reason: `Volume ratio ${volRatio.toFixed(2)}× below threshold (0.5×)` };
@@ -1699,9 +1701,16 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const opens = indicators.opens;
     const htfTrend = config.htfTrend ?? null;
     const enabled  = config.enabledComponents ?? config.smcEnabledComponents ?? ["Scalping", "Intraday", "Swing"];
-    const minConfA = config.smcMinConfidenceScalping ?? config.smcMinConfidenceA ?? 60;
-    const minConfB = config.smcMinConfidenceIntraday ?? config.smcMinConfidenceB ?? 65;
-    const minConfC = config.smcMinConfidenceSwing ?? config.smcMinConfidenceC ?? 65;
+    const typeOverrides = config.typeOverrides || {};
+    const minConfA = typeOverrides.Scalping?.smcMinConfidenceScalping
+      ?? typeOverrides.Scalping?.smcMinConfidenceA
+      ?? config.smcMinConfidenceScalping ?? config.smcMinConfidenceA ?? 60;
+    const minConfB = typeOverrides.Intraday?.smcMinConfidenceIntraday
+      ?? typeOverrides.Intraday?.smcMinConfidenceB
+      ?? config.smcMinConfidenceIntraday ?? config.smcMinConfidenceB ?? 65;
+    const minConfC = typeOverrides.Swing?.smcMinConfidenceSwing
+      ?? typeOverrides.Swing?.smcMinConfidenceC
+      ?? config.smcMinConfidenceSwing ?? config.smcMinConfidenceC ?? 65;
     const minConf  = { A: minConfA, B: minConfB, C: minConfC };
     const marketCond = this._getMarketCondition(config);
 
@@ -1817,7 +1826,6 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // BULLISH regime → only LONG entries allowed
     // BEARISH regime → only SHORT entries allowed
     // SIDEWAYS regime → skip Intraday entirely
-    const typeOverrides = config.typeOverrides || {};
     if (rawB && typeOverrides.Intraday?.regimeMappingStrict === true) {
       const mappedB = this._applyRegimeDirectionMapping(rawB, htfRegime, "Intraday", config);
       if (!mappedB) {
@@ -1932,8 +1940,13 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // 12mo CSV forensics: conf>=75 flips Scalping from netPF 0.90 to 1.18; LONG
     // is the weaker side (PF 0.74 vs SHORT 1.01) — SHORT>=75/LONG>=80 measured
     // netPF 1.35 (n=28, WR 46.4%). rawA here is the side string ("LONG"/"SHORT").
-    const scalpMinConfLong = config.smcMinConfidenceScalpingLong ?? config.smcMinConfidenceALong ?? effMinConf.A;
-    const scalpMinConfShort = config.smcMinConfidenceScalpingShort ?? config.smcMinConfidenceAShort ?? effMinConf.A;
+    const scalpOv = typeOverrides.Scalping || {};
+    const scalpMinConfLong = scalpOv.smcMinConfidenceScalpingLong
+      ?? scalpOv.smcMinConfidenceALong
+      ?? config.smcMinConfidenceScalpingLong ?? config.smcMinConfidenceALong ?? effMinConf.A;
+    const scalpMinConfShort = scalpOv.smcMinConfidenceScalpingShort
+      ?? scalpOv.smcMinConfidenceAShort
+      ?? config.smcMinConfidenceScalpingShort ?? config.smcMinConfidenceAShort ?? effMinConf.A;
     const effMinConfA = rawA === "LONG" ? scalpMinConfLong : scalpMinConfShort;
 
 
