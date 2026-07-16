@@ -308,18 +308,28 @@ function applyRelaxOverrides(legOverride, tradeType) {
 }
 
 function buildConfig(strategyKey, tradeType, relax) {
+  // Do NOT send empty typeOverrides — shallow (pre-fix) or even deep merge
+  // of `{ Scalping: {} }` is pointless noise. Let BE resolveStrategyDefaults
+  // SSOT supply atrGateRelative / atrMinMult / conf floors.
   let params = applyStrategyJobDefaults(strategyKey, {});
-  const legOverride = { ...(params.typeOverrides?.[tradeType] || {}) };
-  if (relax && isAfStrategy(strategyKey)) {
+  if (!relax) return params;
+
+  const { resolveStrategyDefaults } = require("../../../src/config/strategyDefaults");
+  const defaults = resolveStrategyDefaults(strategyKey);
+  const baseOv = defaults.typeOverrides || {};
+  const legOverride = { ...(baseOv[tradeType] || {}) };
+  if (isAfStrategy(strategyKey)) {
     applyRelaxOverrides(legOverride, tradeType);
   }
   params = {
     ...params,
     typeOverrides: {
-      ...(params.typeOverrides || {}),
+      Scalping: { ...(baseOv.Scalping || {}) },
+      Intraday: { ...(baseOv.Intraday || {}) },
+      Swing: { ...(baseOv.Swing || {}) },
       [tradeType]: legOverride,
     },
-    ...(relax && tradeType === "Swing" && isAfStrategy(strategyKey)
+    ...(tradeType === "Swing" && isAfStrategy(strategyKey)
       ? { smcMinConfidenceC: 55, smcFundingGuard: false }
       : {}),
   };

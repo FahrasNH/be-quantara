@@ -89,7 +89,17 @@ function buildWindow(seedBase, days) {
 }
 
 // The pre-fix baseline: uniform absolute floor + Intraday confidence floor 60.
-const OLD_ABSOLUTE_CFG = { typeOverrides: {}, atrMinMult: 0.8, atrMaxMult: 5.0, smcMinConfidenceB: 60 };
+// Explicit absolute-only legs (do NOT use typeOverrides:{} — deep merge preserves SSOT).
+const OLD_ABSOLUTE_CFG = {
+  atrMinMult: 0.8,
+  atrMaxMult: 5.0,
+  smcMinConfidenceB: 60,
+  typeOverrides: {
+    Scalping: { atrMinMult: 0.8, atrGateRelative: false },
+    Intraday: { atrMinMult: 0.8 },
+    Swing: { atrMinMult: 0.8 },
+  },
+};
 
 async function tradesByLeg(window, config) {
   const res = await runTripleTypeBacktest({

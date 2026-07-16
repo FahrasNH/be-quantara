@@ -68,7 +68,13 @@ test("Scalping funnel: ATR fix unblocks leg; conf 30 lets SMC-only pass CHoCH", 
     enableFees: false,
     ...window,
     typeOrder: ["Scalping"],
-    config: { typeOverrides: {}, atrMinMult: 0.8 },
+    // Explicit absolute 0.8 floor — empty typeOverrides no longer wipes SSOT.
+    config: {
+      atrMinMult: 0.8,
+      typeOverrides: {
+        Scalping: { atrMinMult: 0.8, atrGateRelative: false },
+      },
+    },
   });
 
   const raceDefault = await runTripleTypeBacktest({

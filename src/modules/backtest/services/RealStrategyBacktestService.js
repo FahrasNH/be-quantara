@@ -87,11 +87,46 @@ const isSmcKey = (k) => {
   return SMC_COMPONENTS.has(n) || n === "ADAPTIVE_FUSION";
 };
 
+/**
+ * Deep-merge per-leg typeOverrides so a partial/empty client payload cannot
+ * wipe SSOT knobs (atrGateRelative, atrMinMult, conf floors, …).
+ *
+ * Shallow `{ ...base, ...opts }` replaces the whole typeOverrides object —
+ * dataset-expand used to send `{ Scalping: {} }` and FE Advance sends
+ * `typeOverrides: {}`, both of which deleted Scalping.atrGateRelative and
+ * fell back to absolute atrMinMult=0.8 → 100% ATR gate rejects on real 5m.
+ */
+function mergeTypeOverrides(baseOv, overrideOv) {
+  const base = (baseOv && typeof baseOv === "object" && !Array.isArray(baseOv)) ? baseOv : {};
+  if (!overrideOv || typeof overrideOv !== "object" || Array.isArray(overrideOv)) {
+    return { ...base };
+  }
+  const legs = new Set([...Object.keys(base), ...Object.keys(overrideOv)]);
+  const out = {};
+  for (const leg of legs) {
+    const b = base[leg];
+    const o = overrideOv[leg];
+    if (o && typeof o === "object" && !Array.isArray(o)) {
+      out[leg] = { ...(b && typeof b === "object" ? b : {}), ...o };
+    } else if (o !== undefined) {
+      out[leg] = o;
+    } else if (b && typeof b === "object" && !Array.isArray(b)) {
+      out[leg] = { ...b };
+    } else {
+      out[leg] = b;
+    }
+  }
+  return out;
+}
+
 function mergeBacktestCfg(base, optsConfig, feeModel) {
+  const opts = optsConfig || {};
+  const { typeOverrides: optsTypeOverrides, ...optsRest } = opts;
   return normalizeSmcParams({
     ...base,
-    ...(optsConfig || {}),
-    makerFeeRate: optsConfig?.makerFeeRate ?? feeModel.makerFeeRate,
+    ...optsRest,
+    typeOverrides: mergeTypeOverrides(base?.typeOverrides, optsTypeOverrides),
+    makerFeeRate: opts.makerFeeRate ?? feeModel.makerFeeRate,
     fundingRate8h: feeModel.fundingRate8h,
     _feeModel: feeModel,
   });
@@ -3117,6 +3152,8 @@ module.exports = {
   runRealBacktest,
   runTripleTypeBacktest,
   runMultiTypeBacktest,
+  mergeTypeOverrides,
+  mergeBacktestCfg,
   formatScalpingFunnel,
   formatStrategyFunnel,
   formatExecSection,
