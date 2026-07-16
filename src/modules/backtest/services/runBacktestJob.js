@@ -312,6 +312,8 @@ async function runBacktestJob(job, userId, opts) {
         entryCandles[type] = entryRes.candles || [];
         dataInfo[type] = {
           entryBars: entryCandles[type].length,
+          entryTf: tfs.entry,
+          htfTf: tfs.trend,
           realBars: entryRes.realBars,
           coverage: entryRes.coverage,
           startDate: entryRes.startDate,
@@ -324,7 +326,7 @@ async function runBacktestJob(job, userId, opts) {
       } catch (e) {
         if (e.code === "CANCELLED") throw e;
         entryCandles[type] = [];
-        dataInfo[type] = { error: e.message };
+        dataInfo[type] = { error: e.message, entryTf: tfs.entry, htfTf: tfs.trend };
       }
 
       job.progress({ phase: "fetch", type, timeframe: tfs.trend, message: `Fetching ${type} HTF candles (${tfs.trend})…`, pct: 0 });
@@ -335,9 +337,11 @@ async function runBacktestJob(job, userId, opts) {
           warmupBars: 60,
         });
         htfCandles[type] = trendRes.candles || [];
+        if (dataInfo[type]) dataInfo[type].htfBars = htfCandles[type].length;
       } catch (e) {
         if (e.code === "CANCELLED") throw e;
         htfCandles[type] = [];
+        if (dataInfo[type]) dataInfo[type].htfBars = 0;
       }
     }
 
