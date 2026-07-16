@@ -105,5 +105,19 @@ scripts/dataset-expand/
 ## Catatan
 
 - via-api = engine + klines di **server** → angka harus selaras screenshot UI (± timing window).
+- SMC Scalping mengirim **FE Advance factory geometry** (bukan bare BE SSOT) — kalau CLI hanya isolasi racer, trade count akan lebih tinggi dari UI.
 - `--mock` over-fires (ratusan trades) — jangan dibanding ke UI.
 - Token JWT expire → refresh dari FE lalu update `.env`.
+
+## Checklist matching UI (SMC Scalping)
+
+| Field | UI Advance | CLI via-api |
+|-------|------------|-------------|
+| `strategy_key` | `SMART_MONEY_CONCEPTS` | sama |
+| Components | hanya Smart Money Concepts | `afActiveRacers/Voters` + `selectedComponents` = SMC |
+| `activeTypes` | `["Scalping"]` | sama |
+| Period | `3m` (90d) | `--days 90` |
+| Exchange | Binance | `--exchange binance` |
+| Capital | $1000 | `--capital 1000` |
+| Fees/slippage | on (Binance 0.04%/0.02%) | `enable_fees/slippage: true` |
+| Geometry | FE defaults (sweep 1.3, OB 1.8, FVG 0.003) | `FE_ADVANCE_SMC_PARAMS` di `buildConfig` |

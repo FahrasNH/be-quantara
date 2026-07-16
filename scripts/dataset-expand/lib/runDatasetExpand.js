@@ -318,7 +318,7 @@ function applyRelaxOverrides(legOverride, tradeType) {
  * produced ~116 trades (mostly VSA) while UI SMC-only showed ~25.
  *
  * FE Advance parity: selecting only "Smart Money Concepts" sends
- * selectedComponents: ["SMART_MONEY_CONCEPTS"].
+ * selectedComponents: ["SMART_MONEY_CONCEPTS"] (+ afActiveVoters).
  */
 function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
   const params = { ...paramsIn };
@@ -330,6 +330,7 @@ function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
 
   if (strategyKey === "SMART_MONEY_CONCEPTS" && !hasAf) {
     params.afActiveRacers = ["SMART_MONEY_CONCEPTS"];
+    params.afActiveVoters = ["SMART_MONEY_CONCEPTS"];
     params.selectedComponents = ["SMART_MONEY_CONCEPTS"];
   } else if (strategyKey === "TREND_FOLLOWING" && !hasTs && !hasAf) {
     params.tsActiveRacers = ["TREND_FOLLOWING"];
@@ -344,13 +345,53 @@ function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
   return params;
 }
 
+/**
+ * FE Advance factory defaults for SMART_MONEY_CONCEPTS
+ * (`fe-bot-trading/src/constants/backtestStrategies.js` Sprint 14 reset).
+ *
+ * These OVERRULE BE strategyDefaults SSOT when the UI runs Advance — so a bare
+ * via-api payload (isolation only) is NOT 1:1 with the UI. Geometry is stricter
+ * than live SSOT (e.g. smcSweepVolMult 1.3 vs BE 0.9) and was the root cause of
+ * CLI 77 vs UI ~25 SMC Scalping trades on the same 90d / 25540-bar window.
+ *
+ * Keep in sync with FE `BUILTIN_STRATEGIES.SMART_MONEY_CONCEPTS.defaults`.
+ * Do NOT send empty typeOverrides — BE deep-merge supplies atrGateRelative /
+ * per-leg conf floors (SMC_LEG_TYPE_OVERRIDES).
+ */
+const FE_ADVANCE_SMC_PARAMS = Object.freeze({
+  smcMinVotes: 1,
+  smcMinConfidenceA: 60,
+  smcMinConfidenceB: 60,
+  smcMinConfidenceC: 60,
+  smcSweepVolMult: 1.3,
+  smcOBDispMult: 1.8,
+  smcFvgMinGap: 0.003,
+  smcDispVolMult: 2.0,
+  vwapLookback: 14,
+  atrMult: 1.5,
+  riskReward: 2.0,
+  riskPerTrade: 0.01,
+  tpMode: "fixed",
+  smcScoreAtrNorm: false,
+  smcPivotStructure: false,
+  smcFvgAutoThreshold: false,
+  smcPremiumDiscountGate: false,
+  smcHtfHardBlock: false,
+  // AF race flags from FE AF_RACE_FLAGS (harmless in single-racer race mode)
+  afCombinationMode: "race",
+  afUseThreeComponentVoting: true,
+  afMinVotes: 2,
+  afRejectOnDissent: true,
+});
+
 function buildConfig(strategyKey, tradeType, relax) {
   // Do NOT send empty typeOverrides — shallow (pre-fix) or even deep merge
   // of `{ Scalping: {} }` is pointless noise. Let BE resolveStrategyDefaults
   // SSOT supply atrGateRelative / atrMinMult / conf floors.
+  const feParity = strategyKey === "SMART_MONEY_CONCEPTS" ? { ...FE_ADVANCE_SMC_PARAMS } : {};
   let params = ensureDatasetComponentIsolation(
     strategyKey,
-    applyStrategyJobDefaults(strategyKey, {}),
+    applyStrategyJobDefaults(strategyKey, feParity),
   );
   if (!relax) return params;
 
@@ -674,7 +715,9 @@ async function main({ strategyKey, tradeType, argv = process.argv.slice(2) }) {
         : "local HistoricalKlinesService (needs exchange network + optional DB).",
       notes: [
         "Default: --via-api against DATASET_EXPAND_API_URL (1:1 UI). Use --local only when this machine can reach the exchange.",
-        "Pins afActiveRacers/selectedComponents to the folder strategy (SMC-only, not full AF race). Match UI with the same --days (UI often 90d / period 3m).",
+        "Pins afActiveRacers/afActiveVoters/selectedComponents to the folder strategy (SMC-only, not full AF race).",
+        "SMC via-api also sends FE Advance factory geometry (smcSweepVolMult 1.3, …) — bare BE SSOT is looser and over-fires vs UI.",
+        "Match UI with the same --days (UI often 90d / period 3m) + Binance + capital $1000.",
         "Pass --relax for AF research-only denser samples (lower conf floors / session off).",
         "Default --days respects TYPE_MAX_PERIOD cap per entry TF; capital default $1000 (UI parity).",
       ],
@@ -696,6 +739,7 @@ module.exports = {
   parseArgs,
   buildConfig,
   ensureDatasetComponentIsolation,
+  FE_ADVANCE_SMC_PARAMS,
   defaultDaysForType,
   TYPE_TF,
   REPO_ROOT,
