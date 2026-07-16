@@ -545,12 +545,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   const atrMinPct = cfg.atrMinMult ?? 0;
   const atrMaxPct = cfg.atrMaxMult ?? Infinity;
 
-  // live configs don't set atrGateRelative, so live gating is unchanged.
-  // Band defaults 0.4–4.0 mirror strategyDefaults DEFAULT_LEG_TYPE_OVERRIDES.Scalping
-  // (the SSOT the flattened via-api config carries) so backtest == dry-run == live.
-  const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
-  const atrRelMin = cfg.atrRelMin ?? 0.4;
-  const atrRelMax = cfg.atrRelMax ?? 4.0;
+  // atrGateRelative is a PER-LEG flag (typeOverrides[componentId].atrGateRelative),
+  // not a top-level one — this engine races multiple components (Scalping/Intraday/
+  // Swing) in the SAME loop, so the relative-vs-absolute decision must be resolved
+  // per componentId below, not once here off cfg.atrGateRelative (which is never
+  // set at top level and previously made the relative gate permanently dead code).
+  // Precompute unconditionally — building the array is cheap (single pass over ATR).
+  const atrBaselineArr = buildAtrBaseline(indicators.atr);
   const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
   const riskPerTrade = cfg.riskPerTrade ?? 0.01;
 
@@ -1017,19 +1018,22 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       if (dailyBase > 0 && (dailyLoss + floatingLoss) / dailyBase >= maxDailyLossPct) { execAbl.rejDailyLoss += 1; continue; }
 
       // Check ATR gate — relative to the leg's own baseline when enabled.
-      // Per-leg atrMinMult/atrMaxMult (typeOverrides[componentId]) let the
-      // absolute floor track each TF's real ATR% band (e.g. 5m Scalping 0.15%,
-      // 15m Intraday 0.4%, 4h Swing 0.8%). Falls back to the top-level
-      // atrMinPct/atrMaxPct when a leg has no override, so non-SMC strategies
-      // and live gating are unaffected.
-      const compAtr = cfg.typeOverrides?.[componentId];
-      const compAtrMin = compAtr?.atrMinMult ?? atrMinPct;
-      const compAtrMax = compAtr?.atrMaxMult ?? atrMaxPct;
+      // Per-leg atrMinMult/atrMaxMult/atrGateRelative (typeOverrides[componentId])
+      // let each TF use its own band (e.g. 5m Scalping adaptive baseline ratio,
+      // 15m Intraday / 4h Swing absolute floor 0.4%/0.8%). Falls back to the
+      // top-level atrMinPct/atrMaxPct/cfg.atrGateRelative when a leg has no
+      // override, so non-SMC strategies and live gating are unaffected.
+      const compAtr = cfg.typeOverrides?.[componentId] || {};
+      const compAtrMin = compAtr.atrMinMult ?? atrMinPct;
+      const compAtrMax = compAtr.atrMaxMult ?? atrMaxPct;
+      const compAtrGateRelative = compAtr.atrGateRelative ?? cfg.atrGateRelative ?? false;
+      const compAtrRelMin = compAtr.atrRelMin ?? cfg.atrRelMin ?? 0.4;
+      const compAtrRelMax = compAtr.atrRelMax ?? cfg.atrRelMax ?? 4.0;
       const atrPct = (atr / price) * 100;
-      if (atrBaseline) {
-        const base = atrBaseline[i];
+      if (compAtrGateRelative && atrBaselineArr) {
+        const base = atrBaselineArr[i];
         const rel = base > 0 ? atr / base : 1;
-        if (rel < atrRelMin || rel > atrRelMax) { execAbl.rejAtrGate += 1; continue; }
+        if (rel < compAtrRelMin || rel > compAtrRelMax) { execAbl.rejAtrGate += 1; continue; }
       } else if (atrPct < compAtrMin || atrPct > compAtrMax) { execAbl.rejAtrGate += 1; continue; }
 
       // Calculate risk config for this component. Pass the REAL regime so
@@ -2198,12 +2202,16 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const atrMinPct = legAtrOv.atrMinMult ?? cfg.atrMinMult ?? 0;
   const atrMaxPct = legAtrOv.atrMaxMult ?? cfg.atrMaxMult ?? Infinity;
 
-  // live configs don't set atrGateRelative, so live gating is unchanged.
+  // atrGateRelative is a PER-LEG flag (typeOverrides[tradeType].atrGateRelative) —
+  // read it off legAtrOv (already resolved above), falling back to top-level cfg
+  // for callers that flattened it there. Previously this read cfg.atrGateRelative
+  // only, which is never set at top level, permanently disabling the relative gate.
   // Band defaults 0.4–4.0 mirror strategyDefaults DEFAULT_LEG_TYPE_OVERRIDES.Scalping
   // (the SSOT the flattened via-api config carries) so backtest == dry-run == live.
-  const atrBaseline = cfg.atrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
-  const atrRelMin = cfg.atrRelMin ?? 0.4;
-  const atrRelMax = cfg.atrRelMax ?? 4.0;
+  const legAtrGateRelative = legAtrOv.atrGateRelative ?? cfg.atrGateRelative ?? false;
+  const atrBaseline = legAtrGateRelative === true ? buildAtrBaseline(indicators.atr) : null;
+  const atrRelMin = legAtrOv.atrRelMin ?? cfg.atrRelMin ?? 0.4;
+  const atrRelMax = legAtrOv.atrRelMax ?? cfg.atrRelMax ?? 4.0;
   const cooldownMs = (cfg.cooldownAfterLoss ?? 0) * 60000;
   const riskPerTrade = cfg.riskPerTrade ?? 0.01;
   const higherTf = cfg.higherTf ?? null;

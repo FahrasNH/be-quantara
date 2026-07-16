@@ -575,7 +575,6 @@ STRATEGIES.ADAPTIVE_FUSION = {
   description: "Umbrella: SMART_MONEY_CONCEPTS + Wyckoff + VSA race-to-confirm.",
   afCombinationMode: "race",
   afEnabledComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
-  typeOverrides: { ...SMC_LEG_TYPE_OVERRIDES },
 };
 STRATEGIES.TREND_SURGE = {
   name: "TREND_SURGE",
