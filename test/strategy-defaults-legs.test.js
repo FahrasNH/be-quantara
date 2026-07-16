@@ -10,6 +10,7 @@ const {
   TS_COMPONENT_BASE,
   MD_COMPONENT_BASE,
   BS_COMPONENT_BASE,
+  SCALP_GEOMETRY,
 } = require("../src/config/strategyDefaults");
 const { normalizeStrategyKey, normalizeTradeTypeKey } = require("../src/config/strategyKeyNormalizer");
 
@@ -93,6 +94,10 @@ for (const key of MULTI_LEG_KEYS) {
   assert.ok(cfg.typeOverrides?.Scalping?.atrMinMult != null, `${key} Scalping atrMinMult`);
   assert.ok(cfg.typeOverrides?.Intraday?.atrMinMult != null, `${key} Intraday atrMinMult`);
   assert.ok(cfg.typeOverrides?.Swing?.atrMinMult != null, `${key} Swing atrMinMult`);
+  const scalp = cfg.typeOverrides.Scalping;
+  assert.equal(scalp.slAtrMult, SCALP_GEOMETRY.slAtrMult, `${key} Scalping slAtrMult`);
+  assert.equal(scalp.tpAtrMult, SCALP_GEOMETRY.tpAtrMult, `${key} Scalping tpAtrMult`);
+  assert.equal(scalp.maxHoldHours, SCALP_GEOMETRY.maxHoldHours, `${key} Scalping maxHoldHours`);
 }
 
 for (const key of NON_SMC_KEYS) {
@@ -131,7 +136,7 @@ assert.equal(STRATEGIES.BREAKOUT_RETEST.lookbackBars, 20);
 
 const smc = STRATEGIES.SMART_MONEY_CONCEPTS;
 assert.equal(smc.enabledComponents?.join(","), "Scalping,Intraday,Swing");
-assert.equal(smc.typeOverrides.Scalping.smcMinConfidenceA, 30);
+assert.equal(smc.typeOverrides.Scalping.smcMinConfidenceA, 40);
 assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceB, 45);
 assert.ok(smc.smcUseSequenceEngine === true);
 
@@ -154,6 +159,7 @@ assert.equal(normalizeTradeTypeKey("B"), "Intraday");
 assert.equal(normalizeTradeTypeKey("A"), "Scalping");
 
 console.log("  ✓ PDF presets removed; per-leg typeOverrides on all multi-leg strategies");
+console.log("  ✓ Scalping RR 2.0 + 120m time-stop on all 12 multi-leg strategies");
 console.log("  ✓ smc* isolated to SMART_MONEY_CONCEPTS");
 console.log("  ✓ tier COMPONENT_BASE blocks; components exclude parent-only knobs");
 console.log("\nAll strategy-defaults-legs tests passed.\n");

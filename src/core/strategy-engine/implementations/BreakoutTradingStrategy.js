@@ -157,7 +157,9 @@ class BreakoutTradingStrategy extends StrategyBase {
       ? extrasOrComponent
       : (maybeExtras && typeof maybeExtras === "object" ? maybeExtras : {});
     const meta = this._lastSignalMeta || {};
-    const slDist = atr * this.config.slMultiplier;
+    const slMult = extras.slMultiplier ?? this.config.slMultiplier;
+    const tpMult = extras.tpMultiplier ?? this.config.tpMultiplier;
+    const slDist = atr * slMult;
     const minSlDist = atr * (this.config.minSlAtrFloor ?? 1.5);
     const maxRR = this.config.maxPlannedRR ?? 2.5;
     const breakoutLevel = extras.breakoutLevel ?? meta.breakoutLevel ?? null;
@@ -207,7 +209,7 @@ class BreakoutTradingStrategy extends StrategyBase {
     if (structOnCorrectSide) {
       tpDist = Math.abs(structuralTarget - entryPrice);
     } else {
-      tpDist = atr * this.config.tpMultiplier;
+      tpDist = atr * tpMult;
     }
     tpDist = Math.min(tpDist, maxTpDist);
 
@@ -219,8 +221,8 @@ class BreakoutTradingStrategy extends StrategyBase {
       riskReward: parseFloat((tpDist / actualSlDist).toFixed(2)),
       slDistance: actualSlDist,
       tpDistance: tpDist,
-      slMultiplier: this.config.slMultiplier,
-      tpMultiplier: this.config.tpMultiplier,
+      slMultiplier: slMult,
+      tpMultiplier: tpMult,
       preferredTpMode: this.config.preferredTpMode || "full",
       slPlusPartial1Pct: this.config.slPlusPartial1Pct ?? 0.33,
     };

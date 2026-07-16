@@ -111,14 +111,15 @@ class MeanReversionStrategy extends StrategyBase {
     return this._lastSignalMeta || null;
   }
 
-  calculateRiskConfig(entryPrice, atr, signal, component = null, _opts = {}) {
+  calculateRiskConfig(entryPrice, atr, signal, component = null, opts = {}) {
     const comp = component || (typeof signal === "object" ? signal.component : null) || "Intraday";
     const isComponentA = comp === "Scalping" || comp === "A";
     const side = typeof signal === "object" ? signal.signal : signal;
 
-    const slDist = atr * this.config.atrMult;
+    const slMult = opts.slMultiplier ?? this.config.atrMult;
+    const slDist = atr * slMult;
     const tpMultiplier = isComponentA ? this.config.tpMultiplierA : this.config.tpMultiplierB;
-    let tpDist = slDist * tpMultiplier;
+    let tpDist = opts.tpMultiplier != null ? atr * opts.tpMultiplier : slDist * tpMultiplier;
     let tpSource = "rr";
 
     const meta = this._lastSignalMeta;

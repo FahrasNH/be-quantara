@@ -39,6 +39,24 @@ const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
 });
 
 /**
+ * Shared Scalping geometry (Sprint 16 — all 4 umbrellas).
+ * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR), maxHoldHours=2 (120m TIME_STOP).
+ * Backtest + live read typeOverrides.Scalping via RealStrategyBacktestService /
+ * BotEngine TIME_STOP and calculateRiskConfig slAtrMult/tpAtrMult chain.
+ */
+const SCALP_GEOMETRY = Object.freeze({
+  slAtrMult: 1.5,
+  tpAtrMult: 3.0,
+  maxHoldHours: 2,
+});
+
+/** DEFAULT + Scalping geometry — TS / MD / BS parents + AF Wyckoff/VSA components. */
+const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
+  ...DEFAULT_LEG_TYPE_OVERRIDES,
+  Scalping: { ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping, ...SCALP_GEOMETRY },
+});
+
+/**
  * SMC-only per-leg overrides — keep atrGateRelative from DEFAULT, PLUS lower
  * confidence floors. Without these, detectSignalMulti falls back to top-level
  * smcMinConfidence*=60 and Scalping stays ~0 trades on real 5m (Defect A).
@@ -111,7 +129,7 @@ const AF_COMPONENT_BASE = {
   checkInterval: 3_600_000,
 
   enabledComponents: ["Scalping", "Intraday", "Swing"],
-  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+  typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
 
   trades:  "~3–8 trade/hari (1h eval)",
   winrate: "Target 52–60%",
@@ -156,7 +174,7 @@ const TS_COMPONENT_BASE = {
   checkInterval: 60_000,
 
   enabledComponents: ["Scalping", "Intraday", "Swing"],
-  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+  typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
 
   trades:  "8-15 trade/hari",
   winrate: "~54-58%",
@@ -201,7 +219,7 @@ const MD_COMPONENT_BASE = {
   checkInterval: 60_000,
 
   enabledComponents: ["Scalping", "Intraday", "Swing"],
-  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+  typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
 
   trades:  "5-15 trade/minggu",
   winrate: "~55-60%",
@@ -246,7 +264,7 @@ const BS_COMPONENT_BASE = {
   checkInterval: 900_000,
 
   enabledComponents: ["Scalping", "Intraday", "Swing"],
-  typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+  typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
 
   trades:  "2-7 trade/hari",
   winrate: "~51-56%",
@@ -308,7 +326,7 @@ const STRATEGIES = {
     enabledComponents: ["Scalping", "Intraday", "Swing"],
     // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
-      ...DEFAULT_LEG_TYPE_OVERRIDES,
+      ...STANDARD_LEG_TYPE_OVERRIDES,
       Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
 
@@ -378,7 +396,7 @@ const STRATEGIES = {
     signalType:    "MEAN_REVERSION",
 
     enabledComponents: ["Scalping", "Intraday", "Swing"],
-    typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+    typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
 
     bbPeriod:     20,
     minVolRatio:  0.7,
@@ -456,7 +474,7 @@ const STRATEGIES = {
     signalType:    "BREAKOUT_RETEST",
 
     enabledComponents: ["Scalping", "Intraday", "Swing"],
-    typeOverrides: { ...DEFAULT_LEG_TYPE_OVERRIDES },
+    typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
 
     lookbackBars:          20,
     volumeMultiplier:      1.5,
@@ -801,6 +819,8 @@ module.exports = {
   MD_COMPONENT_BASE,
   BS_COMPONENT_BASE,
   DEFAULT_LEG_TYPE_OVERRIDES,
+  SCALP_GEOMETRY,
+  STANDARD_LEG_TYPE_OVERRIDES,
   SMC_LEG_TYPE_OVERRIDES,
   DEFAULT_STRATEGY_KEY,
 };
