@@ -26,18 +26,23 @@ const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
   Swing:    { atrMinMult: 0.8 },
 });
 
-/** SMC-only leg overrides (confidence floors stay on SMART_MONEY_CONCEPTS only). */
+/**
+ * SMC-only per-leg overrides — keep atrGateRelative from DEFAULT, PLUS lower
+ * confidence floors. Without these, detectSignalMulti falls back to top-level
+ * smcMinConfidence*=60 and Scalping stays ~0 trades on real 5m (Defect A).
+ */
 const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
   Scalping: {
-    atrMinMult: 0.15,
-    atrGateRelative: true,
-    atrRelMin: 0.6,
-    atrRelMax: 3.0,
+    ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
     smcMinConfidenceScalping: 30,
     smcMinConfidenceA: 30,
   },
-  Intraday: { atrMinMult: 0.4, smcMinConfidenceIntraday: 45, smcMinConfidenceB: 45 },
-  Swing:    { atrMinMult: 0.8 },
+  Intraday: {
+    ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,
+    smcMinConfidenceIntraday: 45,
+    smcMinConfidenceB: 45,
+  },
+  Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing },
 });
 
 /** Shared AF component geometry (no smc* — Wyckoff/VSA racers + SMC base). */
@@ -273,10 +278,10 @@ const STRATEGIES = {
     signalType:    "TREND_FOLLOWING",
 
     enabledComponents: ["Scalping", "Intraday", "Swing"],
+    // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
-      Scalping: { atrMinMult: 0.15 },
-      Intraday: { atrMinMult: 0.4 },
-      Swing:    { atrMinMult: 0.8, adxMinStrength: 20 },
+      ...DEFAULT_LEG_TYPE_OVERRIDES,
+      Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
 
     adxMinStrength:    25,
@@ -557,9 +562,6 @@ STRATEGIES.ADAPTIVE_FUSION = {
   label: "Adaptive Fusion",
   description: "Umbrella: SMART_MONEY_CONCEPTS + Wyckoff + VSA race-to-confirm.",
   afCombinationMode: "race",
-  afUseThreeComponentVoting: true,
-  afMinVotes: 2,
-  afRejectOnDissent: true,
   afEnabledComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
 };
 STRATEGIES.TREND_SURGE = {
@@ -567,8 +569,6 @@ STRATEGIES.TREND_SURGE = {
   label: "Trend Surge",
   description: "Umbrella: TREND_FOLLOWING + Dow Theory + AMT race-to-confirm.",
   tsCombinationMode: "race",
-  tsUseStructureGate: false,
-  tsUseVwapPrecision: false,
 };
 STRATEGIES.MEAN_DRIFT = {
   name: "MEAN_DRIFT",
@@ -771,5 +771,6 @@ module.exports = {
   MD_COMPONENT_BASE,
   BS_COMPONENT_BASE,
   DEFAULT_LEG_TYPE_OVERRIDES,
+  SMC_LEG_TYPE_OVERRIDES,
   DEFAULT_STRATEGY_KEY,
 };
