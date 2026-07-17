@@ -24,6 +24,7 @@ const TRADE_EXPORT_COLUMNS = [
   ["confidence",   "Confidence"],
   ["htfTrend",     "HTF Trend"],
   ["dailyRegime",  "Daily Regime"],
+  ["session",      "Session"],
   ["atr",          "ATR"],
   ["entryReasons", "Entry Reasons"],
   ["exitReason",   "Exit Reason"],
@@ -69,6 +70,7 @@ const FULL_TRADE_EXPORT_COLUMNS = [
   ["htfTrend", "HTF Trend"],
   ["marketCond", "Market Cond"],
   ["dailyRegime", "Daily Regime"],
+  ["session", "Session"],
   ["atr", "ATR"],
   ["entryRsi", "Entry RSI"],
   ["component", "Component"],
@@ -176,7 +178,7 @@ function buildPerformanceSummaryCsv(data) {
 const ML_FIELD_SETS = Object.freeze({
   SMART_MONEY_CONCEPTS: Object.freeze([
     "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct",
-    "htfAdx", "hourUtc", "confSweepStrength", "confFvgSize",
+    "htfAdx", "confSweepStrength", "confFvgSize",
     "confDisplacementPct", "confHtfAlignment", "confMitigationDepth", "confObConfluence",
   ]),
   BREAKOUT_RETEST: Object.freeze([

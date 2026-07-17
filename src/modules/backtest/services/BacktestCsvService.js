@@ -40,10 +40,47 @@ const {
   normalizeStrategyKey,
   resolveExportColumnKeys,
 } = require("../../../server/services/csv/strategyReasonFormatters");
+const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 const NA = "N/A";
 
 const TYPE_TRADE_CLASSES = ["Scalping", "Intraday", "Swing"];
+
+/**
+ * Umbrella engine → user-facing umbrella name (what user selected in UI).
+ * E.g., SMART_MONEY_CONCEPTS → "Adaptive Fusion", TREND_FOLLOWING → "Trend Surge"
+ */
+const UMBRELLA_DISPLAY_NAMES = {
+  SMART_MONEY_CONCEPTS: "Adaptive Fusion",
+  TREND_FOLLOWING: "Trend Surge",
+  MEAN_REVERSION: "Mean Drift",
+  BREAKOUT_RETEST: "Breakout Storm",
+};
+
+/**
+ * Get user-friendly label for a strategy key (canonical, component, or umbrella).
+ * - Components: WYCKOFF → "Wyckoff", VOLUME_SPREAD_ANALYSIS → "Volume Spread Analysis"
+ * - Umbrellas: SMART_MONEY_CONCEPTS → "Adaptive Fusion", TREND_FOLLOWING → "Trend Surge"
+ */
+function getStrategyLabel(key) {
+  if (!key) return NA;
+  const normalized = normalizeStrategyKey(String(key).toUpperCase());
+
+  // Check if it's an umbrella engine (use display name, not STRATEGIES label)
+  if (UMBRELLA_DISPLAY_NAMES[normalized]) {
+    return UMBRELLA_DISPLAY_NAMES[normalized];
+  }
+
+  // Check if it's a component (try STRATEGIES)
+  const strat = STRATEGIES[normalized];
+  if (strat?.label) return strat.label;
+
+  // Fallback: convert key to title case (e.g., WYCKOFF → "Wyckoff")
+  return String(key)
+    .split(/[\s_-]+/)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
 
 // Classify a trade by holding period (hours): <=4h Scalping, <=24h Intraday, else Swing.
 function classifyTypeTrade(holdHours) {
@@ -57,6 +94,44 @@ function escapeCsv(val) {
   const s = val == null ? "" : String(val);
   if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
+}
+
+/**
+ * Detect market session from UTC hour (0-23).
+ * Sydney: 22:00-06:59 UTC (ASX); Tokyo: 00:00-08:59 UTC (JPX)
+ * London: 08:00-16:59 UTC (LSE); New York: 13:00-21:59 UTC (NYSE)
+ */
+function detectMarketSession(hourUtc) {
+  if (hourUtc == null || !Number.isFinite(Number(hourUtc))) return NA;
+  const h = Number(hourUtc);
+  if ((h >= 22 && h <= 23) || (h >= 0 && h <= 6)) return "Sydney";
+  if (h >= 0 && h <= 8) return "Tokyo"; // Overlaps Sydney early hours (both active)
+  if (h >= 8 && h <= 16) return "London";
+  if (h >= 13 && h <= 21) return "New York";
+  return NA;
+}
+
+/**
+ * Format ISO datetime to readable: "20 April 2026, 01:25 AM"
+ */
+function formatDateTime(isoStr) {
+  if (!isoStr || isoStr === NA) return NA;
+  try {
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return NA;
+    const day = d.getUTCDate();
+    const month = d.toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+    const year = d.getUTCFullYear();
+    const time = d.toLocaleString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "UTC"
+    });
+    return `${day} ${month} ${year}, ${time}`;
+  } catch {
+    return NA;
+  }
 }
 
 function metricsToRow(record) {
@@ -140,10 +215,14 @@ function mapBacktestTrade(trade, ctx, index) {
     ? trade.tradeType
     : classifyTypeTrade(holdHoursNum) ?? NA;
 
-  let hourUtc = trade.hourUtc ?? NA;
+  // Detect market session from open time
+  let session = NA;
   if (openTime !== NA) {
     const openHour = new Date(openTime).getUTCHours();
-    if (!Number.isNaN(openHour)) hourUtc = openHour;
+    if (!Number.isNaN(openHour)) session = detectMarketSession(openHour);
+  }
+  if (!session || session === NA) {
+    session = detectMarketSession(trade.hourUtc) ?? NA;
   }
 
   const holdHoursOut =
@@ -187,7 +266,8 @@ function mapBacktestTrade(trade, ctx, index) {
     sessionId: ctx.sessionId ?? `BT-${ctx.backtestId}`,
     symbol: ctx.symbol,
     side: trade.side,
-    strategy: ctx.strategy,
+    // Use per-trade component as strategy, with user-friendly label (e.g., "Wyckoff" not "WYCKOFF")
+    strategy: getStrategyLabel(trade.winningComponent || trade.component || ctx.strategy),
     // Preserve for Dynamic ML sheet routing (resolveTradeMlStrategyKey order)
     winningComponent: trade.winningComponent ?? null,
     strategyKey: trade.strategyKey ?? strategyKeyForReasons ?? null,
@@ -221,7 +301,7 @@ function mapBacktestTrade(trade, ctx, index) {
     obDistanceAtr: trade.obDistanceAtr ?? NA,
     displacementPct: trade.displacementPct ?? NA,
     htfAdx: trade.htfAdx ?? NA,
-    hourUtc,
+    session,
     volumeRatio: trade.volumeRatio ?? NA,
     bbWidth: trade.bbWidth ?? NA,
     bbSqueezeWidthAtr: trade.bbSqueezeWidthAtr ?? NA,
@@ -309,8 +389,8 @@ function mapBacktestTrade(trade, ctx, index) {
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,
-    openTime,
-    closeTime,
+    openTime: formatDateTime(openTime),
+    closeTime: formatDateTime(closeTime),
     isPartial,
     result: pnlNet > 0 ? "win" : "loss",
   };
