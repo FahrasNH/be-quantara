@@ -36,18 +36,30 @@ const TRADE_EXPORT_COLUMNS = [
   ["dryRun",       "DryRun"],
 ];
 
-/** Admin export — kolom User di depan (admin.js GET /admin/trades/export) */
+/**
+ * Backtest/user export core columns. No "User" — backtest & user files belong to
+ * a single user, so the column is dead weight (see Quantara export review). The
+ * admin multi-user export (admin.js GET /admin/trades/export) prepends its own
+ * "User" column since it genuinely spans users.
+ */
 const ADMIN_TRADE_EXPORT_COLUMNS = [
-  ["user", "User"],
   ...TRADE_EXPORT_COLUMNS,
 ];
 
 /**
+ * SMC-specific review sheet — trader-facing columns only. Drops User/Mode/DryRun
+ * plumbing AND all engine-internal ML/conf features (sweep/FVG/OB/displacement +
+ * conf breakdown live in the ML datasets, not the review export). 22 columns.
+ */
+const SMC_REVIEW_EXPORT_COLUMNS = TRADE_EXPORT_COLUMNS.filter(
+  ([k]) => k !== "mode" && k !== "dryRun"
+);
+
+/**
  * Full flat CSV superset (backward compatible) — SL/TP, sessionId, funding, planned R:R, etc.
- * Used by backtest Full Export only; CORE XLSX User Export stays on TRADE_EXPORT_COLUMNS.
+ * Used by backtest Full Export only (single user → no "User" column).
  */
 const FULL_TRADE_EXPORT_COLUMNS = [
-  ["user", "User"],
   ["id", "ID"],
   ["sessionId", "Session ID"],
   ["symbol", "Symbol"],
@@ -143,8 +155,11 @@ const TRADE_EXPORT_COLUMN_KEYS = TRADE_EXPORT_COLUMNS.map(([k]) => k);
  */
 function pickExportColumns(columnKeys, { adminFormat = false } = {}) {
   const keySet = new Set(columnKeys);
-  const cols = TRADE_EXPORT_COLUMNS.filter(([k]) => keySet.has(k));
-  return adminFormat ? [["user", "User"], ...cols] : cols;
+  // No "User" prepend: backtest/user exports are single-user. The admin
+  // multi-user export adds its own User column (admin.js). adminFormat is kept
+  // for signature compat but no longer injects a column.
+  void adminFormat;
+  return TRADE_EXPORT_COLUMNS.filter(([k]) => keySet.has(k));
 }
 
 function buildPerformanceSummaryCsv(data) {
@@ -322,6 +337,12 @@ function buildSpecificExportColumns(rows, { adminFormat = true, strategies = nul
   const order = Object.keys(ML_FIELD_SETS);
   stratList = order.filter((k) => stratList.includes(k));
 
+  // SMC review sheet: trader-facing columns only, no engine-internal ML/conf
+  // features (see SMC_REVIEW_EXPORT_COLUMNS). Scoped to a SMC-only sheet.
+  if (stratList.length === 1 && stratList[0] === "SMART_MONEY_CONCEPTS") {
+    return SMC_REVIEW_EXPORT_COLUMNS;
+  }
+
   const mlCols = [];
   const seen = new Set();
   for (const strat of stratList) {
@@ -431,6 +452,7 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
 module.exports = {
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
+  SMC_REVIEW_EXPORT_COLUMNS,
   FULL_TRADE_EXPORT_COLUMNS,
   TRADE_EXPORT_COLUMN_KEYS,
   FULL_TRADE_EXPORT_COLUMN_KEYS,
