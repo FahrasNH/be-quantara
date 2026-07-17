@@ -47,6 +47,25 @@ const NA = "N/A";
 const TYPE_TRADE_CLASSES = ["Scalping", "Intraday", "Swing"];
 
 /**
+ * Race component → umbrella engine key. Every trade is attributed to the winning
+ * component; the Strategy column shows its parent umbrella (what the user picked).
+ */
+const COMPONENT_TO_ENGINE = {
+  SMART_MONEY_CONCEPTS: "SMART_MONEY_CONCEPTS",
+  WYCKOFF: "SMART_MONEY_CONCEPTS",
+  VOLUME_SPREAD_ANALYSIS: "SMART_MONEY_CONCEPTS",
+  TREND_FOLLOWING: "TREND_FOLLOWING",
+  MARKET_STRUCTURE: "TREND_FOLLOWING",
+  AUCTION_MARKET_THEORY: "TREND_FOLLOWING",
+  MEAN_REVERSION: "MEAN_REVERSION",
+  SUPPLY_AND_DEMAND: "MEAN_REVERSION",
+  STATISTICAL_ARBITRAGE: "MEAN_REVERSION",
+  BREAKOUT_RETEST: "BREAKOUT_RETEST",
+  ICT_STYLE_TRADING: "BREAKOUT_RETEST",
+  LIQUIDATION_SQUEEZE: "BREAKOUT_RETEST",
+};
+
+/**
  * Umbrella engine → user-facing umbrella name (what user selected in UI).
  * E.g., SMART_MONEY_CONCEPTS → "Adaptive Fusion", TREND_FOLLOWING → "Trend Surge"
  */
@@ -58,24 +77,18 @@ const UMBRELLA_DISPLAY_NAMES = {
 };
 
 /**
- * Get user-friendly label for a strategy key (canonical, component, or umbrella).
- * - Components: WYCKOFF → "Wyckoff", VOLUME_SPREAD_ANALYSIS → "Volume Spread Analysis"
- * - Umbrellas: SMART_MONEY_CONCEPTS → "Adaptive Fusion", TREND_FOLLOWING → "Trend Surge"
+ * Get the umbrella display name for any strategy/component key.
+ * Wyckoff / VSA / SMC → "Adaptive Fusion"; Dow / AMT / TF → "Trend Surge"; etc.
  */
 function getStrategyLabel(key) {
   if (!key) return NA;
   const normalized = normalizeStrategyKey(String(key).toUpperCase());
+  const engine = COMPONENT_TO_ENGINE[normalized] || normalized;
+  if (UMBRELLA_DISPLAY_NAMES[engine]) return UMBRELLA_DISPLAY_NAMES[engine];
 
-  // Check if it's an umbrella engine (use display name, not STRATEGIES label)
-  if (UMBRELLA_DISPLAY_NAMES[normalized]) {
-    return UMBRELLA_DISPLAY_NAMES[normalized];
-  }
-
-  // Check if it's a component (try STRATEGIES)
+  // Fallback: STRATEGIES label, else title-case the raw key.
   const strat = STRATEGIES[normalized];
   if (strat?.label) return strat.label;
-
-  // Fallback: convert key to title case (e.g., WYCKOFF → "Wyckoff")
   return String(key)
     .split(/[\s_-]+/)
     .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
