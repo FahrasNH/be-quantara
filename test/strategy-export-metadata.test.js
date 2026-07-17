@@ -27,10 +27,12 @@ const {
   ML_FIELD_SETS,
   projectMlFields,
   TRADE_EXPORT_COLUMNS,
+  ADMIN_TRADE_EXPORT_COLUMNS,
   DROPPED_ML_CSV_COLUMN_KEYS,
   buildDynamicMultiSheetXlsx,
   normalizeMlStrategyKey,
   resolveTradeMlStrategyKey,
+  specificSheetName,
 } = require("#shared/csv/tradeExportCsv.js");
 const {
   buildSmcEntryFeatures,
@@ -507,18 +509,18 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     }, { ...ctx, strategy: component }, 0);
   }
 
-  test("N trades across 3 strategies → 1 core + 3 ML sheets, no cross-strategy leakage", () => {
+  test("N trades across 3 strategies → 3 self-contained sheets, no cross-strategy leakage", () => {
     const XLSX = require("xlsx");
     const trades = [
       mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
         tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
-        mrRsiValue: 99, // should NOT appear on ML_TREND_FOLLOWING
+        mrRsiValue: 99, // should NOT appear on TF_specific
       }),
       mkTrade("MEAN_REVERSION", {
         mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98,
         mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE",
-        tfAdxStrength: 99, // should NOT appear on ML_MEAN_REVERSION
+        tfAdxStrength: 99, // should NOT appear on MR_specific
       }),
       mkTrade("ICT_STYLE_TRADING", {
         ictKillZoneHour: 8, ictKillZoneLevel: 95, ictRaidType: "RAID_LOW",
@@ -527,21 +529,28 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     ];
     const buf = buildDynamicMultiSheetXlsx(trades, null);
     const wb = XLSX.read(buf, { type: "buffer" });
-    expect(wb.SheetNames).toEqual(["User Export", "ML_TREND_FOLLOWING", "ML_MEAN_REVERSION", "ML_ICT_STYLE_TRADING"]);
+    expect(wb.SheetNames).toEqual([
+      specificSheetName("TREND_FOLLOWING"),
+      specificSheetName("MEAN_REVERSION"),
+      specificSheetName("ICT_STYLE_TRADING"),
+    ]);
+    expect(wb.SheetNames).not.toContain("User Export");
 
-    const tfSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_TREND_FOLLOWING, { header: 1 });
+    const tfSheet = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("TREND_FOLLOWING")], { header: 1 });
     expect(tfSheet.length).toBe(2); // header + 1 trade
-    expect(tfSheet[0]).not.toContain("mrRsiValue");
-    expect(tfSheet[0]).toContain("tfAdxStrength");
+    expect(tfSheet[0].length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length + ML_FIELD_SETS.TREND_FOLLOWING.length);
+    expect(tfSheet[0]).not.toContain("Mr Rsi Value");
+    expect(tfSheet[0]).toContain("Tf Adx Strength");
 
-    const mrSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_MEAN_REVERSION, { header: 1 });
+    const mrSheet = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("MEAN_REVERSION")], { header: 1 });
     expect(mrSheet.length).toBe(2);
-    expect(mrSheet[0]).not.toContain("tfAdxStrength");
-    expect(mrSheet[0]).toContain("mrRsiValue");
+    expect(mrSheet[0].length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length + ML_FIELD_SETS.MEAN_REVERSION.length);
+    expect(mrSheet[0]).not.toContain("Tf Adx Strength");
+    expect(mrSheet[0]).toContain("Mr Rsi Value");
 
-    const ictSheet = XLSX.utils.sheet_to_json(wb.Sheets.ML_ICT_STYLE_TRADING, { header: 1 });
+    const ictSheet = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("ICT_STYLE_TRADING")], { header: 1 });
     expect(ictSheet.length).toBe(2);
-    expect(ictSheet[0]).toContain("ictKillZoneHour");
+    expect(ictSheet[0]).toContain("Ict Kill Zone Hour");
   });
 
   test("coreOnly → User Export sheet only", () => {
@@ -557,7 +566,7 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     expect(wb.SheetNames).toEqual(["User Export"]);
   });
 
-  test("single strategy → 2 sheets (User Export + ML_*)", () => {
+  test("single strategy → one self-contained sheet", () => {
     const XLSX = require("xlsx");
     const trades = [
       mkTrade("TREND_FOLLOWING", {
@@ -567,10 +576,12 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     ];
     const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING"]);
     const wb = XLSX.read(buf, { type: "buffer" });
-    expect(wb.SheetNames).toEqual(["User Export", "ML_TREND_FOLLOWING"]);
+    expect(wb.SheetNames).toEqual([specificSheetName("TREND_FOLLOWING")]);
+    const header = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("TREND_FOLLOWING")], { header: 1 })[0];
+    expect(header.length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length + ML_FIELD_SETS.TREND_FOLLOWING.length);
   });
 
-  test("subset TREND_FOLLOWING + MEAN_REVERSION → 3 sheets", () => {
+  test("subset TREND_FOLLOWING + MEAN_REVERSION → 2 self-contained sheets", () => {
     const XLSX = require("xlsx");
     const trades = [
       mkTrade("TREND_FOLLOWING", {
@@ -584,10 +595,10 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     ];
     const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING", "MEAN_REVERSION"]);
     const wb = XLSX.read(buf, { type: "buffer" });
-    expect(wb.SheetNames.length).toBe(3);
-    expect(wb.SheetNames).toContain("User Export");
-    expect(wb.SheetNames).toContain("ML_TREND_FOLLOWING");
-    expect(wb.SheetNames).toContain("ML_MEAN_REVERSION");
+    expect(wb.SheetNames.length).toBe(2);
+    expect(wb.SheetNames).toContain(specificSheetName("TREND_FOLLOWING"));
+    expect(wb.SheetNames).toContain(specificSheetName("MEAN_REVERSION"));
+    expect(wb.SheetNames).not.toContain("User Export");
   });
 
   test("skips empty strategy sheets; aliases normalize", () => {
@@ -598,10 +609,10 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const buf = buildDynamicMultiSheetXlsx(trades, ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING"]);
     const wb = XLSX.read(buf, { type: "buffer" });
     // TREND_FOLLOWING has no trades → skipped
-    expect(wb.SheetNames).toEqual(["User Export", "ML_SMART_MONEY_CONCEPTS"]);
+    expect(wb.SheetNames).toEqual([specificSheetName("SMART_MONEY_CONCEPTS")]);
   });
 
-  test("all 12 strategies with one trade each → 13 sheets", () => {
+  test("all 12 strategies with one trade each → 12 self-contained sheets", () => {
     const XLSX = require("xlsx");
     const samples = {
       SMART_MONEY_CONCEPTS: { sweepStrength: 1, fvgSizeAtr: 0.2, obDistanceAtr: 0.1, displacementPct: 1, htfAdx: 25, confSweepStrength: 1, confFvgSize: 0.2, confDisplacementPct: 1, confHtfAlignment: 5, confMitigationDepth: 0.2, confObConfluence: true },
@@ -622,8 +633,9 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const buf = buildDynamicMultiSheetXlsx(trades, Object.keys(samples));
     const elapsed = Date.now() - t0;
     const wb = XLSX.read(buf, { type: "buffer" });
-    expect(wb.SheetNames.length).toBe(13);
-    expect(wb.SheetNames[0]).toBe("User Export");
+    expect(wb.SheetNames.length).toBe(12);
+    expect(wb.SheetNames).not.toContain("User Export");
+    expect(wb.SheetNames[0]).toBe(specificSheetName("SMART_MONEY_CONCEPTS"));
     expect(buf.length).toBeLessThan(20 * 1024 * 1024);
     expect(elapsed).toBeLessThan(5000);
   });
