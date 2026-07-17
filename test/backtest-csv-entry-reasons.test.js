@@ -14,6 +14,8 @@ const {
 const {
   TRADE_EXPORT_COLUMN_KEYS,
   DROPPED_ML_CSV_COLUMN_KEYS,
+  ADMIN_TRADE_EXPORT_COLUMNS,
+  FULL_TRADE_EXPORT_COLUMNS,
 } = require("#shared/csv/tradeExportCsv.js");
 
 const ctx = {
@@ -194,6 +196,61 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     expect(csv).not.toContain("Hold Hours");
     expect(csv).not.toContain("Trade Type");
     expect(csv).not.toContain("Funding Rate At Entry");
+  });
+
+  test("Core CSV (buildTradesCsv) stays compact — not Full superset", () => {
+    const csv = buildTradesCsv([{
+      id: 4, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
+      trades_data: [{ ...baseTrade, component: "BREAKOUT_RETEST" }],
+    }], { includeSummary: false });
+    const headerLine = csv.split("\n")[0];
+    const colCount = headerLine.split(",").length;
+    expect(colCount).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length);
+    expect(colCount).toBe(24);
+    expect(csv).not.toContain("Session ID");
+    expect(csv).not.toContain("Planned R:R");
+  });
+
+  test("Full Export (exportBacktests) includes backward-compatible superset columns", () => {
+    const { exportBacktests, exportBacktestsXlsx } = require("../src/server/services/BacktestCsvService");
+    const XLSX = require("xlsx");
+    const record = {
+      id: 4, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
+      trades_data: [{
+        ...baseTrade,
+        component: "BREAKOUT_RETEST",
+        sl: 95,
+        tp: 110,
+        openTime: "2024-01-01T09:00:00Z",
+        closeTime: "2024-01-01T11:00:00Z",
+      }],
+    };
+    const csv = exportBacktests([record], "trades");
+    const headerLine = csv.split("\n").find((line) => line.startsWith("User,"));
+    expect(csv).toContain("Session ID");
+    expect(csv).toContain("SL");
+    expect(csv).toContain("TP");
+    expect(csv).toContain("Planned R:R");
+    expect(headerLine).toBeTruthy();
+    expect(headerLine.split(",").length).toBe(FULL_TRADE_EXPORT_COLUMNS.length);
+    expect(headerLine.split(",").length).toBe(37);
+
+    const coreXlsx = exportBacktestsXlsx([record], { adminFormat: true, coreOnly: true });
+    const coreWb = XLSX.read(coreXlsx, { type: "buffer" });
+    const coreHeader = XLSX.utils.sheet_to_json(coreWb.Sheets["User Export"], { header: 1 })[0];
+    expect(coreHeader.length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length);
+    expect(coreHeader.length).toBe(24);
+    expect(coreHeader).not.toContain("Session ID");
+
+    const stratXlsx = exportBacktestsXlsx([record], {
+      adminFormat: true,
+      coreOnly: false,
+      strategies: ["BREAKOUT_RETEST"],
+    });
+    const stratWb = XLSX.read(stratXlsx, { type: "buffer" });
+    expect(stratWb.SheetNames.length).toBeGreaterThan(1);
+    const stratHeader = XLSX.utils.sheet_to_json(stratWb.Sheets["User Export"], { header: 1 })[0];
+    expect(stratHeader.length).toBe(24);
   });
 });
 

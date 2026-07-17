@@ -41,6 +41,52 @@ const ADMIN_TRADE_EXPORT_COLUMNS = [
   ...TRADE_EXPORT_COLUMNS,
 ];
 
+/**
+ * Full flat CSV superset (backward compatible) — SL/TP, sessionId, funding, planned R:R, etc.
+ * Used by backtest Full Export only; CORE XLSX User Export stays on TRADE_EXPORT_COLUMNS.
+ */
+const FULL_TRADE_EXPORT_COLUMNS = [
+  ["user", "User"],
+  ["id", "ID"],
+  ["sessionId", "Session ID"],
+  ["symbol", "Symbol"],
+  ["side", "Side"],
+  ["strategy", "Strategy"],
+  ["status", "Status"],
+  ["entryPrice", "Entry Price"],
+  ["exitPrice", "Exit Price"],
+  ["sl", "SL"],
+  ["tp", "TP"],
+  ["size", "Size"],
+  ["pnl", "PnL Gross"],
+  ["fee", "Fee"],
+  ["funding", "Funding"],
+  ["pnlNet", "PnL Net"],
+  ["pnlPct", "PnL %"],
+  ["plannedRR", "Planned R:R"],
+  ["actualRR", "Actual R:R"],
+  ["confidence", "Confidence"],
+  ["htfTrend", "HTF Trend"],
+  ["marketCond", "Market Cond"],
+  ["dailyRegime", "Daily Regime"],
+  ["atr", "ATR"],
+  ["entryRsi", "Entry RSI"],
+  ["component", "Component"],
+  ["duration", "Duration"],
+  ["reason", "Reason"],
+  ["exitReason", "Exit Reason"],
+  ["entryReasons", "Entry Reasons"],
+  ["dryRun", "DryRun"],
+  ["mode", "Mode"],
+  ["exchange", "Exchange"],
+  ["openTime", "Open Time"],
+  ["closeTime", "Close Time"],
+  ["isPartial", "Is Partial"],
+  ["result", "Result"],
+];
+
+const FULL_TRADE_EXPORT_COLUMN_KEYS = FULL_TRADE_EXPORT_COLUMNS.map(([k]) => k);
+
 /** Stale ML / forensics columns removed from human-readable CSV exports. */
 const DROPPED_ML_CSV_COLUMN_KEYS = Object.freeze([
   "sweepStrength",
@@ -323,7 +369,9 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
 module.exports = {
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
+  FULL_TRADE_EXPORT_COLUMNS,
   TRADE_EXPORT_COLUMN_KEYS,
+  FULL_TRADE_EXPORT_COLUMN_KEYS,
   DROPPED_ML_CSV_COLUMN_KEYS,
   ML_FIELD_SETS,
   ML_STRATEGY_ALIASES,

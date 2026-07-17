@@ -25,6 +25,7 @@
 const { formatDuration } = require("../../../infrastructure/db/database");
 const {
   TRADE_EXPORT_COLUMN_KEYS,
+  FULL_TRADE_EXPORT_COLUMNS,
   pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
@@ -344,11 +345,12 @@ function collectExportComponents(rows, records) {
 }
 
 function buildTradesCsv(records, opts = {}) {
-  const { includeSummary = true, adminFormat = true } = opts;
+  const { includeSummary = true, adminFormat = true, fullFormat = false } = opts;
   const rows = collectTradeRows(records, { adminFormat });
   const components = collectExportComponents(rows, records);
-  const columnKeys = resolveExportColumnKeys(components, TRADE_EXPORT_COLUMN_KEYS);
-  const columns = pickExportColumns(columnKeys, { adminFormat });
+  const columns = fullFormat
+    ? FULL_TRADE_EXPORT_COLUMNS
+    : pickExportColumns(resolveExportColumnKeys(components, TRADE_EXPORT_COLUMN_KEYS), { adminFormat });
   const body = toCsv(rows, columns);
   if (!includeSummary) return body;
   const summary = buildPerformanceSummaryCsv(rows);
@@ -357,7 +359,8 @@ function buildTradesCsv(records, opts = {}) {
 
 function exportBacktests(records, mode = "trades") {
   if (mode === "summary") return buildSummaryCsv(records);
-  return buildTradesCsv(records, { includeSummary: true, adminFormat: true });
+  // Full Export: flat CSV with backward-compatible superset columns.
+  return buildTradesCsv(records, { includeSummary: true, adminFormat: true, fullFormat: true });
 }
 
 /**
