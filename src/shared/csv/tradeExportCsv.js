@@ -225,6 +225,22 @@ const ML_FIELD_SETS = Object.freeze({
   ]),
 });
 
+/** Short labels for strategy-specific XLSX sheet names (e.g. SMC_specific). */
+const ML_STRATEGY_SHORT_LABELS = Object.freeze({
+  SMART_MONEY_CONCEPTS: "SMC",
+  ICT_STYLE_TRADING: "ICT",
+  SUPPLY_AND_DEMAND: "S&D",
+  TREND_FOLLOWING: "TF",
+  MEAN_REVERSION: "MR",
+  BREAKOUT_RETEST: "BR",
+  MARKET_STRUCTURE: "MS",
+  WYCKOFF: "Wyckoff",
+  VOLUME_SPREAD_ANALYSIS: "VSA",
+  AUCTION_MARKET_THEORY: "AMT",
+  STATISTICAL_ARBITRAGE: "StatArb",
+  LIQUIDATION_SQUEEZE: "LiqSqz",
+});
+
 const ML_STRATEGY_ALIASES = Object.freeze({
   "TREND FOLLOWING": "TREND_FOLLOWING",
   MARKET_STRUCTURE: "MARKET_STRUCTURE",
@@ -350,10 +366,16 @@ function resolveTradeMlStrategyKey(trade) {
   return "";
 }
 
+function specificSheetName(strat) {
+  const short = ML_STRATEGY_SHORT_LABELS[strat] || strat;
+  return `${short}_specific`.slice(0, 31);
+}
+
 /**
- * Build Dynamic ML multi-sheet XLSX workbook buffer.
- * Sheet 1 = User Export (CORE columns). Sheets 2+ = ML_<STRAT> for each
- * selected strategy that has at least one trade.
+ * Build multi-sheet XLSX workbook buffer.
+ * - coreOnly: single "User Export" sheet (24 CORE columns, all strategies merged).
+ * - strategy mode: one self-contained "<SHORT>_specific" sheet per strategy
+ *   (CORE + that strategy's ML columns merged; no separate User Export / ML_* sheets).
  *
  * @param {object[]} trades — mapped trade rows (mapBacktestTrade output)
  * @param {string[]|null} selectedStrategies — subset of ML_FIELD_SETS keys; null/[] = auto from trades
@@ -364,18 +386,18 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
   const XLSX = require("xlsx");
   const wb = XLSX.utils.book_new();
   const rows = Array.isArray(trades) ? trades : [];
-
-  const coreCols = opts.adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
-  const coreAoA = [
-    coreCols.map(([, label]) => label),
-    ...rows.map((r) => coreCols.map(([key]) => {
-      const v = r?.[key];
-      return v === undefined || v === null || v === "N/A" ? "" : v;
-    })),
-  ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coreAoA), "User Export");
+  const adminFormat = opts.adminFormat !== false;
+  const coreCols = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
 
   if (opts.coreOnly) {
+    const coreAoA = [
+      coreCols.map(([, label]) => label),
+      ...rows.map((r) => coreCols.map(([key]) => {
+        const v = r?.[key];
+        return v === undefined || v === null || v === "N/A" ? "" : v;
+      })),
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coreAoA), "User Export");
     return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
   }
 
@@ -383,30 +405,22 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
     ? selectedStrategies.map(normalizeMlStrategyKey).filter((k) => ML_FIELD_SETS[k])
     : [...new Set(rows.map(resolveTradeMlStrategyKey).filter(Boolean))];
 
-  // Stable order: follow ML_FIELD_SETS declaration order
   const order = Object.keys(ML_FIELD_SETS);
   stratList = order.filter((k) => stratList.includes(k));
 
   for (const strat of stratList) {
-    const fields = ML_FIELD_SETS[strat] || [];
-    if (!fields.length) continue;
-    const mlRows = rows.filter((t) => resolveTradeMlStrategyKey(t) === strat);
-    if (!mlRows.length) continue;
+    const stratRows = rows.filter((t) => resolveTradeMlStrategyKey(t) === strat);
+    if (!stratRows.length) continue;
 
-    const headers = ["id", "symbol", "side", "component", "openTime", "closeTime", "pnlNet", "result", ...fields];
+    const cols = buildSpecificExportColumns(stratRows, { adminFormat, strategies: [strat] });
     const aoa = [
-      headers,
-      ...mlRows.map((r) => {
-        const ml = projectMlFields(r, strat);
-        return headers.map((h) => {
-          if (h in ml) return ml[h] ?? "";
-          const v = r?.[h];
-          return v === undefined || v === null ? "" : v;
-        });
-      }),
+      cols.map(([, label]) => label),
+      ...stratRows.map((r) => cols.map(([key]) => {
+        const v = r?.[key];
+        return v === undefined || v === null || v === "N/A" ? "" : v;
+      })),
     ];
-    const sheetName = `ML_${strat}`.slice(0, 31);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sheetName);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), specificSheetName(strat));
   }
 
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
@@ -420,7 +434,9 @@ module.exports = {
   FULL_TRADE_EXPORT_COLUMN_KEYS,
   DROPPED_ML_CSV_COLUMN_KEYS,
   ML_FIELD_SETS,
+  ML_STRATEGY_SHORT_LABELS,
   ML_STRATEGY_ALIASES,
+  specificSheetName,
   escapeCsv,
   toCsv,
   pickExportColumns,

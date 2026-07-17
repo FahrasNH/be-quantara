@@ -248,9 +248,48 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
       strategies: ["BREAKOUT_RETEST"],
     });
     const stratWb = XLSX.read(stratXlsx, { type: "buffer" });
-    expect(stratWb.SheetNames.length).toBeGreaterThan(1);
-    const stratHeader = XLSX.utils.sheet_to_json(stratWb.Sheets["User Export"], { header: 1 })[0];
-    expect(stratHeader.length).toBe(24);
+    expect(stratWb.SheetNames).toEqual(["BR_specific"]);
+    const stratHeader = XLSX.utils.sheet_to_json(stratWb.Sheets["BR_specific"], { header: 1 })[0];
+    expect(stratHeader.length).toBeGreaterThan(24);
+    expect(stratHeader.length).toBe(24 + 11);
+  });
+
+  test("Strategy-specific XLSX: SMC + Wyckoff → self-contained sheets with correct column counts", () => {
+    const { exportBacktestsXlsx } = require("../src/server/services/BacktestCsvService");
+    const XLSX = require("xlsx");
+    const { ML_FIELD_SETS } = require("#shared/csv/tradeExportCsv.js");
+    const base = {
+      side: "LONG", entry: 100, exit: 110, pnl: 10, fee: 0.5, reason: "TP",
+      openTime: "2024-01-01T09:00:00Z", closeTime: "2024-01-01T11:00:00Z",
+    };
+    const records = [{
+      id: 5, symbol: "BTCUSDT", strategy_key: "SMART_MONEY_CONCEPTS",
+      trades_data: [
+        {
+          ...base,
+          component: "SMART_MONEY_CONCEPTS",
+          winningComponent: "SMART_MONEY_CONCEPTS",
+          sweepStrength: 0.5, fvgSizeAtr: 1.2,
+        },
+        {
+          ...base, side: "SHORT", exit: 95, pnl: -5,
+          component: "WYCKOFF",
+          winningComponent: "WYCKOFF",
+          wyPatternType: "accumulation", wyAccumulationBars: 12,
+        },
+      ],
+    }];
+    const buf = exportBacktestsXlsx(records, { adminFormat: true, coreOnly: false });
+    const wb = XLSX.read(buf, { type: "buffer" });
+    expect(wb.SheetNames).toEqual(["SMC_specific", "Wyckoff_specific"]);
+    expect(wb.SheetNames).not.toContain("User Export");
+
+    const smcHeader = XLSX.utils.sheet_to_json(wb.Sheets["SMC_specific"], { header: 1 })[0];
+    const wyHeader = XLSX.utils.sheet_to_json(wb.Sheets["Wyckoff_specific"], { header: 1 })[0];
+    expect(smcHeader.length).toBe(24 + ML_FIELD_SETS.SMART_MONEY_CONCEPTS.length);
+    expect(smcHeader.length).toBe(36);
+    expect(wyHeader.length).toBe(24 + ML_FIELD_SETS.WYCKOFF.length);
+    expect(wyHeader.length).toBe(31);
   });
 });
 
