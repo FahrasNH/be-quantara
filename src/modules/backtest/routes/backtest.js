@@ -520,7 +520,7 @@ module.exports = function createBacktestRouter(context) {
    * coreOnly=true → User Export sheet only (no ML_* sheets).
    */
   router.post("/export-csv", asyncHandler(async (req, res) => {
-    const { ids, mode = "trades", format = "csv", strategies, coreOnly = false } = req.body;
+    const { ids, mode = "trades", format = "csv", variant, strategies, coreOnly = false } = req.body;
     if (!ids?.length) {
       return res.status(400).json({ ok: false, error: "ids diperlukan" });
     }
@@ -529,13 +529,15 @@ module.exports = function createBacktestRouter(context) {
       return res.status(404).json({ ok: false, error: "Tidak ada record ditemukan" });
     }
 
+    const strategyList = Array.isArray(strategies)
+      ? strategies
+      : (typeof strategies === "string"
+        ? strategies.split(",").map((s) => s.trim()).filter(Boolean)
+        : null);
+
     if (String(format).toLowerCase() === "xlsx") {
       const buf = BacktestCsvService.exportBacktestsXlsx(records, {
-        strategies: Array.isArray(strategies)
-          ? strategies
-          : (typeof strategies === "string"
-            ? strategies.split(",").map((s) => s.trim()).filter(Boolean)
-            : null),
+        strategies: strategyList,
         adminFormat: true,
         coreOnly: Boolean(coreOnly),
       });
@@ -551,9 +553,20 @@ module.exports = function createBacktestRouter(context) {
       return res.send(buf);
     }
 
-    const csv = BacktestCsvService.exportBacktests(records, mode);
+    // CSV path — now variant-aware (core=23 / full=37 / specific=core+ML).
+    // Back-compat: coreOnly=true maps to variant "core" when variant is unset.
+    const csvVariant = ["core", "full", "specific"].includes(variant)
+      ? variant
+      : (coreOnly ? "core" : "full");
+    const csv = BacktestCsvService.exportBacktests(records, mode, {
+      variant: csvVariant,
+      strategies: strategyList,
+    });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="quantara_backtest_trades_${Date.now()}.csv"`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="quantara_backtest_${csvVariant}_${Date.now()}.csv"`
+    );
     res.send(csv);
   }));
 

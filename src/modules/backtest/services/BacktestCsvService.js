@@ -26,10 +26,12 @@ const { formatDuration } = require("../../../infrastructure/db/database");
 const {
   TRADE_EXPORT_COLUMN_KEYS,
   FULL_TRADE_EXPORT_COLUMNS,
+  ADMIN_TRADE_EXPORT_COLUMNS,
   pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
   buildDynamicMultiSheetXlsx,
+  buildSpecificExportColumns,
   normalizeMlStrategyKey,
 } = require("#shared/csv/tradeExportCsv.js");
 const {
@@ -344,23 +346,52 @@ function collectExportComponents(rows, records) {
   return [...new Set(fromRecords)];
 }
 
-function buildTradesCsv(records, opts = {}) {
-  const { includeSummary = true, adminFormat = true, fullFormat = false } = opts;
-  const rows = collectTradeRows(records, { adminFormat });
+/**
+ * Resolve CSV columns for a given export variant. The three variants are now
+ * genuinely distinct (previously every CSV collapsed to the 37-col Full superset):
+ *   - full     → FULL_TRADE_EXPORT_COLUMNS (37): all execution + context columns
+ *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (23): compact essentials for quick review
+ *   - specific → core (23) + per-strategy ML feature columns (entry-quality analysis)
+ */
+function resolveVariantColumns(variant, rows, records, { adminFormat = true, strategies = null } = {}) {
+  if (variant === "full") return FULL_TRADE_EXPORT_COLUMNS;
+  if (variant === "specific") {
+    return buildSpecificExportColumns(rows, { adminFormat, strategies });
+  }
+  if (variant === "core") {
+    return adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : ADMIN_TRADE_EXPORT_COLUMNS.slice(1);
+  }
+  // Legacy strategy-aware auto-pick (unchanged fallback)
   const components = collectExportComponents(rows, records);
-  const columns = fullFormat
-    ? FULL_TRADE_EXPORT_COLUMNS
-    : pickExportColumns(resolveExportColumnKeys(components, TRADE_EXPORT_COLUMN_KEYS), { adminFormat });
+  return pickExportColumns(resolveExportColumnKeys(components, TRADE_EXPORT_COLUMN_KEYS), { adminFormat });
+}
+
+function buildTradesCsv(records, opts = {}) {
+  const { includeSummary = true, adminFormat = true, variant = "auto", strategies = null } = opts;
+  const rows = collectTradeRows(records, { adminFormat });
+  // Back-compat: fullFormat:true is shorthand for variant:"full".
+  const effVariant = opts.fullFormat ? "full" : variant;
+  const columns = resolveVariantColumns(effVariant, rows, records, { adminFormat, strategies });
   const body = toCsv(rows, columns);
   if (!includeSummary) return body;
   const summary = buildPerformanceSummaryCsv(rows);
   return `${summary}\n${body}`;
 }
 
-function exportBacktests(records, mode = "trades") {
+/**
+ * @param {object[]} records
+ * @param {string} [mode="trades"] — "trades" | "summary"
+ * @param {{ variant?: "core"|"full"|"specific", strategies?: string[]|null }} [opts]
+ */
+function exportBacktests(records, mode = "trades", opts = {}) {
   if (mode === "summary") return buildSummaryCsv(records);
-  // Full Export: flat CSV with backward-compatible superset columns.
-  return buildTradesCsv(records, { includeSummary: true, adminFormat: true, fullFormat: true });
+  const variant = opts.variant || "full";
+  return buildTradesCsv(records, {
+    includeSummary: true,
+    adminFormat: true,
+    variant,
+    strategies: opts.strategies || null,
+  });
 }
 
 /**

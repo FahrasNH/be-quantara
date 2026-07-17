@@ -270,6 +270,52 @@ function normalizeMlStrategyKey(key) {
   return raw;
 }
 
+/** camelCase ML field key → human header label (e.g. sweepStrength → "Sweep Strength"). */
+function mlFieldLabel(key) {
+  return String(key)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bAtr\b/g, "ATR")
+    .replace(/\bRr\b/g, "R:R")
+    .replace(/\bPct\b/g, "%")
+    .replace(/\bUtc\b/g, "UTC")
+    .replace(/\bHtf\b/g, "HTF")
+    .replace(/\bOb\b/g, "OB")
+    .replace(/\bFvg\b/g, "FVG")
+    .replace(/\bBb\b/g, "BB")
+    .replace(/\bOi\b/g, "OI");
+}
+
+/**
+ * Specific export columns (flat CSV): CORE columns + the ML feature columns of
+ * every strategy present in the rows. This is what makes the "Specific" export
+ * genuinely different from "Full" — it drops execution plumbing (SL/TP/funding/…)
+ * and instead exposes the strategy's ML/entry-quality features for analysis.
+ * @param {object[]} rows — mapped trade rows (mapBacktestTrade output)
+ * @param {{ adminFormat?: boolean, strategies?: string[]|null }} [opts]
+ * @returns {Array<[string,string]>} column [key,label] tuples
+ */
+function buildSpecificExportColumns(rows, { adminFormat = true, strategies = null } = {}) {
+  const coreCols = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+  let stratList = Array.isArray(strategies) && strategies.length
+    ? strategies.map(normalizeMlStrategyKey).filter((k) => ML_FIELD_SETS[k])
+    : [...new Set((rows || []).map(resolveTradeMlStrategyKey).filter(Boolean))];
+  // Stable order: follow ML_FIELD_SETS declaration order
+  const order = Object.keys(ML_FIELD_SETS);
+  stratList = order.filter((k) => stratList.includes(k));
+
+  const mlCols = [];
+  const seen = new Set();
+  for (const strat of stratList) {
+    for (const f of ML_FIELD_SETS[strat]) {
+      if (seen.has(f)) continue;
+      seen.add(f);
+      mlCols.push([f, mlFieldLabel(f)]);
+    }
+  }
+  return [...coreCols, ...mlCols];
+}
+
 /**
  * Project a trade onto ML columns for a strategy (ML_* sheet rows).
  * @param {object} trade
@@ -383,4 +429,6 @@ module.exports = {
   normalizeMlStrategyKey,
   resolveTradeMlStrategyKey,
   buildDynamicMultiSheetXlsx,
+  buildSpecificExportColumns,
+  mlFieldLabel,
 };
