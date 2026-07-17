@@ -350,8 +350,8 @@ function collectExportComponents(rows, records) {
  * Resolve CSV columns for a given export variant. The three variants are now
  * genuinely distinct (previously every CSV collapsed to the 37-col Full superset):
  *   - full     → FULL_TRADE_EXPORT_COLUMNS (37): all execution + context columns
- *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (23): compact essentials for quick review
- *   - specific → core (23) + per-strategy ML feature columns (entry-quality analysis)
+ *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (24): compact essentials for quick review
+ *   - specific → core (24) + per-strategy ML feature columns (entry-quality analysis)
  */
 function resolveVariantColumns(variant, rows, records, { adminFormat = true, strategies = null } = {}) {
   if (variant === "full") return FULL_TRADE_EXPORT_COLUMNS;

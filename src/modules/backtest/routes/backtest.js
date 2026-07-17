@@ -553,7 +553,7 @@ module.exports = function createBacktestRouter(context) {
       return res.send(buf);
     }
 
-    // CSV path — now variant-aware (core=23 / full=37 / specific=core+ML).
+    // CSV path — variant-aware (core=24 / full=37 / specific=core+ML).
     // Back-compat: coreOnly=true maps to variant "core" when variant is unset.
     const csvVariant = ["core", "full", "specific"].includes(variant)
       ? variant
