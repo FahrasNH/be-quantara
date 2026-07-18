@@ -173,6 +173,12 @@ model Trade {
   entryContext Json?
   exitContext  Json?
 
+  // ── ML Data Readiness (Sprint 16 / Phase 1) ────────────────────────────────
+  // Top-level queryable fields for win-prediction + regime-aware tuning.
+  winningComponent String?
+  signalDelayMs    Int?
+  pairTier         String? @default("LIQUID")
+
   enteredAt DateTime  @default(now())
   exitedAt  DateTime?
 

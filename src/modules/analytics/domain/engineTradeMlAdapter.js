@@ -111,6 +111,154 @@ function buildExitContextFromEngineRow(row) {
   };
 }
 
+/**
+ * Detect trading session from UTC hour (Sprint 16 ML readiness).
+ * @returns {"London"|"NY"|"Asia"}
+ */
+function detectTradingSession(hourUtc) {
+  const h = Number(hourUtc);
+  if (!Number.isFinite(h)) return "Asia";
+  if (h >= 13 && h <= 21) return "NY";
+  if (h >= 8 && h <= 16) return "London";
+  return "Asia";
+}
+
+/**
+ * Compute intraday HOD/LOD/sessionOpen from candle array for entry enrichment.
+ */
+function computeIntradayPriceContext(candles = [], entryTime = new Date()) {
+  const entryMs = entryTime instanceof Date ? entryTime.getTime() : new Date(entryTime).getTime();
+  const dayStart = new Date(entryMs);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const dayStartMs = dayStart.getTime();
+
+  const dayCandles = candles.filter((c) => {
+    const ts = c.timestamp ?? c.time ?? c.openTime ?? 0;
+    return ts >= dayStartMs && ts <= entryMs;
+  });
+
+  if (!dayCandles.length) {
+    return { hodPrice: null, lodPrice: null, sessionOpen: null };
+  }
+
+  const hodPrice = Math.max(...dayCandles.map((c) => c.high ?? c.close ?? 0));
+  const lodPrice = Math.min(...dayCandles.map((c) => c.low ?? c.close ?? Infinity));
+  const sessionOpen = dayCandles[0].open ?? dayCandles[0].close ?? null;
+
+  return { hodPrice, lodPrice, sessionOpen };
+}
+
+/**
+ * Resolve signal delay in ms between signal generation and entry fill.
+ */
+function resolveSignalDelayMs(signalTimestamp, entryTimestamp) {
+  const signalMs = Number(signalTimestamp);
+  const entryMs = entryTimestamp instanceof Date
+    ? entryTimestamp.getTime()
+    : new Date(entryTimestamp).getTime();
+  if (!Number.isFinite(signalMs) || !Number.isFinite(entryMs)) return 0;
+  return Math.max(0, Math.round(entryMs - signalMs));
+}
+
+/**
+ * Extract liquidation levels from indicator snapshot (fail-open fallback).
+ */
+function extractLiquidationLevels(snapshot = {}) {
+  const level = snapshot.lsLiquidationLevel ?? snapshot.liquidationLevel ?? null;
+  if (level == null) return null;
+  return { nearestLevel: level, source: "indicator_snapshot" };
+}
+
+/**
+ * Normalize exit reason to ML vocabulary.
+ */
+function normalizeExitReason(reason) {
+  const raw = String(reason || "MANUAL").toUpperCase();
+  if (raw.includes("TP") || raw === "TP_HIT") return "TP_HIT";
+  if (raw.includes("SL") || raw === "SL_HIT") return "SL_HIT";
+  if (raw.includes("TIME") || raw === "TIMEOUT" || raw === "TIME_STOP") return "TIME_STOP";
+  if (raw.includes("REGIME") || raw === "REGIME_FLIP") return "REGIME_FLIP";
+  if (raw.includes("EMERGENCY") || raw.includes("GROK")) return "EMERGENCY";
+  return raw;
+}
+
+/**
+ * Build live entryContext enrichment (Sprint 16 / Task 1.2).
+ */
+function enrichEntryContextLive(baseContext = {}, opts = {}) {
+  const {
+    entryTime = new Date(),
+    candles = [],
+    snapshot = {},
+    pairTier = "LIQUID",
+    signalDelayMs = 0,
+    winningComponent = null,
+    htfTrend = null,
+    htfTrendStrength = null,
+    regime = null,
+  } = opts;
+
+  const et = entryTime instanceof Date ? entryTime : new Date(entryTime);
+  const { hodPrice, lodPrice, sessionOpen } = computeIntradayPriceContext(candles, et);
+  const session = detectTradingSession(et.getUTCHours());
+
+  return {
+    ...baseContext,
+    session,
+    dayOfWeek: et.getUTCDay(),
+    hodPrice,
+    lodPrice,
+    sessionOpen,
+    liquidationLevels: extractLiquidationLevels(snapshot),
+    iv30d: snapshot.iv30d ?? null,
+    skew: snapshot.skew ?? null,
+    pairTier: pairTier ?? baseContext.pairTier ?? "LIQUID",
+    signalDelayMs,
+    winningComponent: winningComponent ?? snapshot.winningComponent ?? baseContext.winningComponent ?? null,
+    htfAlignment: htfTrend ?? snapshot.htfTrend ?? null,
+    htfTrendStrength: htfTrendStrength ?? snapshot.htfTrendStrength ?? null,
+    afRace: snapshot.afRace ?? null,
+    tsRace: snapshot.tsRace ?? null,
+    regime: regime ?? snapshot.afMarketCond ?? baseContext.regime ?? null,
+    correlationRisk: pairTier === "MICRO" || pairTier === "VOLATILE" ? "elevated" : "normal",
+    liquidationBuffer: snapshot.liquidationBuffer ?? null,
+    source: baseContext.source ?? "live-enriched",
+  };
+}
+
+/**
+ * Build live exitContext enrichment (Sprint 16 / Task 1.3).
+ */
+function enrichExitContextLive(baseContext = {}, opts = {}) {
+  const {
+    pnl = 0,
+    pnlPct = 0,
+    exitPrice = 0,
+    expectedPrice = null,
+    fundingCost = 0,
+    regimeAtExit = null,
+    exitReason = "MANUAL",
+    closedAt = new Date().toISOString(),
+  } = opts;
+
+  const isWin = (parseFloat(pnl) || 0) > 0;
+  const slippage = expectedPrice != null && Number.isFinite(expectedPrice)
+    ? parseFloat((exitPrice - expectedPrice).toFixed(8))
+    : null;
+
+  return {
+    ...baseContext,
+    pnl: parseFloat(pnl) || 0,
+    pnlPct: parseFloat(pnlPct) || 0,
+    outcome: isWin ? "win" : "loss",
+    exitReason: normalizeExitReason(exitReason),
+    slippage,
+    fundingCost: parseFloat(fundingCost) || 0,
+    regimeAtExit,
+    closedAt,
+  };
+}
+
 function normalizeStrategyKey(raw) {
   if (!raw) return "SMART_MONEY_CONCEPTS";
   return aclNormalizeStrategyKey(String(raw).toUpperCase());
@@ -207,6 +355,13 @@ module.exports = {
   indicatorsSnapshotToEntryContext,
   buildBacktestEntryContext,
   buildExitContextFromEngineRow,
+  detectTradingSession,
+  computeIntradayPriceContext,
+  resolveSignalDelayMs,
+  extractLiquidationLevels,
+  normalizeExitReason,
+  enrichEntryContextLive,
+  enrichExitContextLive,
   normalizeStrategyKey,
   fetchClosedEngineTrades,
   buildMlArtifactsFromEngineRows,

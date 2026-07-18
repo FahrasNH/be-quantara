@@ -21,6 +21,13 @@ const notifier = require("../../../infrastructure/notifications/TelegramNotifier
 const GrokTradingService = require("../../research/services/GrokTradingService");
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const { onEngineTradeOpen, onEngineTradeClose } = require("../../ml/services/BotEngineMlHook");
+const {
+  enrichEntryContextLive,
+  enrichExitContextLive,
+  resolveSignalDelayMs,
+  indicatorsSnapshotToEntryContext,
+  classifyHtfTrend,
+} = require("../../analytics/domain/engineTradeMlAdapter");
 // Phase 2g — pure execution helpers (core/execution-engine + risk-engine)
 const {
   stratLabel,
@@ -771,7 +778,8 @@ class BotEngine extends EventEmitter {
                 const fee = this._estimateFee(dbTrade.entry_price, exitPrice, dbTrade.size || 0);
                 this._log("warn", `Posisi ${dbTrade.side} sesi #${dbTrade.session_id} sudah ditutup di exchange saat offline — PnL ≈ $${pnl.toFixed(2)} (fee est -$${fee.toFixed(4)})`);
                 try {
-                  await db.closeTrade(dbTrade.id, {
+                  const offlinePos = { entry: dbTrade.entry_price, sl: dbTrade.sl, tp: dbTrade.tp, dbId: dbTrade.id };
+                  await this._closeTradeInDb(offlinePos, {
                     exitPrice,
                     pnl,
                     fee,
@@ -1176,6 +1184,7 @@ class BotEngine extends EventEmitter {
 
     try {
       const candles = await this._fetchCandles();
+      this._lastCandles = candles;
       if (!candles || candles.length < this.config.emaSlow + 20) {
         this._log("warn", "Candle tidak cukup untuk kalkulasi indikator");
         // Posisi terbuka tetap wajib dimonitor SL/TP meski indikator belum siap.
@@ -2081,7 +2090,7 @@ class BotEngine extends EventEmitter {
 
     if (this.sessionId && pos.dbId) {
       try {
-        await db.closeTrade(pos.dbId, {
+        await this._closeTradeInDb(pos, {
           exitPrice: price,
           pnl,
           pnlPct,
@@ -2200,6 +2209,71 @@ class BotEngine extends EventEmitter {
       this._log("warn", `Cap posisi akun: gagal baca jumlah posisi terbuka (${e.message}) — fail-open`);
       return { allowed: true };
     }
+  }
+
+  /**
+   * Build ML entry payload (Sprint 16 / Phase 1): top-level fields + enriched entryContext.
+   */
+  _buildMlEntryPayload(enrichedSnapshot, { price, openTime, attributionKey }) {
+    const openDate = openTime ? new Date(openTime) : new Date();
+    const signalTs = enrichedSnapshot?.candleTimestamp
+      ?? enrichedSnapshot?.signalTimestamp
+      ?? openDate.getTime();
+    const signalDelayMs = resolveSignalDelayMs(signalTs, openDate);
+    const pairTier = this.config.pairTier ?? "LIQUID";
+    const winningComponent = attributionKey ?? enrichedSnapshot?.winningComponent ?? null;
+
+    const base = indicatorsSnapshotToEntryContext(enrichedSnapshot || {}, {
+      strategyKey: winningComponent ?? this.config.strategyKey,
+      entryPrice:  price,
+      openTime,
+      pairTier,
+      leverage:    this.config.leverage,
+      capital:     this.state.capital,
+      htfTrend:    this.state.htfTrend,
+      marketCond:  enrichedSnapshot?.afMarketCond,
+      confidence:  enrichedSnapshot?.afAggregateConfidence ?? enrichedSnapshot?.afConfidence,
+    });
+
+    const entryContext = enrichEntryContextLive(base, {
+      entryTime: openDate,
+      candles:   this._lastCandles ?? [],
+      snapshot:  enrichedSnapshot ?? {},
+      pairTier,
+      signalDelayMs,
+      winningComponent,
+      htfTrend:  this.state.htfTrend,
+      regime:    enrichedSnapshot?.afMarketCond,
+    });
+
+    return { winningComponent, signalDelayMs, pairTier, entryContext };
+  }
+
+  /**
+   * Build ML exit payload (Sprint 16 / Phase 1): enriched exitContext.
+   */
+  _buildMlExitPayload(pos, { exitPrice, pnl, pnlPct, fee, funding, reason }) {
+    const reasonUp = String(reason || "MANUAL").toUpperCase();
+    let expectedPrice = null;
+    if (reasonUp.includes("TP")) expectedPrice = pos.tp;
+    else if (reasonUp.includes("SL")) expectedPrice = pos.sl;
+
+    return enrichExitContextLive({}, {
+      pnl,
+      pnlPct,
+      exitPrice,
+      expectedPrice,
+      fundingCost: funding ?? 0,
+      regimeAtExit: classifyHtfTrend(this.state.htfTrend),
+      exitReason:   reason,
+      closedAt:     new Date().toISOString(),
+    });
+  }
+
+  /** Persist trade close with ML exitContext enrichment. */
+  async _closeTradeInDb(pos, params) {
+    const exitContext = this._buildMlExitPayload(pos, params);
+    return db.closeTrade(pos.dbId, { ...params, exitContext });
   }
 
   async _handleSignal(signal, price, atr, indicatorSnapshot = null, options = {}) {
@@ -2799,6 +2873,8 @@ class BotEngine extends EventEmitter {
 
         // Simpan ke DB
         if (this.sessionId) {
+          const mlEntry = this._buildMlEntryPayload(enrichedSnapshot, { price, openTime, attributionKey });
+          pos.entryContext = mlEntry.entryContext;
           pos.dbId = await db.insertTrade({
             sessionId:  this.sessionId,
             exchange:   this.config.exchange,
@@ -2811,6 +2887,10 @@ class BotEngine extends EventEmitter {
             indicators: enrichedSnapshot,
             // Persist winning-racer canonical key (WYCKOFF / MARKET_STRUCTURE / …), not umbrella.
             strategyName: attributionKey ?? this.config.strategyKey ?? null,
+            winningComponent: mlEntry.winningComponent,
+            signalDelayMs:    mlEntry.signalDelayMs,
+            pairTier:         mlEntry.pairTier,
+            entryContext:     mlEntry.entryContext,
           });
           onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
             strategyKey: attributionKey ?? this.config.strategyKey,
@@ -2820,24 +2900,8 @@ class BotEngine extends EventEmitter {
             openTime,
             leverage:    this.config.leverage,
             capital:     this.state.capital,
-          });
-          onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
-            strategyKey: this.config.strategyKey,
-            symbol:      this.config.symbol,
-            side:        signal,
-            entryPrice:  price,
-            openTime,
-            leverage:    this.config.leverage,
-            capital:     this.state.capital,
-          });
-          onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
-            strategyKey: this.config.strategyKey,
-            symbol:      this.config.symbol,
-            side:        signal,
-            entryPrice:  price,
-            openTime,
-            leverage:    this.config.leverage,
-            capital:     this.state.capital,
+            pairTier:    mlEntry.pairTier,
+            entryContext: mlEntry.entryContext,
           });
         }
 
@@ -2895,6 +2959,8 @@ class BotEngine extends EventEmitter {
 
       // Simpan ke DB (dry run)
       if (this.sessionId) {
+        const mlEntry = this._buildMlEntryPayload(enrichedSnapshot, { price, openTime, attributionKey });
+        pos.entryContext = mlEntry.entryContext;
         pos.dbId = await db.insertTrade({
           sessionId:  this.sessionId,
           exchange:   this.config.exchange,
@@ -2907,6 +2973,10 @@ class BotEngine extends EventEmitter {
           // Persist winning-racer canonical key + attribution snapshot.
           indicators: enrichedSnapshot,
           strategyName: attributionKey ?? this.config.strategyKey ?? null,
+          winningComponent: mlEntry.winningComponent,
+          signalDelayMs:    mlEntry.signalDelayMs,
+          pairTier:         mlEntry.pairTier,
+          entryContext:     mlEntry.entryContext,
         });
         onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
           strategyKey: attributionKey ?? this.config.strategyKey,
@@ -2916,24 +2986,8 @@ class BotEngine extends EventEmitter {
           openTime,
           leverage:    this.config.leverage,
           capital:     this.state.capital,
-        });
-        onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
-          strategyKey: this.config.strategyKey,
-          symbol:      this.config.symbol,
-          side:        signal,
-          entryPrice:  price,
-          openTime,
-          leverage:    this.config.leverage,
-          capital:     this.state.capital,
-        });
-        onEngineTradeOpen(pos.dbId, enrichedSnapshot, {
-          strategyKey: this.config.strategyKey,
-          symbol:      this.config.symbol,
-          side:        signal,
-          entryPrice:  price,
-          openTime,
-          leverage:    this.config.leverage,
-          capital:     this.state.capital,
+          pairTier:    mlEntry.pairTier,
+          entryContext: mlEntry.entryContext,
         });
       }
 
@@ -3501,6 +3555,14 @@ class BotEngine extends EventEmitter {
     // ── Catat ke DB (insert + langsung close) ────────────────────────────────
     if (this.sessionId) {
       try {
+        const partialSnapshot = pos.entrySnapshot ?? (pos.atr != null
+          ? { atr: pos.atr, atrPct: pos.entry ? parseFloat(((pos.atr / pos.entry) * 100).toFixed(3)) : null }
+          : null);
+        const mlEntry = this._buildMlEntryPayload(partialSnapshot, {
+          price: pos.entry,
+          openTime: pos.openTime,
+          attributionKey: pos.strategyName ?? this.config.strategyKey,
+        });
         const partialDbId = await db.insertTrade({
           sessionId:  this.sessionId,
           exchange:   this.config.exchange,
@@ -3514,23 +3576,18 @@ class BotEngine extends EventEmitter {
           atr:        pos.atr,
           dryRun:     this.config.dryRun,
           orderId:    `${pos.id}_${reason}`,
-          // BUG-004: salin snapshot indikator dari ENTRY asli (RSI/ATR/ATR%),
-          // jika tidak ada fallback ke ATR posisi agar tidak NaN.
-          indicators: pos.entrySnapshot ?? (pos.atr != null
-            ? { atr: pos.atr, atrPct: pos.entry ? parseFloat(((pos.atr / pos.entry) * 100).toFixed(3)) : null }
-            : null),
-          // BUG-001: strategi pada partial trade.
+          indicators: partialSnapshot,
           strategyName: pos.strategyName ?? this.config.strategyKey ?? null,
           isPartial:    true,
+          winningComponent: mlEntry.winningComponent,
+          signalDelayMs:    mlEntry.signalDelayMs,
+          pairTier:         mlEntry.pairTier,
+          entryContext:     mlEntry.entryContext,
         });
-        await db.closeTrade(partialDbId, {
-          exitPrice: price,
-          pnl,
-          pnlPct,
-          fee,
-          reason,
-          closeTime: new Date().toISOString(),
-        });
+        await this._closeTradeInDb(
+          { entry: pos.entry, sl: pos.sl, tp: pos.tp, dbId: partialDbId },
+          { exitPrice: price, pnl, pnlPct, fee, reason, closeTime: new Date().toISOString() }
+        );
         onEngineTradeOpen(partialDbId, pos.entrySnapshot ?? (pos.atr != null
           ? { atr: pos.atr, atrPct: pos.entry ? parseFloat(((pos.atr / pos.entry) * 100).toFixed(3)) : null }
           : {}), {
@@ -3807,7 +3864,7 @@ class BotEngine extends EventEmitter {
           let applied = true;
           if (pos.dbId) {
             try {
-              const res = await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() });
+              const res = await this._closeTradeInDb(pos, { exitPrice, pnl, fee, reason: exitReason, closeTime: new Date().toISOString() });
               applied = res?.applied !== false;
               if (applied) onEngineTradeClose(pos.dbId, pnl);
             } catch (err) {
@@ -3952,7 +4009,7 @@ class BotEngine extends EventEmitter {
                   let applied = true;
                   if (pos.dbId) {
                     try {
-                      const res = await db.closeTrade(pos.dbId, { exitPrice, pnl, fee, reason: hitSL ? "SL" : "TP", closeTime: new Date().toISOString() });
+                      const res = await this._closeTradeInDb(pos, { exitPrice, pnl, fee, reason: hitSL ? "SL" : "TP", closeTime: new Date().toISOString() });
                       applied = res?.applied !== false;
                       if (applied) onEngineTradeClose(pos.dbId, pnl);
                     } catch (dbErr) {
@@ -4032,7 +4089,7 @@ class BotEngine extends EventEmitter {
           );
           if (this.sessionId && pos.dbId) {
             try {
-              await db.closeTrade(pos.dbId, {
+              await this._closeTradeInDb(pos, {
                 exitPrice, pnl, pnlPct, fee,
                 reason: "TIME_STOP",
                 closeTime: new Date(closeTime).toISOString(),
@@ -4095,7 +4152,7 @@ class BotEngine extends EventEmitter {
 
         if (this.sessionId && pos.dbId) {
           try {
-            await db.closeTrade(pos.dbId, { exitPrice, pnl, pnlPct, fee, reason, closeTime: new Date(closeTime).toISOString() });
+            await this._closeTradeInDb(pos, { exitPrice, pnl, pnlPct, fee, reason, closeTime: new Date(closeTime).toISOString() });
             onEngineTradeClose(pos.dbId, pnl);
           } catch (dbErr) {
             // Dry-run: tidak fatal, tapi jangan ditelan diam-diam (audit trail).

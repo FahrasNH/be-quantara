@@ -44,10 +44,11 @@ function onEngineTradeOpen(dbId, enrichedSnapshot, meta = {}) {
     indicators:  snapshot,
     htfTrend:    snapshot.htfTrend ?? meta.htfTrend,
     confidence:  snapshot.afAggregateConfidence ?? snapshot.afConfidence ?? meta.confidence,
-    config:      { strategyKey: meta.strategyKey, leverage: meta.leverage },
+    config:      { strategyKey: meta.strategyKey, leverage: meta.leverage, pairTier: meta.pairTier },
     capital:     meta.capital,
+    pairTier:    meta.pairTier,
   }).then((captured) => {
-    const entryContext = captured?.capturedAt
+    const baseEntry = captured?.capturedAt
       ? { ...captured, regime: snapshot.afMarketCond ?? meta.marketCond ?? captured.regime }
       : indicatorsSnapshotToEntryContext(snapshot, {
         strategyKey: meta.strategyKey,
@@ -62,6 +63,8 @@ function onEngineTradeOpen(dbId, enrichedSnapshot, meta = {}) {
         leverage:    meta.leverage,
         capital:     meta.capital,
       });
+
+    const entryContext = meta.entryContext ?? baseEntry;
 
     return svc.logPrediction(String(dbId), entryContext, {
       strategyKey: meta.strategyKey,

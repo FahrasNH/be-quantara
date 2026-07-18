@@ -121,6 +121,23 @@ const SCHEMA_SQL = `
     ALTER TABLE trades ADD COLUMN is_partial INTEGER DEFAULT 0;
   EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 
+  -- Sprint 16 / ML Data Readiness Phase 1 — queryable ML fields + context JSON
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN winning_component TEXT;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN signal_delay_ms INTEGER DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN pair_tier TEXT DEFAULT 'LIQUID';
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN entry_context JSONB;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  DO $$ BEGIN
+    ALTER TABLE trades ADD COLUMN exit_context JSONB;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
   CREATE TABLE IF NOT EXISTS equity_snapshots (
     id             SERIAL PRIMARY KEY,
     session_id     INTEGER REFERENCES bot_sessions(id) ON DELETE CASCADE,
@@ -483,7 +500,7 @@ function parseSession(row) {
 
 // ── Trades ────────────────────────────────────
 
-async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators, strategyName, isPartial }) {
+async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, tp, size, openTime, atr, dryRun, orderId, indicators, strategyName, isPartial, winningComponent, signalDelayMs, pairTier, entryContext }) {
   // Prefer winning-racer / firedByStrategy over umbrella engine keys.
   const { resolvePersistedStrategyKey } = require("#modules/analytics/domain/tradeAttribution.js");
   const resolvedStrategy = resolvePersistedStrategyKey({
@@ -495,10 +512,18 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
     console.warn('[DB] insertTrade: strategyName null — trade akan masuk sebagai Untracked', { sessionId, symbol, side });
   }
 
+  const resolvedWinner = winningComponent
+    ?? (indicators && typeof indicators === "object" ? indicators.winningComponent : null)
+    ?? resolvedStrategy;
+  const resolvedPairTier = pairTier ?? "LIQUID";
+  const resolvedSignalDelay = Number.isFinite(signalDelayMs) ? Math.max(0, Math.round(signalDelayMs)) : 0;
+  const entryCtxJson = entryContext != null ? JSON.stringify(entryContext) : null;
+
   const { rows } = await pool.query(
     `INSERT INTO trades
-       (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators, strategy_name, status, is_partial)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'open', $15)
+       (session_id, exchange, symbol, side, entry_price, sl, tp, size, open_time, atr, dry_run, order_id, indicators, strategy_name, status, is_partial,
+        winning_component, signal_delay_ms, pair_tier, entry_context)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'open', $15, $16, $17, $18, $19::jsonb)
      RETURNING id`,
     [
       sessionId,
@@ -516,6 +541,10 @@ async function insertTrade({ sessionId, exchange, symbol, side, entryPrice, sl, 
       indicators ? JSON.stringify(indicators) : null,
       resolvedStrategy,
       isPartial ? 1 : 0,
+      resolvedWinner,
+      resolvedSignalDelay,
+      resolvedPairTier,
+      entryCtxJson,
     ]
   );
   return rows[0].id;
@@ -560,6 +589,59 @@ async function backfillTradeStrategyNames({ limit = 5000 } = {}) {
   return { scanned: rows.length, updated };
 }
 
+/**
+ * Backfill ML readiness fields for recent trades (Sprint 16 / Phase 1).
+ * Sets pair_tier from symbol heuristics and signal_delay_ms=0 where unknown.
+ * @returns {{ scanned: number, updated: number }}
+ */
+async function backfillMlReadinessFields({ days = 30 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT id, symbol, pair_tier, signal_delay_ms, winning_component, strategy_name, indicators
+       FROM trades
+      WHERE open_time > NOW() - ($1 || ' days')::interval
+      ORDER BY id DESC`,
+    [String(days)]
+  );
+
+  let updated = 0;
+  for (const row of rows) {
+    const needsPairTier = !row.pair_tier;
+    const needsSignalDelay = row.signal_delay_ms == null;
+    const needsWinner = !row.winning_component;
+
+    if (!needsPairTier && !needsSignalDelay && !needsWinner) continue;
+
+    let ind = null;
+    if (row.indicators) {
+      try {
+        ind = typeof row.indicators === "string" ? JSON.parse(row.indicators) : row.indicators;
+      } catch { ind = null; }
+    }
+
+    const pairTier = row.pair_tier || "LIQUID";
+    const signalDelayMs = row.signal_delay_ms ?? 0;
+    const winningComponent = row.winning_component
+      ?? ind?.winningComponent
+      ?? row.strategy_name
+      ?? null;
+
+    await pool.query(
+      `UPDATE trades
+          SET pair_tier = $2,
+              signal_delay_ms = $3,
+              winning_component = COALESCE(winning_component, $4)
+        WHERE id = $1`,
+      [row.id, pairTier, signalDelayMs, winningComponent]
+    );
+    updated += 1;
+  }
+
+  if (updated > 0) {
+    console.log(`[DB] backfillMlReadinessFields: updated ${updated}/${rows.length} trades (last ${days}d)`);
+  }
+  return { scanned: rows.length, updated };
+}
+
 /** Distinct symbols present in the trades store (admin / backtest validation). */
 async function getAdminTradeSymbols() {
   const { rows } = await pool.query(
@@ -568,11 +650,12 @@ async function getAdminTradeSymbols() {
   return rows.map((r) => r.symbol);
 }
 
-async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime }) {
+async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reason, closeTime, exitContext }) {
   const feeVal     = fee ?? 0;
   const fundingVal = funding ?? 0;
   const pnlGross   = pnl ?? 0;
   const pnlNet     = pnlGross - feeVal - fundingVal;
+  const exitCtxJson = exitContext != null ? JSON.stringify(exitContext) : null;
 
   // Ambil entry_price + size untuk: (a) BUG-002 menghitung pnl_pct dari notional,
   // (b) BUG-003 mendeteksi zero-fill (exit == entry & pnl gross == 0).
@@ -608,7 +691,8 @@ async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reaso
   // Mengembalikan { applied } agar pemanggil melewati log/notifikasi/stats ganda.
   const { rowCount } = await pool.query(
     `UPDATE trades
-     SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8, status = $9
+     SET exit_price = $2, pnl = $3, pnl_pct = $4, fee = $5, funding = $6, reason = $7, close_time = $8, status = $9,
+         exit_context = COALESCE($10::jsonb, exit_context)
      WHERE id = $1 AND close_time IS NULL`,
     [
       tradeId,
@@ -620,6 +704,7 @@ async function closeTrade(tradeId, { exitPrice, pnl, pnlPct, fee, funding, reaso
       reason,
       closeTime ? new Date(closeTime).toISOString() : new Date().toISOString(),
       status,
+      exitCtxJson,
     ]
   );
   return { applied: rowCount === 1 };
@@ -1787,6 +1872,7 @@ module.exports = {
   getAdminTradeStats,
   getAdminTradeSymbols,
   backfillTradeStrategyNames,
+  backfillMlReadinessFields,
   getAdminStrategyStats,
   getAdminStrategyPnlHistory,
   getAdminTradesExport,
