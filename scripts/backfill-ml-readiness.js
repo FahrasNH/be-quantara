@@ -11,6 +11,9 @@
 
 "use strict";
 
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "../.env") });
+
 const db = require("../src/infrastructure/db/database");
 
 const args = Object.fromEntries(
@@ -23,6 +26,16 @@ const args = Object.fromEntries(
 const DAYS = parseInt(args.days ?? "30", 10);
 const DRY_RUN = args["dry-run"] === true || args["dry-run"] === "true";
 
+function formatFatalError(err) {
+  if (!err) return "unknown error";
+  if (err.message) return err.message;
+  if (err.code) return err.code;
+  if (Array.isArray(err.errors) && err.errors.length > 0) {
+    return err.errors.map((e) => e.message || e.code || String(e)).join("; ");
+  }
+  return String(err);
+}
+
 async function main() {
   console.log("╔══════════════════════════════════════════════════╗");
   console.log("║   ML Readiness Backfill (Sprint 16 / Phase 1)   ║");
@@ -34,6 +47,12 @@ async function main() {
     return;
   }
 
+  if (!process.env.DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL is not set. Add it to .env or export it before running this script."
+    );
+  }
+
   await db.init();
   const result = await db.backfillMlReadinessFields({ days: DAYS });
   console.log(`\n  Scanned: ${result.scanned}  Updated: ${result.updated}`);
@@ -42,7 +61,12 @@ async function main() {
 
 if (require.main === module) {
   main().catch((err) => {
-    console.error("[backfill-ml-readiness] Fatal:", err.message);
+    console.error("[backfill-ml-readiness] Fatal:", formatFatalError(err));
+    if (err?.code === "ECONNREFUSED" || /ECONNREFUSED/.test(formatFatalError(err))) {
+      console.error(
+        "[backfill-ml-readiness] Hint: start local Postgres with `docker compose up -d postgres`"
+      );
+    }
     process.exit(1);
   });
 }
