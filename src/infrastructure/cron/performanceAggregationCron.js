@@ -215,8 +215,9 @@ function start() {
   scheduleWeekly();
   scheduleMonthly();
   scheduleWalkForward();
-  scheduleFeatureImportance();
-  log.info("Started (daily/weekly/monthly/walk-forward/feature-importance)");
+  // Run immediately on boot so /feature-importance has cached data; hourly thereafter.
+  runFeatureImportance();
+  log.info("Started (daily/weekly/monthly/walk-forward/feature-importance-on-boot)");
 }
 
 function stop() {

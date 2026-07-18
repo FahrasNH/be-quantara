@@ -445,6 +445,7 @@ promises.push(test("36. Cron module loads without error", () => {
   assert(typeof cron.runDaily   === "function", "Missing runDaily");
   assert(typeof cron.runWeekly  === "function", "Missing runWeekly");
   assert(typeof cron.runMonthly === "function", "Missing runMonthly");
+  assert(typeof cron.runFeatureImportance === "function", "Missing runFeatureImportance");
 }));
 
 promises.push(test("37. Job failure mock: Telegram notifyError gets called on aggregateDaily error", async () => {
