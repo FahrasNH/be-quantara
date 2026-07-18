@@ -3051,6 +3051,7 @@ class BotEngine extends EventEmitter {
     const SmartMoneyConceptsStrategy = require("../../../core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
     const afStrategy = new SmartMoneyConceptsStrategy();
     const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcEntry");
+    const { checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
 
     // Map legacy letters → type names for typeOverrides lookup
     const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;
@@ -3073,6 +3074,20 @@ class BotEngine extends EventEmitter {
     // Sprint 13: Side×Regime for Scalping LONGs in CHOP (live parity with backtest)
     if (typeName === "Scalping") {
       const flags = resolveScalpingGateFlags({ ...this.config, ...typeOverride, typeOverrides: this.config.typeOverrides });
+      const ts = indicatorSnapshot?.candleTimestamp
+        ?? indicators?.timestamps?.[lastIdx]
+        ?? Date.now();
+      const sessionGate = checkNoTradeSessionGate({
+        timestamp: ts,
+        noTradeSessions: flags.noTradeSessions,
+        enabled: flags.smcSessionFilter,
+        tradeTier: "Scalping",
+        strategyKey: this.config.strategyKey || "SMART_MONEY_CONCEPTS",
+      });
+      if (!sessionGate.ok) {
+        this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${sessionGate.reason}`);
+        return;
+      }
       const dailyRegime = this.state.dailyRegime || indicatorSnapshot?.dailyRegime || "UNKNOWN";
       const sideGate = applySmcSideRegimeGate({
         signal,

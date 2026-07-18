@@ -174,19 +174,21 @@ test("SMC-05b: validateEntry respects per-leg atrMinMult (Scalping 0.15%)", () =
   assert.equal(smc.validateEntry(100, 0.2, 200, 100, { atrMinMult: 0.15, atrMaxMult: 5.0 }).valid, true);
 });
 
-test("SMC-05c: validateEntry atrGateRelative uses baseline ratio (live/backtest parity)", () => {
+test("SMC-05c: validateEntry atrGateRelative + absolute floor (live/backtest parity)", () => {
   const smc = new SmartMoneyConceptsStrategy();
-  // atrPct = 0.10% — absolute Scalping floor 0.15 would reject; relative vs baseline passes
   const cfgRel = {
     atrMinMult: 0.15,
     atrMaxMult: 5.0,
     atrGateRelative: true,
     atrRelMin: 0.6,
     atrRelMax: 3.0,
-    _atrBaseline: 0.12, // atr/baseline = 0.10/0.12 ≈ 0.83 → within 0.6–3.0
+    _atrBaseline: 0.12,
   };
-  assert.equal(smc.validateEntry(100, 0.10, 200, 100, cfgRel).valid, true);
-  // Dead market: atr << baseline
+  // Relative OK (≈0.83) but 0.10% < 0.15% absolute floor → blocked (Sprint 16 dual gate)
+  assert.equal(smc.validateEntry(100, 0.10, 200, 100, cfgRel).valid, false);
+  // Both relative and absolute pass
+  assert.equal(smc.validateEntry(100, 0.20, 200, 100, cfgRel).valid, true);
+  // Dead market: atr << baseline → relative fail
   assert.equal(smc.validateEntry(100, 0.05, 200, 100, { ...cfgRel, _atrBaseline: 0.20 }).valid, false);
 });
 

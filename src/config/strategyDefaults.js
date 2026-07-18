@@ -73,6 +73,9 @@ const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
 const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
   Scalping: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
+    // Sprint 16 edge discovery: absolute ATR% floor (also enforced atop relative gate)
+    atrMinMult: 0.287,
+    noTradeSessions: ["Sydney", "Tokyo"],
     smcMinConfidenceScalping: 40,
     smcMinConfidenceA: 40,
     // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0

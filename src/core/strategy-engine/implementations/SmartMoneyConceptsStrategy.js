@@ -1804,8 +1804,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const swingGates = resolveSwingGateFlags(config);
 
     // Sprint 13: UTC session filter (default on for Scalping via typeOverrides).
-    // Blocks new Scalping entries during 21–23 UTC (hours 21,22). Fail-open when
-    // no candle timestamp is available.
+    // Sprint 16: full Asia block (Sydney+Tokyo) when noTradeSessions configured.
     if (rawA && scalpGates.smcSessionFilter) {
       const ts = config.candleTimestamp
         ?? indicators.timestamps?.[lastIdx]
@@ -1814,6 +1813,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       const sess = applySmcSessionFilter(ts, {
         enabled: true,
         blockHoursUtc: scalpGates.smcSessionBlockHoursUtc,
+        noTradeSessions: scalpGates.noTradeSessions,
       });
       if (sess.blocked) {
         this._abl("rejBySession");

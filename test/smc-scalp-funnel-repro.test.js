@@ -98,6 +98,6 @@ test("Scalping funnel: ATR fix unblocks leg; conf 30 lets SMC-only pass CHoCH", 
   assert.ok((raceDefault.perTypeStats.Scalping?.trades ?? 0) > 0, "race mode opens Scalping trades with per-leg overrides");
   assert.ok((smcOnly.perTypeStats.Scalping?.trades ?? 0) > 0,
     "SMC-only opens Scalping trades when conf floor is 30 (CHoCH still filters most setups)");
-  assert.equal(base.typeOverrides.Scalping.atrMinMult, 0.15);
+  assert.equal(base.typeOverrides.Scalping.atrMinMult, 0.287);
   assert.equal(base.typeOverrides.Scalping.smcMinConfidenceA, 40);
 });

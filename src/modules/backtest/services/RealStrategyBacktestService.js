@@ -32,7 +32,7 @@ const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefault
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
-const { buildAtrBaseline } = require("../../../core/risk-engine/entryRiskGates");
+const { buildAtrBaseline, checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const {
   resolveScalpingGateFlags,
@@ -2259,7 +2259,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const diag = {
     barsEvaluated: 0, htfUnknownSkip: 0, signalNull: 0, htfDirBlock: 0,
     cooldownBlock: 0, consecLossBlock: 0, maxTradesBlock: 0, dailyLossBlock: 0,
-    atrGateBlock: 0, validateBlock: 0, opened: 0,
+    atrGateBlock: 0, validateBlock: 0, sessionBlock: 0, opened: 0,
   };
 
   // SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones).
@@ -2645,6 +2645,21 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
+    const entryMeta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+    const tradeTier = cfg.tradeType || entryMeta?.component || entryMeta?.winningComponent || null;
+    const scalpGateFlags = resolveScalpingGateFlags({ ...cfg, typeOverrides: cfg.typeOverrides });
+    const sessionGate = checkNoTradeSessionGate({
+      timestamp: c.timestamp,
+      noTradeSessions: scalpGateFlags.noTradeSessions,
+      enabled: scalpGateFlags.smcSessionFilter,
+      tradeTier,
+      strategyKey,
+    });
+    if (!sessionGate.ok) {
+      diag.sessionBlock += 1;
+      equity.push({ date: isoOf(c), value: round2(capital) });
+      continue;
+    }
 
     // last CLOSED HTF bar (htfPtr[i] is the forming bar — lookahead). Fail-closed:
     // adx null (warmup) or no closed bar yet → skip entry, never "assume strong".
@@ -2741,10 +2756,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const base = atrBaseline[i];
       const rel = base > 0 ? atr / base : 1;
       if (rel < atrRelMin || rel > atrRelMax) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
+      if (legAtrOv.atrMinMult != null && legAtrOv.atrMinMult > 0 && atrPct < legAtrOv.atrMinMult) {
+        diag.atrGateBlock += 1;
+        equity.push({ date: isoOf(c), value: round2(capital) });
+        continue;
+      }
     } else if (atrPct < atrMinPct || atrPct > atrMaxPct) { diag.atrGateBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
     // ── 7. validateEntry (mirror step 9) ────────────────────────────────────
-    const meta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+    const meta = entryMeta;
     if (typeof strategy.validateEntry === "function") {
       try {
         const legName = meta?.component || meta?.winningComponent;

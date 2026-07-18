@@ -5,6 +5,95 @@
  * Account coordinator + ATR range stay ordered in BotEngine (coordinator before ATR).
  */
 
+/** UTC hour ranges (inclusive) per market session — SSOT for session gates. */
+const SESSION_HOUR_RANGES = Object.freeze({
+  Sydney: [[22, 23], [0, 6]],
+  Tokyo: [[0, 8]],
+  London: [[8, 16]],
+  "New York": [[13, 21]],
+});
+
+/**
+ * Detect primary market session from UTC hour (0–23).
+ * Overlaps match BacktestCsvService.detectMarketSession priority.
+ * @param {number|null|undefined} hourUtc
+ * @returns {string|null}
+ */
+function detectMarketSession(hourUtc) {
+  if (hourUtc == null || !Number.isFinite(Number(hourUtc))) return null;
+  const h = Number(hourUtc);
+  if ((h >= 22 && h <= 23) || (h >= 0 && h <= 6)) return "Sydney";
+  if (h >= 0 && h <= 8) return "Tokyo";
+  if (h >= 8 && h <= 16) return "London";
+  if (h >= 13 && h <= 21) return "New York";
+  return null;
+}
+
+/**
+ * Whether a UTC hour falls inside a named session window.
+ * @param {number|null|undefined} hourUtc
+ * @param {string} sessionName
+ * @returns {boolean}
+ */
+function hourInMarketSession(hourUtc, sessionName) {
+  if (hourUtc == null || !Number.isFinite(Number(hourUtc))) return false;
+  const h = Number(hourUtc);
+  const ranges = SESSION_HOUR_RANGES[sessionName];
+  if (!ranges) return false;
+  return ranges.some(([lo, hi]) => h >= lo && h <= hi);
+}
+
+/**
+ * UTC hour from epoch ms / ISO / Date. Fail-open → null.
+ * @param {number|Date|string|null|undefined} timestamp
+ * @returns {number|null}
+ */
+function hourUtcFromTimestamp(timestamp) {
+  if (timestamp == null || timestamp === "") return null;
+  const ms = typeof timestamp === "number"
+    ? timestamp
+    : Date.parse(timestamp instanceof Date ? timestamp.toISOString() : String(timestamp));
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).getUTCHours();
+}
+
+/**
+ * Block SMC Scalping entries during configured no-trade sessions (Sydney/Tokyo).
+ * Fail-open when timestamp missing. Only Scalping + SMART_MONEY_CONCEPTS.
+ *
+ * @returns {{ ok: boolean, reason?: string, hourUtc?: number|null, session?: string|null }}
+ */
+function checkNoTradeSessionGate({
+  timestamp,
+  noTradeSessions,
+  enabled,
+  tradeTier,
+  strategyKey,
+} = {}) {
+  if (enabled !== true) return { ok: true };
+  if (tradeTier !== "Scalping") return { ok: true };
+  const sk = String(strategyKey || "");
+  if (!sk.includes("SMART_MONEY_CONCEPTS")) return { ok: true };
+
+  const sessions = Array.isArray(noTradeSessions) ? noTradeSessions : [];
+  if (!sessions.length) return { ok: true };
+
+  const hourUtc = hourUtcFromTimestamp(timestamp);
+  if (hourUtc == null) return { ok: true, hourUtc: null };
+
+  for (const sess of sessions) {
+    if (hourInMarketSession(hourUtc, sess)) {
+      return {
+        ok: false,
+        hourUtc,
+        session: sess,
+        reason: `Session ${sess} blocked for SMC Scalping (hour ${hourUtc} UTC)`,
+      };
+    }
+  }
+  return { ok: true, hourUtc, session: detectMarketSession(hourUtc) };
+}
+
 /**
  * Rolling ATR baseline (SMA) — shared by backtest atrGateRelative + live validateEntry.
  * @param {Array<number|null|undefined>} atrArr
@@ -38,7 +127,7 @@ function evaluateAtrEntryGate({
   atr,
   price,
   atrBaseline = null,
-  atrMinMult = 0.8,
+  atrMinMult,
   atrMaxMult = 5.0,
   atrGateRelative = false,
   atrRelMin = 0.4,
@@ -53,6 +142,10 @@ function evaluateAtrEntryGate({
     && Number.isFinite(atrBaseline)
     && atrBaseline > 0;
 
+  const atrPct = (atr / price) * 100;
+  const minPct = atrMinMult ?? 0.8;
+  const maxPct = atrMaxMult ?? 5.0;
+
   if (useRelative) {
     const rel = atr / atrBaseline;
     if (rel < atrRelMin || rel > atrRelMax) {
@@ -63,12 +156,18 @@ function evaluateAtrEntryGate({
         reason: `ATR ratio ${rel.toFixed(2)} outside (${atrRelMin}–${atrRelMax})`,
       };
     }
+    // Sprint 16: explicit per-leg atrMinMult also enforced as absolute ATR% floor.
+    if (atrMinMult !== undefined && atrMinMult > 0 && atrPct < atrMinMult) {
+      return {
+        ok: false,
+        valid: false,
+        mode: "relative+absolute",
+        reason: `ATR terlalu kecil (${atrPct.toFixed(3)}% < ${atrMinMult}%) — market terlalu sepi`,
+      };
+    }
     return { ok: true, valid: true, mode: "relative" };
   }
 
-  const atrPct = (atr / price) * 100;
-  const minPct = atrMinMult ?? 0.8;
-  const maxPct = atrMaxMult ?? 5.0;
   if (atrPct < minPct) {
     return {
       ok: false,
@@ -193,7 +292,12 @@ function checkAtrRangeGate(atr, price, config = {}) {
 module.exports = {
   checkEntryRiskGates,
   checkAtrRangeGate,
+  checkNoTradeSessionGate,
   evaluateAtrEntryGate,
   buildAtrBaseline,
   resolveAtrLegOverride,
+  detectMarketSession,
+  hourInMarketSession,
+  hourUtcFromTimestamp,
+  SESSION_HOUR_RANGES,
 };

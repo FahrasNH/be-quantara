@@ -60,7 +60,7 @@ describe("mergeBacktestCfg preserves SMC SSOT under FE/CLI poison payloads", () 
     }, feeModel);
 
     assert.equal(cfg.typeOverrides.Scalping.atrGateRelative, true);
-    assert.equal(cfg.typeOverrides.Scalping.atrMinMult, 0.15);
+    assert.equal(cfg.typeOverrides.Scalping.atrMinMult, 0.287);
 
     const typeConfig = {
       ...cfg,

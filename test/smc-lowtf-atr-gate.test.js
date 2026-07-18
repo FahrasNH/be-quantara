@@ -23,7 +23,7 @@ const assert = require("node:assert");
 const { test } = require("node:test");
 const { STRATEGIES, DEFAULT_LEG_TYPE_OVERRIDES } = require("../src/config/strategyDefaults");
 const { runTripleTypeBacktest } = require("../src/modules/backtest/services/RealStrategyBacktestService");
-const { evaluateAtrEntryGate, buildAtrBaseline } = require("../src/core/risk-engine/entryRiskGates");
+const { evaluateAtrEntryGate, buildAtrBaseline, checkNoTradeSessionGate, hourInMarketSession } = require("../src/core/risk-engine/entryRiskGates");
 
 const TF_MS = { "5m": 5 * 60e3, "15m": 15 * 60e3, "1h": 60 * 60e3, "4h": 240 * 60e3, "1w": 7 * 24 * 60 * 60e3 };
 
@@ -70,7 +70,7 @@ function genCandles(nBars, stepMs, seed, volPct, startTs) {
 // low-TF legs sit BELOW the old 0.8 floor but above their new per-leg floors,
 // while Swing stays above 0.8 (its behaviour must not change).
 const LEGS = {
-  Scalping: { tf: "5m", htf: "1h", vol: 0.25 },
+  Scalping: { tf: "5m", htf: "1h", vol: 0.35 },
   Intraday: { tf: "15m", htf: "4h", vol: 0.37 },
   Swing:    { tf: "4h", htf: "1w", vol: 0.8 },
 };
@@ -120,8 +120,9 @@ async function tradesByLeg(window, config) {
 
 test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intraday confB", () => {
   const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides;
-  assert.equal(ov.Scalping.atrMinMult, 0.15, "Scalping atrMinMult must be 0.15");
+  assert.equal(ov.Scalping.atrMinMult, 0.287, "Scalping atrMinMult must be 0.287 (Sprint 16 edge filter)");
   assert.equal(ov.Scalping.atrGateRelative, true, "Scalping must use adaptive ATR gate");
+  assert.deepEqual(ov.Scalping.noTradeSessions, ["Sydney", "Tokyo"], "Scalping blocks Asia sessions");
   // Defect A fix (2026-07-16): band widened 0.6–3.0 → 0.4–4.0 so clustered real-vol
   // SMC setups (rel<0.6 in calm legs / rel>3.0 on displacement spikes) are no longer
   // blanket-rejected. Shared SSOT → live/dry-run/backtest all move together.
@@ -130,7 +131,7 @@ test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intrad
   assert.equal(ov.Intraday.atrMinMult, 0.4, "Intraday atrMinMult must be 0.4");
   assert.equal(ov.Swing.atrMinMult, 0.8, "Swing atrMinMult must stay 0.8");
   assert.ok(!ov.Intraday.atrGateRelative, "Intraday stays absolute ATR gate");
-  assert.equal(ov.Scalping.smcMinConfidenceA, 30, "Scalping confA must be 30");
+  assert.equal(ov.Scalping.smcMinConfidenceA, 40, "Scalping confA must be 40");
   assert.equal(ov.Intraday.smcMinConfidenceB, 45, "Intraday confB must be 45");
   // Top-level floor (what LIVE gating reads) is untouched at 0.8 → live unchanged.
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.atrMinMult, 0.8, "top-level atrMinMult (live) must stay 0.8");
@@ -164,6 +165,41 @@ test("PARITY: relative ATR band 0.4–4.0 is the SHARED SSOT (gate math == confi
   // caller that omits the band (some live paths) matches the backtest.
   assert.ok(evaluateAtrEntryGate({ atr: 0.5, price: 100, atrBaseline: 1, atrGateRelative: true }).ok);
   assert.ok(!evaluateAtrEntryGate({ atr: 0.3, price: 100, atrBaseline: 1, atrGateRelative: true }).ok);
+});
+
+test("Sprint 16: relative pass still blocked below per-leg absolute atrMinMult floor", () => {
+  const gate = evaluateAtrEntryGate({
+    atr: 0.2,
+    price: 100,
+    atrBaseline: 0.25,
+    atrMinMult: 0.287,
+    atrGateRelative: true,
+    atrRelMin: 0.4,
+    atrRelMax: 4.0,
+  });
+  assert.ok(!gate.ok, "rel=0.8 passes relative band but 0.20% < 0.287% absolute floor");
+  assert.equal(gate.mode, "relative+absolute");
+});
+
+test("SESSION-GATE: checkNoTradeSessionGate blocks SMC Scalping in Tokyo, not Intraday", () => {
+  const tsAsia = Date.UTC(2026, 6, 13, 3, 0, 0);
+  assert.ok(hourInMarketSession(3, "Tokyo"));
+  const blocked = checkNoTradeSessionGate({
+    timestamp: tsAsia,
+    noTradeSessions: ["Sydney", "Tokyo"],
+    enabled: true,
+    tradeTier: "Scalping",
+    strategyKey: "SMART_MONEY_CONCEPTS",
+  });
+  assert.equal(blocked.ok, false);
+  const intraOk = checkNoTradeSessionGate({
+    timestamp: tsAsia,
+    noTradeSessions: ["Sydney", "Tokyo"],
+    enabled: true,
+    tradeTier: "Intraday",
+    strategyKey: "SMART_MONEY_CONCEPTS",
+  });
+  assert.equal(intraOk.ok, true);
 });
 
 test("PARITY: relative branch does NOT fire on warmup/NaN baseline (no spurious rel rejection)", () => {

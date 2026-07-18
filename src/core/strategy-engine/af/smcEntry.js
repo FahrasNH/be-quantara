@@ -14,6 +14,10 @@
 "use strict";
 
 const { bbWidthSeries } = require("./volumeAnalysisUtils");
+const {
+  hourInMarketSession,
+  hourUtcFromTimestamp,
+} = require("../../risk-engine/entryRiskGates");
 
 /** Default Scalping session block: [21:00, 23:00) UTC (hours 21 and 22). */
 const DEFAULT_BLOCK_HOURS_UTC = [21, 22];
@@ -28,22 +32,36 @@ const DEFAULT_SWING_HOLD_WARN_HOURS = 168;
 const DEFAULT_SWING_MAX_FUNDING_RATE = 0.0002;
 
 /**
- * Session filter — block new entries during configured UTC hours.
+ * Session filter — block new entries during configured UTC hours or named sessions.
+ * When `noTradeSessions` is set (e.g. ['Sydney','Tokyo']), blocks the full Asia
+ * window for SMC Scalping. Legacy `blockHoursUtc` still supported when no sessions.
  * @param {number|Date|string|null} timestamp
  * @param {object} [opts]
  * @param {boolean} [opts.enabled]
  * @param {number[]} [opts.blockHoursUtc]
+ * @param {string[]} [opts.noTradeSessions]
  * @returns {{ blocked: boolean, hourUtc: number|null, reason: string|null }}
  */
 function applySmcSessionFilter(timestamp, opts = {}) {
   const enabled = opts.enabled === true;
+  const hourUtc = hourUtcFromTimestamp(timestamp);
   if (!enabled) {
-    return { blocked: false, hourUtc: hourUtcOf(timestamp), reason: null };
+    return { blocked: false, hourUtc, reason: null };
   }
-  const hourUtc = hourUtcOf(timestamp);
   if (hourUtc == null) {
     return { blocked: false, hourUtc: null, reason: "no_timestamp_fail_open" };
   }
+
+  const noTradeSessions = opts.noTradeSessions;
+  if (Array.isArray(noTradeSessions) && noTradeSessions.length) {
+    for (const sess of noTradeSessions) {
+      if (hourInMarketSession(hourUtc, sess)) {
+        return { blocked: true, hourUtc, reason: `session_block_${String(sess).toLowerCase()}` };
+      }
+    }
+    return { blocked: false, hourUtc, reason: null };
+  }
+
   const blockHours = Array.isArray(opts.blockHoursUtc) && opts.blockHoursUtc.length
     ? opts.blockHoursUtc
     : DEFAULT_BLOCK_HOURS_UTC;
@@ -97,12 +115,7 @@ function applySmcFundingGuard({ signal, fundingRate, enabled, maxAbsRate } = {})
 }
 
 function hourUtcOf(timestamp) {
-  if (timestamp == null || timestamp === "") return null;
-  const ms = typeof timestamp === "number"
-    ? timestamp
-    : Date.parse(timestamp instanceof Date ? timestamp.toISOString() : String(timestamp));
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms).getUTCHours();
+  return hourUtcFromTimestamp(timestamp);
 }
 
 /**
@@ -115,6 +128,7 @@ function resolveScalpingGateFlags(config = {}) {
     smcSessionFilter: config.smcSessionFilter ?? ov.smcSessionFilter ?? false,
     smcSessionBlockHoursUtc:
       config.smcSessionBlockHoursUtc ?? ov.smcSessionBlockHoursUtc ?? DEFAULT_BLOCK_HOURS_UTC,
+    noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
     smcBlockLongInChop: config.smcBlockLongInChop ?? ov.smcBlockLongInChop ?? false,
     smcRequireObRetest: config.smcRequireObRetest ?? ov.smcRequireObRetest ?? false,
     maxHoldHours: config.maxHoldHours ?? ov.maxHoldHours ?? ov.scalpingMaxHoldHours ?? null,

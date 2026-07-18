@@ -16,6 +16,25 @@ const { applyRegimeGate } = require("#core/signal-engine/dailyRegimeGate.js");
 const SmartMoneyConceptsStrategy = require("../src/core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
 const { TRADE_EXPORT_COLUMNS } = require("#shared/csv/tradeExportCsv.js");
 
+test("GATE-SESSION: blocks Sydney and Tokyo hours when noTradeSessions set", () => {
+  const tsTokyo = Date.UTC(2026, 6, 13, 3, 30, 0); // hour 3 UTC — Sydney+Tokyo
+  const tsLondon = Date.UTC(2026, 6, 13, 14, 0, 0);
+
+  const blocked = applySmcSessionFilter(tsTokyo, {
+    enabled: true,
+    noTradeSessions: ["Sydney", "Tokyo"],
+  });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.hourUtc, 3);
+
+  const open = applySmcSessionFilter(tsLondon, {
+    enabled: true,
+    noTradeSessions: ["Sydney", "Tokyo"],
+  });
+  assert.equal(open.blocked, false);
+  assert.equal(open.hourUtc, 14);
+});
+
 test("GATE-SESSION: blocks 21–22 UTC when enabled, fail-open when off", () => {
   const ts21 = Date.UTC(2026, 6, 13, 21, 30, 0);
   const ts14 = Date.UTC(2026, 6, 13, 14, 0, 0);
@@ -113,6 +132,8 @@ test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + 120m time-stop + gates 
   assert.equal(ov.smcBlockLongInChop, true);
   assert.equal(ov.smcRequireObRetest, true);
   assert.equal(ov.smcMinConfidenceScalping, 40);
+  assert.deepEqual(ov.noTradeSessions, ["Sydney", "Tokyo"]);
+  assert.equal(ov.atrMinMult, 0.287);
 
   const smc = new SmartMoneyConceptsStrategy();
   assert.equal(smc.SUB_STRATEGIES.Scalping.slMultiplier, 1.5);
@@ -200,7 +221,7 @@ test("FEATURES: buildSmcEntryFeatures returns expected keys", () => {
   assert.equal(feats.obDistanceAtr, 0);
 });
 
-test("SESSION in detectSignalMulti: Scalping null at 21 UTC when filter on", () => {
+test("SESSION in detectSignalMulti: Scalping null at 03 UTC when Asia filter on", () => {
   const smc = new SmartMoneyConceptsStrategy();
   // Force a sequence signal via stub
   const orig = smc._detectSMCSequence.bind(smc);
@@ -235,7 +256,8 @@ test("SESSION in detectSignalMulti: Scalping null at 21 UTC when filter on", () 
     smcMinConfidenceAShort: 50,
     scalpingChochValidate: false,
     smcSessionFilter: true,
-    candleTimestamp: Date.UTC(2026, 6, 13, 21, 5, 0),
+    noTradeSessions: ["Sydney", "Tokyo"],
+    candleTimestamp: Date.UTC(2026, 6, 13, 3, 5, 0),
     htfTrend: "BULLISH",
   });
   assert.equal(blocked.Scalping, null);
@@ -247,6 +269,7 @@ test("SESSION in detectSignalMulti: Scalping null at 21 UTC when filter on", () 
     smcMinConfidenceAShort: 50,
     scalpingChochValidate: false,
     smcSessionFilter: true,
+    noTradeSessions: ["Sydney", "Tokyo"],
     candleTimestamp: Date.UTC(2026, 6, 13, 14, 5, 0),
     htfTrend: "BULLISH",
   });
