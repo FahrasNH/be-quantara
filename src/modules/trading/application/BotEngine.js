@@ -21,6 +21,7 @@ const notifier = require("../../../infrastructure/notifications/TelegramNotifier
 const GrokTradingService = require("../../research/services/GrokTradingService");
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const { onEngineTradeOpen, onEngineTradeClose } = require("../../ml/services/BotEngineMlHook");
+const MLGateService = require("../../ml/services/MLGateService");
 const {
   enrichEntryContextLive,
   enrichExitContextLive,
@@ -2558,6 +2559,40 @@ class BotEngine extends EventEmitter {
     };
     // NOTE: "Fired by" attribution folded into the consolidated entry banner below
     // (one card per entry instead of six). enrichedSnapshot still persisted to DB.
+
+    // ── Sprint 16 Phase 2: ML win-probability gate ─────────────────────────────
+    if (!this._mlGate) {
+      this._mlGate = MLGateService.autoStart();
+    }
+    if (this._mlGate) {
+      const mlGatePayload = this._buildMlEntryPayload(enrichedSnapshot, {
+        price,
+        openTime: Date.now(),
+        attributionKey,
+      });
+      let closedTradeCount = 999;
+      if (this.sessionId) {
+        try {
+          const stats = await db.getTradeStats(this.sessionId, this.config.userId);
+          closedTradeCount = parseInt(stats?.total, 10) || 0;
+        } catch { /* fail-open */ }
+      }
+      const mlVerdict = this._mlGate.evaluateEntry({
+        entryContext:     mlGatePayload.entryContext,
+        strategyKey:      attributionKey,
+        symbol:           this.config.symbol,
+        regime:           enrichedSnapshot?.afMarketCond,
+        tradeCount:       closedTradeCount,
+        signalConfidence: enrichedSnapshot?.afAggregateConfidence ?? enrichedSnapshot?.afConfidence,
+      });
+      if (!mlVerdict.allowed) {
+        this._log("info", `⏸ ML gate — ${mlVerdict.reason}`);
+        return;
+      }
+      if (mlVerdict.mode === "shadow" && mlVerdict.pWin < (mlVerdict.threshold ?? 0.45)) {
+        this._log("info", `[ML shadow] Would skip: ${mlVerdict.reason}`);
+      }
+    }
 
     // Tentukan modal acuan untuk sizing.
     // LIVE: WAJIB dari balance exchange yang valid. Jika gagal/0 → ABORT trade.

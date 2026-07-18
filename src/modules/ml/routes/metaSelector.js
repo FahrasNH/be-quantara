@@ -61,6 +61,19 @@ function getHybridAdvisor() {
   return _hybridAdvisor;
 }
 
+// Sprint 16 Phase 2 — lazy-loaded FeatureImportanceAnalyzer
+let _featureImportanceAnalyzer = null;
+function getFeatureImportanceAnalyzer() {
+  if (_featureImportanceAnalyzer) return _featureImportanceAnalyzer;
+  try {
+    const FeatureImportanceAnalyzer = require("../services/FeatureImportanceAnalyzer");
+    _featureImportanceAnalyzer = FeatureImportanceAnalyzer.autoStart();
+  } catch (err) {
+    console.warn("[MetaSelector] FeatureImportanceAnalyzer unavailable:", err.message);
+  }
+  return _featureImportanceAnalyzer;
+}
+
 // ── Feature flag ──────────────────────────────────────────────────────────────
 
 function getMode() {
@@ -384,6 +397,48 @@ module.exports = function createMetaSelectorRouter(wssOrRef = null) {
       });
     } catch (err) {
       console.error("[MetaSelector] rag/revert error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── GET /feature-importance (Sprint 16 Phase 2 / Task 2.3) ─────────────────
+  /**
+   * Return cached feature importance ranking (top signals driving wins).
+   * Falls back to model built-in importance if no cache exists.
+   */
+  router.get("/feature-importance", async (req, res) => {
+    try {
+      const analyzer = getFeatureImportanceAnalyzer();
+      if (!analyzer) {
+        return res.status(503).json({ ok: false, error: "FeatureImportanceAnalyzer not available" });
+      }
+      const cached = analyzer.getCached();
+      if (cached) {
+        return res.json({ ok: true, ...cached });
+      }
+      const result = await analyzer.analyze({ samples: 100 });
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("[MetaSelector] feature-importance error:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── POST /feature-importance/analyze (SUPER_ADMIN, Sprint 16 Phase 2) ────
+  /**
+   * Trigger on-demand SHAP approximation analysis.
+   */
+  router.post("/feature-importance/analyze", superAdminGuard, async (req, res) => {
+    try {
+      const analyzer = getFeatureImportanceAnalyzer();
+      if (!analyzer) {
+        return res.status(503).json({ ok: false, error: "FeatureImportanceAnalyzer not available" });
+      }
+      const samples = parseInt(req.body?.samples, 10) || 500;
+      const result  = await analyzer.analyze({ samples });
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("[MetaSelector] feature-importance/analyze error:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
     }
   });

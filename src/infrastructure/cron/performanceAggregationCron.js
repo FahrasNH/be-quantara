@@ -13,7 +13,9 @@
 
 "use strict";
 
+const StrategyPerformanceAggregation = require("../../modules/ml/services/StrategyPerformanceAggregation");
 const StrategyPerformanceService = require("../../server/services/StrategyPerformanceService");
+const FeatureImportanceAnalyzer = require("../../modules/ml/services/FeatureImportanceAnalyzer");
 const telegram = require("../notifications/TelegramNotifier");
 const walkForwardJob = require("../jobs/WalkForwardJob");
 const log = require("#shared/logger").child({ component: "performanceAggregationCron" });
@@ -74,6 +76,7 @@ let _dailyTimeout        = null;
 let _weeklyTimeout       = null;
 let _monthlyTimeout      = null;
 let _walkForwardTimeout  = null;
+let _featureImportanceTimeout = null;
 
 // ── Daily (02:00 UTC) ─────────────────────────────────────────────────────────
 
@@ -84,7 +87,7 @@ async function runDaily() {
 
   try {
     log.info({ date: yesterday.toISOString().slice(0, 10) }, "Starting daily aggregation");
-    const results = await StrategyPerformanceService.aggregateDaily(yesterday);
+    const results = await StrategyPerformanceAggregation.aggregateDaily(yesterday);
     log.info({ records: results.length }, "Daily aggregation done");
   } catch (err) {
     log.error({ err }, "Daily aggregation failed");
@@ -171,6 +174,36 @@ function scheduleWalkForward() {
   if (_walkForwardTimeout.unref) _walkForwardTimeout.unref();
 }
 
+// ── Feature Importance (hourly) — Sprint 16 Phase 2 / Task 2.3 ───────────────
+
+async function runFeatureImportance() {
+  log.info("Starting feature importance analysis (SHAP approximation)");
+  try {
+    const analyzer = FeatureImportanceAnalyzer.autoStart();
+    if (!analyzer) {
+      log.warn("FeatureImportanceAnalyzer unavailable — skipping");
+    } else {
+      const result = await analyzer.analyze({ samples: 500 });
+      log.info({
+        sampleCount: result.sampleCount,
+        baselineAuc: result.baselineAuc,
+        topFeature:  result.top5?.[0]?.name ?? null,
+      }, "Feature importance analysis done");
+    }
+  } catch (err) {
+    log.error({ err }, "Feature importance analysis failed");
+    await alertFailure("FeatureImportanceAnalyzer", err);
+  }
+  scheduleFeatureImportance();
+}
+
+function scheduleFeatureImportance() {
+  const ONE_HOUR = 3600000;
+  log.info("Next feature importance run in 1h");
+  _featureImportanceTimeout = setTimeout(runFeatureImportance, ONE_HOUR);
+  if (_featureImportanceTimeout.unref) _featureImportanceTimeout.unref();
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 function start() {
@@ -182,13 +215,23 @@ function start() {
   scheduleWeekly();
   scheduleMonthly();
   scheduleWalkForward();
-  log.info("Started (daily/weekly/monthly/walk-forward)");
+  scheduleFeatureImportance();
+  log.info("Started (daily/weekly/monthly/walk-forward/feature-importance)");
 }
 
 function stop() {
-  [_dailyTimeout, _weeklyTimeout, _monthlyTimeout, _walkForwardTimeout].forEach(t => t && clearTimeout(t));
-  _dailyTimeout = _weeklyTimeout = _monthlyTimeout = _walkForwardTimeout = null;
+  [_dailyTimeout, _weeklyTimeout, _monthlyTimeout, _walkForwardTimeout, _featureImportanceTimeout]
+    .forEach(t => t && clearTimeout(t));
+  _dailyTimeout = _weeklyTimeout = _monthlyTimeout = _walkForwardTimeout = _featureImportanceTimeout = null;
   log.info("Stopped");
 }
 
-module.exports = { start, stop, runDaily, runWeekly, runMonthly, runWalkForward };
+module.exports = {
+  start,
+  stop,
+  runDaily,
+  runWeekly,
+  runMonthly,
+  runWalkForward,
+  runFeatureImportance,
+};
