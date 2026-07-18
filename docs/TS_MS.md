@@ -86,6 +86,30 @@ Race mode uses HTF arrays (`highsHTF`, `lowsHTF`, `closesHTF`). Signal labels ar
 
 ---
 
+## Tick open trade
+
+Live path: `BotEngine._tick()` evaluates the **`interval`** candle each **`checkInterval`**, then opens at the exchange **ticker** `last` (not bar close). Backtest fills at the entry bar **close** (`RealStrategyBacktestService`).
+
+| Parameter | Default | Unit | Kegunaan |
+| --- | --- | --- | --- |
+| `interval` | `5m` | TF | Signal / indicator candle polled each tick |
+| `checkInterval` | `60_000` | ms | Minimum spacing between live ticks (~60 s) |
+| `higherTf` | `1h` | TF | HTF trend filter (`BotEngine` HTF cache) |
+
+**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
+
+| Leg | Real money | Dry-run / backtest |
+| --- | --- | --- |
+| Scalping | Blocked | Allowed |
+| Intraday | Allowed | Allowed |
+| Swing | Allowed | Allowed |
+
+Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
+
+Live entry guards: ticker fail-closed if `getTicker` unavailable; skip when \|ticker − signal close\| > 1×ATR (`AdaptiveStrategyEngine` §11b–11c).
+
+---
+
 ## Entry signal labels
 
 Labels come from `entryMeta.reason` + `entryMeta.meta.structure`.

@@ -122,6 +122,30 @@ Signal labels are **identical across trade types** for a given sequence; only ti
 
 ---
 
+## Tick open trade
+
+Live path: `BotEngine._tick()` evaluates the **`interval`** candle each **`checkInterval`**, then opens at the exchange **ticker** `last` (not bar close). Backtest fills at the entry bar **close** (`RealStrategyBacktestService`).
+
+| Parameter | Default | Unit | Kegunaan |
+| --- | --- | --- | --- |
+| `interval` | `1h` | TF | Signal / indicator candle polled each tick |
+| `checkInterval` | `3_600_000` | ms | Minimum spacing between live ticks (~1 h) |
+| `higherTf` | `4h` | TF | HTF trend filter (`BotEngine` HTF cache) |
+
+**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
+
+| Leg | Real money | Dry-run / backtest |
+| --- | --- | --- |
+| Scalping | Blocked | Allowed |
+| Intraday | Allowed | Allowed |
+| Swing | Allowed | Allowed |
+
+Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global — same for every strategy). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
+
+Live entry guards: ticker fail-closed if `getTicker` unavailable; skip when \|ticker − signal close\| > 1×ATR (`AdaptiveStrategyEngine` §11b–11c).
+
+---
+
 ## Entry signal labels
 
 Labels are derived **only** from `sequenceMeta` fields on fill. Confidence scores and gate blocks are separate concerns.
