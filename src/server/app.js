@@ -16,6 +16,7 @@ const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinato
 const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 const { getStrategy } = require("#config/strategyDefaults.js");
 const { ingressNormalizeStrategyKey } = require("#config/strategyKeyNormalizer.js");
+const { mergeBotStartOverrides } = require("../modules/trading/services/botConfigMerge");
 const { createExchangeClient } = require("../infrastructure/exchange");
 const db     = require("../infrastructure/db/database");
 const backup = require("../infrastructure/backup/BackupScheduler");
@@ -416,8 +417,14 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   // berbagi AccountCoordinator + kredensial user. cfg dari koordinator sudah berisi
   // strategyKey/capital/dryRun/botKey/groupKey.
   const engineFactory = (strategyKey, cfg2) => {
+    const strategyDbOverrides = mergeBotStartOverrides({
+      dbConfigOverrides: opts.configOverrides,
+      strategyKey,
+      explicit: {},
+    });
     const eng = new AdaptiveStrategyEngine({
       ...cfg2,
+      ...strategyDbOverrides,
       coordinator: accountCoordinator,
       exchangeType: opts.exchangeType || "bitget",
       apiKey:      opts.apiKey,
@@ -878,6 +885,7 @@ async function _resumeOneBotAttempt(bot, prisma) {
       dryRun:      bot.dryRun,
       tpMode:      bot.tpMode ?? "full",
       botId:       bot.id,
+      configOverrides: bot.configOverrides,
       exchangeType,
       apiKey, apiSecret, passphrase,
       maxAccountOpenPositions: accountOpenCap,
@@ -888,24 +896,28 @@ async function _resumeOneBotAttempt(bot, prisma) {
     });
     console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
   } else {
-    instance = createBotInstance(bot.userId, bot.symbol, {
-      capital:     bot.capital,
-      strategyKey: ingressNormalizeStrategyKey(bot.strategyKey, {
-        source: "app.startup-resume",
-        mode: "live",
-      }),
-      dryRun:      bot.dryRun,
-      tpMode:      bot.tpMode ?? "full",
-      botId:       bot.id,
-      userId:      bot.userId,
-      exchangeType,
-      apiKey, apiSecret, passphrase,
-      maxAccountOpenPositions: accountOpenCap,
-      grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
-      grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
-      grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
-      grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
-    });
+    instance = createBotInstance(bot.userId, bot.symbol, mergeBotStartOverrides({
+      dbConfigOverrides: bot.configOverrides,
+      strategyKey: bot.strategyKey,
+      explicit: {
+        capital:     bot.capital,
+        strategyKey: ingressNormalizeStrategyKey(bot.strategyKey, {
+          source: "app.startup-resume",
+          mode: "live",
+        }),
+        dryRun:      bot.dryRun,
+        tpMode:      bot.tpMode ?? "full",
+        botId:       bot.id,
+        userId:      bot.userId,
+        exchangeType,
+        apiKey, apiSecret, passphrase,
+        maxAccountOpenPositions: accountOpenCap,
+        grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+        grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+        grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+        grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
+      },
+    }));
     console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
   }
 

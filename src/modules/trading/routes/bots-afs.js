@@ -19,6 +19,7 @@ module.exports = function createBotsRouter(helpers) {
   // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
   const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../../core/risk-engine/tierConfig");
   const { ingressNormalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+  const { mergeBotStartOverrides } = require("../services/botConfigMerge");
   const db = require("../../../infrastructure/db/database");
   const envCfg = require("../../../config/env");
 
@@ -877,6 +878,7 @@ module.exports = function createBotsRouter(helpers) {
             dryRun:     bot.dryRun,
             tpMode:     bot.tpMode ?? "full",
             botId:      bot.id,
+            configOverrides: bot.configOverrides,
             exchangeType,
             apiKey:     decryptedApiKey,
             apiSecret:  decryptedApiSecret,
@@ -888,24 +890,28 @@ module.exports = function createBotsRouter(helpers) {
             grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
             grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
           })
-        : createBotInstance(userId, symbol, {
-            capital:     bot.capital,
+        : createBotInstance(userId, symbol, mergeBotStartOverrides({
+            dbConfigOverrides: bot.configOverrides,
             strategyKey: bot.strategyKey,
-            dryRun:      bot.dryRun,
-            tpMode:      bot.tpMode ?? "full",
-            botId:       bot.id,
-            userId,                // diteruskan ke openSession → user_id di bot_sessions
-            exchangeType,
-            apiKey:      decryptedApiKey,
-            apiSecret:   decryptedApiSecret,
-            passphrase:  decryptedPassphrase,
-            pairMetrics,
-            maxAccountOpenPositions: accountOpenCap,
-            grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
-            grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
-            grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
-            grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
-          });
+            explicit: {
+              capital:     bot.capital,
+              strategyKey: bot.strategyKey,
+              dryRun:      bot.dryRun,
+              tpMode:      bot.tpMode ?? "full",
+              botId:       bot.id,
+              userId,
+              exchangeType,
+              apiKey:      decryptedApiKey,
+              apiSecret:   decryptedApiSecret,
+              passphrase:  decryptedPassphrase,
+              pairMetrics,
+              maxAccountOpenPositions: accountOpenCap,
+              grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
+              grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
+              grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
+              grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
+            },
+          }));
 
       const instState = instance.getState();
 

@@ -33,9 +33,30 @@ const {
   filterOrphanTradesForEngine,
   positionFromDbTrade,
 } = require("../../../core/execution-engine");
-const { checkEntryRiskGates, checkAtrRangeGate } = require("../../../core/risk-engine/entryRiskGates");
+const {
+  buildAtrBaseline,
+  checkEntryRiskGates,
+  checkAtrRangeGate,
+  resolveAtrLegOverride,
+} = require("../../../core/risk-engine/entryRiskGates");
 const { applyBsBrSnapshotFields } = require("../../../shared/csv/strategyMlEnrichment");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+
+/** Legacy PDF sideways handlers in _checkSidewaysEntry (Strat A/B/C). */
+const LEGACY_PDF_SIDEWAYS_SIGNAL_TYPES = new Set([
+  "PDF_SCALPING",
+  "PDF_DAYTRADING",
+  "PDF_SWING",
+]);
+
+/** Non-legacy detectors — skip TF-style EMA+RSI no-entry diagnostics. */
+const MODERN_SIGNAL_TYPES = new Set([
+  "MEAN_REVERSION",
+  "BREAKOUT_RETEST",
+  "SMART_MONEY_CONCEPTS",
+  "ADAPTIVE_FUSION",
+  "TREND_FOLLOWING",
+]);
 
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
 // Lazy-import Prisma (singleton bersama) agar tidak circular dengan db module
@@ -443,6 +464,48 @@ class BotEngine extends EventEmitter {
       return true;
     }
     return false;
+  }
+
+  /** Throttled no-entry diagnostic — strategy-aware (avoid misleading TF EMA+RSI for MR/SMC/BR). */
+  _logNoEntryDiagnostic(indicators, lastIdx, { emaF, emaS, rsi }) {
+    const signalType = this.config.signalType;
+    if (MODERN_SIGNAL_TYPES.has(signalType)) {
+      const parts = [
+        `${this.config.strategyLabel || this.config.strategyKey}: belum ada sinyal`,
+      ];
+      if (this.config.higherTf) {
+        parts.push(`HTF ${this.config.higherTf}=${this.state.htfTrend}`);
+      }
+      if (rsi != null) parts.push(`RSI=${rsi.toFixed(1)}`);
+      this._log("info", `⏳ Belum entry — ${parts.join(" | ")}`);
+      return;
+    }
+
+    const rsiMin = this.config.rsiLongMin ?? 50;
+    const rsiMax = this.config.rsiLongMax ?? 70;
+    const emaOk  = emaF > emaS;
+    const rsiOk  = rsi != null && rsi >= rsiMin && rsi <= rsiMax;
+    const vol    = indicators.volumes?.[lastIdx] ?? 0;
+    const volAvg = indicators.volSMA?.[lastIdx]  ?? 0;
+    const volOk  = !volAvg || vol >= volAvg * this.config.volSmaMultiplier;
+    const htfOk  = !this.config.higherTf ||
+                   this.state.htfTrend === "BULLISH" ||
+                   this.state.htfTrend === "SIDEWAYS";
+
+    const reasons = [];
+    if (!emaOk)    reasons.push(`EMA${this.config.emaFast}<EMA${this.config.emaSlow} (trend belum bullish)`);
+    if (!htfOk)    reasons.push(`HTF ${this.config.higherTf}=${this.state.htfTrend} (bukan BULLISH)`);
+    if (!rsiOk && rsi != null) {
+      const tag = rsi > rsiMax ? "overbought—tunggu pullback" : "terlalu rendah";
+      reasons.push(`RSI=${rsi.toFixed(1)} di luar zona ${rsiMin}–${rsiMax} (${tag})`);
+    }
+    if (!volOk && volAvg > 0) {
+      reasons.push(`Volume ${(vol / volAvg).toFixed(2)}x SMA (perlu ≥${this.config.volSmaMultiplier}x)`);
+    }
+    if (reasons.length === 0) {
+      reasons.push(`RSI pullback-bounce pattern belum terpenuhi (RSI=${rsi?.toFixed(1)}, perlu pullback ke ${rsiMin}–${rsiMax} lalu naik)`);
+    }
+    this._log("info", `⏳ Belum entry — menunggu: ${reasons.join(" | ")}`);
   }
 
   _capTrades() {
@@ -1226,15 +1289,28 @@ class BotEngine extends EventEmitter {
         await this._tickGrokAi(price, indicators, lastIdx, htfCandlesCache);
       } else if (this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
-        const gate = this._checkRiskGates(atr, price);
+        const atrLegOv = resolveAtrLegOverride(this.config, null);
+        const atrBaselineArr = atrLegOv.atrGateRelative === true || this.config.atrGateRelative === true
+          ? buildAtrBaseline(indicators.atr)
+          : null;
+        const atrBaselineNow = atrBaselineArr?.[lastIdx] ?? null;
+        const atrGateCfg = {
+          ...this.config,
+          ...atrLegOv,
+          atrBaseline: atrBaselineNow,
+          _atrBaseline: atrBaselineNow,
+        };
+        const gate = this._checkRiskGates(atr, price, atrGateCfg);
         if (!gate.ok) {
           if (this._shouldLogDecision()) {
             this._log("info", `⏸ Belum entry — ${gate.reason}`);
           }
         } else {
-          // BREAKOUT_RETEST punya detector sendiri (level S&R + retest) — tidak pakai handler sideways PDF
-          if (this.state.htfTrend === "SIDEWAYS" && normalizeStrategyKey(this.config.signalType) !== "BREAKOUT_RETEST") {
-            // ── STEP 2a: SIDEWAYS — per-strategi (A diam, B breakout, C retest) ───
+          // Legacy PDF sideways only — modern strategies proceed via STEP 2b (mirror AdaptiveStrategyEngine).
+          const useLegacySideways = this.state.htfTrend === "SIDEWAYS"
+            && LEGACY_PDF_SIDEWAYS_SIGNAL_TYPES.has(this.config.signalType);
+          if (useLegacySideways) {
+            // ── STEP 2a: SIDEWAYS — PDF Strat A/B/C ───
             await this._checkSidewaysEntry(htfCandlesCache, price, atr, indicators, lastIdx, emaF, emaS, emaTrend, rsi);
           } else {
             // ── STEP 2b: TRENDING — sinyal trend-following normal ───────────────
@@ -1559,33 +1635,8 @@ class BotEngine extends EventEmitter {
             } else if (!filteredSignal) {
               this.state.lastSignal = null;
               // ── Diagnostic: log kenapa belum ada entry (throttle 3 menit) ──────
-              // Bantu user paham kondisi bot tanpa spam log. Tampil di Live Bot panel.
               if (this._shouldLogDecision()) {
-                const rsiMin = this.config.rsiLongMin ?? 50;
-                const rsiMax = this.config.rsiLongMax ?? 70;
-                const emaOk  = emaF > emaS;
-                const rsiOk  = rsi != null && rsi >= rsiMin && rsi <= rsiMax;
-                const vol    = indicators.volumes?.[lastIdx] ?? 0;
-                const volAvg = indicators.volSMA?.[lastIdx]  ?? 0;
-                const volOk  = !volAvg || vol >= volAvg * this.config.volSmaMultiplier;
-                const htfOk  = !this.config.higherTf ||
-                               this.state.htfTrend === "BULLISH" ||
-                               this.state.htfTrend === "SIDEWAYS";
-
-                const reasons = [];
-                if (!emaOk)    reasons.push(`EMA${this.config.emaFast}<EMA${this.config.emaSlow} (trend belum bullish)`);
-                if (!htfOk)    reasons.push(`HTF ${this.config.higherTf}=${this.state.htfTrend} (bukan BULLISH)`);
-                if (!rsiOk && rsi != null) {
-                  const tag = rsi > rsiMax ? "overbought—tunggu pullback" : "terlalu rendah";
-                  reasons.push(`RSI=${rsi.toFixed(1)} di luar zona ${rsiMin}–${rsiMax} (${tag})`);
-                }
-                if (!volOk && volAvg > 0) {
-                  reasons.push(`Volume ${(vol / volAvg).toFixed(2)}x SMA (perlu ≥${this.config.volSmaMultiplier}x)`);
-                }
-                if (reasons.length === 0) {
-                  reasons.push(`RSI pullback-bounce pattern belum terpenuhi (RSI=${rsi?.toFixed(1)}, perlu pullback ke ${rsiMin}–${rsiMax} lalu naik)`);
-                }
-                this._log("info", `⏳ Belum entry — menunggu: ${reasons.join(" | ")}`);
+                this._logNoEntryDiagnostic(indicators, lastIdx, { emaF, emaS, emaTrend, rsi, atr, price });
               }
             }
           }

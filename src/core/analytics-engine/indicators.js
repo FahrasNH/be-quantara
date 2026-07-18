@@ -852,6 +852,12 @@ function detectSignal(indicators, i, config = {}, higherTfIndicators = null) {
       return br.detectSignal(indicators, i, config);
     }
 
+    // SMART_MONEY_CONCEPTS — SMC sequence engine (legacy BotEngine path)
+    case "SMART_MONEY_CONCEPTS": {
+      const smc = getAdaptiveFusionInstance();
+      return smc.detectSignal(indicators, i, config);
+    }
+
     // Legacy support
     case "RSI_REVERSAL":    return detectSignalLegacy(indicators, i, { ...config, mode: "rsi_reversal" });
     case "EMA_MOMENTUM":    return detectSignalLegacy(indicators, i, config);
