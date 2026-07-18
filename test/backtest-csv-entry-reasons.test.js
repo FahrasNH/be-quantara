@@ -226,11 +226,14 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
       }],
     };
     const csv = exportBacktests([record], "trades");
-    const headerLine = csv.split("\n").find((line) => line.startsWith("User,"));
+    // Full export no longer carries a leading "User" column (single-user backtest);
+    // header now starts at "ID,".
+    const headerLine = csv.split("\n").find((line) => line.startsWith("ID,"));
     expect(csv).toContain("Session ID");
     expect(csv).toContain("SL");
     expect(csv).toContain("TP");
     expect(csv).toContain("Planned R:R");
+    expect(csv).not.toContain("User,");
     expect(headerLine).toBeTruthy();
     expect(headerLine.split(",").length).toBe(FULL_TRADE_EXPORT_COLUMNS.length);
     expect(headerLine.split(",").length).toBe(37);
@@ -286,8 +289,15 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
 
     const smcHeader = XLSX.utils.sheet_to_json(wb.Sheets["SMC_specific"], { header: 1 })[0];
     const wyHeader = XLSX.utils.sheet_to_json(wb.Sheets["Wyckoff_specific"], { header: 1 })[0];
-    expect(smcHeader.length).toBe(24 + ML_FIELD_SETS.SMART_MONEY_CONCEPTS.length);
-    expect(smcHeader.length).toBe(36);
+    // SMC sheet is a curated trader-review set (SMC_REVIEW_EXPORT_COLUMNS): no
+    // User/Mode/DryRun, no engine-internal ML/conf features → 22 columns.
+    expect(smcHeader.length).toBe(22);
+    expect(smcHeader).not.toContain("Sweep Strength");
+    expect(smcHeader).not.toContain("Conf Sweep Strength");
+    expect(smcHeader).not.toContain("User");
+    expect(smcHeader).not.toContain("Mode");
+    expect(smcHeader).not.toContain("DryRun");
+    // Other strategies keep their ML feature columns (research dataset): core 24 + ML.
     expect(wyHeader.length).toBe(24 + ML_FIELD_SETS.WYCKOFF.length);
     expect(wyHeader.length).toBe(31);
   });

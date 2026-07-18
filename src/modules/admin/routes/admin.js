@@ -567,8 +567,10 @@ module.exports = function createAdminRouter(helpers = {}) {
    * (ADMIN-BE-04). Cursor-paginated so memory stays flat on large tables.
    */
   // CORE CSV columns (Sprint 14 redesign) — shared with user + backtest export.
-  // Leading "User" column since admin spans all users.
-  const ADMIN_EXPORT_COLUMNS = ADMIN_TRADE_EXPORT_COLUMNS;
+  // Prepend the "User" column here (not in the shared core set) since the admin
+  // export is the only one that spans multiple users; backtest/user files are
+  // single-user and omit it.
+  const ADMIN_EXPORT_COLUMNS = [["user", "User"], ...ADMIN_TRADE_EXPORT_COLUMNS];
 
   router.get("/trades/export", ...requireAdmin, async (req, res) => {
     try {

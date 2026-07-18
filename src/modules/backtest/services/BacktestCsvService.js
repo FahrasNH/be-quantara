@@ -452,7 +452,9 @@ function resolveVariantColumns(variant, rows, records, { adminFormat = true, str
     return buildSpecificExportColumns(rows, { adminFormat, strategies });
   }
   if (variant === "core") {
-    return adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : ADMIN_TRADE_EXPORT_COLUMNS.slice(1);
+    // ADMIN cols no longer carry a leading "User" column, so both formats resolve
+    // to the same 24-col core set (backtest is single-user).
+    return ADMIN_TRADE_EXPORT_COLUMNS;
   }
   // Legacy strategy-aware auto-pick (unchanged fallback)
   const components = collectExportComponents(rows, records);
