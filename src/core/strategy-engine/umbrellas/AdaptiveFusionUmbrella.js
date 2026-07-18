@@ -21,6 +21,10 @@ const WyckoffStrategy            = require("../implementations/WyckoffStrategy")
 const VsaStrategy                = require("../implementations/VsaStrategy");
 const { aggregateAfVotes }       = require("../af/afVoting");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const {
+  enrichMetaWithGradedScore,
+  gradedConfidenceFromMeta,
+} = require("../scoring/ComponentScoringEngine");
 
 const RACER_PRIORITY = ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"];
 const RACER_LABELS = {
@@ -245,16 +249,22 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
         if (smcMulti) {
           const smc = smcVoteFromMulti(smcMulti);
           signal = smc.vote === "LONG" || smc.vote === "SHORT" ? smc.vote : null;
-          confidence = smc.confidence || 0;
+          const smcMeta = enrichMetaWithGradedScore(
+            { ...(smcMulti.meta || {}), winningComponent: "SMART_MONEY_CONCEPTS" },
+            "SMART_MONEY_CONCEPTS",
+          );
+          confidence = gradedConfidenceFromMeta(smcMeta, "SMART_MONEY_CONCEPTS") || smc.confidence || 0;
           reason = smc.reason || (signal ? "smc_signal" : "smc_no_signal");
         } else {
           signal = this._smc.detectSignal(indicators, lastIdx, config);
           const meta = typeof this._smc.getLastSignalMeta === "function"
-            ? this._smc.getLastSignalMeta()
+            ? enrichMetaWithGradedScore(
+              { ...(this._smc.getLastSignalMeta() || {}), winningComponent: "SMART_MONEY_CONCEPTS" },
+              "SMART_MONEY_CONCEPTS",
+            )
             : null;
-          confidence = meta?.aggregateConfidence != null
-            ? meta.aggregateConfidence / 100
-            : (signal ? 0.7 : 0);
+          confidence = gradedConfidenceFromMeta(meta, "SMART_MONEY_CONCEPTS")
+            || (meta?.aggregateConfidence != null ? meta.aggregateConfidence / 100 : (signal ? 0.7 : 0));
           reason = signal ? "smc_signal" : "smc_no_signal";
         }
       } catch (err) {
@@ -279,7 +289,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       try {
         const result = this._wyckoff.evaluate(indicators, lastIdx, config);
         signal = result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
-        confidence = result.confidence || 0;
+        const wyMeta = enrichMetaWithGradedScore(
+          { ...(this._wyckoff.getLastSignalMeta() || {}), winningComponent: "WYCKOFF", signal },
+          "WYCKOFF",
+        );
+        confidence = gradedConfidenceFromMeta(wyMeta, "WYCKOFF") || result.confidence || 0;
         reason = result.reason || (signal ? "wyckoff_pattern" : "wyckoff_no_signal");
       } catch (err) {
         reason = `wyckoff_error:${err.message}`;
@@ -303,7 +317,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       try {
         const result = this._vsa.evaluate(indicators, lastIdx, config);
         signal = result.vote === "LONG" || result.vote === "SHORT" ? result.vote : null;
-        confidence = result.confidence || 0;
+        const vsaMeta = enrichMetaWithGradedScore(
+          { ...(this._vsa.getLastSignalMeta() || {}), winningComponent: "VOLUME_SPREAD_ANALYSIS", signal },
+          "VOLUME_SPREAD_ANALYSIS",
+        );
+        confidence = gradedConfidenceFromMeta(vsaMeta, "VOLUME_SPREAD_ANALYSIS") || result.confidence || 0;
         reason = result.reason || (signal ? "vsa_pattern" : "vsa_no_signal");
       } catch (err) {
         reason = `vsa_error:${err.message}`;
@@ -559,7 +577,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const label = this._lastRaceMeta?.strategyLabel
       || (winnerKey ? RACER_LABELS[winnerKey] : null);
 
-    return {
+    return enrichMetaWithGradedScore({
       ...(baseMeta || {}),
       component: winnerKey || baseMeta?.component || "SMART_MONEY_CONCEPTS",
       winningComponent: winnerKey || null,
@@ -572,7 +590,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       componentConfidence: this._lastRaceMeta?.winner?.confidence != null
         ? Math.round(this._lastRaceMeta.winner.confidence * 100)
         : baseMeta?.componentConfidence ?? baseMeta?.aggregateConfidence,
-    };
+    }, winnerKey || baseMeta?.component || "SMART_MONEY_CONCEPTS");
   }
 
   getLastVoteMeta() {

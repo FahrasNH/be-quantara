@@ -21,6 +21,59 @@ function _bool(v) {
   return Boolean(v);
 }
 
+/** SMART_MONEY_CONCEPTS — entry-quality fields for graded scoring + SSOT */
+function extractSmcEnrichment(meta) {
+  if (!meta) return {};
+  const comps = meta.confidenceComponents
+    || meta.sequenceMeta?.confidenceComponents
+    || {};
+  return {
+    sweepStrength: _num(meta.sweepStrength ?? comps.sweepStrength),
+    fvgSizeAtr: _num(meta.fvgSizeAtr ?? comps.fvgSize ?? meta.confFvgSize),
+    obDistanceAtr: _num(meta.obDistanceAtr),
+    displacementPct: _num(meta.displacementPct ?? comps.displacementPct),
+    htfAdx: _num(meta.htfAdx),
+    confSweepStrength: _num(meta.confSweepStrength ?? comps.sweepStrength),
+    confFvgSize: _num(meta.confFvgSize ?? comps.fvgSize),
+    confDisplacementPct: _num(meta.confDisplacementPct ?? comps.displacementPct),
+    confHtfAlignment: _num(meta.confHtfAlignment ?? comps.htfAlignment),
+    confMitigationDepth: _num(meta.confMitigationDepth ?? comps.mitigationDepth),
+    confObConfluence: _bool(meta.confObConfluence ?? comps.obConfluence),
+    mitigationDepth: _num(comps.mitigationDepth ?? meta.confMitigationDepth),
+    obConfluence: _bool(comps.obConfluence ?? meta.confObConfluence),
+  };
+}
+
+/** BREAKOUT_RETEST — BR ML fields (mirrors extractBsBrEnrichment) */
+function extractBrEnrichment(meta) {
+  if (!meta) return {};
+  return {
+    bbSqueezeWidthAtr: _num(meta.bbSqueezeWidthAtr),
+    breakoutVolumeRatio: _num(meta.breakoutVolumeRatio),
+    retestDepthAtr: _num(meta.retestDepthAtr),
+    rejectionWickPct: _num(meta.rejectionWickPct),
+    consolidationBars: _num(meta.consolidationBars),
+    breakoutCandleAtr: _num(meta.breakoutCandleAtr),
+    fundingRateAtEntry: _num(meta.fundingRateAtEntry),
+    fundingForecast24h: _num(meta.fundingForecast24h),
+    volumeRatio: _num(meta.volumeRatio ?? meta.breakoutVolumeRatio),
+    bbWidth: _num(meta.bbWidth ?? meta.squeezeWidthPct),
+  };
+}
+
+/** Sprint 16 graded scoring — total + JSON breakdown for Research Dataset SSOT */
+function extractGradedScoreEnrichment(meta) {
+  if (!meta) return {};
+  const breakdown = meta.gradedScoreBreakdown;
+  return {
+    gradedScore: _num(meta.gradedScore ?? meta.componentConfidence),
+    gradedScoreBreakdown: breakdown && typeof breakdown === "object"
+      ? JSON.stringify(breakdown)
+      : (typeof breakdown === "string" ? breakdown : null),
+    scoringStrategyKey: meta.scoringStrategyKey ?? null,
+  };
+}
+
 /** TREND_FOLLOWING — 6 fields */
 function extractTsTfEnrichment(meta) {
   if (!meta) return {};
@@ -324,6 +377,12 @@ function extractAllStrategyEnrichment(meta) {
 
 /** Flat list of all Sprint 15 ML enrichment keys for pass-through. */
 const ALL_ML_ENRICH_KEYS = Object.freeze([
+  "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
+  "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct", "htfAdx",
+  "confSweepStrength", "confFvgSize", "confDisplacementPct", "confHtfAlignment",
+  "confMitigationDepth", "confObConfluence",
+  "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr", "rejectionWickPct",
+  "consolidationBars", "breakoutCandleAtr", "fundingRateAtEntry", "fundingForecast24h",
   "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend", "tfVolRatio", "tfHtfTrendConfirmed", "tfEmaCrossover",
   "msSwingHighPrice", "msSwingLowPrice", "msPullbackDepthAtr", "msHhPattern", "msLlPattern", "msPullbackConfirmed",
   "vpVwapLevel", "vpVahLevel", "vpValLevel", "vpPocLevel", "vpTriggerType",
@@ -337,6 +396,9 @@ const ALL_ML_ENRICH_KEYS = Object.freeze([
 ]);
 
 module.exports = {
+  extractSmcEnrichment,
+  extractBrEnrichment,
+  extractGradedScoreEnrichment,
   extractTsTfEnrichment,
   extractTsMsEnrichment,
   extractTsVpEnrichment,

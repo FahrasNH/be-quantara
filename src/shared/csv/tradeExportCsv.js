@@ -192,51 +192,63 @@ function buildPerformanceSummaryCsv(data) {
  */
 const ML_FIELD_SETS = Object.freeze({
   SMART_MONEY_CONCEPTS: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct",
     "htfAdx", "confSweepStrength", "confFvgSize",
     "confDisplacementPct", "confHtfAlignment", "confMitigationDepth", "confObConfluence",
   ]),
   BREAKOUT_RETEST: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr", "rejectionWickPct",
     "consolidationBars", "breakoutCandleAtr", "fundingRateAtEntry", "fundingForecast24h",
     "holdHours", "volumeRatio", "bbWidth",
   ]),
   AUCTION_MARKET_THEORY: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "vpVwapLevel", "vpVahLevel", "vpValLevel", "vpPocLevel", "vpTriggerType",
   ]),
   TREND_FOLLOWING: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend",
     "tfVolRatio", "tfHtfTrendConfirmed", "tfEmaCrossover",
   ]),
   MARKET_STRUCTURE: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "msSwingHighPrice", "msSwingLowPrice", "msPullbackDepthAtr",
     "msHhPattern", "msLlPattern", "msPullbackConfirmed",
   ]),
   MEAN_REVERSION: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "mrRsiValue", "mrBbMidLevel", "mrBbUpperLevel", "mrBbLowerLevel",
     "mrVwapLevel", "mrVwapDeviation", "mrAdxRegime",
   ]),
   SUPPLY_AND_DEMAND: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "sdZoneType", "sdZoneLevel", "sdZoneSizeAtr", "sdRetestDepthAtr",
     "sdVolumeConfirmation", "sdTimeToRetestBars", "sdConfluence",
   ]),
   STATISTICAL_ARBITRAGE: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "saZScore", "saMaValue", "saStdDev", "saUpperBand",
     "saLowerBand", "saBandTouch", "saMeanRevertBars",
   ]),
   WYCKOFF: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "wyPatternType", "wyAccumulationBars", "wyFakeBreakDepthAtr", "wyReclameBars",
     "wyVolumeRatio", "wySosOrSow", "wyLpsLevel",
   ]),
   VOLUME_SPREAD_ANALYSIS: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "vsaPatternType", "vsaSpread", "vsaVolume", "vsaAvgSpread",
     "vsaAvgVolume", "vsaSwingProximity", "vsaReversal",
   ]),
   ICT_STYLE_TRADING: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "ictKillZoneHour", "ictKillZoneLevel", "ictRaidType", "ictRaidDepthAtr",
     "ictVolumeRatio", "ictReversal", "ictMssPct",
   ]),
   LIQUIDATION_SQUEEZE: Object.freeze([
+    "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "lsOiValue", "lsOiPercentile", "lsBbWidth", "lsBbWidthPercentile",
     "lsLiquidationLevel", "lsWickDepthAtr", "lsOiForecast24h",
   ]),

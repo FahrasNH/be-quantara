@@ -13,6 +13,10 @@
 const UmbrellaStrategy = require("../base/UmbrellaStrategy");
 const MeanReversionStrategy = require("../implementations/MeanReversionStrategy");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const {
+  enrichMetaWithGradedScore,
+  gradedConfidenceFromMeta,
+} = require("../scoring/ComponentScoringEngine");
 const SupplyDemandStrategy = require("../implementations/SupplyDemandStrategy");
 const StatisticalArbitrageStrategy = require("../implementations/StatisticalArbitrageStrategy");
 
@@ -87,12 +91,17 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     let reason = `${key.toLowerCase()}_no_signal`;
     try {
       signal = strategy.detectSignal(indicators, lastIdx, config);
-      const meta = typeof strategy.getLastSignalMeta === "function"
+      const rawMeta = typeof strategy.getLastSignalMeta === "function"
         ? strategy.getLastSignalMeta()
         : null;
-      confidence = meta?.componentConfidence != null
-        ? meta.componentConfidence / 100
-        : (meta?.confidence ?? (signal ? 0.65 : 0));
+      const meta = rawMeta
+        ? enrichMetaWithGradedScore(
+          { ...rawMeta, winningComponent: key, signal },
+          key,
+        )
+        : null;
+      confidence = gradedConfidenceFromMeta(meta, key)
+        || (meta?.confidence ?? (signal ? 0.65 : 0));
       if (confidence > 1) confidence = confidence / 100;
       reason = signal ? (meta?.reason || `${key.toLowerCase()}_trigger`) : reason;
     } catch (err) {
@@ -196,7 +205,7 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
     const label = this._lastRaceMeta?.strategyLabel
       || (winnerKey ? RACER_LABELS[winnerKey] : null);
 
-    return {
+    return enrichMetaWithGradedScore({
       ...(baseMeta || {}),
       component: winnerKey || baseMeta?.component || "MEAN_REVERSION",
       winningComponent: winnerKey || null,
@@ -207,7 +216,7 @@ class MeanDriftUmbrella extends UmbrellaStrategy {
       componentConfidence: this._lastRaceMeta?.winner?.confidence != null
         ? Math.round(this._lastRaceMeta.winner.confidence * 100)
         : baseMeta?.componentConfidence,
-    };
+    }, winnerKey || baseMeta?.component || "MEAN_REVERSION");
   }
 
   getLastLayerMeta() {

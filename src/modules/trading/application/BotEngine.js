@@ -23,6 +23,10 @@ const GrokConfirmService = require("../../research/services/GrokConfirmService")
 const { onEngineTradeOpen, onEngineTradeClose } = require("../../ml/services/BotEngineMlHook");
 const MLGateService = require("../../ml/services/MLGateService");
 const {
+  applyGradedScoreToSnapshot,
+  resolveGradedSignalConfidence,
+} = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
+const {
   enrichEntryContextLive,
   enrichExitContextLive,
   resolveSignalDelayMs,
@@ -2233,7 +2237,7 @@ class BotEngine extends EventEmitter {
       capital:     this.state.capital,
       htfTrend:    this.state.htfTrend,
       marketCond:  enrichedSnapshot?.afMarketCond,
-      confidence:  enrichedSnapshot?.afAggregateConfidence ?? enrichedSnapshot?.afConfidence,
+      confidence:  resolveGradedSignalConfidence(enrichedSnapshot),
     });
 
     const entryContext = enrichEntryContextLive(base, {
@@ -2549,6 +2553,12 @@ class BotEngine extends EventEmitter {
         }
       }
     } catch { /* degrade — umbrella attribution still recorded */ }
+    try {
+      const { strategyRegistry: reg } = require("../../../core/strategy-engine/index");
+      const stratKey = normalizeStrategyKey(String(this.config.strategyKey || this.config.signalType || "").toUpperCase());
+      const strat = reg.get(stratKey);
+      applyGradedScoreToSnapshot(indicatorSnapshot, strat?.getLastSignalMeta?.(), attributionKey);
+    } catch { /* degrade — graded score optional */ }
     const enrichedSnapshot = {
       ...(indicatorSnapshot || {}),
       ...buildTradeAttribution({
@@ -2583,7 +2593,7 @@ class BotEngine extends EventEmitter {
         symbol:           this.config.symbol,
         regime:           enrichedSnapshot?.afMarketCond,
         tradeCount:       closedTradeCount,
-        signalConfidence: enrichedSnapshot?.afAggregateConfidence ?? enrichedSnapshot?.afConfidence,
+        signalConfidence: resolveGradedSignalConfidence(enrichedSnapshot),
       });
       if (!mlVerdict.allowed) {
         this._log("info", `⏸ ML gate — ${mlVerdict.reason}`);

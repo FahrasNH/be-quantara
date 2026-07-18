@@ -14,6 +14,10 @@ const IctStyleStrategy = require("../implementations/IctStyleStrategy");
 const LiquidationSqueezeStrategy = require("../implementations/LiquidationSqueezeStrategy");
 const { BS_BR_HALTED } = require("../../../config/strategies");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const {
+  enrichMetaWithGradedScore,
+  gradedConfidenceFromMeta,
+} = require("../scoring/ComponentScoringEngine");
 
 const RACER_PRIORITY = ["BREAKOUT_RETEST", "ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"];
 const RACER_LABELS = {
@@ -107,12 +111,17 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
     let reason = `${key.toLowerCase()}_no_signal`;
     try {
       signal = strategy.detectSignal(indicators, lastIdx, config);
-      const meta = typeof strategy.getLastSignalMeta === "function"
+      const rawMeta = typeof strategy.getLastSignalMeta === "function"
         ? strategy.getLastSignalMeta()
         : null;
-      confidence = meta?.componentConfidence != null
-        ? meta.componentConfidence / 100
-        : (meta?.confidence ?? (signal ? 0.65 : 0));
+      const meta = rawMeta
+        ? enrichMetaWithGradedScore(
+          { ...rawMeta, winningComponent: key, signal },
+          key,
+        )
+        : null;
+      confidence = gradedConfidenceFromMeta(meta, key)
+        || (meta?.confidence ?? (signal ? 0.65 : 0));
       if (confidence > 1) confidence = confidence / 100;
       reason = signal ? (meta?.reason || `${key.toLowerCase()}_trigger`) : reason;
     } catch (err) {
@@ -217,7 +226,7 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
     const label = this._lastRaceMeta?.strategyLabel
       || (winnerKey ? RACER_LABELS[winnerKey] : null);
 
-    return {
+    return enrichMetaWithGradedScore({
       ...(baseMeta || {}),
       component: winnerKey || baseMeta?.component || "BREAKOUT_RETEST",
       winningComponent: winnerKey || null,
@@ -227,7 +236,7 @@ class BreakoutStormUmbrella extends UmbrellaStrategy {
       componentConfidence: this._lastRaceMeta?.winner?.confidence != null
         ? Math.round(this._lastRaceMeta.winner.confidence * 100)
         : baseMeta?.componentConfidence,
-    };
+    }, winnerKey || baseMeta?.component || "BREAKOUT_RETEST");
   }
 
   getLastLayerMeta() {

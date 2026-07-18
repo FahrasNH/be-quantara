@@ -207,13 +207,30 @@ const {
   extractBsLsEnrichment,
   extractAfVsaEnrichment,
   extractAfWyckoffEnrichment,
+  extractSmcEnrichment,
+  extractBrEnrichment,
+  extractGradedScoreEnrichment,
   ALL_ML_ENRICH_KEYS,
 } = require("../../../shared/csv/strategyMlEnrichment");
+const { enrichMetaWithGradedScore } = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
 
-/** Sprint 15: collect all strategy ML enrichments from signal meta. */
+/** Sprint 16: enrich signal meta with graded 0-100 score (live/backtest parity). */
+function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null) {
+  const meta = rawMeta ?? (typeof strategy?.getLastSignalMeta === "function"
+    ? strategy.getLastSignalMeta()
+    : null);
+  if (!meta) return null;
+  const key = meta.winningComponent || meta.component || strategyKey;
+  return enrichMetaWithGradedScore({ ...meta, winningComponent: key }, key);
+}
+
+/** Sprint 15 + Sprint 16: collect all strategy ML enrichments from signal meta. */
 function extractStrategyMlEnrichment(meta) {
   if (!meta) return {};
   return {
+    ...extractSmcEnrichment(meta),
+    ...extractBrEnrichment(meta),
+    ...extractGradedScoreEnrichment(meta),
     ...extractTsTfEnrichment(meta),
     ...extractTsMsEnrichment(meta),
     ...extractTsVpEnrichment(meta),
@@ -1119,8 +1136,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       if (size <= 0) { execAbl.rejSize += 1; continue; }
 
-      const lastMeta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
-      const meta = multiSignal.meta || lastMeta;
+      const lastMeta = resolveEnrichedSignalMeta(strategy, strategyKey);
+      const meta = multiSignal.meta
+        ? resolveEnrichedSignalMeta(strategy, strategyKey, multiSignal.meta)
+        : lastMeta;
       const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
       const winningComponent = meta?.winningComponent || null;
 
@@ -1153,7 +1172,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         plannedRR: riskCfg.riskReward,
 
         confidence: multiSignal.meta?.confidence?.[componentId]
+          ?? meta?.gradedScore
           ?? meta?.componentConfidence
+          ?? lastMeta?.gradedScore
           ?? lastMeta?.componentConfidence
           ?? null,
         // GROK-FIX: entry-context snapshot so the trade can be Grok-confirmed post-hoc.
@@ -2645,7 +2666,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
-    const entryMeta = typeof strategy.getLastSignalMeta === "function" ? strategy.getLastSignalMeta() : null;
+    const entryMeta = resolveEnrichedSignalMeta(strategy, strategyKey);
     const tradeTier = cfg.tradeType || entryMeta?.component || entryMeta?.winningComponent || null;
     const scalpGateFlags = resolveScalpingGateFlags({ ...cfg, typeOverrides: cfg.typeOverrides });
     const sessionGate = checkNoTradeSessionGate({
@@ -2807,7 +2828,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
 
-      confidence = meta.componentConfidence ?? meta.aggregateConfidence ?? null;
+      confidence = meta.gradedScore ?? meta.componentConfidence ?? meta.aggregateConfidence ?? null;
       brEnrich = extractBsBrEnrichment(meta);
       mlEnrich = extractStrategyMlEnrichment(meta);
     } else {

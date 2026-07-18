@@ -18,6 +18,10 @@ const TrendFollowingStrategy   = require("../implementations/TrendFollowingStrat
 const MarketStructureStrategy  = require("../implementations/MarketStructureStrategy");
 const VolumeProfileStrategy    = require("../implementations/VolumeProfileStrategy");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const {
+  enrichMetaWithGradedScore,
+  gradedConfidenceFromMeta,
+} = require("../scoring/ComponentScoringEngine");
 
 const RACER_PRIORITY = ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"];
 const RACER_LABELS = {
@@ -104,12 +108,17 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       let reason = "tf_no_signal";
       try {
         signal = this._tf.detectSignal(indicators, lastIdx, config);
-        const meta = typeof this._tf.getLastSignalMeta === "function"
+        const rawMeta = typeof this._tf.getLastSignalMeta === "function"
           ? this._tf.getLastSignalMeta()
           : null;
-        confidence = meta?.componentConfidence != null
-          ? meta.componentConfidence / 100
-          : (meta?.confidence ?? (signal ? 0.7 : 0));
+        const meta = rawMeta
+          ? enrichMetaWithGradedScore(
+            { ...rawMeta, winningComponent: "TREND_FOLLOWING", signal },
+            "TREND_FOLLOWING",
+          )
+          : null;
+        confidence = gradedConfidenceFromMeta(meta, "TREND_FOLLOWING")
+          || (meta?.confidence ?? (signal ? 0.7 : 0));
         if (confidence > 1) confidence = confidence / 100;
         reason = signal ? (meta?.reason || "tf_trigger") : "tf_no_signal";
       } catch (err) {
@@ -133,8 +142,13 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       let reason = "ms_no_signal";
       try {
         signal = this._ms.detectSignal(indicators, lastIdx, config);
-        const meta = this._ms.getLastSignalMeta() || {};
-        confidence = meta.confidence || 0;
+        const rawMeta = this._ms.getLastSignalMeta() || {};
+        const meta = enrichMetaWithGradedScore(
+          { ...rawMeta, winningComponent: "MARKET_STRUCTURE", signal },
+          "MARKET_STRUCTURE",
+        );
+        confidence = gradedConfidenceFromMeta(meta, "MARKET_STRUCTURE")
+          || meta.confidence || 0;
         reason = meta.reason || (signal ? "dow_entry" : "ms_no_signal");
       } catch (err) {
         reason = `ms_error:${err.message}`;
@@ -157,8 +171,13 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       let reason = "vp_no_signal";
       try {
         signal = this._vp.detectSignal(indicators, lastIdx, config);
-        const meta = this._vp.getLastSignalMeta() || {};
-        confidence = meta.confidence || 0;
+        const rawMeta = this._vp.getLastSignalMeta() || {};
+        const meta = enrichMetaWithGradedScore(
+          { ...rawMeta, winningComponent: "AUCTION_MARKET_THEORY", signal, price: indicators.closes?.[lastIdx] },
+          "AUCTION_MARKET_THEORY",
+        );
+        confidence = gradedConfidenceFromMeta(meta, "AUCTION_MARKET_THEORY")
+          || meta.confidence || 0;
         reason = meta.reason || (signal ? "amt_entry" : "vp_no_signal");
       } catch (err) {
         reason = `vp_error:${err.message}`;
@@ -358,7 +377,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       || this._lastLayerMeta?.strategyLabel
       || (winnerKey ? RACER_LABELS[winnerKey] : null);
 
-    return {
+    return enrichMetaWithGradedScore({
       ...(baseMeta || {}),
       component: winnerKey || baseMeta?.component || "TREND_FOLLOWING",
       winningComponent: winnerKey || null,
@@ -371,7 +390,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
       componentConfidence: this._lastRaceMeta?.winner?.confidence != null
         ? Math.round(this._lastRaceMeta.winner.confidence * 100)
         : baseMeta?.componentConfidence,
-    };
+    }, winnerKey || baseMeta?.component || "TREND_FOLLOWING");
   }
 
   getLastLayerMeta() {
