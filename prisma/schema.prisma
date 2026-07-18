@@ -577,3 +577,64 @@ model MLShadowLog {
   @@index([createdAt])
   @@index([strategyKey, symbol])
 }
+
+// ── Sprint 16 — Research Dataset SSOT ────────────────────────────────────────
+// Canonical per-trade research rows for graded scoring calibration + RCA.
+model TradeResearchDataset {
+  id        String @id @default(cuid())
+  tradeId   String @unique
+  backtestId String?
+
+  symbol      String
+  side        String
+  strategyKey String
+  component   String?
+  tradeType   String?
+
+  entryPrice Float
+  exitPrice  Float?
+  entryTime  DateTime
+  exitTime   DateTime?
+
+  pnlGross Float?
+  pnlNet   Float?
+  fee      Float?
+  result   String?
+  exitReason String?
+  holdDurationMinutes Float?
+
+  sessionName      String?
+  dailyRegime      String?
+  htfTrend         String?
+  atr              Float?
+  atrPercent       Float?
+  volatilityBucket String?
+
+  gradedScore          Float?
+  gradedScoreBreakdown Json?
+  scoringStrategyKey   String?
+  featureScores        Json?
+
+  mfe          Float?
+  mae          Float?
+  mfePercent   Float?
+  maePercent   Float?
+  realizedRr   Float?
+  holdDays     Float?
+  entryReasons Json?
+  exitReasons  Json?
+
+  sourceFile       String?
+  dataQualityFlags String[] @default([])
+  migrationBatch   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([strategyKey])
+  @@index([symbol])
+  @@index([result])
+  @@index([gradedScore])
+  @@index([migrationBatch])
+  @@index([entryTime])
+}

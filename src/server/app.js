@@ -42,6 +42,7 @@ const createAdminVouchersRouter = require("./routes/adminVouchers");
 const { createPaymentsRouter, createPaymentWebhookRouter } = require("./routes/payments");
 const createAnalyticsRouter    = require("./routes/analytics");
 const createMetaSelectorRouter = require("./routes/metaSelector");
+const createResearchDatasetRouter = require("./routes/researchDataset");
 const createParametersRouter   = require("./routes/parameters");
 
 // ── Env validation (fail-fast sebelum boot) ─────────────────────────────────
@@ -575,6 +576,7 @@ app.use("/api/v1/internal/analytics", authMiddleware, createAnalyticsRouter());
 // Route uses a lazy wss reference so advisory WS events work correctly.
 const _metaSelectorWssRef = { current: null };
 app.use("/api/v1/internal/meta-selector", authMiddleware, createMetaSelectorRouter(_metaSelectorWssRef));
+app.use("/api/v1/internal/research-dataset", authMiddleware, createResearchDatasetRouter());
 app.use("/api/v1/internal/parameters",   authMiddleware, createParametersRouter());
 
 // 404 handler

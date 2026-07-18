@@ -54,6 +54,11 @@ node test/ml-readiness-phase2.test.js
 npm test -- --grep ml-readiness
 ```
 
+## Related
+
+- Research Dataset SSOT: `docs/RESEARCH_DATASET_SSOT.md`
+- Graded scoring calibration consumes SSOT via `/api/v1/internal/research-dataset`
+
 ## Deferred (Sprint 18+)
 
 - Train win-prediction model on enriched dataset
