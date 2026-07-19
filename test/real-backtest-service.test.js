@@ -132,7 +132,7 @@ test("AF race mode — per-trade strategyLabel is winning racer, not race header
 test("runMultiTypeBacktest (TREND_FOLLOWING: Intraday+Swing) never touches Scalping/5m", async () => {
   const r = await runMultiTypeBacktest({
     entryCandles: { Intraday: entry, Swing: entry4h },
-    htfCandles: { Intraday: htf4h, Swing: htf1w },
+    htfCandles: { Intraday: htf, Swing: htf1w },
     strategyKey: "TREND_FOLLOWING",
     capital: 1000,
   }, ["Intraday", "Swing"]);

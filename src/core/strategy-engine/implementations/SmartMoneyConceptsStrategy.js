@@ -3,7 +3,7 @@
  *
  * FOUNDRY Tier — 3 Trade Types, each on its own timeframe stack:
  *   Scalping  (type A) : Liquidity sweep + OB + CVD  | entry 1m, confirm 5m,  trend 15m
- *   Intraday  (type B) : CHoCH + OB + EMA trend      | entry 5m, confirm 15m, trend 4h
+ *   Intraday  (type B) : CHoCH + OB + EMA trend      | entry 15m, confirm 30m, trend 1h
  *   Swing     (type C) : FVG + Displacement + P/D     | entry 4h, confirm 1d,  trend 1W
  *
  * All three types use the SAME SMC indicators (Liquidity, BOS, CHoCH, OB, FVG,
@@ -43,7 +43,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         "Event-driven SMC sequence engine (v3.0): " +
         "sweep → CHoCH/MSS → displacement/FVG → mitigation → entry. " +
         "Causal, cross-bar structure replicates institutional market reading. " +
-        "3 independent trade types: Scalping (5m/1h), Intraday (15m/4h), Swing (4h/1w). " +
+        "3 independent trade types: Scalping (5m/1h), Intraday (15m/1h), Swing (4h/1w). " +
         "HTF directional bias; smcUseSequenceEngine flag (default on) for fallback.",
       version: "3.0.0",
       enabled: true,
@@ -51,15 +51,15 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     });
 
     // ── Trade type TF configuration (each type runs on its own TF stack) ─────
-    // Sprint 14 factory reset — genuine 3-rung ladder (matches backtest TYPE_TF):
-    //   Scalping 5m/1h · Intraday 15m/4h · Swing 4h/1w.
+    // Sprint 17 Intraday ladder patch — genuine 3-rung ladder (matches backtest TYPE_TF):
+    //   Scalping 5m/1h · Intraday 15m/30m/1h · Swing 4h/1w.
     // NOTE: the 5m Scalping leg is NEW and unproven (5m SMC historically WR
     // ~28.6%, below coin-flip) → it is Advance-backtest-only and gated OUT of
     // real live trading by liveTradeTypeGate.js. The previously-live 15m cadence
     // now lives under the Intraday label (proven, live-eligible).
     this.TRADE_TYPE_TF_CONFIG = {
       Scalping: { entryTf: "5m",  confirmTf: "15m", trendTf: "1h" },
-      Intraday: { entryTf: "15m", confirmTf: "1h",  trendTf: "4h" },
+      Intraday: { entryTf: "15m", confirmTf: "30m", trendTf: "1h" },
       Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w" },
     };
 
@@ -173,8 +173,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   getTimeframeConfig() {
     // Default returns Intraday TF (primary trade type)
     return {
-      interval:      "5m",
-      higherTf:      "4h",
+      interval:      "15m",
+      higherTf:      "1h",
       checkInterval: 300000,
     };
   }

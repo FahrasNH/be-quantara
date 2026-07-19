@@ -51,7 +51,7 @@ const SCALP_GEOMETRY = Object.freeze({
   maxHoldHours: 2,
 });
 
-/** Intraday TIME_STOP — force-close unresolved 15m/1h/4h legs at 6h. */
+/** Intraday TIME_STOP — force-close unresolved 15m/30m/1h legs at 6h. */
 const INTRADAY_HOLD = Object.freeze({ maxHoldHours: 6 });
 
 /** Swing TIME_STOP — force-close unresolved 4h/1d/1w legs at 120h (5 days). */

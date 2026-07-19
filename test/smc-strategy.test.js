@@ -150,11 +150,19 @@ test("SMC-03: canActivate blocks below $20", () => {
   assert.equal(smc.canActivate(1000).allowed, true);
 });
 
-test("SMC-04: getTimeframeConfig returns Intraday TF (5m/4h)", () => {
+test("SMC-04: getTimeframeConfig returns Intraday TF (15m/1h)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const tf  = smc.getTimeframeConfig();
-  assert.equal(tf.interval,  "5m");
-  assert.equal(tf.higherTf,  "4h");
+  assert.equal(tf.interval,  "15m");
+  assert.equal(tf.higherTf,  "1h");
+});
+
+test("SMC-04b: getTradeTypeTfConfig Intraday ladder is 15m/30m/1h", () => {
+  const smc = new SmartMoneyConceptsStrategy();
+  const tf  = smc.getTradeTypeTfConfig("Intraday");
+  assert.equal(tf.entryTf,  "15m");
+  assert.equal(tf.confirmTf, "30m");
+  assert.equal(tf.trendTf,  "1h");
 });
 
 test("SMC-05: validateEntry blocks extreme ATR (< 0.8% or > 5%)", () => {
