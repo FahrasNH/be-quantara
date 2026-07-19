@@ -224,16 +224,18 @@ test("SMC default rubric max caps unchanged for Intraday/Swing", () => {
 });
 
 test("SMC Scalping rubric max caps match Sprint 16 calibration", () => {
-  assert.strictEqual(SMC_RUBRIC_SCALPING.sweepQuality.maxPts, 30);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.sweepQuality.maxPts, 50);
   assert.strictEqual(SMC_RUBRIC_SCALPING.chochDisplacement.maxPts, 20);
   assert.strictEqual(SMC_RUBRIC_SCALPING.fvgQuality.maxPts, 15);
   assert.strictEqual(SMC_RUBRIC_SCALPING.obConfluence.proximityMax + SMC_RUBRIC_SCALPING.obConfluence.booleanMax, 10);
-  assert.strictEqual(SMC_RUBRIC_SCALPING.htfAlignment.adxMax + SMC_RUBRIC_SCALPING.htfAlignment.alignMax, 10);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.htfAlignment.adxMax + SMC_RUBRIC_SCALPING.htfAlignment.alignMax, 5);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.htfAlignment.adxMax, 4);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.htfAlignment.alignMax, 1);
   assert.strictEqual(
     SMC_RUBRIC_SCALPING.liquidityFreshness.mitigationMax + SMC_RUBRIC_SCALPING.liquidityFreshness.sweepAgeMax,
     5,
   );
-  assert.strictEqual(rubricMaxSum(SMC_RUBRIC_SCALPING), 90);
+  assert.strictEqual(rubricMaxSum(SMC_RUBRIC_SCALPING), 105);
 });
 
 test("SMC Scalping tradeType uses scalp rubric; Intraday keeps default", () => {
@@ -254,7 +256,7 @@ test("enrichMetaWithGradedScore routes SMC Scalping via tradeType", () => {
     ...SAMPLE_FEATURES.SMART_MONEY_CONCEPTS,
   }, "SMART_MONEY_CONCEPTS");
   assert.strictEqual(meta.scoringStrategyKey, "SMART_MONEY_CONCEPTS");
-  assert.ok(meta.gradedScoreBreakdown.sweepQuality <= 30);
+  assert.ok(meta.gradedScoreBreakdown.sweepQuality <= 50);
   assert.ok(meta.gradedScoreBreakdown.obConfluence <= 10);
 });
 

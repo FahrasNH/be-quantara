@@ -48,13 +48,13 @@ const SMC_RUBRIC_DEFAULT = Object.freeze({
   liquidityFreshness: { mitigationMax: 7, sweepAgeMax: 3 },
 });
 
-/** Scalping SMC graded rubric — de-emphasizes OB/HTF/freshness; sweep +5 vs default. */
+/** Scalping SMC graded rubric — sweep-heavy; HTF de-emphasized vs Intraday/Swing. */
 const SMC_RUBRIC_SCALPING = Object.freeze({
-  sweepQuality: { maxPts: 30, floor: 3 },
+  sweepQuality: { maxPts: 50, floor: 3 },
   chochDisplacement: { maxPts: 20, floor: 2 },
   fvgQuality: { maxPts: 15, floor: 2 },
   obConfluence: { proximityMax: 8, booleanMax: 2 },
-  htfAlignment: { adxMax: 7, alignMax: 3 },
+  htfAlignment: { adxMax: 4, alignMax: 1 },
   liquidityFreshness: { mitigationMax: 4, sweepAgeMax: 1 },
 });
 
