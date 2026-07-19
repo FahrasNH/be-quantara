@@ -135,7 +135,11 @@ function resolveGradedScoreFields(trade, ctx) {
     return { gradedScore: NA, gradedScoreBreakdown: NA, scoringStrategyKey: NA };
   }
   const enriched = enrichMetaWithGradedScore(
-    { ...trade, winningComponent: mlKey },
+    {
+      ...trade,
+      winningComponent: mlKey,
+      tradeType: trade.tradeType ?? trade.component,
+    },
     mlKey,
   );
   const graded = extractGradedScoreEnrichment(enriched);

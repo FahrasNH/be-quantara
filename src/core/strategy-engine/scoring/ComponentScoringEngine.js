@@ -9,7 +9,7 @@
  * Interface: scoreComponent(strategyKey, features) → { total, breakdown }
  */
 
-const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const { normalizeStrategyKey, normalizeTradeTypeKey } = require("../../../config/strategyKeyNormalizer");
 const {
   clamp,
   linearPts,
@@ -38,25 +38,81 @@ const {
 
 // ─── Per-strategy scorers (Notion rubric) ───────────────────────────────────
 
-function scoreSmc(f) {
-  const breakdown = {
+/** Intraday/Swing SMC graded rubric — max component caps sum to 105 (clamped to 100). */
+const SMC_RUBRIC_DEFAULT = Object.freeze({
+  sweepQuality: { maxPts: 25, floor: 3 },
+  chochDisplacement: { maxPts: 20, floor: 2 },
+  fvgQuality: { maxPts: 15, floor: 2 },
+  obConfluence: { proximityMax: 15, booleanMax: 5 },
+  htfAlignment: { adxMax: 10, alignMax: 5 },
+  liquidityFreshness: { mitigationMax: 7, sweepAgeMax: 3 },
+});
+
+/** Scalping SMC graded rubric — de-emphasizes OB/HTF/freshness; sweep +5 vs default. */
+const SMC_RUBRIC_SCALPING = Object.freeze({
+  sweepQuality: { maxPts: 30, floor: 3 },
+  chochDisplacement: { maxPts: 20, floor: 2 },
+  fvgQuality: { maxPts: 15, floor: 2 },
+  obConfluence: { proximityMax: 8, booleanMax: 2 },
+  htfAlignment: { adxMax: 7, alignMax: 3 },
+  liquidityFreshness: { mitigationMax: 4, sweepAgeMax: 1 },
+});
+
+function canonicalTradeType(raw) {
+  if (raw == null || raw === "") return null;
+  const leg = normalizeTradeTypeKey(String(raw).toUpperCase());
+  return ["Scalping", "Intraday", "Swing"].find((t) => t.toUpperCase() === String(leg).toUpperCase()) ?? null;
+}
+
+function resolveSmcTradeType(f, opts = {}) {
+  return canonicalTradeType(f.tradeType ?? opts.tradeType ?? f.component ?? opts.component);
+}
+
+function resolveSmcRubric(f, opts = {}) {
+  return resolveSmcTradeType(f, opts) === "Scalping"
+    ? SMC_RUBRIC_SCALPING
+    : SMC_RUBRIC_DEFAULT;
+}
+
+function buildSmcBreakdown(f, rubric) {
+  return {
     sweepQuality: sweetSpotPts(f.sweepStrength, {
-      peak: 1.5, inner: 0.35, outer: 2.5, maxPts: 25, floor: 3,
+      peak: 1.5, inner: 0.35, outer: 2.5,
+      maxPts: rubric.sweepQuality.maxPts,
+      floor: rubric.sweepQuality.floor,
     }),
     chochDisplacement: sweetSpotPts(f.displacementPct, {
-      peak: 1.2, inner: 0.4, outer: 3.0, maxPts: 20, floor: 2,
+      peak: 1.2, inner: 0.4, outer: 3.0,
+      maxPts: rubric.chochDisplacement.maxPts,
+      floor: rubric.chochDisplacement.floor,
     }),
     fvgQuality: sweetSpotPts(f.fvgSizeAtr, {
-      peak: 0.7, inner: 0.3, outer: 2.0, maxPts: 15, floor: 2,
+      peak: 0.7, inner: 0.3, outer: 2.0,
+      maxPts: rubric.fvgQuality.maxPts,
+      floor: rubric.fvgQuality.floor,
     }),
-    obConfluence: proximityPts(f.obDistanceAtr, 1.5, 15)
-      + booleanPts(f.confObConfluence ?? f.obConfluence, 5),
-    htfAlignment: linearPts(f.htfAdx, 15, 35, 10)
-      + linearPts(Math.abs(f.confHtfAlignment ?? 0), 0, 15, 5),
-    liquidityFreshness: linearPts(f.confMitigationDepth ?? f.mitigationDepth, 0.15, 0.85, 7)
-      + inverseLinearPts(f.sweepAgeBars ?? f.zoneAgeBars, 5, 60, 3),
+    obConfluence: proximityPts(f.obDistanceAtr, 1.5, rubric.obConfluence.proximityMax)
+      + booleanPts(f.confObConfluence ?? f.obConfluence, rubric.obConfluence.booleanMax),
+    htfAlignment: linearPts(f.htfAdx, 15, 35, rubric.htfAlignment.adxMax)
+      + linearPts(Math.abs(f.confHtfAlignment ?? 0), 0, 15, rubric.htfAlignment.alignMax),
+    liquidityFreshness: linearPts(
+      f.confMitigationDepth ?? f.mitigationDepth,
+      0.15,
+      0.85,
+      rubric.liquidityFreshness.mitigationMax,
+    )
+      + inverseLinearPts(
+        f.sweepAgeBars ?? f.zoneAgeBars,
+        5,
+        60,
+        rubric.liquidityFreshness.sweepAgeMax,
+      ),
   };
-  return finalizeBreakdown(breakdown);
+}
+
+function scoreSmc(f, opts = {}) {
+  const rubric = resolveSmcRubric(f, opts);
+  return finalizeBreakdown(buildSmcBreakdown(f, rubric));
 }
 
 function scoreIct(f) {
@@ -357,6 +413,10 @@ function buildFeaturesFromMeta(meta, strategyKey) {
     lsLiquidationDistancePct: meta.lsLiquidationDistancePct ?? null,
     lsBbWidthExpansion: meta.lsBbWidthExpansion ?? null,
     scoringKey: key,
+    tradeType: canonicalTradeType(meta.tradeType)
+      ?? canonicalTradeType(meta.component)
+      ?? canonicalTradeType(meta.winningComponent),
+    component: canonicalTradeType(meta.component) ?? meta.component,
   };
 }
 
@@ -388,10 +448,13 @@ function enrichMetaWithGradedScore(meta, strategyKey) {
   const key = resolveScoringStrategyKey(meta, strategyKey);
   if (!SCORERS[key]) return meta;
   const features = buildFeaturesFromMeta(meta, key);
+  const tradeType = features.tradeType ?? null;
   const scored = scoreComponent(key, features, {
     signal: meta.signal ?? meta.vote,
     price: meta.price ?? meta.entryPrice,
     htfAligned: meta.htfAligned ?? meta.tfHtfTrendConfirmed,
+    tradeType,
+    component: tradeType,
   });
   return {
     ...meta,
@@ -429,6 +492,9 @@ function resolveGradedSignalConfidence(snapshot) {
 
 module.exports = {
   SCORERS,
+  SMC_RUBRIC_DEFAULT,
+  SMC_RUBRIC_SCALPING,
+  resolveSmcRubric,
   scoreComponent,
   buildFeaturesFromMeta,
   resolveScoringStrategyKey,

@@ -215,13 +215,19 @@ const {
 const { enrichMetaWithGradedScore } = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
 
 /** Sprint 16: enrich signal meta with graded 0-100 score (live/backtest parity). */
-function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null) {
+function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null, tradeType = null) {
   const meta = rawMeta ?? (typeof strategy?.getLastSignalMeta === "function"
     ? strategy.getLastSignalMeta()
     : null);
   if (!meta) return null;
   const key = meta.winningComponent || meta.component || strategyKey;
-  return enrichMetaWithGradedScore({ ...meta, winningComponent: key }, key);
+  const leg = tradeType ?? meta.tradeType ?? meta.component ?? null;
+  return enrichMetaWithGradedScore({
+    ...meta,
+    winningComponent: key,
+    tradeType: leg,
+    component: leg ?? meta.component,
+  }, key);
 }
 
 /** Sprint 15 + Sprint 16: collect all strategy ML enrichments from signal meta. */
@@ -1135,9 +1141,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
       if (size <= 0) { execAbl.rejSize += 1; continue; }
 
-      const lastMeta = resolveEnrichedSignalMeta(strategy, strategyKey);
+      const lastMeta = resolveEnrichedSignalMeta(strategy, strategyKey, null, componentId);
       const meta = multiSignal.meta
-        ? resolveEnrichedSignalMeta(strategy, strategyKey, multiSignal.meta)
+        ? resolveEnrichedSignalMeta(strategy, strategyKey, multiSignal.meta, componentId)
         : lastMeta;
       const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
       const winningComponent = meta?.winningComponent || null;

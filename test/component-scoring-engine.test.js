@@ -9,6 +9,8 @@
 const assert = require("assert");
 const {
   SCORERS,
+  SMC_RUBRIC_DEFAULT,
+  SMC_RUBRIC_SCALPING,
   scoreComponent,
   enrichMetaWithGradedScore,
   gradedConfidenceFromMeta,
@@ -197,6 +199,63 @@ test("unknown strategy key returns zero score", () => {
   const result = scoreComponent("NOT_A_STRATEGY", {});
   assert.strictEqual(result.total, 0);
   assert.deepStrictEqual(result.breakdown, {});
+});
+
+function rubricMaxSum(rubric) {
+  return rubric.sweepQuality.maxPts
+    + rubric.chochDisplacement.maxPts
+    + rubric.fvgQuality.maxPts
+    + rubric.obConfluence.proximityMax + rubric.obConfluence.booleanMax
+    + rubric.htfAlignment.adxMax + rubric.htfAlignment.alignMax
+    + rubric.liquidityFreshness.mitigationMax + rubric.liquidityFreshness.sweepAgeMax;
+}
+
+test("SMC default rubric max caps unchanged for Intraday/Swing", () => {
+  assert.strictEqual(SMC_RUBRIC_DEFAULT.sweepQuality.maxPts, 25);
+  assert.strictEqual(SMC_RUBRIC_DEFAULT.chochDisplacement.maxPts, 20);
+  assert.strictEqual(SMC_RUBRIC_DEFAULT.fvgQuality.maxPts, 15);
+  assert.strictEqual(SMC_RUBRIC_DEFAULT.obConfluence.proximityMax + SMC_RUBRIC_DEFAULT.obConfluence.booleanMax, 20);
+  assert.strictEqual(SMC_RUBRIC_DEFAULT.htfAlignment.adxMax + SMC_RUBRIC_DEFAULT.htfAlignment.alignMax, 15);
+  assert.strictEqual(
+    SMC_RUBRIC_DEFAULT.liquidityFreshness.mitigationMax + SMC_RUBRIC_DEFAULT.liquidityFreshness.sweepAgeMax,
+    10,
+  );
+  assert.strictEqual(rubricMaxSum(SMC_RUBRIC_DEFAULT), 105);
+});
+
+test("SMC Scalping rubric max caps match Sprint 16 calibration", () => {
+  assert.strictEqual(SMC_RUBRIC_SCALPING.sweepQuality.maxPts, 30);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.chochDisplacement.maxPts, 20);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.fvgQuality.maxPts, 15);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.obConfluence.proximityMax + SMC_RUBRIC_SCALPING.obConfluence.booleanMax, 10);
+  assert.strictEqual(SMC_RUBRIC_SCALPING.htfAlignment.adxMax + SMC_RUBRIC_SCALPING.htfAlignment.alignMax, 10);
+  assert.strictEqual(
+    SMC_RUBRIC_SCALPING.liquidityFreshness.mitigationMax + SMC_RUBRIC_SCALPING.liquidityFreshness.sweepAgeMax,
+    5,
+  );
+  assert.strictEqual(rubricMaxSum(SMC_RUBRIC_SCALPING), 90);
+});
+
+test("SMC Scalping tradeType uses scalp rubric; Intraday keeps default", () => {
+  const features = { ...SAMPLE_FEATURES.SMART_MONEY_CONCEPTS, confObConfluence: true };
+  const scalp = scoreComponent("SMART_MONEY_CONCEPTS", features, { tradeType: "Scalping" });
+  const intraday = scoreComponent("SMART_MONEY_CONCEPTS", features, { tradeType: "Intraday" });
+  assert.ok(scalp.total > 0 && scalp.total <= 100);
+  assert.ok(intraday.total > 0 && intraday.total <= 100);
+  assert.ok(scalp.breakdown.sweepQuality >= intraday.breakdown.sweepQuality);
+  assert.ok(scalp.breakdown.obConfluence <= intraday.breakdown.obConfluence);
+  assert.ok(scalp.breakdown.liquidityFreshness <= intraday.breakdown.liquidityFreshness);
+});
+
+test("enrichMetaWithGradedScore routes SMC Scalping via tradeType", () => {
+  const meta = enrichMetaWithGradedScore({
+    winningComponent: "SMART_MONEY_CONCEPTS",
+    tradeType: "Scalping",
+    ...SAMPLE_FEATURES.SMART_MONEY_CONCEPTS,
+  }, "SMART_MONEY_CONCEPTS");
+  assert.strictEqual(meta.scoringStrategyKey, "SMART_MONEY_CONCEPTS");
+  assert.ok(meta.gradedScoreBreakdown.sweepQuality <= 30);
+  assert.ok(meta.gradedScoreBreakdown.obConfluence <= 10);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
