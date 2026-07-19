@@ -1069,8 +1069,11 @@ function checkPm2RestartHealth() {
 }
 
 // Pastikan tabel engine (Postgres) siap sebelum menerima request.
+const { assertMlGateProductionSafety } = require("../modules/ml/guards/mlGateProductionGuard");
+
 db.init()
   .then(() => {
+    assertMlGateProductionSafety();
     server.listen(PORT, () => {
       console.log(`\n🚀 Quantara Bot Server running on ${PORT}`);
       console.log(`📊 Dashboard: http://localhost:5173`);

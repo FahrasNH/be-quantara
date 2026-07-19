@@ -12,7 +12,11 @@ const { transformEngineRow } = require("../src/modules/ml/services/StrategyPerfo
 const FeatureImportanceAnalyzer = require("../src/modules/ml/services/FeatureImportanceAnalyzer");
 const WinPredictor = require("../src/modules/ml/domain/WinPredictor");
 const FeatureEngineer = require("../src/modules/ml/domain/FeatureEngineer");
-const { FEATURE_NAMES } = require("../src/modules/ml/domain/FeatureEngineer");
+const { FEATURE_NAMES, EXCLUDED_FEATURES } = require("../src/modules/ml/domain/FeatureEngineer");
+const {
+  assertMlGateProductionSafety,
+} = require("../src/modules/ml/guards/mlGateProductionGuard");
+const { validateEntryContext } = require("../src/modules/ml/guards/entryContextValidator");
 
 let passed = 0;
 let failed = 0;
@@ -110,6 +114,71 @@ test("MLGateService disabled mode always allows", () => {
   assert.strictEqual(verdict.allowed, true);
   assert.strictEqual(verdict.source, "disabled");
   process.env.ML_GATE_MODE = prev;
+});
+
+// ── Sprint 18: Gate production safety ────────────────────────────────────────
+
+test("assertMlGateProductionSafety throws when active in production", () => {
+  const prevEnv = process.env.NODE_ENV;
+  const prevMode = process.env.ML_GATE_MODE;
+  process.env.NODE_ENV = "production";
+  process.env.ML_GATE_MODE = "active";
+  assert.throws(() => assertMlGateProductionSafety(), /ML_GATE_MODE=active forbidden/);
+  process.env.NODE_ENV = prevEnv;
+  process.env.ML_GATE_MODE = prevMode;
+});
+
+test("assertMlGateProductionSafety allows active in development", () => {
+  const prevEnv = process.env.NODE_ENV;
+  const prevMode = process.env.ML_GATE_MODE;
+  process.env.NODE_ENV = "development";
+  process.env.ML_GATE_MODE = "active";
+  assert.doesNotThrow(() => assertMlGateProductionSafety());
+  process.env.NODE_ENV = prevEnv;
+  process.env.ML_GATE_MODE = prevMode;
+});
+
+// ── Sprint 18: entryContext validation ───────────────────────────────────────
+
+test("validateEntryContext fail-open on malformed hodPrice", () => {
+  const { error } = validateEntryContext({ hodPrice: "NaN", pairTier: "LIQUID" });
+  assert.ok(error);
+  assert.ok(error.message.includes("hodPrice"));
+});
+
+test("MLGateService graceful on invalid entryContext (fail-open)", () => {
+  const prev = process.env.ML_GATE_MODE;
+  process.env.ML_GATE_MODE = "shadow";
+  const gate = new MLGateService(new WinPredictor(), new FeatureEngineer());
+  const verdict = gate.evaluateEntry({
+    entryContext: { hodPrice: "NaN", confidenceScore: 50 },
+    strategyKey: "TREND_FOLLOWING",
+    symbol: "BTCUSDT",
+    tradeCount: 500,
+  });
+  assert.strictEqual(verdict.allowed, true);
+  assert.strictEqual(verdict.source, "validation-failed");
+  process.env.ML_GATE_MODE = prev;
+});
+
+// ── Sprint 18: EXCLUDED_FEATURES hygiene ───────────────────────────────────
+
+test("FeatureEngineer excludes null-dense fields from training context", () => {
+  const fe = new FeatureEngineer();
+  const filtered = fe.filterEntryContextForTraining({
+    confidenceScore: 70,
+    iv30d: 0.5,
+    skew: 0.1,
+    liquidationBuffer: 100,
+    liquidationLevels: [1, 2],
+    correlationRisk: "elevated",
+    atr: 500,
+  });
+  for (const key of EXCLUDED_FEATURES) {
+    assert.ok(!(key in filtered), `expected ${key} excluded`);
+  }
+  assert.strictEqual(filtered.confidenceScore, 70);
+  assert.strictEqual(filtered.atr, 500);
 });
 
 // ── Task 2.2: Engine trades aggregation transform ────────────────────────────

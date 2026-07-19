@@ -278,3 +278,18 @@ node backtest.js --interval 1H --days 90
 
 **OKX: Demo tidak berfungsi**
 → Pastikan `OKX_DEMO_TRADING=true` dan API key dibuat saat mode demo aktif di website OKX.
+
+---
+
+## ML Training Pre-flight (Sprint 18)
+
+Before model training, validate data readiness:
+
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost:5432/bot_trading"
+chmod +x scripts/pre_sprint18_ml_validation.sh
+./scripts/pre_sprint18_ml_validation.sh
+```
+
+See also `docs/ML_READINESS.md`, `docs/ML_MODEL_CARD.md`, and
+`docs/SMC_SCALPING_WALKFORWARD_EXPORT.md`.

@@ -7,6 +7,14 @@
  * Uses pure JS normalization (no external dependencies).
  * All values are clamped to [0, 1] range; NaN/Infinity → 0.
  *
+ * FEATURE CATEGORIES (Phase 1-2):
+ *   Trade: winningComponent, signalDelayMs, pairTier (100% complete)
+ *   Execution: racer metadata, HTF alignment, signal age (95% complete)
+ *   Outcome: PnL, exit reason, slippage, funding cost (100% complete)
+ *   Market: session, HOD/LOD, regime (95% complete — iv30d/skew TBD)
+ *   Risk: VaR/CVaR, correlation portfolio, liquidation buffer (PHASE 3 / SPRINT 20)
+ *     Deferred: requires Binance API + portfolio-level tracking.
+ *
  * Feature layout (60 total):
  *   [0-9]   Signal features
  *   [10-19] Regime features
@@ -22,6 +30,15 @@ const REGIMES = ["trend_up", "trend_down", "ranging", "expansion", "compression"
 const PAIR_TIERS = ["LIQUID", "STABLE", "VOLATILE"];
 const STRATEGY_KEYS = ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const TRADE_TYPES = ["Scalping", "Swing"];
+
+/** Sprint 18 — exclude null-dense / heuristic fields from training feature extraction. */
+const EXCLUDED_FEATURES = [
+  "iv30d",              // No options feed from Binance
+  "skew",               // No options feed
+  "liquidationBuffer",  // Never computed live
+  "liquidationLevels",  // 60% null — use only if LiqSqz active
+  "correlationRisk",    // Heuristic, not real correlation
+];
 
 const FEATURE_NAMES = [
   // [0-9] Signal features
@@ -53,13 +70,33 @@ const FEATURE_NAMES = [
 
 class FeatureEngineer {
   /**
+   * Strip null-dense / deferred fields before training or inference.
+   * @param {object} entryContext
+   * @returns {object}
+   */
+  filterEntryContextForTraining(entryContext = {}) {
+    const ctx = { ...(entryContext || {}) };
+    for (const key of EXCLUDED_FEATURES) {
+      delete ctx[key];
+    }
+    return ctx;
+  }
+
+  /**
+   * @returns {string[]}
+   */
+  getExcludedFeatures() {
+    return [...EXCLUDED_FEATURES];
+  }
+
+  /**
    * Generate a 60-dim normalized feature vector from entryContext + tradeMetadata.
    * @param {object} entryContext — from TradeFeatureCollector.captureEntryFeatures()
    * @param {object} tradeMetadata — { strategyKey, symbol, side, dryRun }
    * @returns {Float32Array} length 60
    */
   buildFeatureVector(entryContext = {}, tradeMetadata = {}) {
-    const ctx = entryContext || {};
+    const ctx = this.filterEntryContextForTraining(entryContext);
     const meta = tradeMetadata || {};
 
     const vec = new Float32Array(VECTOR_DIM);
@@ -221,3 +258,4 @@ class FeatureEngineer {
 module.exports = FeatureEngineer;
 module.exports.VECTOR_DIM = VECTOR_DIM;
 module.exports.FEATURE_NAMES = FEATURE_NAMES;
+module.exports.EXCLUDED_FEATURES = EXCLUDED_FEATURES;

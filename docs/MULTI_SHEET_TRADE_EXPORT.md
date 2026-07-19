@@ -66,3 +66,18 @@ Legacy labels (`ICT-style trading`, `Supply and Demand`, `ADAPTIVE FUSION` → S
 | Archive export service | `BacktestCsvService.js` |
 | HTTP | `POST /api/v1/backtest/export-csv` |
 | FE UI | `ExportFormatPanel.jsx` (Core / Full only) + `useBacktest.exportCsv` |
+
+## Changelog (Sprint 16–18)
+
+**Sprint 16+** added graded scoring fields to Full Export:
+
+- `gradedScore` (0–100 bounded total)
+- `gradedScoreBreakdown` (JSON rubric keys)
+- `scoringStrategyKey`
+
+**Backward compatibility**: Core Export (24 cols) unchanged. Full Export column count
+increased — downstream consumers parsing fixed column indices must switch to header
+names or use `variant: "core"` for stable 24-col output.
+
+**Sprint 18**: null-dense ML raw fields (`iv30d`, `skew`, `liquidationBuffer`) remain
+in entryContext JSON but are excluded from model training via `EXCLUDED_FEATURES`.

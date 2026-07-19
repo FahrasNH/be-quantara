@@ -22,6 +22,7 @@ const GrokTradingService = require("../../research/services/GrokTradingService")
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const { onEngineTradeOpen, onEngineTradeClose } = require("../../ml/services/BotEngineMlHook");
 const MLGateService = require("../../ml/services/MLGateService");
+const { assertMlGateProductionSafety } = require("../../ml/guards/mlGateProductionGuard");
 const {
   applyGradedScoreToSnapshot,
   resolveGradedSignalConfidence,
@@ -101,6 +102,7 @@ class BotEngine extends EventEmitter {
    */
   constructor(configOverrides = {}) {
     super();
+    assertMlGateProductionSafety();
     /** @type {import('../domain/MetaSelectorEngine').MetaSelectorEngine|null} */
     this.metaSelector = null;
 

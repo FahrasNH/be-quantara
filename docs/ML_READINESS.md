@@ -64,3 +64,58 @@ npm test -- --grep ml-readiness
 
 - Train win-prediction model on enriched dataset
 - Regime-aware parameter tuning from StrategyPerformance rollups
+
+## Sprint 18 — ML Training Readiness
+
+### Pre-flight validation
+
+Run 1 week before model training:
+
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost:5432/bot_trading"
+chmod +x scripts/pre_sprint18_ml_validation.sh
+./scripts/pre_sprint18_ml_validation.sh
+```
+
+Checks: gate mode lock, null-density report, data completeness (>70%), trade field write-through.
+
+### Feature hygiene
+
+`FeatureEngineer.EXCLUDED_FEATURES` strips null-dense fields before training:
+
+- `iv30d`, `skew`, `liquidationBuffer` (100% null — no options feed)
+- `liquidationLevels` (60% null)
+- `correlationRisk` (heuristic only)
+
+See `docs/ML_MODEL_CARD.md`.
+
+### Backfill gap analysis
+
+```bash
+node scripts/ml/backfill_gap_analysis.js
+node scripts/ml/backfill_gap_analysis.js --synthetic   # offline when DB unavailable
+```
+
+### Gate safety (production)
+
+`ML_GATE_MODE=active` throws at server boot and BotEngine construction when
+`NODE_ENV=production`. Default remains `shadow`.
+
+### Category completeness (Phase 1-2 vs Phase 3)
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| Trade | ✅ Complete | winningComponent, signalDelayMs, pairTier |
+| Execution | ✅ Usable | racer metadata, HTF alignment, signal age |
+| Outcome | ✅ Complete | PnL, exit reason, slippage, funding |
+| Market | ✅ Usable | session, HOD/LOD, regime; iv30d/skew TBD |
+| Risk | ⏳ Sprint 20 | VaR/CVaR, real correlation, liquidation buffer |
+
+Risk fields require Binance margin API + portfolio-level tracking — deferred to Phase 3.
+
+**Sprint 20 placeholder**: Phase 3 Risk Category ML Data (VaR/correlation/liquidation) —
+see Quantara Plan backlog; fields in `EXCLUDED_FEATURES` until external feeds land.
+
+### SMC walk-forward dataset
+
+See `docs/SMC_SCALPING_WALKFORWARD_EXPORT.md` — 8 windows 2020–2026 post Sprint 16 config.

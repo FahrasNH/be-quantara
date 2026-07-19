@@ -15,6 +15,8 @@
 const WinPredictor = require("../domain/WinPredictor");
 const FeatureEngineer = require("../domain/FeatureEngineer");
 const { classifyHtfTrend } = require("../../analytics/domain/engineTradeMlAdapter");
+const { validateEntryContext } = require("../guards/entryContextValidator");
+const { logMlGateStartupMode } = require("../guards/mlGateProductionGuard");
 
 const DEFAULT_PWIN_THRESHOLD = parseFloat(process.env.ML_WIN_GATE_THRESHOLD || "0.45");
 const COLD_START_TRADE_COUNT = parseInt(process.env.ML_COLD_START_TRADES || "200", 10);
@@ -84,12 +86,24 @@ class MLGateService {
       return { allowed: true, pWin: 0.5, reason: "ML gate disabled", mode, source: "disabled" };
     }
 
-    const resolvedRegime = resolveRegime(entryContext, regime);
+    const { error: validationError, value: validatedContext } = validateEntryContext(entryContext);
+    if (validationError) {
+      console.warn(`[MLGateService] Invalid entryContext: ${validationError.message}`);
+      return {
+        allowed: true,
+        pWin: 0.5,
+        reason: `[validation-error] ${validationError.message}`,
+        mode: mode === "shadow" ? "shadow" : mode,
+        source: "validation-failed",
+      };
+    }
+
+    const resolvedRegime = resolveRegime(validatedContext, regime);
     const closedCount = Number.isFinite(tradeCount) ? tradeCount : COLD_START_TRADE_COUNT;
 
     if (closedCount < COLD_START_TRADE_COUNT) {
       return this._evaluateColdStart({
-        entryContext,
+        entryContext: validatedContext,
         strategyKey,
         resolvedRegime,
         signalConfidence,
@@ -98,7 +112,7 @@ class MLGateService {
       });
     }
 
-    const features = this.featureEngineer.buildFeatureVector(entryContext, {
+    const features = this.featureEngineer.buildFeatureVector(validatedContext, {
       strategyKey,
       symbol,
       regime: resolvedRegime,
@@ -181,7 +195,9 @@ class MLGateService {
       wp.load().catch(() => {});
       const fe = new FeatureEngineer();
       const svc = new MLGateService(wp, fe);
-      console.log("[MLGateService] Auto-started (mode=%s, threshold=%s)", svc.getMode(), svc.threshold);
+      const mode = svc.getMode();
+      logMlGateStartupMode(mode);
+      console.log("[MLGateService] Auto-started (mode=%s, threshold=%s)", mode, svc.threshold);
       return svc;
     } catch (err) {
       console.warn(`[MLGateService] autoStart failed (non-fatal): ${err.message}`);
