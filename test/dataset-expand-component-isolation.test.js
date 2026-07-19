@@ -100,6 +100,9 @@ describe("buildConfig BE SSOT parity (no FE geometry override)", () => {
   test("BE SSOT entry knobs locked (FE Advance must mirror these)", () => {
     const smc = STRATEGIES.SMART_MONEY_CONCEPTS;
     assert.equal(smc.smcSweepVolMult, 0.9);
+    assert.equal(smc.typeOverrides.Scalping.smcSweepVolMult, 1.2);
+    assert.equal(smc.typeOverrides.Intraday.smcSweepVolMult, undefined);
+    assert.equal(smc.typeOverrides.Swing.smcSweepVolMult, undefined);
     assert.equal(smc.smcOBDispMult, 1.3);
     assert.equal(smc.smcFvgMinGap, 0.0015);
     assert.equal(smc.smcDispVolMult, 1.8);

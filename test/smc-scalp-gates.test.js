@@ -132,6 +132,7 @@ test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + 120m time-stop + gates 
   assert.equal(ov.smcBlockLongInChop, true);
   assert.equal(ov.smcRequireObRetest, true);
   assert.equal(ov.smcMinConfidenceScalping, 40);
+  assert.equal(ov.smcSweepVolMult, 1.2);
   assert.deepEqual(ov.noTradeSessions, ["Sydney", "Tokyo"]);
   assert.equal(ov.atrMinMult, 0.287);
 

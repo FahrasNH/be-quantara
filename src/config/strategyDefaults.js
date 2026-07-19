@@ -87,6 +87,7 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     noTradeSessions: ["Sydney", "Tokyo"],
     smcMinConfidenceScalping: 40,
     smcMinConfidenceA: 40,
+    smcSweepVolMult: 1.2,
     // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0
     slAtrMult: 1.5,
     tpAtrMult: 3.0,

@@ -143,7 +143,10 @@ assert.equal(STRATEGIES.BREAKOUT_RETEST.lookbackBars, 20);
 const smc = STRATEGIES.SMART_MONEY_CONCEPTS;
 assert.equal(smc.enabledComponents?.join(","), "Scalping,Intraday,Swing");
 assert.equal(smc.typeOverrides.Scalping.smcMinConfidenceA, 40);
+assert.equal(smc.typeOverrides.Scalping.smcSweepVolMult, 1.2);
 assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceB, 45);
+assert.equal(smc.typeOverrides.Intraday.smcSweepVolMult, undefined);
+assert.equal(smc.typeOverrides.Swing.smcSweepVolMult, undefined);
 assert.ok(smc.smcUseSequenceEngine === true);
 
 const UMBRELLA_KEYS = ["ADAPTIVE_FUSION", "TREND_SURGE", "MEAN_DRIFT", "BREAKOUT_STORM"];
