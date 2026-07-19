@@ -415,7 +415,16 @@ module.exports = function createBacktestRouter(context) {
       data_start: dataStart,
       data_end: dataEnd,
       action: clientAction,
+      explicit_save: explicitSave,
     } = req.body;
+
+    if (explicitSave !== true && explicitSave !== "true" && explicitSave !== 1 && explicitSave !== "1") {
+      return res.status(400).json({
+        ok: false,
+        error: "Archive writes require explicit_save=true (Save Archive button only)",
+        code: "EXPLICIT_SAVE_REQUIRED",
+      });
+    }
 
     const sym = (pair || symbol || "").toUpperCase();
     const strategyKey = (strategyKeyRaw || strategyId || "").replace(/^preset-\d+$|^import-/, "").toUpperCase();
@@ -974,7 +983,26 @@ module.exports = function createBacktestRouter(context) {
    * Save backtest result to history database
    */
   router.post("/save", asyncHandler(async (req, res) => {
-    const { symbol, metrics, equityCurve, tradesData, config, notes, strategy_key: strategyKey, timeframe, period_label: periodLabel } = req.body;
+    const {
+      symbol,
+      metrics,
+      equityCurve,
+      tradesData,
+      config,
+      notes,
+      strategy_key: strategyKey,
+      timeframe,
+      period_label: periodLabel,
+      explicit_save: explicitSave,
+    } = req.body;
+
+    if (explicitSave !== true && explicitSave !== "true" && explicitSave !== 1 && explicitSave !== "1") {
+      return res.status(400).json({
+        ok: false,
+        error: "Archive writes require explicit_save=true (Save Archive button only)",
+        code: "EXPLICIT_SAVE_REQUIRED",
+      });
+    }
 
     if (!symbol || !metrics) {
       return res.status(400).json({

@@ -1711,6 +1711,11 @@ async function deleteBacktestHistoryByIds(ids) {
   return rowCount;
 }
 
+async function deleteAllBacktestHistory() {
+  const { rowCount } = await pool.query(`DELETE FROM backtest_history`);
+  return rowCount;
+}
+
 async function insertStrategyPreset({ userId, name, strategyKey, parameters }) {
   const { rows } = await pool.query(
     `INSERT INTO strategy_presets (user_id, name, strategy_key, parameters)
@@ -1921,6 +1926,7 @@ module.exports = {
   getBacktestHistoryByIds,
   deleteBacktestHistoryById,
   deleteBacktestHistoryByIds,
+  deleteAllBacktestHistory,
   insertStrategyPreset,
   getStrategyPresets,
   deleteStrategyPreset,

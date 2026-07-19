@@ -89,7 +89,7 @@ class BacktestHistoryService {
     try {
       const record = await db.getBacktestHistoryById(id);
       if (!record) return null;
-      const healed = await this._healAndMaybePersist(record);
+      const healed = this._healPayload(record);
       return {
         ...record,
         metrics: healed.metrics,
@@ -243,36 +243,18 @@ class BacktestHistoryService {
   }
 
   /**
-   * Heal corrupted archive payloads (COALESCE leftover: 0 trades + declining equity)
-   * and optionally persist the repair so subsequent lookups stay clean.
+   * Heal corrupted archive payloads (COALESCE leftover: 0 trades + declining equity).
+   * Read paths (lookup/detail) heal in-memory only — archive DB writes happen on
+   * explicit Save Archive (POST /backtest/run with explicit_save).
    */
-  static async _healAndMaybePersist(record, { metrics, trades, equity_curve } = {}) {
+  static _healPayload(record, { metrics, trades, equity_curve } = {}) {
     const capital = Number(record?.config?.parameters?.capital ?? record?.config?.capital ?? 1000) || 1000;
-    const healed = healArchivePayload({
+    return healArchivePayload({
       metrics: metrics ?? record?.metrics,
       trades: trades ?? record?.trades_data,
       equity_curve: equity_curve ?? record?.equity_curve,
       capital,
     });
-    if (healed.healed && record?.id) {
-      try {
-        await db.updateBacktestHistory(record.id, {
-          metrics: healed.metrics,
-          equityCurve: healed.equity_curve,
-          tradesData: healed.trades,
-          config: record.config ?? null,
-          dataStart: record.data_start ?? record.dataStart ?? null,
-          dataEnd: record.data_end ?? record.dataEnd ?? null,
-          engineVersion: record.engine_version ?? record.engineVersion ?? ENGINE_VERSION,
-        });
-        console.warn(
-          `[BacktestHistory] Healed desynced archive id=${record.id} reason=${healed.healReason}`,
-        );
-      } catch (err) {
-        console.error(`[BacktestHistory] Failed to persist heal for id=${record.id}: ${err.message}`);
-      }
-    }
-    return healed;
   }
 
   /**
@@ -309,7 +291,7 @@ class BacktestHistoryService {
       if (record.engine_version && record.engine_version !== ENGINE_VERSION) {
         return { action: "miss", canonicalKey, id: null };
       }
-      const healed = await this._healAndMaybePersist(record);
+      const healed = this._healPayload(record);
       return {
         action: "reused",
         canonicalKey,
@@ -364,7 +346,7 @@ class BacktestHistoryService {
       };
     }
 
-    const healed = await this._healAndMaybePersist(record);
+    const healed = this._healPayload(record);
     return {
       action: "reused",
       canonicalKey,
