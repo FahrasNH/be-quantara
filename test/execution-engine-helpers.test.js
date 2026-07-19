@@ -183,7 +183,7 @@ t("checkAtrRangeGate: quiet / extreme / ok", () => {
   assert.ok(/ATR terlalu besar/.test(wild.reason));
 });
 
-t("checkAtrRangeGate: atrGateRelative uses baseline ratio", () => {
+t("checkAtrRangeGate: atrGateRelative uses baseline ratio + dual gate", () => {
   const cfg = {
     atrMinMult: 0.15,
     atrMaxMult: 5.0,
@@ -192,8 +192,10 @@ t("checkAtrRangeGate: atrGateRelative uses baseline ratio", () => {
     atrRelMax: 3.0,
     atrBaseline: 0.12,
   };
-  // atr%=0.10 absolute would fail 0.15 floor; relative 0.10/0.12≈0.83 passes
-  assert.strictEqual(checkAtrRangeGate(0.10, 100, cfg).ok, true);
+  // atr%=0.10: relative 0.10/0.12≈0.83 ok, but absolute 0.10 < 0.15 → blocked (Sprint 16 dual gate)
+  assert.strictEqual(checkAtrRangeGate(0.10, 100, cfg).ok, false);
+  // atr%=0.20: both relative and absolute pass
+  assert.strictEqual(checkAtrRangeGate(0.20, 100, cfg).ok, true);
   assert.strictEqual(checkAtrRangeGate(0.05, 100, { ...cfg, atrBaseline: 0.20 }).ok, false);
 });
 
