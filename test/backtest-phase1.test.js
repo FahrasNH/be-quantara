@@ -18,12 +18,12 @@ assert(summary.includes("BTCUSDT"), "summary CSV should include symbol");
 
 const trades = exportBacktests(sample, "trades");
 assert(trades.includes("LONG"), "trades CSV should include side");
-// "trades" defaults to the FULL variant (superset). No leading "User" column —
-// backtest is single-user (User lives only on the admin multi-user export).
-assert(trades.includes("ID,Session ID,Symbol,Side,Strategy"), "trades CSV should use FULL columns, no User");
+assert(trades.includes("ID,Symbol,Side,Strategy"), "trades CSV Full header starts at core columns, no Session ID");
 assert(!trades.includes("User,"), "trades CSV must not carry a User column");
+assert(!trades.includes("Session ID"), "Full export must not include deprecated Session ID column");
 assert(trades.includes("Entry Reasons"), "trades CSV should include Entry Reasons");
+assert(trades.includes("SL"), "Full export includes geometry columns");
+assert(trades.includes("Sweep Strength"), "Full export includes SMC ML columns for ADAPTIVE_FUSION alias");
 assert(trades.includes("Performance Summary"), "trades CSV should include performance summary");
-assert(!trades.includes("Sweep Strength"), "trades CSV must omit stale ML columns");
 
 console.log("✓ BacktestCsvService tests passed");

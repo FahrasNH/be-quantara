@@ -25,13 +25,12 @@
 const { formatDuration } = require("../../../infrastructure/db/database");
 const {
   TRADE_EXPORT_COLUMN_KEYS,
-  FULL_TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
   pickExportColumns,
   toCsv,
   buildPerformanceSummaryCsv,
   buildDynamicMultiSheetXlsx,
-  buildSpecificExportColumns,
+  buildFullExportColumns,
   normalizeMlStrategyKey,
   resolveTradeMlStrategyKey,
 } = require("#shared/csv/tradeExportCsv.js");
@@ -484,16 +483,14 @@ function collectExportComponents(rows, records) {
 }
 
 /**
- * Resolve CSV columns for a given export variant. The three variants are now
- * genuinely distinct (previously every CSV collapsed to the 37-col Full superset):
- *   - full     → FULL_TRADE_EXPORT_COLUMNS (37): all execution + context columns
- *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (24): compact essentials for quick review
- *   - specific → core (24) + per-strategy ML feature columns (entry-quality analysis)
+ * Resolve CSV columns for a given export variant:
+ *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (24): compact essentials
+ *   - full     → buildFullExportColumns (31 base + ML union)
+ *   - specific → alias of full (API back-compat)
  */
 function resolveVariantColumns(variant, rows, records, { adminFormat = true, strategies = null } = {}) {
-  if (variant === "full") return FULL_TRADE_EXPORT_COLUMNS;
-  if (variant === "specific") {
-    return buildSpecificExportColumns(rows, { adminFormat, strategies });
+  if (variant === "full" || variant === "specific") {
+    return buildFullExportColumns(rows, { adminFormat, strategies });
   }
   if (variant === "core") {
     // ADMIN cols no longer carry a leading "User" column, so both formats resolve

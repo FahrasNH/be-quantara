@@ -28,6 +28,7 @@ const {
   projectMlFields,
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
+  FULL_EXPORT_GEOMETRY_COLUMNS,
   DROPPED_ML_CSV_COLUMN_KEYS,
   buildDynamicMultiSheetXlsx,
   normalizeMlStrategyKey,
@@ -539,13 +540,21 @@ describe("Dynamic ML multi-sheet XLSX", () => {
 
     const tfSheet = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("TREND_FOLLOWING")], { header: 1 });
     expect(tfSheet.length).toBe(2); // header + 1 trade
-    expect(tfSheet[0].length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length + ML_FIELD_SETS.TREND_FOLLOWING.length);
+    expect(tfSheet[0].length).toBe(
+      ADMIN_TRADE_EXPORT_COLUMNS.length
+      + FULL_EXPORT_GEOMETRY_COLUMNS.length
+      + ML_FIELD_SETS.TREND_FOLLOWING.length,
+    );
     expect(tfSheet[0]).not.toContain("Mr Rsi Value");
     expect(tfSheet[0]).toContain("Tf Adx Strength");
 
     const mrSheet = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("MEAN_REVERSION")], { header: 1 });
     expect(mrSheet.length).toBe(2);
-    expect(mrSheet[0].length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length + ML_FIELD_SETS.MEAN_REVERSION.length);
+    expect(mrSheet[0].length).toBe(
+      ADMIN_TRADE_EXPORT_COLUMNS.length
+      + FULL_EXPORT_GEOMETRY_COLUMNS.length
+      + ML_FIELD_SETS.MEAN_REVERSION.length,
+    );
     expect(mrSheet[0]).not.toContain("Tf Adx Strength");
     expect(mrSheet[0]).toContain("Mr Rsi Value");
 
@@ -579,7 +588,11 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const wb = XLSX.read(buf, { type: "buffer" });
     expect(wb.SheetNames).toEqual([specificSheetName("TREND_FOLLOWING")]);
     const header = XLSX.utils.sheet_to_json(wb.Sheets[specificSheetName("TREND_FOLLOWING")], { header: 1 })[0];
-    expect(header.length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length + ML_FIELD_SETS.TREND_FOLLOWING.length);
+    expect(header.length).toBe(
+      ADMIN_TRADE_EXPORT_COLUMNS.length
+      + FULL_EXPORT_GEOMETRY_COLUMNS.length
+      + ML_FIELD_SETS.TREND_FOLLOWING.length,
+    );
   });
 
   test("subset TREND_FOLLOWING + MEAN_REVERSION → 2 self-contained sheets", () => {

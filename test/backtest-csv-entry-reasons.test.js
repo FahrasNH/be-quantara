@@ -15,8 +15,12 @@ const {
   TRADE_EXPORT_COLUMN_KEYS,
   DROPPED_ML_CSV_COLUMN_KEYS,
   ADMIN_TRADE_EXPORT_COLUMNS,
-  FULL_TRADE_EXPORT_COLUMNS,
+  FULL_EXPORT_GEOMETRY_COLUMNS,
+  ML_FIELD_SETS,
 } = require("#shared/csv/tradeExportCsv.js");
+
+const FULL_EXPORT_BASE_COLUMN_COUNT =
+  ADMIN_TRADE_EXPORT_COLUMNS.length + FULL_EXPORT_GEOMETRY_COLUMNS.length;
 
 const ctx = {
   backtestId: "bt-1",
@@ -211,10 +215,9 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     expect(csv).not.toContain("Planned R:R");
   });
 
-  test("Full Export (exportBacktests) includes backward-compatible superset columns", () => {
+  test("Full Export (exportBacktests) includes geometry + ML union columns", () => {
     const { exportBacktests, exportBacktestsXlsx } = require("../src/server/services/BacktestCsvService");
     const XLSX = require("xlsx");
-    const { ML_FIELD_SETS } = require("#shared/csv/tradeExportCsv.js");
     const record = {
       id: 4, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
       trades_data: [{
@@ -227,17 +230,18 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
       }],
     };
     const csv = exportBacktests([record], "trades");
-    // Full export no longer carries a leading "User" column (single-user backtest);
-    // header now starts at "ID,".
     const headerLine = csv.split("\n").find((line) => line.startsWith("ID,"));
-    expect(csv).toContain("Session ID");
     expect(csv).toContain("SL");
     expect(csv).toContain("TP");
     expect(csv).toContain("Planned R:R");
+    expect(csv).toContain("BB Squeeze Width ATR");
+    expect(csv).not.toContain("Session ID");
     expect(csv).not.toContain("User,");
     expect(headerLine).toBeTruthy();
-    expect(headerLine.split(",").length).toBe(FULL_TRADE_EXPORT_COLUMNS.length);
-    expect(headerLine.split(",").length).toBe(37);
+    expect(headerLine.split(",").length).toBe(
+      FULL_EXPORT_BASE_COLUMN_COUNT + ML_FIELD_SETS.BREAKOUT_RETEST.length,
+    );
+    expect(headerLine.split(",").length).toBe(31 + ML_FIELD_SETS.BREAKOUT_RETEST.length);
 
     const coreXlsx = exportBacktestsXlsx([record], { adminFormat: true, coreOnly: true });
     const coreWb = XLSX.read(coreXlsx, { type: "buffer" });
@@ -254,8 +258,11 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     const stratWb = XLSX.read(stratXlsx, { type: "buffer" });
     expect(stratWb.SheetNames).toEqual(["BR_specific"]);
     const stratHeader = XLSX.utils.sheet_to_json(stratWb.Sheets["BR_specific"], { header: 1 })[0];
-    expect(stratHeader.length).toBeGreaterThan(24);
-    expect(stratHeader.length).toBe(24 + ML_FIELD_SETS.BREAKOUT_RETEST.length);
+    expect(stratHeader.length).toBe(
+      FULL_EXPORT_BASE_COLUMN_COUNT + ML_FIELD_SETS.BREAKOUT_RETEST.length,
+    );
+    expect(stratHeader).toContain("SL");
+    expect(stratHeader).toContain("BB Squeeze Width ATR");
   });
 
   test("Strategy-specific XLSX: SMC + Wyckoff → self-contained sheets with correct column counts", () => {
@@ -290,16 +297,32 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
 
     const smcHeader = XLSX.utils.sheet_to_json(wb.Sheets["SMC_specific"], { header: 1 })[0];
     const wyHeader = XLSX.utils.sheet_to_json(wb.Sheets["Wyckoff_specific"], { header: 1 })[0];
-    // SMC sheet is a curated trader-review set (SMC_REVIEW_EXPORT_COLUMNS): no
-    // User/Mode/DryRun, no engine-internal ML/conf features → 22 columns.
-    expect(smcHeader.length).toBe(22);
-    expect(smcHeader).not.toContain("Sweep Strength");
-    expect(smcHeader).not.toContain("Conf Sweep Strength");
-    expect(smcHeader).not.toContain("User");
-    expect(smcHeader).not.toContain("Mode");
-    expect(smcHeader).not.toContain("DryRun");
-    // Other strategies keep their ML feature columns (research dataset): core 24 + ML.
-    expect(wyHeader.length).toBe(24 + ML_FIELD_SETS.WYCKOFF.length);
+    const smcRows = XLSX.utils.sheet_to_json(wb.Sheets["SMC_specific"]);
+    expect(smcHeader.length).toBe(
+      FULL_EXPORT_BASE_COLUMN_COUNT + ML_FIELD_SETS.SMART_MONEY_CONCEPTS.length,
+    );
+    expect(smcHeader).toContain("Sweep Strength");
+    expect(smcHeader).toContain("Conf Sweep Strength");
+    expect(smcHeader).toContain("SL");
+    expect(smcRows[0]["Sweep Strength"]).toBe(0.5);
+    expect(wyHeader.length).toBe(
+      FULL_EXPORT_BASE_COLUMN_COUNT + ML_FIELD_SETS.WYCKOFF.length,
+    );
+  });
+
+  test("Full CSV SMC-only batch exposes sweepStrength", () => {
+    const { exportBacktests } = require("../src/server/services/BacktestCsvService");
+    const csv = exportBacktests([{
+      id: 6, symbol: "BTCUSDT", strategy_key: "SMART_MONEY_CONCEPTS",
+      trades_data: [{
+        ...baseTrade,
+        component: "SMART_MONEY_CONCEPTS",
+        winningComponent: "SMART_MONEY_CONCEPTS",
+        sweepStrength: 0.5,
+      }],
+    }], "trades", { variant: "full" });
+    expect(csv).toContain("Sweep Strength");
+    expect(csv).toContain("0.5");
   });
 });
 

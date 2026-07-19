@@ -515,9 +515,10 @@ module.exports = function createBacktestRouter(context) {
   /**
    * POST /api/v1/backtest/export-csv
    * Export CSV single atau multi-run.
-   * Body: { ids, mode?, format?: 'csv'|'xlsx', strategies?: string[], coreOnly?: boolean }
-   * format=xlsx → Dynamic ML multi-sheet workbook (Sprint 15).
-   * coreOnly=true → User Export sheet only (no ML_* sheets).
+   * Body: { ids, mode?, format?: 'csv'|'xlsx', variant?: 'core'|'full'|'specific', strategies?: string[], coreOnly?: boolean }
+   * CSV variants: core=24 cols | full=31 base + ML union | specific=alias of full.
+   * format=xlsx → per-strategy sheets via buildFullExportColumns (no SMC downgrade).
+   * coreOnly=true → single User Export sheet (24 cols) when format=xlsx.
    */
   router.post("/export-csv", asyncHandler(async (req, res) => {
     const { ids, mode = "trades", format = "csv", variant, strategies, coreOnly = false } = req.body;
@@ -553,7 +554,7 @@ module.exports = function createBacktestRouter(context) {
       return res.send(buf);
     }
 
-    // CSV path — variant-aware (core=24 / full=37 / specific=core+ML).
+    // CSV path — variant-aware (core=24 / full=31+ML / specific=alias of full).
     // Back-compat: coreOnly=true maps to variant "core" when variant is unset.
     const csvVariant = ["core", "full", "specific"].includes(variant)
       ? variant

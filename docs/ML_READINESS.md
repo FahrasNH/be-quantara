@@ -57,6 +57,7 @@ npm test -- --grep ml-readiness
 ## Related
 
 - Research Dataset SSOT: `docs/RESEARCH_DATASET_SSOT.md`
+- **Full Export** (backtest CSV `variant=full`) is the primary flat research dataset path (core + geometry + ML union)
 - Graded scoring calibration consumes SSOT via `/api/v1/internal/research-dataset`
 
 ## Deferred (Sprint 18+)

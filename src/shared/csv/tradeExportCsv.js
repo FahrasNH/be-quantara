@@ -1,9 +1,9 @@
 /**
  * tradeExportCsv.js — kolom & helper CSV export trade (selaras admin Trade History).
  *
- * Sprint 14 redesign: ~20 CORE universal columns + strategy-aware `Entry Reasons`.
- * Stale ML numerics (sweepStrength, conf*, bbSqueezeWidthAtr, …) are NOT exported
- * here — ML datasets use SMC_ML_CSV_COLUMNS / dedicated expand scripts.
+ * Export variants:
+ * - Core (24): ADMIN_TRADE_EXPORT_COLUMNS — compact essentials
+ * - Full (31 base + ML union): core + geometry + ML_FIELD_SETS for strategies in batch
  */
 
 const { normalizeStrategyKey } = require("../../config/strategyKeyNormalizer");
@@ -46,18 +46,20 @@ const ADMIN_TRADE_EXPORT_COLUMNS = [
   ...TRADE_EXPORT_COLUMNS,
 ];
 
-/**
- * SMC-specific review sheet — trader-facing columns only. Drops User/Mode/DryRun
- * plumbing AND all engine-internal ML/conf features (sweep/FVG/OB/displacement +
- * conf breakdown live in the ML datasets, not the review export). 22 columns.
- */
-const SMC_REVIEW_EXPORT_COLUMNS = TRADE_EXPORT_COLUMNS.filter(
-  ([k]) => k !== "mode" && k !== "dryRun"
-);
+/** Geometry columns appended after core for Full export (not in Core 24). */
+const FULL_EXPORT_GEOMETRY_COLUMNS = [
+  ["sl", "SL"],
+  ["tp", "TP"],
+  ["size", "Size"],
+  ["funding", "Funding"],
+  ["pnlPct", "PnL %"],
+  ["plannedRR", "Planned R:R"],
+  ["actualRR", "Actual R:R"],
+];
 
 /**
- * Full flat CSV superset (backward compatible) — SL/TP, sessionId, funding, planned R:R, etc.
- * Used by backtest Full Export only (single user → no "User" column).
+ * @deprecated Legacy 37-col Full superset (sessionId, status, marketCond, …).
+ * Use buildFullExportColumns() — 31 base + dynamic ML union.
  */
 const FULL_TRADE_EXPORT_COLUMNS = [
   ["id", "ID"],
@@ -331,30 +333,15 @@ function mlFieldLabel(key) {
     .replace(/\bOi\b/g, "OI");
 }
 
-/**
- * Specific export columns (flat CSV): CORE columns + the ML feature columns of
- * every strategy present in the rows. This is what makes the "Specific" export
- * genuinely different from "Full" — it drops execution plumbing (SL/TP/funding/…)
- * and instead exposes the strategy's ML/entry-quality features for analysis.
- * @param {object[]} rows — mapped trade rows (mapBacktestTrade output)
- * @param {{ adminFormat?: boolean, strategies?: string[]|null }} [opts]
- * @returns {Array<[string,string]>} column [key,label] tuples
- */
-function buildSpecificExportColumns(rows, { adminFormat = true, strategies = null } = {}) {
-  const coreCols = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+function resolveMlStrategyList(rows, strategies) {
   let stratList = Array.isArray(strategies) && strategies.length
     ? strategies.map(normalizeMlStrategyKey).filter((k) => ML_FIELD_SETS[k])
     : [...new Set((rows || []).map(resolveTradeMlStrategyKey).filter(Boolean))];
-  // Stable order: follow ML_FIELD_SETS declaration order
   const order = Object.keys(ML_FIELD_SETS);
-  stratList = order.filter((k) => stratList.includes(k));
+  return order.filter((k) => stratList.includes(k));
+}
 
-  // SMC review sheet: trader-facing columns only, no engine-internal ML/conf
-  // features (see SMC_REVIEW_EXPORT_COLUMNS). Scoped to a SMC-only sheet.
-  if (stratList.length === 1 && stratList[0] === "SMART_MONEY_CONCEPTS") {
-    return SMC_REVIEW_EXPORT_COLUMNS;
-  }
-
+function buildMlExportColumns(stratList) {
   const mlCols = [];
   const seen = new Set();
   for (const strat of stratList) {
@@ -364,6 +351,34 @@ function buildSpecificExportColumns(rows, { adminFormat = true, strategies = nul
       mlCols.push([f, mlFieldLabel(f)]);
     }
   }
+  return mlCols;
+}
+
+/**
+ * Full export columns: 24 core + 7 geometry + union ML_FIELD_SETS for strategies
+ * present in the batch (no SMC downgrade).
+ * @param {object[]} rows — mapped trade rows (mapBacktestTrade output)
+ * @param {{ adminFormat?: boolean, strategies?: string[]|null }} [opts]
+ * @returns {Array<[string,string]>} column [key,label] tuples
+ */
+function buildFullExportColumns(rows, { adminFormat = true, strategies = null } = {}) {
+  const coreCols = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+  const stratList = resolveMlStrategyList(rows, strategies);
+  const mlCols = buildMlExportColumns(stratList);
+  return [...coreCols, ...FULL_EXPORT_GEOMETRY_COLUMNS, ...mlCols];
+}
+
+/**
+ * Specific export columns (flat CSV): CORE columns + the ML feature columns of
+ * every strategy present in the rows (no geometry — use buildFullExportColumns).
+ * @param {object[]} rows — mapped trade rows (mapBacktestTrade output)
+ * @param {{ adminFormat?: boolean, strategies?: string[]|null }} [opts]
+ * @returns {Array<[string,string]>} column [key,label] tuples
+ */
+function buildSpecificExportColumns(rows, { adminFormat = true, strategies = null } = {}) {
+  const coreCols = adminFormat ? ADMIN_TRADE_EXPORT_COLUMNS : TRADE_EXPORT_COLUMNS;
+  const stratList = resolveMlStrategyList(rows, strategies);
+  const mlCols = buildMlExportColumns(stratList);
   return [...coreCols, ...mlCols];
 }
 
@@ -447,7 +462,7 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
     const stratRows = rows.filter((t) => resolveTradeMlStrategyKey(t) === strat);
     if (!stratRows.length) continue;
 
-    const cols = buildSpecificExportColumns(stratRows, { adminFormat, strategies: [strat] });
+    const cols = buildFullExportColumns(stratRows, { adminFormat, strategies: [strat] });
     const aoa = [
       cols.map(([, label]) => label),
       ...stratRows.map((r) => cols.map(([key]) => {
@@ -464,7 +479,7 @@ function buildDynamicMultiSheetXlsx(trades, selectedStrategies = null, opts = {}
 module.exports = {
   TRADE_EXPORT_COLUMNS,
   ADMIN_TRADE_EXPORT_COLUMNS,
-  SMC_REVIEW_EXPORT_COLUMNS,
+  FULL_EXPORT_GEOMETRY_COLUMNS,
   FULL_TRADE_EXPORT_COLUMNS,
   TRADE_EXPORT_COLUMN_KEYS,
   FULL_TRADE_EXPORT_COLUMN_KEYS,
@@ -481,6 +496,7 @@ module.exports = {
   normalizeMlStrategyKey,
   resolveTradeMlStrategyKey,
   buildDynamicMultiSheetXlsx,
+  buildFullExportColumns,
   buildSpecificExportColumns,
   mlFieldLabel,
 };
