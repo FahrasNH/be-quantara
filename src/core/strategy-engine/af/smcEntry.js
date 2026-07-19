@@ -294,6 +294,9 @@ function sweetSpotPts(value, { peak, inner, outer, maxPts, floor = 0 } = {}) {
 
 /** CSV column keys added in Sprint 13 (BE + FE must stay in sync). */
 const SMC_ML_CSV_COLUMNS = [
+  ["gradedScore", "Graded Score"],
+  ["gradedScoreBreakdown", "Graded Score Breakdown"],
+  ["scoringStrategyKey", "Scoring Strategy Key"],
   ["sweepStrength", "Sweep Strength"],
   ["fvgSizeAtr", "FVG Size ATR"],
   ["obDistanceAtr", "OB Distance ATR"],

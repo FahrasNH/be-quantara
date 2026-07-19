@@ -14,6 +14,7 @@ const {
   evaluateVolumeProfileEntry,
   DEFAULTS,
 } = require("../ts/volumeProfileEntry");
+const { enrichMetaWithGradedScore } = require("../scoring/ComponentScoringEngine");
 
 class VolumeProfileStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -89,13 +90,13 @@ class VolumeProfileStrategy extends StrategyBase {
       vpPocLevel: nested.poc ?? null,
       vpTriggerType: result.reason ? String(result.reason).toUpperCase() : null,
     };
-    this._lastSignalMeta = {
+    this._lastSignalMeta = enrichMetaWithGradedScore({
       component: "AUCTION_MARKET_THEORY",
       winningComponent: result.signal ? "AUCTION_MARKET_THEORY" : null,
       strategyLabel: "Auction Market Theory",
       ...result,
       ...vpFields,
-    };
+    }, "AUCTION_MARKET_THEORY");
     return result.signal || null;
   }
 
@@ -120,7 +121,8 @@ class VolumeProfileStrategy extends StrategyBase {
   }
 
   getLastSignalMeta() {
-    return this._lastSignalMeta;
+    if (!this._lastSignalMeta) return this._lastSignalMeta;
+    return enrichMetaWithGradedScore(this._lastSignalMeta, "AUCTION_MARKET_THEORY");
   }
 
   getRiskConfig() {

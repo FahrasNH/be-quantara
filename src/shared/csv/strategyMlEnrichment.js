@@ -359,6 +359,7 @@ function extractAllStrategyEnrichment(meta) {
   if (!meta) return {};
   const winner = String(meta.winningComponent || meta.component || "").toUpperCase();
   const out = {
+    ...extractGradedScoreEnrichment(meta),
     ...extractTsTfEnrichment(meta),
     ...extractTsMsEnrichment(meta),
     ...extractTsVpEnrichment(meta),

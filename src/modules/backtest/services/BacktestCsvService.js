@@ -33,6 +33,7 @@ const {
   buildDynamicMultiSheetXlsx,
   buildSpecificExportColumns,
   normalizeMlStrategyKey,
+  resolveTradeMlStrategyKey,
 } = require("#shared/csv/tradeExportCsv.js");
 const {
   formatExitReason,
@@ -40,6 +41,8 @@ const {
   normalizeStrategyKey,
   resolveExportColumnKeys,
 } = require("../../../server/services/csv/strategyReasonFormatters");
+const { enrichMetaWithGradedScore } = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
+const { extractGradedScoreEnrichment } = require("../../../shared/csv/strategyMlEnrichment");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 const NA = "N/A";
@@ -114,6 +117,36 @@ function escapeCsv(val) {
  * Sydney: 22:00-06:59 UTC (ASX); Tokyo: 00:00-08:59 UTC (JPX)
  * London: 08:00-16:59 UTC (LSE); New York: 13:00-21:59 UTC (NYSE)
  */
+/** Resolve gradedScore fields for CSV / ML export from trade row or entry meta. */
+function resolveGradedScoreFields(trade, ctx) {
+  const mlKey = resolveTradeMlStrategyKey({
+    winningComponent: trade.winningComponent,
+    component: trade.component,
+    strategyKey: trade.strategyKey,
+    strategy: ctx.strategy,
+  });
+  if (trade.gradedScore != null && trade.gradedScore !== NA) {
+    return {
+      gradedScore: trade.gradedScore,
+      gradedScoreBreakdown: trade.gradedScoreBreakdown ?? NA,
+      scoringStrategyKey: trade.scoringStrategyKey ?? mlKey ?? NA,
+    };
+  }
+  if (!mlKey) {
+    return { gradedScore: NA, gradedScoreBreakdown: NA, scoringStrategyKey: NA };
+  }
+  const enriched = enrichMetaWithGradedScore(
+    { ...trade, winningComponent: mlKey },
+    mlKey,
+  );
+  const graded = extractGradedScoreEnrichment(enriched);
+  return {
+    gradedScore: graded.gradedScore ?? NA,
+    gradedScoreBreakdown: graded.gradedScoreBreakdown ?? NA,
+    scoringStrategyKey: graded.scoringStrategyKey ?? mlKey,
+  };
+}
+
 function detectMarketSession(hourUtc) {
   if (hourUtc == null || !Number.isFinite(Number(hourUtc))) return NA;
   const h = Number(hourUtc);
@@ -273,6 +306,13 @@ function mapBacktestTrade(trade, ctx, index) {
       ? NA
       : rsiNum;
 
+  let hourUtcOut = trade.hourUtc;
+  if (hourUtcOut == null && openTime !== NA) {
+    const openMs = new Date(openTime).getTime();
+    if (Number.isFinite(openMs)) hourUtcOut = new Date(openMs).getUTCHours();
+  }
+  const gradedFields = resolveGradedScoreFields(trade, ctx);
+
   return {
     user: ctx.userLabel ?? "Backtest",
     id: trade.id ?? `${ctx.backtestId}-${index + 1}`,
@@ -399,6 +439,10 @@ function mapBacktestTrade(trade, ctx, index) {
     wyVolumeRatio: trade.wyVolumeRatio ?? NA,
     wySosOrSow: trade.wySosOrSow ?? NA,
     wyLpsLevel: trade.wyLpsLevel ?? NA,
+    hourUtc: hourUtcOut ?? NA,
+    gradedScore: gradedFields.gradedScore,
+    gradedScoreBreakdown: gradedFields.gradedScoreBreakdown,
+    scoringStrategyKey: gradedFields.scoringStrategyKey,
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,

@@ -18,10 +18,14 @@ const TrendFollowingStrategy   = require("../implementations/TrendFollowingStrat
 const MarketStructureStrategy  = require("../implementations/MarketStructureStrategy");
 const VolumeProfileStrategy    = require("../implementations/VolumeProfileStrategy");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
-const {
-  enrichMetaWithGradedScore,
-  gradedConfidenceFromMeta,
-} = require("../scoring/ComponentScoringEngine");
+const { enrichMetaWithGradedScore } = require("../scoring/ComponentScoringEngine");
+
+/** Race winner selection uses raw component confidence (0–1), not gradedScore. */
+function raceConfidenceFromMeta(meta, signal) {
+  let confidence = meta?.confidence ?? (signal ? 0.7 : 0);
+  if (confidence > 1) confidence = confidence / 100;
+  return confidence;
+}
 
 const RACER_PRIORITY = ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"];
 const RACER_LABELS = {
@@ -117,9 +121,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
             "TREND_FOLLOWING",
           )
           : null;
-        confidence = gradedConfidenceFromMeta(meta, "TREND_FOLLOWING")
-          || (meta?.confidence ?? (signal ? 0.7 : 0));
-        if (confidence > 1) confidence = confidence / 100;
+        confidence = raceConfidenceFromMeta(meta, signal);
         reason = signal ? (meta?.reason || "tf_trigger") : "tf_no_signal";
       } catch (err) {
         reason = `tf_error:${err.message}`;
@@ -147,8 +149,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
           { ...rawMeta, winningComponent: "MARKET_STRUCTURE", signal },
           "MARKET_STRUCTURE",
         );
-        confidence = gradedConfidenceFromMeta(meta, "MARKET_STRUCTURE")
-          || meta.confidence || 0;
+        confidence = raceConfidenceFromMeta(meta, signal);
         reason = meta.reason || (signal ? "dow_entry" : "ms_no_signal");
       } catch (err) {
         reason = `ms_error:${err.message}`;
@@ -176,8 +177,7 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
           { ...rawMeta, winningComponent: "AUCTION_MARKET_THEORY", signal, price: indicators.closes?.[lastIdx] },
           "AUCTION_MARKET_THEORY",
         );
-        confidence = gradedConfidenceFromMeta(meta, "AUCTION_MARKET_THEORY")
-          || meta.confidence || 0;
+        confidence = raceConfidenceFromMeta(meta, signal);
         reason = meta.reason || (signal ? "amt_entry" : "vp_no_signal");
       } catch (err) {
         reason = `vp_error:${err.message}`;

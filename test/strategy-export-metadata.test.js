@@ -52,18 +52,18 @@ const ctx = {
 };
 
 const EXPECTED_COUNTS = {
-  SMART_MONEY_CONCEPTS: 12,
-  BREAKOUT_RETEST: 11,
-  AUCTION_MARKET_THEORY: 5,
-  TREND_FOLLOWING: 6,
-  MARKET_STRUCTURE: 6,
-  MEAN_REVERSION: 7,
-  SUPPLY_AND_DEMAND: 7,
-  STATISTICAL_ARBITRAGE: 7,
-  WYCKOFF: 7,
-  VOLUME_SPREAD_ANALYSIS: 7,
-  ICT_STYLE_TRADING: 7,
-  LIQUIDATION_SQUEEZE: 7,
+  SMART_MONEY_CONCEPTS: 14,
+  BREAKOUT_RETEST: 14,
+  AUCTION_MARKET_THEORY: 8,
+  TREND_FOLLOWING: 9,
+  MARKET_STRUCTURE: 9,
+  MEAN_REVERSION: 10,
+  SUPPLY_AND_DEMAND: 10,
+  STATISTICAL_ARBITRAGE: 10,
+  WYCKOFF: 10,
+  VOLUME_SPREAD_ANALYSIS: 10,
+  ICT_STYLE_TRADING: 10,
+  LIQUIDATION_SQUEEZE: 10,
 };
 
 describe("ML_FIELD_SETS contracts", () => {
@@ -200,7 +200,8 @@ describe("SMART_MONEY_CONCEPTS metadata verify (already implemented)", () => {
       { atr: 2, price: closes[n - 1], timestamp: Date.UTC(2026, 6, 13, 14, 0, 0), fundingRate: 0.0002 },
     );
     for (const k of ML_FIELD_SETS.SMART_MONEY_CONCEPTS) {
-      assert.ok(k in feats || k === "hourUtc", `feature key ${k}`);
+      const gradedOnly = k === "gradedScore" || k === "gradedScoreBreakdown" || k === "scoringStrategyKey";
+      assert.ok(k in feats || k === "hourUtc" || gradedOnly, `feature key ${k}`);
     }
     expect(feats.hourUtc).toBe(14);
   });

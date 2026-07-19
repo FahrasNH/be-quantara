@@ -15,6 +15,7 @@ const {
   checkShortEntry,
   evaluateTrendFollowingEntry,
 } = require("../ts/trendFollowingEntry");
+const { enrichMetaWithGradedScore } = require("../scoring/ComponentScoringEngine");
 
 class TrendFollowingStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -324,7 +325,7 @@ class TrendFollowingStrategy extends StrategyBase {
       tfEmaCrossover: Boolean(checklist.ema9Retest ?? false),
     };
 
-    return {
+    return enrichMetaWithGradedScore({
       component: "TREND_FOLLOWING",
       winningComponent: "TREND_FOLLOWING",
       strategyLabel: "Trend Following",
@@ -349,7 +350,7 @@ class TrendFollowingStrategy extends StrategyBase {
       adxMinStrength,
       donchianPeriod,
       ...tfFields,
-    };
+    }, "TREND_FOLLOWING");
   }
 
   validateEntry(price, atr, volume, volSMA, config = {}) {

@@ -214,6 +214,7 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
   test("Full Export (exportBacktests) includes backward-compatible superset columns", () => {
     const { exportBacktests, exportBacktestsXlsx } = require("../src/server/services/BacktestCsvService");
     const XLSX = require("xlsx");
+    const { ML_FIELD_SETS } = require("#shared/csv/tradeExportCsv.js");
     const record = {
       id: 4, symbol: "BTCUSDT", strategy_key: "BREAKOUT_RETEST",
       trades_data: [{
@@ -254,7 +255,7 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     expect(stratWb.SheetNames).toEqual(["BR_specific"]);
     const stratHeader = XLSX.utils.sheet_to_json(stratWb.Sheets["BR_specific"], { header: 1 })[0];
     expect(stratHeader.length).toBeGreaterThan(24);
-    expect(stratHeader.length).toBe(24 + 11);
+    expect(stratHeader.length).toBe(24 + ML_FIELD_SETS.BREAKOUT_RETEST.length);
   });
 
   test("Strategy-specific XLSX: SMC + Wyckoff → self-contained sheets with correct column counts", () => {
@@ -299,7 +300,6 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     expect(smcHeader).not.toContain("DryRun");
     // Other strategies keep their ML feature columns (research dataset): core 24 + ML.
     expect(wyHeader.length).toBe(24 + ML_FIELD_SETS.WYCKOFF.length);
-    expect(wyHeader.length).toBe(31);
   });
 });
 
