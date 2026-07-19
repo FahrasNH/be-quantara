@@ -86,7 +86,7 @@ Final `reason` prefixed with `ls_` (e.g. `ls_liquidation_wick_low_bounce+funding
 
 | Type | Entry / Confirm / Trend TF | Live eligible |
 | --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
+| Scalping | 5m / 15m / 30m | Backtest & dry-run only |
 | Intraday | 15m / 1h / 4h | Yes |
 | Swing | 4h / 1d / 1w | Yes |
 
@@ -116,7 +116,7 @@ Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestSe
 | Intraday | Allowed | Allowed |
 | Swing | Allowed | Allowed |
 
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
+Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/30m**, Intraday **15m/1h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
 
 Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
 

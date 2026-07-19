@@ -2,7 +2,7 @@
 /**
  * Shared batch dataset-expand runner — 1:1 with production backtest TYPE_TF ladder.
  *
- * Scalping 5m/1h · Intraday 15m/4h · Swing 4h/1w (runBacktestJob.TYPE_TF SSOT).
+ * Scalping 5m/30m · Intraday 15m/1h · Swing 4h/1w (runBacktestJob.TYPE_TF SSOT).
  * Applies applyStrategyJobDefaults for component isolation (Wyckoff-only, etc.).
  */
 

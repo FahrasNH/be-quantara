@@ -94,7 +94,7 @@ Hasil: `tmp/dataset-expand/<slug>/<type>/trades.csv` + `stats.json` + `scalping-
 
 | Trade type | Entry | HTF |
 |------------|-------|-----|
-| Scalping | 5m | 1h |
+| Scalping | 5m | 30m |
 | Intraday | 15m | 4h |
 | Swing | 4h | 1w |
 

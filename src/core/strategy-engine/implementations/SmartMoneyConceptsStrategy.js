@@ -2,7 +2,7 @@
  * SmartMoneyConceptsStrategy.js — v2.0.0 (SMC: Smart Money Concepts)
  *
  * FOUNDRY Tier — 3 Trade Types, each on its own timeframe stack:
- *   Scalping  (type A) : Liquidity sweep + OB + CVD  | entry 1m, confirm 5m,  trend 15m
+ *   Scalping  (type A) : Liquidity sweep + OB + CVD  | entry 5m, confirm 15m, trend 30m
  *   Intraday  (type B) : CHoCH + OB + EMA trend      | entry 15m, confirm 30m, trend 1h
  *   Swing     (type C) : FVG + Displacement + P/D     | entry 4h, confirm 1d,  trend 1W
  *
@@ -43,7 +43,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         "Event-driven SMC sequence engine (v3.0): " +
         "sweep → CHoCH/MSS → displacement/FVG → mitigation → entry. " +
         "Causal, cross-bar structure replicates institutional market reading. " +
-        "3 independent trade types: Scalping (5m/1h), Intraday (15m/1h), Swing (4h/1w). " +
+        "3 independent trade types: Scalping (5m/30m), Intraday (15m/1h), Swing (4h/1w). " +
         "HTF directional bias; smcUseSequenceEngine flag (default on) for fallback.",
       version: "3.0.0",
       enabled: true,
@@ -51,14 +51,14 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     });
 
     // ── Trade type TF configuration (each type runs on its own TF stack) ─────
-    // Sprint 17 Intraday ladder patch — genuine 3-rung ladder (matches backtest TYPE_TF):
-    //   Scalping 5m/1h · Intraday 15m/30m/1h · Swing 4h/1w.
+    // Sprint 17 TF ladder patch — genuine 3-rung ladder (matches backtest TYPE_TF):
+    //   Scalping 5m/15m/30m · Intraday 15m/30m/1h · Swing 4h/1w.
     // NOTE: the 5m Scalping leg is NEW and unproven (5m SMC historically WR
     // ~28.6%, below coin-flip) → it is Advance-backtest-only and gated OUT of
     // real live trading by liveTradeTypeGate.js. The previously-live 15m cadence
     // now lives under the Intraday label (proven, live-eligible).
     this.TRADE_TYPE_TF_CONFIG = {
-      Scalping: { entryTf: "5m",  confirmTf: "15m", trendTf: "1h" },
+      Scalping: { entryTf: "5m",  confirmTf: "15m", trendTf: "30m" },
       Intraday: { entryTf: "15m", confirmTf: "30m", trendTf: "1h" },
       Swing:    { entryTf: "4h",  confirmTf: "1d",  trendTf: "1w" },
     };
@@ -1876,7 +1876,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       }
     }
 
-    // ── Scalping (A) Entry TF Structure Validation (5m alignment with 1h) ──────
+    // ── Scalping (A) Entry TF Structure Validation (5m alignment with 30m) ─────
     // AF-SCALP-28: For Scalping only — validate that 5m entry-TF structure
     // (sweep + CHoCH + displacement) is complete before allowing entry. This
     // prevents entries during incomplete structure moves, which often reverse.

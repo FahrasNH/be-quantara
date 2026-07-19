@@ -23,7 +23,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   WYCKOFF: {
     pdfName: "Wyckoff Method",
@@ -34,7 +34,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   VOLUME_SPREAD_ANALYSIS: {
     pdfName: "Volume Spread Analysis — VSA",
@@ -44,7 +44,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   TREND_FOLLOWING: {
     pdfName: "Trend Following",
@@ -54,7 +54,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "implemented",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   MARKET_STRUCTURE: {
     pdfName: "Dow Theory / Market Structure",
@@ -64,7 +64,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   AUCTION_MARKET_THEORY: {
     pdfName: "Auction Market Theory",
@@ -74,7 +74,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   MEAN_REVERSION: {
     pdfName: "Mean Reversion",
@@ -84,7 +84,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "implemented",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   SUPPLY_AND_DEMAND: {
     pdfName: "Supply and Demand",
@@ -94,7 +94,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   STATISTICAL_ARBITRAGE: {
     pdfName: "Statistical Arbitrage",
@@ -106,7 +106,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   BREAKOUT_RETEST: {
     pdfName: "Breakout Trading",
@@ -117,7 +117,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   ICT_STYLE_TRADING: {
     pdfName: "ICT-style trading",
@@ -127,7 +127,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
   LIQUIDATION_SQUEEZE: {
     pdfName: "Liquidation/Squeeze Trading",
@@ -137,7 +137,7 @@ const STRATEGY_RECAP_CATALOG = {
     runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/30m, Intraday 15m/1h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
   },
 };
 

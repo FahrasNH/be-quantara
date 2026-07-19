@@ -8,7 +8,7 @@ const { test } = require("node:test");
 const { resolveStrategyDefaults } = require("../src/config/strategyDefaults");
 const { runTripleTypeBacktest } = require("../src/modules/backtest/services/RealStrategyBacktestService");
 
-const TF_MS = { "5m": 5 * 60e3, "1h": 60 * 60e3 };
+const TF_MS = { "5m": 5 * 60e3, "30m": 30 * 60e3, "1h": 60 * 60e3 };
 
 function mulberry(seed) {
   let s = seed >>> 0;
@@ -51,10 +51,10 @@ function genCandles(nBars, stepMs, seed, volPct, startTs) {
 function buildWindow(days, seed) {
   const startTs = Date.UTC(2025, 0, 1) + seed;
   const nEntry = Math.floor((days * 24 * 60 * 60e3) / TF_MS["5m"]);
-  const nHtf = Math.floor((days * 24 * 60 * 60e3) / TF_MS["1h"]) + 300;
+  const nHtf = Math.floor((days * 24 * 60 * 60e3) / TF_MS["30m"]) + 300;
   return {
     entryCandles: { Scalping: genCandles(nEntry, TF_MS["5m"], seed * 7 + 11, 0.25, startTs) },
-    htfCandles: { Scalping: genCandles(nHtf, TF_MS["1h"], seed * 7 + 23, 0.35, startTs - 300 * TF_MS["1h"]) },
+    htfCandles: { Scalping: genCandles(nHtf, TF_MS["30m"], seed * 7 + 23, 0.35, startTs - 300 * TF_MS["30m"]) },
   };
 }
 
