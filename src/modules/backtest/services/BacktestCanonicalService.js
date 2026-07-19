@@ -5,8 +5,8 @@
 
 const crypto = require("crypto");
 
-/** Bump saat strategyBacktest.js / logika metrik berubah material. */
-const ENGINE_VERSION = "fe-1.0.0";
+/** Bump saat RealStrategyBacktestService / rubric SMC / gate SSOT berubah material. */
+const ENGINE_VERSION = "be-real-2.0.1-smc-scalp";
 
 function stableStringify(value) {
   if (value === null || value === undefined) return "null";
