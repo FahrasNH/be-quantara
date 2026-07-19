@@ -49,14 +49,13 @@ const SCALP_GEOMETRY = Object.freeze({
   slAtrMult: 1.5,
   tpAtrMult: 3.0,
   maxHoldHours: 2,
-  riskPerTrade: 0.01,
 });
 
 /** Intraday TIME_STOP — force-close unresolved 15m/30m/1h legs at 6h. */
-const INTRADAY_HOLD = Object.freeze({ maxHoldHours: 6, riskPerTrade: 0.02 });
+const INTRADAY_HOLD = Object.freeze({ maxHoldHours: 6 });
 
 /** Swing TIME_STOP — force-close unresolved 4h/1d/1w legs at 120h (5 days). */
-const SWING_HOLD = Object.freeze({ maxHoldHours: 120, riskPerTrade: 0.02 });
+const SWING_HOLD = Object.freeze({ maxHoldHours: 120 });
 
 /** DEFAULT + per-leg geometry / hold limits — TS / MD / BS parents + AF Wyckoff/VSA components. */
 const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
@@ -92,7 +91,6 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     slAtrMult: 1.5,
     tpAtrMult: 3.0,
     maxHoldHours: 2,
-    riskPerTrade: 0.01,
     smcSessionFilter: true,
     smcBlockLongInChop: true,
     smcRequireObRetest: true,
@@ -133,7 +131,7 @@ const AF_COMPONENT_BASE = {
 
   volSmaMultiplier: 1.0,
 
-  riskPerTrade:        0.01,
+  riskPerTrade:        0.05,
   maxDailyLossPct:     0.03,
   maxTradesPerDay:     8,
   cooldownAfterLoss:   60,
@@ -178,7 +176,7 @@ const TS_COMPONENT_BASE = {
 
   volSmaMultiplier: 1.0,
 
-  riskPerTrade:        0.01,
+  riskPerTrade:        0.05,
   maxDailyLossPct:     0.06,
   maxTradesPerDay:     4,
   cooldownAfterLoss:   5,
@@ -223,7 +221,7 @@ const MD_COMPONENT_BASE = {
 
   volSmaMultiplier: 0.8,
 
-  riskPerTrade:        0.01,
+  riskPerTrade:        0.05,
   maxDailyLossPct:     0.03,
   maxTradesPerDay:     3,
   cooldownAfterLoss:   15,
@@ -268,7 +266,7 @@ const BS_COMPONENT_BASE = {
 
   volSmaMultiplier: 1.0,
 
-  riskPerTrade:        0.01,
+  riskPerTrade:        0.05,
   maxDailyLossPct:     0.08,
   maxTradesPerDay:     5,
   cooldownAfterLoss:   5,
@@ -321,7 +319,7 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.01,
+    riskPerTrade:     0.05,
     maxDailyLossPct:  0.06,
     maxTradesPerDay:  4,
     cooldownAfterLoss: 5,
@@ -395,7 +393,7 @@ const STRATEGIES = {
 
     volSmaMultiplier: 0.8,
 
-    riskPerTrade:     0.01,
+    riskPerTrade:     0.05,
     maxDailyLossPct:  0.03,
     maxTradesPerDay:  3,
     cooldownAfterLoss: 15,
@@ -473,7 +471,7 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:     0.01,
+    riskPerTrade:     0.05,
     maxDailyLossPct:  0.08,
     maxTradesPerDay:  5,
     cooldownAfterLoss: 5,
@@ -550,7 +548,7 @@ const STRATEGIES = {
 
     volSmaMultiplier: 1.0,
 
-    riskPerTrade:        0.01,
+    riskPerTrade:        0.05,
     maxDailyLossPct:     0.05,
     maxTradesPerDay:     20,
     cooldownAfterLoss:   30,
