@@ -9,8 +9,8 @@
  * auto-enabled for live tier packages — the live routing gate (liveTradeTypeGate.js)
  * restricts which of these types may actually trade real money.
  *
- * Trade-type timeframes (runBacktestJob.TYPE_TF): Scalping 5m/30m, Intraday
- * 15m/1h, Swing 4h/1w. Concept + indicators per strategy: strategyRecapCatalog.js.
+ * Trade-type timeframes (runBacktestJob.TYPE_TF): Scalping 5m/1h, Intraday
+ * 15m/4h, Swing 4h/1w. Concept + indicators per strategy: strategyRecapCatalog.js.
  */
 
 const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];

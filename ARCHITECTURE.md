@@ -197,7 +197,7 @@ TIME_STOP), `smcSessionFilter` (block 21–23 UTC), `smcBlockLongInChop`,
 Helpers: `src/core/strategy-engine/af/smcComponent.js`. CSV adds ML columns
 (`sweepStrength`, `fvgSizeAtr`, …) + confidence component fields.
 `marketCond` ≠ `dailyRegime` — both always exported (entry-TF bucket vs daily ADX-proxy).
-Dataset expand: `scripts/dataset-expand/<strategy>/scalping.js` (5m/30m; e.g. `smart-money-concepts/scalping.js`).
+Dataset expand: `scripts/dataset-expand/<strategy>/scalping.js` (5m/1h; e.g. `smart-money-concepts/scalping.js`).
 
 **Sprint 13 Swing SSOT** (`typeOverrides.Swing`): Planned RR **2.5** (SL 1.8×ATR / TP 4.5×ATR;
 intentional deviation from PRD aspirational 1.2/4.0 ≈ RR 3.33 — fast-fail: 38% of Swing

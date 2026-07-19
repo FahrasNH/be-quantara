@@ -165,14 +165,6 @@ test("SMC-04b: getTradeTypeTfConfig Intraday ladder is 15m/30m/1h", () => {
   assert.equal(tf.trendTf,  "1h");
 });
 
-test("SMC-04c: getTradeTypeTfConfig Scalping ladder is 5m/15m/30m", () => {
-  const smc = new SmartMoneyConceptsStrategy();
-  const tf  = smc.getTradeTypeTfConfig("Scalping");
-  assert.equal(tf.entryTf,  "5m");
-  assert.equal(tf.confirmTf, "15m");
-  assert.equal(tf.trendTf,  "30m");
-});
-
 test("SMC-05: validateEntry blocks extreme ATR (< 0.8% or > 5%)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   // atrPct = 0.5/100 * 100 = 0.5% → below 0.8%

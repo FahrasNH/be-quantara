@@ -2942,7 +2942,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
 /**
  * Run a single-signal strategy (TREND_FOLLOWING, MEAN_REVERSION) across a SUBSET of SMART_MONEY_CONCEPTS's own
- * Scalping/Intraday/Swing timeframe definitions — same TF pairs (5m/30m, 15m/1h,
+ * Scalping/Intraday/Swing timeframe definitions — same TF pairs (5m/1h, 15m/1h,
  * 4h/1w), same candle-fetch resilience, but using the single-position engine
  * (strategy.detectSignal contract) instead of AF's detectSignalMulti fusion.
  *
@@ -3002,11 +3002,11 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
     : typeOrder;
-  // Mirror backtest.js TYPE_TF (Sprint 17 ladder: Scalping 5m/30m · Intraday
-  // 15m/1h · Swing 4h/1w) so ADX weekly soft-cap + HTF directional gates know
+  // Mirror backtest.js TYPE_TF (Sprint 14 ladder: Scalping 5m/1h · Intraday
+  // 15m/4h · Swing 4h/1w) so ADX weekly soft-cap + HTF directional gates know
   // which trend TF each leg uses.
   const TYPE_TF_HTF = {
-    Scalping: "30m",
+    Scalping: "1h",
     Intraday: "1h",
     Swing: "1w",
   };

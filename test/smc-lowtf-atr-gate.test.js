@@ -65,12 +65,12 @@ function genCandles(nBars, stepMs, seed, volPct, startTs) {
   return candles;
 }
 
-// Sprint 17 TF ladder: Scalping 5m/30m · Intraday 15m/1h · Swing 4h/1w.
+// Sprint 17 TF ladder: Scalping 5m/1h · Intraday 15m/1h · Swing 4h/1w.
 // vols chosen so ATR% ≈ Scalping 0.4 · Intraday 0.6 · Swing 1.3 — i.e. the two
 // low-TF legs sit BELOW the old 0.8 floor but above their new per-leg floors,
 // while Swing stays above 0.8 (its behaviour must not change).
 const LEGS = {
-  Scalping: { tf: "5m", htf: "30m", vol: 0.35 },
+  Scalping: { tf: "5m", htf: "1h", vol: 0.35 },
   Intraday: { tf: "15m", htf: "1h", vol: 0.37 },
   Swing:    { tf: "4h", htf: "1w", vol: 0.8 },
 };

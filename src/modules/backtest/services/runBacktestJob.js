@@ -29,13 +29,13 @@ const AF_SMC_KEYS = new Set([
 ]);
 
 // Trade-type → timeframe ladder (Sprint 14 factory reset).
-// Scalping is now a GENUINE low-TF leg (5m/30m), distinct from Intraday (15m/1h).
+// Scalping is now a GENUINE low-TF leg (5m/1h), distinct from Intraday (15m/1h).
 // Previously Scalping and Intraday were both 15m/4h (100% overlap) — the leg
-// labelled "Scalping" was really a 15m intraday leg. Now: 5m → 15m → 30m → 1h → 1w.
+// labelled "Scalping" was really a 15m intraday leg. Now: 5m → 15m → 1h → 1w.
 // NOTE: this table is GLOBAL (shared by every umbrella). Moving Scalping to 5m
 // moves the Scalping leg for MD_*/BS_* too — intended (uniform 3-type ladder).
 const TYPE_TF = {
-  Scalping: { entry: "5m",  trend: "30m" },
+  Scalping: { entry: "5m",  trend: "1h" },
   Intraday: { entry: "15m", trend: "1h" },
   Swing:    { entry: "4h",  trend: "1w" },
 };

@@ -105,11 +105,11 @@ Gates (HTF soft align, session filter, OB retest, dead market, etc.) can **block
 
 | Type | Entry / Confirm / Trend TF | Live eligible |
 | --- | --- | --- |
-| Scalping | 5m / 15m / 30m | Backtest & dry-run only |
+| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
 | Intraday | 15m / 1h / 4h | Yes |
 | Swing | 4h / 1d / 1w | Yes |
 
-Backtest pairing: Scalping **5m/30m**, Intraday **15m/1h**, Swing **4h/1w**.  
+Backtest pairing: Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w**.  
 Live gate: `liveTradeTypeGate.js` — Scalping excluded from real money until promoted.
 
 **Scalping geometry SSOT** (`typeOverrides.Scalping` in `strategyDefaults.js`):
@@ -145,7 +145,7 @@ Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestSe
 | Intraday | Allowed | Allowed |
 | Swing | Allowed | Allowed |
 
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/30m**, Intraday **15m/1h**, Swing **4h/1w** (global — same for every strategy). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
+Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global — same for every strategy). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
 
 Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
 

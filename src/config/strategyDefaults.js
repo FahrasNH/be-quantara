@@ -41,7 +41,7 @@ const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
 
 /**
  * Shared Scalping geometry (Sprint 16 — all 4 umbrellas).
- * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR), maxHoldHours=2 (120m TIME_STOP on 5m/15m/30m legs).
+ * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR), maxHoldHours=2 (120m TIME_STOP).
  * Backtest + live read typeOverrides.Scalping via RealStrategyBacktestService /
  * BotEngine TIME_STOP and calculateRiskConfig slAtrMult/tpAtrMult chain.
  */

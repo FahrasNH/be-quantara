@@ -6,7 +6,7 @@
  * of those legs are brand-new or unproven and must NOT trade real money until
  * they pass the 5-window walk-forward gate.
  *
- * Concretely: the "Scalping" leg was re-based onto a genuine 5m/30m stack (it
+ * Concretely: the "Scalping" leg was re-based onto a genuine 5m/1h stack (it
  * used to be a mislabelled 15m intraday leg). 5m has no demonstrated edge yet,
  * so Scalping is Advance-backtest-only. The previously-live 15m cadence now
  * lives under the "Intraday" label (proven), which — together with Swing —
