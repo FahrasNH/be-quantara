@@ -201,7 +201,7 @@ Dataset expand: `scripts/dataset-expand/<strategy>/scalping.js` (5m/1h; e.g. `sm
 
 **Sprint 13 Swing SSOT** (`typeOverrides.Swing`): Planned RR **2.5** (SL 1.8×ATR / TP 4.5×ATR;
 intentional deviation from PRD aspirational 1.2/4.0 ≈ RR 3.33 — fast-fail: 38% of Swing
-trades died &lt;48h on thin 1.2×ATR stops). Also: `maxHoldHours=240` (10d TIME_STOP),
+trades died &lt;48h on thin 1.2×ATR stops). Also: `maxHoldHours=120` (5d TIME_STOP),
 `smcRequireObRetest`, `smcFundingGuard` (block |funding| &gt; 0.02%), `smcHoldWarnHours=168`
 (live Telegram warn), `swingMarketingBlocked=true` (FOUNDRY/FORGE marketing gate until
 2023 window revalidated after fast-fail fix). Confidence scoring uses ATR-normalized

@@ -24,7 +24,7 @@ test("SWING-FLAGS: resolveSwingGateFlags defaults + typeOverrides", () => {
     typeOverrides: {
       Swing: {
         smcRequireObRetest: true,
-        maxHoldHours: 240,
+        maxHoldHours: 120,
         smcFundingGuard: true,
         smcMaxFundingRate: 0.0002,
         smcHoldWarnHours: 168,
@@ -33,12 +33,12 @@ test("SWING-FLAGS: resolveSwingGateFlags defaults + typeOverrides", () => {
     },
   });
   assert.equal(flags.smcRequireObRetest, true);
-  assert.equal(flags.maxHoldHours, 240);
+  assert.equal(flags.maxHoldHours, 120);
   assert.equal(flags.smcFundingGuard, true);
   assert.equal(flags.smcMaxFundingRate, 0.0002);
   assert.equal(flags.smcHoldWarnHours, 168);
   assert.equal(flags.swingMarketingBlocked, true);
-  assert.equal(DEFAULT_SWING_MAX_HOLD_HOURS, 240);
+  assert.equal(DEFAULT_SWING_MAX_HOLD_HOURS, 120);
 });
 
 test("SWING-FUNDING: blocks LONG on extreme positive funding, SHORT on extreme negative", () => {
@@ -92,7 +92,7 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig hon
   if (ov && ov.slAtrMult != null) {
     assert.equal(ov.slAtrMult, 1.8);
     assert.equal(ov.tpAtrMult, 4.5);
-    assert.equal(ov.maxHoldHours, 240);
+    assert.equal(ov.maxHoldHours, 120);
     assert.equal(ov.smcRequireObRetest, true);
     assert.equal(ov.smcFundingGuard, true);
   }

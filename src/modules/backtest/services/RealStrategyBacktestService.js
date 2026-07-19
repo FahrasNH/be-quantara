@@ -880,12 +880,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       checkPartialMilestones(componentId, pos, c, i);
       if (!positions.has(componentId)) continue; // safety: milestone logic never fully closes, but guard anyway
 
-      // Sprint 13: enforce Scalping maxHoldHours in multi-position AF path
-      // (previously only wired in single-position backtest → 60h "Scalping" holds).
+      // TIME_STOP: typeOverrides[leg].maxHoldHours (Scalping 2h / Intraday 6h / Swing 120h).
       const holdOv = cfg.typeOverrides?.[pos.component || componentId] || {};
       const maxHoldHours = holdOv.maxHoldHours
-        ?? (componentId === "Scalping" || pos.component === "Scalping"
-          ? holdOv.scalpingMaxHoldHours : undefined)
+        ?? holdOv.scalpingMaxHoldHours
+        ?? holdOv.swingMaxHoldHours
         ?? (componentId === "Scalping" ? cfg.maxHoldHours : undefined);
       if (maxHoldHours) {
         const openTs = entryCandles[pos.openIdx]?.timestamp ?? 0;

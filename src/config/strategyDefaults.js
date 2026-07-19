@@ -2,6 +2,7 @@
 // strategyDefaults.js — strategy engine presets (STRATEGIES SSOT)
 //
 // Per-strategy leg tuning lives in typeOverrides (Scalping / Intraday / Swing).
+// TIME_STOP maxHoldHours SSOT: Scalping 2h, Intraday 6h, Swing 120h (5d).
 // Deprecated PDF preset keys (AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING)
 // and legacy A/B/C resolve via strategyKeyNormalizer ACL at ingress.
 //
@@ -50,10 +51,18 @@ const SCALP_GEOMETRY = Object.freeze({
   maxHoldHours: 2,
 });
 
-/** DEFAULT + Scalping geometry — TS / MD / BS parents + AF Wyckoff/VSA components. */
+/** Intraday TIME_STOP — force-close unresolved 15m/1h/4h legs at 6h. */
+const INTRADAY_HOLD = Object.freeze({ maxHoldHours: 6 });
+
+/** Swing TIME_STOP — force-close unresolved 4h/1d/1w legs at 120h (5 days). */
+const SWING_HOLD = Object.freeze({ maxHoldHours: 120 });
+
+/** DEFAULT + per-leg geometry / hold limits — TS / MD / BS parents + AF Wyckoff/VSA components. */
 const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
   ...DEFAULT_LEG_TYPE_OVERRIDES,
   Scalping: { ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping, ...SCALP_GEOMETRY },
+  Intraday: { ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday, ...INTRADAY_HOLD },
+  Swing:    { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, ...SWING_HOLD },
 });
 
 /**
@@ -88,10 +97,11 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
   },
   Intraday: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,
+    ...INTRADAY_HOLD,
     smcMinConfidenceIntraday: 45,
     smcMinConfidenceB: 45,
   },
-  Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing },
+  Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, ...SWING_HOLD },
 });
 
 /** Shared AF component geometry (no smc* — Wyckoff/VSA racers + SMC base). */
@@ -330,7 +340,7 @@ const STRATEGIES = {
     // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
-      Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
+      Swing: { ...STANDARD_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
 
     adxMinStrength:    25,
@@ -823,6 +833,8 @@ module.exports = {
   BS_COMPONENT_BASE,
   DEFAULT_LEG_TYPE_OVERRIDES,
   SCALP_GEOMETRY,
+  INTRADAY_HOLD,
+  SWING_HOLD,
   STANDARD_LEG_TYPE_OVERRIDES,
   SMC_LEG_TYPE_OVERRIDES,
   DEFAULT_STRATEGY_KEY,

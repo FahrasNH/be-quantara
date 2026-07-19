@@ -18,12 +18,13 @@ const {
   hourInMarketSession,
   hourUtcFromTimestamp,
 } = require("../../risk-engine/entryRiskGates");
+const { SWING_HOLD } = require("../../../config/strategyDefaults");
 
 /** Default Scalping session block: [21:00, 23:00) UTC (hours 21 and 22). */
 const DEFAULT_BLOCK_HOURS_UTC = [21, 22];
 
-/** Swing max hold middle-ground (10 days) — Notion Swing max-hold task. */
-const DEFAULT_SWING_MAX_HOLD_HOURS = 240;
+/** Swing max hold — SSOT via strategyDefaults SWING_HOLD (5 days). */
+const DEFAULT_SWING_MAX_HOLD_HOURS = SWING_HOLD.maxHoldHours;
 
 /** Telegram / live warn after this many hours open (Swing). */
 const DEFAULT_SWING_HOLD_WARN_HOURS = 168;

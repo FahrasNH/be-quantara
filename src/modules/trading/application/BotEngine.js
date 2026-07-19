@@ -4107,7 +4107,7 @@ class BotEngine extends EventEmitter {
       // ── SL+ milestone check (dry run) ─────────────────────────────────────
       await this._checkSLPlusMilestones(pos, price);
 
-      // Sprint 13: Scalping/Swing maxHoldHours TIME_STOP (live parity with backtest)
+      // TIME_STOP: typeOverrides maxHoldHours (Scalping 2h / Intraday 6h / Swing 120h)
       const typeName = pos.tradeType
         || ({ A: "Scalping", B: "Intraday", C: "Swing" }[pos.componentId] || pos.componentId);
       const holdOv = this.config.typeOverrides?.[typeName] || {};

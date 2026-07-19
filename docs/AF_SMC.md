@@ -114,6 +114,7 @@ Live gate: `liveTradeTypeGate.js` — Scalping excluded from real money until pr
 
 **Scalping geometry SSOT** (`typeOverrides.Scalping` in `strategyDefaults.js`):
 Planned RR **2.0** (SL 1.5×ATR / TP 3.0×ATR), `maxHoldHours=2` (120m TIME_STOP).
+**Intraday / Swing hold SSOT**: `maxHoldHours=6` (6h TIME_STOP) and `maxHoldHours=120` (5d TIME_STOP).
 Same geometry via `STANDARD_LEG_TYPE_OVERRIDES` on TS/MD/BS + AF Wyckoff/VSA (SMC uses `SMC_LEG_TYPE_OVERRIDES`).
 session filter + OB retest + chop-LONG gates enabled. Do not revert to 4.5R TP
 (swing target on 5m → negative expectancy).
