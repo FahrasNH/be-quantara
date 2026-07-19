@@ -1300,6 +1300,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       close: cl, vwap, cvd, maxCVD,
       emaFast: fast, emaSlow: slow,
       volRatio: vol / Math.max(vSMA, EPSILON),
+      smcSweepVolMult: config.smcSweepVolMult ?? 1.1,
       sweep, choch, fvgBull: fvgs.bullish, fvgBear: fvgs.bearish, disp,
       obLong: obL, obShort: obS,
     };
@@ -1320,7 +1321,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         (dir === "SHORT" && sweep.type === "bearish")
       );
       const cvdAlign = (dir === "LONG" ? cvd > 0 : cvd < 0) ? W.cvdAlign * (0.5 + 0.5 * cvdNorm) : 0;
-      const sweepScore = hasSweep ? W.sweep * Math.min(sweep.volRatio / 2.5, 1) : 0;
+      const sweepVolMult = ctx.smcSweepVolMult ?? 1.1;
+      const sweepScore = hasSweep ? W.sweep * Math.min(sweep.volRatio / sweepVolMult, 1) : 0;
       const ob = dir === "LONG" ? obLong : obShort;
       const obScore = ob ? (ob.inZone ? W.obZone : W.obZone * 0.4) : 0;
       const volScore = W.volSurge * Math.min(Math.max((volRatio - 1) / 1.5, 0), 1);

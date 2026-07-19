@@ -323,6 +323,26 @@ test("SMC-18: Confidence A > 0 when sweep + CVD align (LONG)", () => {
   assert.ok(conf > 0, `Expected conf > 0, got ${conf}`);
 });
 
+test("SMC-18b: sweep confidence scales with smcSweepVolMult SSOT", () => {
+  const smc = new SmartMoneyConceptsStrategy();
+  const W = smc.getConfidenceWeights().A;
+  const baseCtx = {
+    sweep: { type: "bullish", volRatio: 1.8 },
+    cvd: 0,
+    maxCVD: 100,
+    obLong: null,
+    obShort: null,
+    volRatio: 1,
+  };
+  const confLoose = smc._componentConfidence("A", "LONG", { ...baseCtx, smcSweepVolMult: 2.5 });
+  const confScalp = smc._componentConfidence("A", "LONG", { ...baseCtx, smcSweepVolMult: 1.2 });
+  const expectedLoose = Math.round(W.sweep * Math.min(1.8 / 2.5, 1));
+  const expectedScalp = Math.round(W.sweep * Math.min(1.8 / 1.2, 1));
+  assert.equal(confLoose, expectedLoose);
+  assert.equal(confScalp, expectedScalp);
+  assert.ok(confScalp > confLoose, `Scalp sweep score ${confScalp} should exceed loose ${confLoose}`);
+});
+
 test("SMC-19: Confidence A = 0 when direction is null", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const ind = baseIndicators();
