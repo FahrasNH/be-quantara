@@ -2,14 +2,14 @@
  * Wyckoff Method component for Adaptive Fusion (AF-SUB-01).
  *
  * Detection formulas aligned with wyckoff_indicator.txt (Kingshuk Ghosh schematic).
- * Entry gating follows Syarat_Entry_Strategi_Wyckoff.txt:
+ * Entry gating follows syarat_entry_wyckoff.txt:
  *   Long  : Downtrend → Accumulation → Spring → Reclaim → CHoCH → (SOS → LPS)
  *   Short : Uptrend → Distribution → UTAD → Rejection → CHoCH → (SOW → LPSY)
  *
  * entryModel:
- *   aggressive  — Spring/UTAD + reclaim/rejection + volume (legacy AF race)
- *   moderate    — + prior trend + rejection wick + local CHoCH/BOS (default)
- *   conservative— + SOS/SOW + LPS/LPSY retest (safest formula)
+ *   aggressive  — Spring/UTAD + reclaim + volume (legacy AF race / opt-in)
+ *   moderate    — Syarat checklist (§4–5): prior trend, rejection, CHoCH, discount/premium, RR≥1:2
+ *   conservative— safest formula (§11): + SC/BC + SOS/SOW + LPS/LPSY retest
  *
  * Return: { vote: 'LONG'|'SHORT'|'NEUTRAL', confidence: 0-1, reason: string, meta? }
  */
@@ -50,17 +50,18 @@ const DEFAULTS = {
   volumeConfirmMult: 1.0,
   volumeSmaPeriod: 20,
   cooldownBars: 5,
-  // ── Entry gates (Syarat_Entry_Strategi_Wyckoff.txt) ───────────────────────
-  // Aggressive = AF race / standalone Scalping-viable path. Moderate/conservative
-  // Syarat checklist is opt-in via config.entryModel (not the strategy default).
-  entryModel: "aggressive", // aggressive | moderate | conservative
+  // ── Entry gates (syarat_entry_wyckoff.txt) ────────────────────────────────
+  // Default moderate enforces Syarat §4–5. Use entryModel:"aggressive" to opt out.
+  entryModel: "moderate", // aggressive | moderate | conservative
   priorTrendBars: 40,
   priorTrendMinSlopePct: 0.01, // 1% net move before range
-  rejectionWickRatio: 0.45, // lower/upper wick share of candle range
+  rejectionWickRatio: 0.4, // lower/upper wick share of candle range
   chochLookback: 12,
   minRr: 2.0,
-  maxEntryProximityPct: 0.35, // reject if entry is within 35% of opposite side of range
+  maxEntryProximityPct: 0.4, // entry must stay in discount (long) / premium (short)
   eventScanBars: 80,
+  minRangeTouches: 2, // S/R tested at least twice (Syarat §1)
+  cancelConfirmBars: 2, // bars to confirm invalidation breakdown/breakout
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -137,22 +138,55 @@ function _candleRange(high, low) {
   return Math.max(0, high - low);
 }
 
-function _isBullishRejection(o, h, l, c, wickRatio) {
+function _isBullishRejection(o, h, l, c, wickRatio, prevO, prevC) {
   if (o == null || h == null || l == null || c == null) return false;
   const rng = _candleRange(h, l);
   if (rng <= 0) return false;
   const lowerWick = Math.min(o, c) - l;
   const bullish = c > o;
-  return bullish && lowerWick / rng >= wickRatio;
+  // Syarat §2A: long lower wick, or seller fails to close near lows (CLV high)
+  const longWick = bullish && lowerWick / rng >= wickRatio;
+  const closeOffLows = bullish && (c - l) / rng >= 0.6;
+  // Bullish engulfing of prior bearish bar
+  const engulf =
+    bullish &&
+    prevO != null &&
+    prevC != null &&
+    prevC < prevO &&
+    c >= prevO &&
+    o <= prevC;
+  return longWick || closeOffLows || engulf;
 }
 
-function _isBearishRejection(o, h, l, c, wickRatio) {
+function _isBearishRejection(o, h, l, c, wickRatio, prevO, prevC) {
   if (o == null || h == null || l == null || c == null) return false;
   const rng = _candleRange(h, l);
   if (rng <= 0) return false;
   const upperWick = h - Math.max(o, c);
   const bearish = c < o;
-  return bearish && upperWick / rng >= wickRatio;
+  const longWick = bearish && upperWick / rng >= wickRatio;
+  const closeOffHighs = bearish && (h - c) / rng >= 0.6;
+  const engulf =
+    bearish &&
+    prevO != null &&
+    prevC != null &&
+    prevC > prevO &&
+    c <= prevO &&
+    o >= prevC;
+  return longWick || closeOffHighs || engulf;
+}
+
+/** Count how many times S/R levels were touched inside the range window. */
+function _countRangeTouches(highs, lows, start, end, rangeHigh, rangeLow, tolPct = 0.002) {
+  let supportTouches = 0;
+  let resistanceTouches = 0;
+  const mid = (rangeHigh + rangeLow) / 2;
+  const tol = mid * tolPct;
+  for (let i = start; i <= end; i++) {
+    if (lows[i] != null && Math.abs(lows[i] - rangeLow) <= tol) supportTouches++;
+    if (highs[i] != null && Math.abs(highs[i] - rangeHigh) <= tol) resistanceTouches++;
+  }
+  return { supportTouches, resistanceTouches };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -235,6 +269,21 @@ function detectTradingRange(candles, config = {}) {
     return { isValid: false, reason: "range_not_mature", barsInRange, rangeEndIdx };
   }
 
+  // Syarat §1: S/R identifiable and tested several times
+  const touches = _countRangeTouches(
+    highs,
+    lows,
+    rangeStart,
+    rangeEndIdx,
+    rangeHigh,
+    rangeLow,
+  );
+  // Syarat §1: both sides identified and tested (at least one touch each, total ≥ min)
+  const rangeTested =
+    touches.supportTouches >= 1 &&
+    touches.resistanceTouches >= 1 &&
+    touches.supportTouches + touches.resistanceTouches >= cfg.minRangeTouches;
+
   return {
     isValid: true,
     rangeHigh,
@@ -246,8 +295,12 @@ function detectTradingRange(candles, config = {}) {
     bbWidthRatio,
     bbWidthPercentile: bbWidthPct,
     barsInRange,
+    bars: barsInRange,
     rangeEndIdx,
     rangeStartIdx: rangeStart,
+    supportTouches: touches.supportTouches,
+    resistanceTouches: touches.resistanceTouches,
+    rangeTested,
   };
 }
 
@@ -425,10 +478,12 @@ function scanRecentEvents(candles, lastIdx, config = {}) {
   const events = {
     sc: [],
     ar: [],
+    st: [],
     springInd: [],
     sos: [],
     bc: [],
     arDist: [],
+    stDist: [],
     utadInd: [],
     sow: [],
     lps: [],
@@ -437,8 +492,10 @@ function scanRecentEvents(candles, lastIdx, config = {}) {
 
   let lastScLow = null;
   let lastSpringLow = null;
+  let lastStLow = null;
   let lastBcHigh = null;
   let lastUtadHigh = null;
+  let lastStDistHigh = null;
 
   for (let i = start; i <= lastIdx; i++) {
     const e = detectEventsAt(candles, i, cfg);
@@ -465,7 +522,7 @@ function scanRecentEvents(candles, lastIdx, config = {}) {
     }
     if (e.sow) events.sow.push(i);
 
-    // ST / LPS / LPSY — need prior climax / spring / utad reference
+    // ST / LPS / LPSY — need prior climax / spring / utad reference (indicator formulas)
     const o = candles.opens?.[i];
     const c = candles.closes?.[i];
     const l = candles.lows?.[i];
@@ -486,11 +543,25 @@ function scanRecentEvents(candles, lastIdx, config = {}) {
       v < avgVol &&
       bullish
     ) {
-      // tracked implicitly via sc/ar presence
+      events.st.push(i);
+      lastStLow = l;
+    }
+
+    // ST dist: test near BC high with lower volume
+    if (
+      lastBcHigh != null &&
+      h != null &&
+      avgVol != null &&
+      h > lastBcHigh * 0.995 &&
+      h < lastBcHigh * 1.005 &&
+      v < avgVol
+    ) {
+      events.stDist.push(i);
+      lastStDistHigh = h;
     }
 
     // LPS: higher low vs spring/ST, bullish, below-avg volume, close > mid
-    const refLow = lastSpringLow ?? lastScLow;
+    const refLow = lastSpringLow ?? lastStLow ?? lastScLow;
     if (
       refLow != null &&
       l != null &&
@@ -505,7 +576,7 @@ function scanRecentEvents(candles, lastIdx, config = {}) {
     }
 
     // LPSY: lower high vs UTAD/ST dist, bearish, below-avg volume, close < mid
-    const refHigh = lastUtadHigh ?? lastBcHigh;
+    const refHigh = lastUtadHigh ?? lastStDistHigh ?? lastBcHigh;
     if (
       refHigh != null &&
       h != null &&
@@ -528,22 +599,29 @@ function scanRecentEvents(candles, lastIdx, config = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Detect trend preceding the trading range.
- * Accumulation wants prior downtrend; distribution wants prior uptrend.
+ * Detect trend preceding the trading range (Syarat §1 / §2A / §3A).
+ * Looks BEFORE the mature accumulation/distribution box, not inside rangeLookback.
  */
-function detectPriorTrend(candles, rangeStartIdx, config = {}) {
+function detectPriorTrend(candles, rangeStartIdx, config = {}, rangeEndIdx = null) {
   const cfg = { ...DEFAULTS, ...config };
   const { closes, highs, lows } = candles;
-  const end = Math.max(0, rangeStartIdx - 1);
+  // Anchor before the accumulation/distribution box (not just rangeLookback window).
+  // Walk back a full indicator lookback so prior trend is pre-range (Syarat §1).
+  const accumDepth = Math.max(cfg.minBarsInRange, cfg.lookback);
+  const matureStart =
+    rangeEndIdx != null
+      ? Math.max(0, rangeEndIdx - accumDepth)
+      : rangeStartIdx;
+  const end = Math.max(0, Math.min(rangeStartIdx, matureStart) - 1);
   const start = Math.max(0, end - cfg.priorTrendBars + 1);
   if (end - start < 10) {
-    return { direction: "unknown", reason: "insufficient_prior_bars" };
+    return { direction: "unknown", reason: "insufficient_prior_bars", start, end };
   }
 
   const first = closes[start];
   const last = closes[end];
   if (first == null || last == null || first <= 0) {
-    return { direction: "unknown", reason: "missing_closes" };
+    return { direction: "unknown", reason: "missing_closes", start, end };
   }
 
   const slopePct = (last - first) / first;
@@ -575,9 +653,9 @@ function detectPriorTrend(candles, rangeStartIdx, config = {}) {
 }
 
 /**
- * Local CHoCH / BOS after a manipulation bar.
- * Bullish: close breaks above recent swing high after spring.
- * Bearish: close breaks below recent swing low after UTAD.
+ * Local CHoCH / BOS after a manipulation bar (Syarat §2A / §3A moderate).
+ * Bullish: close breaks recent swing high OR high of the spring structure.
+ * Bearish: close breaks recent swing low OR low of the UTAD structure.
  */
 function detectLocalChoCH(candles, fromIdx, toIdx, side, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
@@ -589,20 +667,37 @@ function detectLocalChoCH(candles, fromIdx, toIdx, side, config = {}) {
   const look = Math.min(cfg.chochLookback, fromIdx);
   if (side === "bullish") {
     const swingHigh = _highest(highs, fromIdx - 1, look);
-    if (swingHigh == null) return { detected: false, reason: "no_swing_high" };
+    const structHigh = highs[fromIdx];
+    const level = Math.min(
+      swingHigh ?? Infinity,
+      structHigh ?? Infinity,
+    );
+    if (!Number.isFinite(level)) return { detected: false, reason: "no_swing_high" };
     for (let i = fromIdx + 1; i <= toIdx; i++) {
-      if (closes[i] != null && closes[i] > swingHigh) {
-        return { detected: true, idx: i, level: swingHigh, type: "bullish_choch" };
+      if (closes[i] != null && closes[i] > level) {
+        return {
+          detected: true,
+          idx: i,
+          level,
+          type: closes[i] > (swingHigh ?? level) ? "bullish_choch" : "bullish_bos",
+        };
       }
     }
     return { detected: false, reason: "no_bullish_choch" };
   }
 
   const swingLow = _lowest(lows, fromIdx - 1, look);
-  if (swingLow == null) return { detected: false, reason: "no_swing_low" };
+  const structLow = lows[fromIdx];
+  const level = Math.max(swingLow ?? -Infinity, structLow ?? -Infinity);
+  if (!Number.isFinite(level)) return { detected: false, reason: "no_swing_low" };
   for (let i = fromIdx + 1; i <= toIdx; i++) {
-    if (closes[i] != null && closes[i] < swingLow) {
-      return { detected: true, idx: i, level: swingLow, type: "bearish_choch" };
+    if (closes[i] != null && closes[i] < level) {
+      return {
+        detected: true,
+        idx: i,
+        level,
+        type: closes[i] < (swingLow ?? level) ? "bearish_choch" : "bearish_bos",
+      };
     }
   }
   return { detected: false, reason: "no_bearish_choch" };
@@ -643,13 +738,28 @@ function detectSpring(candles, range, config = {}) {
       if (cl == null) continue;
       if (cl > range.rangeLow && cl > op) {
         const volRatio = vol / volSma;
-        const rejection = _isBullishRejection(
-          opens?.[penIdx] ?? op,
-          highs?.[penIdx],
-          lows[penIdx],
-          closes?.[penIdx] ?? cl,
-          cfg.rejectionWickRatio,
-        ) || _isBullishRejection(op, highs?.[r], lows?.[r], cl, cfg.rejectionWickRatio);
+        const penO = opens?.[penIdx];
+        const penC = closes?.[penIdx];
+        const prevPen = penIdx > 0 ? penIdx - 1 : null;
+        const rejection =
+          _isBullishRejection(
+            penO ?? op,
+            highs?.[penIdx],
+            lows[penIdx],
+            penC ?? cl,
+            cfg.rejectionWickRatio,
+            prevPen != null ? opens?.[prevPen] : null,
+            prevPen != null ? closes?.[prevPen] : null,
+          ) ||
+          _isBullishRejection(
+            op,
+            highs?.[r],
+            lows?.[r],
+            cl,
+            cfg.rejectionWickRatio,
+            opens?.[r - 1],
+            closes?.[r - 1],
+          );
 
         return {
           detected: true,
@@ -658,6 +768,9 @@ function detectSpring(candles, range, config = {}) {
           penIdx,
           recoveryIdx: r,
           penetrationDepth,
+          depthAtr: penetrationDepth / atr,
+          penetrationAtr: penetrationDepth / atr,
+          reclaimBars: r - penIdx,
           volRatio,
           rejection,
           springLow: lo,
@@ -699,13 +812,28 @@ function detectUpthrust(candles, range, config = {}) {
       if (cl == null) continue;
       if (cl < range.rangeHigh && cl < op) {
         const volRatio = vol / volSma;
-        const rejection = _isBearishRejection(
-          opens?.[penIdx] ?? op,
-          highs[penIdx],
-          lows?.[penIdx],
-          closes?.[penIdx] ?? cl,
-          cfg.rejectionWickRatio,
-        ) || _isBearishRejection(op, highs?.[r], lows?.[r], cl, cfg.rejectionWickRatio);
+        const penO = opens?.[penIdx];
+        const penC = closes?.[penIdx];
+        const prevPen = penIdx > 0 ? penIdx - 1 : null;
+        const rejection =
+          _isBearishRejection(
+            penO ?? op,
+            highs[penIdx],
+            lows?.[penIdx],
+            penC ?? cl,
+            cfg.rejectionWickRatio,
+            prevPen != null ? opens?.[prevPen] : null,
+            prevPen != null ? closes?.[prevPen] : null,
+          ) ||
+          _isBearishRejection(
+            op,
+            highs?.[r],
+            lows?.[r],
+            cl,
+            cfg.rejectionWickRatio,
+            opens?.[r - 1],
+            closes?.[r - 1],
+          );
 
         return {
           detected: true,
@@ -714,6 +842,9 @@ function detectUpthrust(candles, range, config = {}) {
           penIdx,
           recoveryIdx: r,
           penetrationDepth,
+          depthAtr: penetrationDepth / atr,
+          penetrationAtr: penetrationDepth / atr,
+          reclaimBars: r - penIdx,
           volRatio,
           rejection,
           utadHigh: hi,
@@ -725,14 +856,14 @@ function detectUpthrust(candles, range, config = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Entry checklist (Syarat_Entry_Strategi_Wyckoff.txt)
+// Entry checklist (syarat_entry_wyckoff.txt §4–7, §10–11)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function _entryProximityOk(side, entryPrice, range, maxPct) {
   const width = range.rangeHigh - range.rangeLow;
   if (width <= 0 || entryPrice == null) return false;
   if (side === "LONG") {
-    // Prefer discount / lower half — reject if too close to resistance
+    // Discount zone: stay in lower portion of range (away from resistance)
     const distToRes = range.rangeHigh - entryPrice;
     return distToRes / width >= 1 - maxPct;
   }
@@ -740,34 +871,114 @@ function _entryProximityOk(side, entryPrice, range, maxPct) {
   return distToSup / width >= 1 - maxPct;
 }
 
+function _inDiscountZone(entryPrice, range) {
+  if (entryPrice == null || !range) return false;
+  const mid = range.midRange ?? (range.rangeHigh + range.rangeLow) / 2;
+  return entryPrice <= mid;
+}
+
+function _inPremiumZone(entryPrice, range) {
+  if (entryPrice == null || !range) return false;
+  const mid = range.midRange ?? (range.rangeHigh + range.rangeLow) / 2;
+  return entryPrice >= mid;
+}
+
 function _estimateRr(side, entry, invalidation, range) {
   if (entry == null || invalidation == null || !range) return null;
   const risk = Math.abs(entry - invalidation);
   if (risk <= 0) return null;
-  const target =
-    side === "LONG"
-      ? range.midRange ?? (range.rangeHigh + range.rangeLow) / 2
-      : range.midRange ?? (range.rangeHigh + range.rangeLow) / 2;
-  // Prefer opposite side of range as primary structural target
+  // Prefer opposite side of range as primary structural target (§9)
   const structuralTarget = side === "LONG" ? range.rangeHigh : range.rangeLow;
   const reward = Math.abs(structuralTarget - entry);
   return reward / risk;
 }
 
 /**
- * Build LONG / SHORT entry decision from pattern + checklist layers.
+ * Syarat §6–7: cancel entry if manipulation level is invalidated with follow-through.
+ */
+function detectEntryCancellation(candles, pattern, side, range, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  const lastIdx = candles.lastIdx;
+  if (!pattern?.detected || pattern.penIdx == null) {
+    return { cancelled: false };
+  }
+
+  const from = pattern.recoveryIdx ?? pattern.penIdx;
+  const confirm = Math.max(1, cfg.cancelConfirmBars | 0);
+
+  if (side === "LONG") {
+    const springLow = pattern.springLow ?? candles.lows[pattern.penIdx];
+    let closesBelow = 0;
+    for (let i = from + 1; i <= lastIdx; i++) {
+      const c = candles.closes[i];
+      if (c != null && c < springLow) closesBelow++;
+      else closesBelow = 0;
+      if (closesBelow >= confirm) {
+        return { cancelled: true, reason: "spring_invalidated_below" };
+      }
+      // Strong close back below support
+      if (c != null && c < range.rangeLow && candles.opens?.[i] != null && c < candles.opens[i]) {
+        if (i === lastIdx) return { cancelled: true, reason: "strong_close_below_support" };
+      }
+    }
+    // Fresh lower low after reclaim
+    if (
+      lastIdx > from &&
+      candles.lows[lastIdx] != null &&
+      springLow != null &&
+      candles.lows[lastIdx] < springLow
+    ) {
+      return { cancelled: true, reason: "lower_low_after_spring" };
+    }
+  } else {
+    const utadHigh = pattern.utadHigh ?? candles.highs[pattern.penIdx];
+    let closesAbove = 0;
+    for (let i = from + 1; i <= lastIdx; i++) {
+      const c = candles.closes[i];
+      if (c != null && c > utadHigh) closesAbove++;
+      else closesAbove = 0;
+      if (closesAbove >= confirm) {
+        return { cancelled: true, reason: "utad_invalidated_above" };
+      }
+      if (c != null && c > range.rangeHigh && candles.opens?.[i] != null && c > candles.opens[i]) {
+        if (i === lastIdx) return { cancelled: true, reason: "strong_close_above_resistance" };
+      }
+    }
+    if (
+      lastIdx > from &&
+      candles.highs[lastIdx] != null &&
+      utadHigh != null &&
+      candles.highs[lastIdx] > utadHigh
+    ) {
+      return { cancelled: true, reason: "higher_high_after_utad" };
+    }
+  }
+
+  return { cancelled: false };
+}
+
+/**
+ * Build LONG / SHORT entry decision from pattern + Syarat checklist layers.
  */
 function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const lastIdx = candles.lastIdx;
   const model = cfg.entryModel || "moderate";
   const events = scanRecentEvents(candles, lastIdx, cfg);
-  const prior = detectPriorTrend(candles, range.rangeStartIdx ?? range.rangeEndIdx, cfg);
+  const prior = detectPriorTrend(
+    candles,
+    range.rangeStartIdx ?? range.rangeEndIdx,
+    cfg,
+    range.rangeEndIdx,
+  );
+  const cancel = detectEntryCancellation(candles, pattern, side, range, cfg);
 
   const checklist = {
     priorTrend: false,
     tradingRange: range.isValid === true,
+    rangeTested: range.rangeTested === true || model === "aggressive",
     climaxOrWeakening: false,
+    discountOrPremium: false,
     manipulation: false, // Spring / UTAD
     reclaimOrReject: false,
     rejection: false,
@@ -777,16 +988,24 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
     lpsOrLpsy: false,
     proximityOk: false,
     rrOk: false,
+    notCancelled: !cancel.cancelled,
   };
 
   const entryPrice = candles.closes[lastIdx];
+  // Location / RR evaluated at reclaim bar (setup quality), not chased CHoCH close
+  const locationIdx = pattern?.recoveryIdx ?? lastIdx;
+  const locationPrice = candles.closes[locationIdx] ?? entryPrice;
   let invalidation = null;
   let choch = { detected: false };
+  let lpsLevel = null;
 
   if (side === "LONG") {
     checklist.priorTrend = prior.direction === "down" || model === "aggressive";
     checklist.climaxOrWeakening =
-      events.sc.length > 0 || events.ar.length > 0 || model === "aggressive";
+      events.sc.length > 0 ||
+      events.ar.length > 0 ||
+      events.st.length > 0 ||
+      model === "aggressive";
     checklist.manipulation = !!pattern?.detected;
     checklist.reclaimOrReject =
       pattern?.recoveryIdx != null &&
@@ -794,27 +1013,33 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
     checklist.rejection = !!pattern?.rejection || model === "aggressive";
     checklist.volumeConfirm =
       pattern?.volRatio != null && pattern.volRatio >= cfg.volumeConfirmMult;
-    choch = detectLocalChoCH(
-      candles,
-      pattern.penIdx,
-      lastIdx,
-      "bullish",
-      cfg,
-    );
+    choch = detectLocalChoCH(candles, pattern.penIdx, lastIdx, "bullish", cfg);
     checklist.choch = choch.detected || model === "aggressive";
+    // Discount at reclaim, or moderate entry after confirmed CHoCH (§2A moderate)
+    checklist.discountOrPremium =
+      _inDiscountZone(locationPrice, range) ||
+      (model === "moderate" && choch.detected) ||
+      model === "aggressive";
     checklist.sosOrSow =
       events.sos.some((i) => i >= (pattern.penIdx ?? 0)) || model !== "conservative";
-    checklist.lpsOrLpsy =
-      events.lps.some((i) => i >= (pattern.recoveryIdx ?? pattern.penIdx ?? 0)) ||
-      model !== "conservative";
+    const lpsAfter = events.lps.filter(
+      (i) => i >= (pattern.recoveryIdx ?? pattern.penIdx ?? 0),
+    );
+    checklist.lpsOrLpsy = lpsAfter.length > 0 || model !== "conservative";
+    if (lpsAfter.length > 0) lpsLevel = candles.lows[lpsAfter[lpsAfter.length - 1]];
     invalidation =
       pattern.springLow ??
       (pattern.penIdx != null ? candles.lows[pattern.penIdx] : range.rangeLow);
-    checklist.proximityOk = _entryProximityOk("LONG", entryPrice, range, cfg.maxEntryProximityPct);
+    checklist.proximityOk =
+      _entryProximityOk("LONG", locationPrice, range, cfg.maxEntryProximityPct) ||
+      (model === "moderate" && choch.detected);
   } else {
     checklist.priorTrend = prior.direction === "up" || model === "aggressive";
     checklist.climaxOrWeakening =
-      events.bc.length > 0 || events.arDist.length > 0 || model === "aggressive";
+      events.bc.length > 0 ||
+      events.arDist.length > 0 ||
+      events.stDist.length > 0 ||
+      model === "aggressive";
     checklist.manipulation = !!pattern?.detected;
     checklist.reclaimOrReject =
       pattern?.recoveryIdx != null &&
@@ -822,32 +1047,56 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
     checklist.rejection = !!pattern?.rejection || model === "aggressive";
     checklist.volumeConfirm =
       pattern?.volRatio != null && pattern.volRatio >= cfg.volumeConfirmMult;
-    choch = detectLocalChoCH(
-      candles,
-      pattern.penIdx,
-      lastIdx,
-      "bearish",
-      cfg,
-    );
+    choch = detectLocalChoCH(candles, pattern.penIdx, lastIdx, "bearish", cfg);
     checklist.choch = choch.detected || model === "aggressive";
+    checklist.discountOrPremium =
+      _inPremiumZone(locationPrice, range) ||
+      (model === "moderate" && choch.detected) ||
+      model === "aggressive";
     checklist.sosOrSow =
       events.sow.some((i) => i >= (pattern.penIdx ?? 0)) || model !== "conservative";
-    checklist.lpsOrLpsy =
-      events.lpsy.some((i) => i >= (pattern.recoveryIdx ?? pattern.penIdx ?? 0)) ||
-      model !== "conservative";
+    const lpsyAfter = events.lpsy.filter(
+      (i) => i >= (pattern.recoveryIdx ?? pattern.penIdx ?? 0),
+    );
+    checklist.lpsOrLpsy = lpsyAfter.length > 0 || model !== "conservative";
+    if (lpsyAfter.length > 0) lpsLevel = candles.highs[lpsyAfter[lpsyAfter.length - 1]];
     invalidation =
       pattern.utadHigh ??
       (pattern.penIdx != null ? candles.highs[pattern.penIdx] : range.rangeHigh);
-    checklist.proximityOk = _entryProximityOk("SHORT", entryPrice, range, cfg.maxEntryProximityPct);
+    checklist.proximityOk =
+      _entryProximityOk("SHORT", locationPrice, range, cfg.maxEntryProximityPct) ||
+      (model === "moderate" && choch.detected);
   }
 
-  const rr = _estimateRr(side, entryPrice, invalidation, range);
+  // RR from reclaim (setup) — also accept mid-range target (§9) if opposite side too tight
+  const rrStructural = _estimateRr(side, locationPrice, invalidation, range);
+  const mid = range.midRange ?? (range.rangeHigh + range.rangeLow) / 2;
+  const risk = invalidation != null && locationPrice != null
+    ? Math.abs(locationPrice - invalidation)
+    : 0;
+  const rrMid =
+    risk > 0 && mid != null ? Math.abs(mid - locationPrice) / risk : null;
+  const rr = Math.max(rrStructural ?? 0, rrMid ?? 0) || null;
   checklist.rrOk = rr != null && rr >= cfg.minRr;
 
-  // Required layers by model
-  const required = ["tradingRange", "manipulation", "reclaimOrReject", "volumeConfirm"];
+  // Required layers by model (maps to Syarat §4–5 / §11)
+  const required = [
+    "tradingRange",
+    "manipulation",
+    "reclaimOrReject",
+    "volumeConfirm",
+    "notCancelled",
+  ];
   if (model === "moderate" || model === "conservative") {
-    required.push("priorTrend", "rejection", "choch", "proximityOk", "rrOk");
+    required.push(
+      "priorTrend",
+      "rangeTested",
+      "discountOrPremium",
+      "rejection",
+      "choch",
+      "proximityOk",
+      "rrOk",
+    );
   }
   if (model === "conservative") {
     required.push("climaxOrWeakening", "sosOrSow", "lpsOrLpsy");
@@ -856,11 +1105,19 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
   const failed = required.filter((k) => !checklist[k]);
   const passed = failed.length === 0;
 
-  // Confidence: base pattern confidence × checklist fill rate
   const keys = Object.keys(checklist);
   const hit = keys.filter((k) => checklist[k]).length;
   const fill = hit / keys.length;
   const confidence = Math.min(1, (pattern.confidence || 0.5) * (0.5 + 0.5 * fill));
+
+  let reason;
+  if (cancel.cancelled) {
+    reason = `entry_cancelled:${cancel.reason}`;
+  } else if (passed) {
+    reason = side === "LONG" ? "wyckoff_spring" : "wyckoff_upthrust";
+  } else {
+    reason = `entry_checklist_failed:${failed.join(",")}`;
+  }
 
   return {
     passed,
@@ -872,14 +1129,112 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
     choch,
     entryPrice,
     invalidation,
+    lpsLevel,
+    reclaimBars: pattern?.reclaimBars ?? null,
+    volRatio: pattern?.volRatio ?? null,
     rr,
     confidence,
-    reason: passed
-      ? side === "LONG"
-        ? "wyckoff_spring"
-        : "wyckoff_upthrust"
-      : `entry_checklist_failed:${failed.join(",")}`,
+    cancel,
+    reason,
   };
+}
+
+/**
+ * Alternate Syarat paths: SOS→LPS (long) / SOW→LPSY (short) for moderate+.
+ */
+function evaluateSchematicContinuation(candles, range, config = {}) {
+  const cfg = { ...DEFAULTS, ...config };
+  if (cfg.entryModel === "aggressive") return null;
+
+  const lastIdx = candles.lastIdx;
+  const events = scanRecentEvents(candles, lastIdx, cfg);
+  const prior = detectPriorTrend(
+    candles,
+    range.rangeStartIdx ?? range.rangeEndIdx,
+    cfg,
+    range.rangeEndIdx,
+  );
+  const entryPrice = candles.closes[lastIdx];
+  const windowStart = lastIdx - cfg.recoveryWindow;
+
+  const lastLps = events.lps[events.lps.length - 1];
+  const lastSos = events.sos[events.sos.length - 1];
+  if (
+    lastLps != null &&
+    lastLps >= windowStart &&
+    lastSos != null &&
+    lastSos < lastLps &&
+    (events.springInd.length > 0 || events.sc.length > 0) &&
+    prior.direction === "down" &&
+    entryPrice != null &&
+    entryPrice > (range.midRange ?? (range.rangeHigh + range.rangeLow) / 2)
+  ) {
+    // LPS after SOS: price holds above mid / old resistance as support (§2C)
+    const invalidation = range.rangeLow;
+    const rr = _estimateRr("LONG", entryPrice, invalidation, range);
+    if (rr != null && rr >= cfg.minRr && entryPrice > range.rangeLow) {
+      return {
+        vote: "LONG",
+        confidence: 0.72,
+        reason: "wyckoff_lps",
+        meta: {
+          range,
+          events,
+          prior,
+          stopLoss: invalidation,
+          takeProfit: range.rangeHigh,
+          rr,
+          lpsLevel: candles.lows[lastLps],
+          entry: {
+            passed: true,
+            model: cfg.entryModel,
+            reason: "wyckoff_lps",
+            checklist: { sosOrSow: true, lpsOrLpsy: true, priorTrend: true },
+            lpsLevel: candles.lows[lastLps],
+          },
+        },
+      };
+    }
+  }
+
+  const lastLpsy = events.lpsy[events.lpsy.length - 1];
+  const lastSow = events.sow[events.sow.length - 1];
+  if (
+    lastLpsy != null &&
+    lastLpsy >= windowStart &&
+    lastSow != null &&
+    lastSow < lastLpsy &&
+    (events.utadInd.length > 0 || events.bc.length > 0) &&
+    prior.direction === "up"
+  ) {
+    const invalidation = range.rangeHigh;
+    const rr = _estimateRr("SHORT", entryPrice, invalidation, range);
+    if (rr != null && rr >= cfg.minRr && entryPrice < range.rangeHigh) {
+      return {
+        vote: "SHORT",
+        confidence: 0.72,
+        reason: "wyckoff_lpsy",
+        meta: {
+          range,
+          events,
+          prior,
+          stopLoss: invalidation,
+          takeProfit: range.rangeLow,
+          rr,
+          lpsLevel: candles.highs[lastLpsy],
+          entry: {
+            passed: true,
+            model: cfg.entryModel,
+            reason: "wyckoff_lpsy",
+            checklist: { sosOrSow: true, lpsOrLpsy: true, priorTrend: true },
+            lpsLevel: candles.highs[lastLpsy],
+          },
+        },
+      };
+    }
+  }
+
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -984,43 +1339,11 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
     };
   }
 
-  // Conservative path: LPS / LPSY without fresh spring/UTAD in window
-  if (cfg.entryModel === "conservative") {
-    const events = scanRecentEvents(candles, lastIdx, cfg);
-    const lastLps = events.lps[events.lps.length - 1];
-    const lastLpsy = events.lpsy[events.lpsy.length - 1];
-    const prior = detectPriorTrend(candles, range.rangeStartIdx ?? range.rangeEndIdx, cfg);
-
-    if (
-      lastLps != null &&
-      lastLps >= lastIdx - cfg.recoveryWindow &&
-      events.sos.length > 0 &&
-      (events.springInd.length > 0 || events.sc.length > 0) &&
-      prior.direction === "down"
-    ) {
-      _abl("passed");
-      return {
-        vote: "LONG",
-        confidence: 0.7,
-        reason: "wyckoff_lps",
-        meta: { range, events, prior, stopLoss: range.rangeLow, takeProfit: range.rangeHigh },
-      };
-    }
-    if (
-      lastLpsy != null &&
-      lastLpsy >= lastIdx - cfg.recoveryWindow &&
-      events.sow.length > 0 &&
-      (events.utadInd.length > 0 || events.bc.length > 0) &&
-      prior.direction === "up"
-    ) {
-      _abl("passed");
-      return {
-        vote: "SHORT",
-        confidence: 0.7,
-        reason: "wyckoff_lpsy",
-        meta: { range, events, prior, stopLoss: range.rangeHigh, takeProfit: range.rangeLow },
-      };
-    }
+  // Syarat §2B–C / §3B–C: SOS→LPS / SOW→LPSY continuation (moderate + conservative)
+  const continuation = evaluateSchematicContinuation(candles, range, cfg);
+  if (continuation) {
+    _abl("passed");
+    return continuation;
   }
 
   _abl("rejPattern");
@@ -1048,7 +1371,9 @@ module.exports = {
   scanRecentEvents,
   detectPriorTrend,
   detectLocalChoCH,
+  detectEntryCancellation,
   evaluateEntryChecklist,
+  evaluateSchematicContinuation,
   evaluateWyckoffComponent,
   candlesFromIndicators,
   relativeVolume,

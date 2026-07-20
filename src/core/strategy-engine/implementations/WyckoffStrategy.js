@@ -1,17 +1,17 @@
 /**
  * WyckoffStrategy.js — AF racer B (Spring / Upthrust / LPS / LPSY)
  *
- * Independent race participant under AdaptiveFusionUmbrella (Sprint 12).
+ * Independent race participant under AdaptiveFusionUmbrella.
  * Also usable as vote Component B when afCombinationMode:"vote".
  *
- * Entry logic follows Syarat_Entry_Strategi_Wyckoff.txt.
- * Event detection aligned with wyckoff_indicator.txt via wyckoffComponent.
+ * Entry logic follows syarat_entry_wyckoff.txt.
+ * Event detection aligned with wyckoff_indicator.txt via wyckoffEntry.js.
  *
- * Default entryModel: "aggressive" (aligned with wyckoffComponent DEFAULTS / AF race).
- *   Spring/UTAD + reclaim + volume — viable for Scalping/Swing standalone backtests.
+ * Default entryModel: "moderate" (Syarat §4–5 checklist enforced)
+ *   Spring/UTAD + reclaim + prior trend + rejection + CHoCH + discount/premium + RR ≥ 1:2
  * Set config.entryModel / config.wyckoff.entryModel to:
- *   "moderate"     — + prior trend + rejection wick + local CHoCH + RR ≥ 1:2 (Syarat)
- *   "conservative" — safest chain including SOS/SOW + LPS/LPSY
+ *   "aggressive"   — pattern + reclaim + volume only (opt-in for race/scalping)
+ *   "conservative" — safest chain (§11): SOS/SOW + LPS/LPSY
  */
 
 "use strict";
@@ -23,12 +23,14 @@ const {
   DEFAULTS,
 } = require("../af/wyckoffEntry");
 
-/** Strategy-level defaults layered on component DEFAULTS. */
+/** Strategy-level defaults layered on component DEFAULTS — Syarat-first. */
 const STRATEGY_DEFAULTS = {
-  entryModel: "aggressive",
+  entryModel: "moderate",
   minRr: 2.0,
   volMultiplier: 1.5,
   lookback: 100,
+  rejectionWickRatio: 0.4,
+  maxEntryProximityPct: 0.4,
 };
 
 class WyckoffStrategy extends StrategyBase {
@@ -37,10 +39,11 @@ class WyckoffStrategy extends StrategyBase {
       name: "WYCKOFF",
       label: "Wyckoff Method (Spring/Upthrust)",
       description:
-        "AF Component B: Wyckoff accumulation/distribution entries " +
-        "(Spring → reclaim → CHoCH → LPS / UTAD → rejection → CHoCH → LPSY) " +
-        "with volume confirmation per schematic indicator rules.",
-      version: "2.0.0",
+        "Wyckoff accumulation/distribution entries per syarat_entry_wyckoff: " +
+        "Downtrend→Accumulation→Spring→Reclaim→CHoCH→(SOS→LPS) / " +
+        "Uptrend→Distribution→UTAD→Rejection→CHoCH→(SOW→LPSY). " +
+        "Indicator events from wyckoff_indicator schematic.",
+      version: "2.1.0",
       enabled: true,
       ...config,
     });
@@ -56,7 +59,7 @@ class WyckoffStrategy extends StrategyBase {
       { key: "rejVolume", label: "3. - Volume absent" },
       { key: "rejCooldown", label: "4. - Cooldown active" },
       { key: "rejRange", label: "5. - No valid trading range" },
-      { key: "rejPattern", label: "6. - No spring/upthrust" },
+      { key: "rejPattern", label: "6. - No spring/upthrust/LPS" },
       { key: "rejChecklist", label: "7. - Entry checklist failed" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
@@ -107,14 +110,7 @@ class WyckoffStrategy extends StrategyBase {
     return { allowed: true, reason: "ok" };
   }
 
-  detectSignal(indicators, lastIdx, config = {}) {
-    const candles = candlesFromIndicators(indicators, lastIdx);
-    const result = evaluateWyckoffComponent(
-      candles,
-      this._mergedConfig(config),
-      { lastSignalIdx: this._lastSignalIdx, ablation: this._ablation },
-    );
-
+  _buildWyFields(result) {
     const nested = result.meta || {};
     const range = nested.range || {};
     const spring = nested.spring || {};
@@ -123,17 +119,22 @@ class WyckoffStrategy extends StrategyBase {
     const checklist = entry.checklist || {};
     const reason = String(result.reason || "");
     let patternType = null;
-    if (spring.detected || reason.toLowerCase().includes("spring")) patternType = "SPRING";
-    else if (upthrust.detected || reason.toLowerCase().includes("upthrust") || reason.includes("utad")) {
+    if (reason.includes("lpsy")) patternType = "LPSY";
+    else if (reason.includes("wyckoff_lps") || reason.endsWith("_lps")) patternType = "LPS";
+    else if (spring.detected || reason.includes("spring")) patternType = "SPRING";
+    else if (upthrust.detected || reason.includes("upthrust") || reason.includes("utad")) {
       patternType = "UPTHRUST";
     }
     const event = spring.detected ? spring : (upthrust.detected ? upthrust : null);
     let sosOrSow = null;
-    if (checklist.sosOrSow) sosOrSow = patternType === "SPRING" ? "SOS" : "SOW";
-    else if (reason.includes("sos")) sosOrSow = "SOS";
-    else if (reason.includes("sow")) sosOrSow = "SOW";
-    // Sprint 15: flat wy* ML fields
-    const wyFields = {
+    if (checklist.sosOrSow) {
+      sosOrSow = result.vote === "LONG" || patternType === "SPRING" || patternType === "LPS"
+        ? "SOS"
+        : "SOW";
+    } else if (reason.includes("sos") || reason.includes("lps")) sosOrSow = "SOS";
+    else if (reason.includes("sow") || reason.includes("lpsy")) sosOrSow = "SOW";
+
+    return {
       wyPatternType: patternType,
       wyAccumulationBars: range.bars
         ?? (range.rangeEndIdx != null && range.rangeStartIdx != null
@@ -144,8 +145,23 @@ class WyckoffStrategy extends StrategyBase {
       wyVolumeRatio: event?.volRatio ?? entry.volRatio ?? null,
       wySosOrSow: sosOrSow,
       wyLpsLevel: entry.lpsLevel ?? nested.lpsLevel
-        ?? (patternType === "SPRING" ? range.rangeLow : range.rangeHigh) ?? null,
+        ?? (result.vote === "LONG" || patternType === "SPRING" || patternType === "LPS"
+          ? range.rangeLow
+          : range.rangeHigh) ?? null,
+      wyEntryModel: entry.model ?? this._mergedConfig().entryModel,
+      wyRr: nested.rr ?? entry.rr ?? null,
     };
+  }
+
+  detectSignal(indicators, lastIdx, config = {}) {
+    const candles = candlesFromIndicators(indicators, lastIdx);
+    const result = evaluateWyckoffComponent(
+      candles,
+      this._mergedConfig(config),
+      { lastSignalIdx: this._lastSignalIdx, ablation: this._ablation },
+    );
+
+    const wyFields = this._buildWyFields(result);
     this._lastSignalMeta = {
       component: "WYCKOFF",
       winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "WYCKOFF" : null,
@@ -179,31 +195,7 @@ class WyckoffStrategy extends StrategyBase {
       winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "WYCKOFF" : null,
       strategyLabel: "Wyckoff Method (Spring/Upthrust)",
       ...result,
-      ...(() => {
-        const nested = result.meta || {};
-        const range = nested.range || {};
-        const spring = nested.spring || {};
-        const upthrust = nested.upthrust || {};
-        const entry = nested.entry || {};
-        const reason = String(result.reason || "");
-        let patternType = null;
-        if (spring.detected || reason.toLowerCase().includes("spring")) patternType = "SPRING";
-        else if (upthrust.detected || reason.includes("upthrust") || reason.includes("utad")) patternType = "UPTHRUST";
-        const event = spring.detected ? spring : (upthrust.detected ? upthrust : null);
-        return {
-          wyPatternType: patternType,
-          wyAccumulationBars: range.bars
-            ?? (range.rangeEndIdx != null && range.rangeStartIdx != null
-              ? range.rangeEndIdx - range.rangeStartIdx : null),
-          wyFakeBreakDepthAtr: event?.depthAtr ?? event?.penetrationAtr ?? null,
-          wyReclameBars: event?.reclaimBars ?? entry.reclaimBars ?? null,
-          wyVolumeRatio: event?.volRatio ?? entry.volRatio ?? null,
-          wySosOrSow: entry.checklist?.sosOrSow
-            ? (patternType === "SPRING" ? "SOS" : "SOW") : null,
-          wyLpsLevel: entry.lpsLevel
-            ?? (patternType === "SPRING" ? range.rangeLow : range.rangeHigh) ?? null,
-        };
-      })(),
+      ...this._buildWyFields(result),
     };
     if (result.vote === "LONG" || result.vote === "SHORT") {
       this._lastSignalIdx = lastIdx;
@@ -233,7 +225,7 @@ class WyckoffStrategy extends StrategyBase {
   }
 
   /**
-   * Validate entry: volume + ATR + optional Wyckoff checklist / RR from last meta.
+   * Validate entry: volume + ATR + Syarat checklist / RR / proximity from last meta.
    */
   validateEntry(price, atr, volume, volSMA) {
     if (!volume || volume === 0) return { valid: false, reason: "missing_volume" };
@@ -241,33 +233,44 @@ class WyckoffStrategy extends StrategyBase {
     if (!atr || atr <= 0) return { valid: false, reason: "no_atr" };
 
     const meta = this._lastSignalMeta;
-    if (meta?.meta?.entry && !meta.meta.entry.passed) {
+    if (meta?.meta?.entry && meta.meta.entry.passed === false) {
       return { valid: false, reason: meta.meta.entry.reason || "entry_checklist_failed" };
     }
+    if (meta?.reason && String(meta.reason).startsWith("entry_cancelled")) {
+      return { valid: false, reason: meta.reason };
+    }
 
-    // RR + proximity are moderate/conservative Syarat gates — do not re-apply on aggressive.
     const model = meta?.meta?.entry?.model
+      || meta?.wyEntryModel
       || this._mergedConfig().entryModel
       || STRATEGY_DEFAULTS.entryModel;
+
+    // Aggressive opt-out: skip Syarat proximity/RR re-check
     if (model === "aggressive") {
       return { valid: true, reason: "ok" };
     }
 
-    if (meta?.meta?.rr != null && meta.meta.rr < STRATEGY_DEFAULTS.minRr) {
+    // Syarat §10: minimum RR 1:2
+    const rr = meta?.meta?.rr ?? meta?.wyRr;
+    if (rr != null && rr < STRATEGY_DEFAULTS.minRr) {
       return { valid: false, reason: "rr_below_minimum" };
     }
 
-    // Prefer discount (long) / premium (short) — reject mid-range without confirmation
+    // Syarat §1 / §4–5: avoid mid-range / poor location without confirmation
     const range = meta?.meta?.range;
     const vote = meta?.vote;
     if (range?.rangeHigh != null && range?.rangeLow != null && price != null && vote) {
       const mid = range.midRange ?? (range.rangeHigh + range.rangeLow) / 2;
       const width = range.rangeHigh - range.rangeLow;
       if (width > 0) {
-        if (vote === "LONG" && price > mid + width * 0.15) {
+        // Spring long: prefer discount; LPS long may sit above mid after SOS
+        const isLps = String(meta?.reason || "").includes("lps")
+          && !String(meta?.reason || "").includes("lpsy");
+        const isLpsy = String(meta?.reason || "").includes("lpsy");
+        if (vote === "LONG" && !isLps && price > mid + width * 0.15) {
           return { valid: false, reason: "long_too_close_to_resistance" };
         }
-        if (vote === "SHORT" && price < mid - width * 0.15) {
+        if (vote === "SHORT" && !isLpsy && price < mid - width * 0.15) {
           return { valid: false, reason: "short_too_close_to_support" };
         }
       }
@@ -278,6 +281,7 @@ class WyckoffStrategy extends StrategyBase {
 
   /**
    * Suggested SL/TP from last signal meta (Spring low / UTAD high → range opposite).
+   * Syarat §8–9.
    */
   getStopTakeLevels(price, side) {
     const meta = this._lastSignalMeta?.meta;
