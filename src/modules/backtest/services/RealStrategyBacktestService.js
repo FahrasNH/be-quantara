@@ -235,6 +235,14 @@ function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null, tradeT
   }, key);
 }
 
+/** Drop null/empty enrichment keys so later spreads do not clobber computed mlFeatures. */
+function definedEnrichmentOnly(obj) {
+  if (!obj || typeof obj !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v != null && v !== ""),
+  );
+}
+
 /** Sprint 15 + Sprint 16: collect all strategy ML enrichments from signal meta. */
 function extractStrategyMlEnrichment(meta) {
   if (!meta) return {};
@@ -843,11 +851,13 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       vpValLevel: position.vpValLevel ?? null,
       vpPocLevel: position.vpPocLevel ?? null,
       vpTriggerType: position.vpTriggerType ?? null,
-      // Sprint 15 ML enrichments — spread remaining ALL_ML keys from position
+      // Sprint 15 ML enrichments — only defined position keys (null must not
+      // overwrite explicit mfe/mae/sweepAgeBars set above).
       ...Object.fromEntries(
         ALL_ML_ENRICH_KEYS
           .filter((k) => !k.startsWith("vp"))
-          .map((k) => [k, position[k] ?? null])
+          .filter((k) => position[k] != null)
+          .map((k) => [k, position[k]])
       ),
       reason,
       result: pnl > 0 ? "win" : "loss",
@@ -1211,7 +1221,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         winningComponent,
         ...mlFeatures,
         ...brEnrich,
-        ...mlEnrich,
+        ...definedEnrichmentOnly(mlEnrich),
 
         // is the live stop (moves to +0.3R/+1R as milestones fire), remainingSize
         // shrinks as partials execute; originalSize stays fixed for milestone %.
