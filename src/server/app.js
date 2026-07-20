@@ -85,6 +85,13 @@ const ALLOWED_ORIGINS = cfg.corsOrigins;
 function isOriginAllowed(origin) {
   if (!origin) return true;
   if (ALLOWED_ORIGINS.includes(origin)) return true;
+  // APP_URL = canonical FE domain (dev/staging/prod). Guard against mis-set CORS_ORIGINS
+  // on VPS — common cause of "CORS not allowed" on https://dev.quantara.software login.
+  if (cfg.APP_URL) {
+    try {
+      if (origin === new URL(cfg.APP_URL).origin) return true;
+    } catch { /* ignore malformed APP_URL */ }
+  }
   // Localhost selalu diizinkan (development & production — tidak ada risiko keamanan)
   if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
   // Staging/dev VPS: Vite `npm run dev -- --host 0.0.0.0` → Origin http://<vps-ip>:5173
