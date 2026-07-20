@@ -115,12 +115,13 @@ async function test(name, fn) {
 (async () => {
   console.log("ExchangeService — getPerpetualSymbols + validation\n");
 
-  await test("A-AC1/AC3: normalized shape, filters non-linear/spot/inactive", async () => {
+  await test("A-AC1/AC3: normalized shape, filters non-linear/spot/inactive and non-allowlisted", async () => {
     control.connectedExchange = "binance";
     const { exchange, symbols } = await ExchangeService.getPerpetualSymbols("u1");
     assert.strictEqual(exchange, "binance");
     assert.deepStrictEqual(symbols.map((s) => s.symbol), ["BTCUSDT", "ETHUSDT"]);
     assert.deepStrictEqual(symbols[0], { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", minQty: 0.001 });
+    assert.ok(!symbols.some((s) => s.symbol === "ADAUSDT"), "ADA must be excluded by allowlist");
   });
 
   await test("A-AC1: works for bitget and okx too", async () => {

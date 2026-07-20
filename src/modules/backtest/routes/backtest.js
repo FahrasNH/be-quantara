@@ -20,10 +20,18 @@ const GrokConfirmBatchProcessor = require("../../research/services/GrokConfirmBa
 const GrokBacktestJobService = require("../../research/services/GrokBacktestJobService");
 const BacktestJobService = require("../services/BacktestJobService");
 const cfg = require("../../../config/env");
+const { symbolNotAllowedError } = require("../../../shared/constants/allowedSymbols");
 
 // Gen2 canonical engines for picker/list APIs (legacy aliases accepted at ingress via normalize).
 const USER_STRATEGY_KEYS = ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const GROK_CONFIRM_MAX_SIGNALS = 500;
+
+function rejectDisallowedSymbol(res, symbol) {
+  const err = symbolNotAllowedError(symbol);
+  if (!err) return false;
+  res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+  return true;
+}
 
 function validateGrokConfirmPayload(body) {
   const {
@@ -46,6 +54,10 @@ function validateGrokConfirmPayload(body) {
         message: "Grok Confirm Gate hanya untuk strategi Adaptive Fusion, Trend Surge (TREND_FOLLOWING), Mean Drift (MEAN_REVERSION), dan Breakout (BREAKOUT_RETEST)",
       },
     };
+  }
+  const symErr = symbolNotAllowedError(symbol);
+  if (symErr) {
+    return { error: { status: symErr.status, message: symErr.message } };
   }
   if (!Array.isArray(signals)) {
     return { error: { status: 400, message: "signals harus berupa array" } };
@@ -364,6 +376,7 @@ module.exports = function createBacktestRouter(context) {
     if (!sym || !strategyKey) {
       return res.status(400).json({ ok: false, error: "symbol dan strategy_key diperlukan" });
     }
+    if (rejectDisallowedSymbol(res, sym)) return;
 
     let parameters = {};
     if (parametersRaw) {
@@ -432,6 +445,7 @@ module.exports = function createBacktestRouter(context) {
     if (!sym || !metrics) {
       return res.status(400).json({ ok: false, error: "pair/symbol dan metrics diperlukan" });
     }
+    if (rejectDisallowedSymbol(res, sym)) return;
 
     // Extend must send equity_curve atomically with metrics (COALESCE partial-write bug).
     if (clientAction === "extend" && !Array.isArray(equityCurve)) {
@@ -1316,6 +1330,7 @@ module.exports = function createBacktestRouter(context) {
     const sym = (pair || symbol || "").toUpperCase();
     const strategyKey = String(strategyKeyRaw || "ADAPTIVE_FUSION").toUpperCase();
     if (!sym) return res.status(400).json({ ok: false, error: "symbol/pair is required" });
+    if (rejectDisallowedSymbol(res, sym)) return;
 
     // Validate tpMode if provided
     const tpMode = parameters?.tpMode;

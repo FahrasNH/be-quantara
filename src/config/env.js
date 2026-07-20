@@ -24,7 +24,7 @@ const cfg = {
   BITGET_PASSPHRASE: process.env.BITGET_PASSPHRASE || "",
 
   // ── Market data (simbol untuk ticker & backtest publik) ─────────────────────
-  SYMBOLS_RAW: process.env.SYMBOLS || process.env.SYMBOL || "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT",
+  SYMBOLS_RAW: process.env.SYMBOLS || process.env.SYMBOL || "BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,SOLUSDT",
   SYMBOL:      process.env.SYMBOL  || "BTCUSDT",
 
   // ── Telegram notifications ──────────────────────────────────────────────────
@@ -133,13 +133,15 @@ const cfg = {
       .filter(Boolean);
   },
 
-  // Daftar simbol untuk market data (max 4)
+  // Daftar simbol untuk market data (platform allowlist only)
   get symbolsList() {
-    return this.SYMBOLS_RAW
+    const { filterAllowedSymbolStrings } = require("../shared/constants/allowedSymbols");
+    const parsed = this.SYMBOLS_RAW
       .split(",")
       .map(s => s.trim().toUpperCase())
-      .filter(Boolean)
-      .slice(0, 4);
+      .filter(Boolean);
+    const filtered = filterAllowedSymbolStrings(parsed);
+    return filtered.length > 0 ? filtered : filterAllowedSymbolStrings([]);
   },
 
   // Apakah ada API key fallback yang valid (bukan placeholder)

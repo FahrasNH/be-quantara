@@ -356,6 +356,7 @@ module.exports = function createBotsRouter(helpers) {
         ETHUSDT: 23.50,  // ~0.01 ETH × $2,350 / 2x
         SOLUSDT: 4.73,   // ~0.1 SOL × $94.60 / 2x
         BNBUSDT: 11.75,  // ~0.05 BNB × $470 / 2x
+        XRPUSDT: 5.00,   // ~10 XRP × $1.00 / 2x
       };
 
       // Breakdown committed per symbol dari reservations

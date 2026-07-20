@@ -6,6 +6,7 @@ const { Router } = require("express");
 const db = require("../../infrastructure/db/database");
 const ExchangeService = require("../../services/ExchangeService");
 const { symbolsRateLimiter } = require("../../middleware/marketRateLimiter");
+const { filterAllowedSymbolStrings, isAllowedSymbol } = require("../../shared/constants/allowedSymbols");
 const { pairClassifier } = require("../../infrastructure/classification/PairClassifier");
 const { getPairTierMetrics } = require("../services/MarketSnapshotService");
 
@@ -41,8 +42,10 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   // Ticker harga real-time
   router.get("/tickers", async (req, res) => {
     try {
-      const syms = (req.query.symbols || SYMBOLS_LIST.join(","))
-        .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+      const syms = filterAllowedSymbolStrings(
+        (req.query.symbols || SYMBOLS_LIST.join(","))
+          .split(",").map(s => s.trim().toUpperCase()).filter(Boolean)
+      );
       const result = {};
       await Promise.all(syms.map(async sym => {
         try { result[sym] = await sharedClient.getTicker(sym); }
@@ -65,6 +68,9 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   router.get("/candles", async (req, res) => {
     try {
       const sym      = (req.query.symbol || SYMBOLS_LIST[0] || "BTCUSDT").toUpperCase();
+      if (!isAllowedSymbol(sym)) {
+        return res.status(400).json({ ok: false, error: "Symbol not allowed", code: "SYMBOL_NOT_ALLOWED" });
+      }
       const bot      = getBot(req.userId, sym);
       const interval = req.query.interval || bot?.config?.interval || "15m";
       const limit    = Math.min(safeInt(req.query.limit, 200), 500);
@@ -90,6 +96,9 @@ module.exports = function createMarketRouter({ sharedClient, bots, getBot, SYMBO
   // backtest dulu selalu menembak Bitget.
   router.get("/candles/backtest", async (req, res) => {
     const symbol    = (req.query.symbol || SYMBOLS_LIST[0] || "BTCUSDT").toUpperCase();
+    if (!isAllowedSymbol(symbol)) {
+      return res.status(400).json({ ok: false, error: "Symbol not allowed", code: "SYMBOL_NOT_ALLOWED" });
+    }
     const timeframe = req.query.interval || "1d";
     const total     = Math.min(safeInt(req.query.limit, 500), 1000);
     let exchange = null;

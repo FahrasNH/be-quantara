@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ccxt = require("ccxt");
+const { filterAllowedSymbolRows } = require("../../../shared/constants/allowedSymbols");
 const { withExchangeGate } = require("../../../infrastructure/exchange/exchangeRateGate");
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 
@@ -68,7 +69,7 @@ function normalizeMarkets(markets) {
   const seen = new Set();
   const unique = out.filter((s) => (seen.has(s.symbol) ? false : seen.add(s.symbol)));
   unique.sort((a, b) => a.symbol.localeCompare(b.symbol));
-  return unique;
+  return filterAllowedSymbolRows(unique);
 }
 
 /**
@@ -234,6 +235,15 @@ const CANDLE_INTERVAL_MS = {
  * @throws {Error&{statusCode,code}} 400 no exchange / unsupported, 503 unavailable
  */
 async function getCandlesForUser(userId, symbol, timeframe = "1d", limit = 500) {
+  const { isAllowedSymbol, symbolNotAllowedError } = require("../../../shared/constants/allowedSymbols");
+  const symCheck = symbolNotAllowedError(symbol);
+  if (symCheck) {
+    const e = new Error(symCheck.message);
+    e.statusCode = symCheck.status;
+    e.code = symCheck.code;
+    throw e;
+  }
+
   const exchange = await getConnectedExchange(userId);
   if (!exchange) {
     const e = new Error("Belum ada exchange yang terhubung. Hubungkan exchange di Settings.");

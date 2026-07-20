@@ -2,6 +2,8 @@
  * Validation middleware using simple schema validation
  */
 
+const { isAllowedSymbol, ALLOWED_SYMBOLS } = require("../constants/allowedSymbols");
+
 // RFC-5321-safe email: rejects quotes, semicolons, HTML special chars
 const EMAIL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
 // Username: alphanumeric + _ . - only, 3-30 chars (no HTML/script injection)
@@ -115,7 +117,17 @@ function validateSymbolParam(req, res, next) {
       ok: false,
       statusCode: 400,
       message: 'Invalid symbol format',
-      errors: ['Symbol must be in format: BTCUSDT, ETHUSDT, 1000PEPEUSDT, etc.'],
+      errors: ['Symbol must be in format: BTCUSDT, ETHUSDT, etc.'],
+    });
+  }
+
+  if (!isAllowedSymbol(symbol)) {
+    return res.status(400).json({
+      ok: false,
+      statusCode: 400,
+      message: 'Symbol not allowed',
+      code: 'SYMBOL_NOT_ALLOWED',
+      errors: [`Supported symbols: ${ALLOWED_SYMBOLS.join(', ')}`],
     });
   }
 
