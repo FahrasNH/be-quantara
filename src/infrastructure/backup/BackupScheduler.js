@@ -3,10 +3,17 @@
  * Berjalan di dalam proses Node.js. Dipanggil setelah db.init() berhasil.
  *
  * Yang di-backup:
- *   1. Tabel trades + sessions → CSV (ringan, bisa dibuka Excel)
- *   2. Full pg_dump gzip (untuk restore full)
+ *   1. Tabel trades + sessions → CSV (ringan, bisa dibuka Excel) — SELALU
+ *   2. Full pg_dump gzip (untuk restore full) — PROD saja secara default
  *
- * Default: setiap 24 jam, simpan 30 hari terakhir.
+ * Non-prod (staging/dev) default: CSV-only, retensi 3 hari. Full pg_dump di
+ * non-prod adalah biang bloat (72GB — tiap dump menyalin SELURUH DB 2GB), dan
+ * CSV trades/sessions sudah cukup untuk keperluan non-prod. Prod tetap full dump.
+ *
+ * Guardrail berlapis (agar 72GB TIDAK terjadi lagi walau salah satu gagal):
+ *   1. cleanup() by-mtime (retensi hari) — selalu di finally.
+ *   2. enforceSizeCap() hard-cap total folder — hapus dump tertua sampai < cap.
+ *   3. Non-prod skip full dump → volume dump ~0.
  */
 
 const { execSync } = require("child_process");
@@ -16,12 +23,24 @@ const fs      = require("fs");
 // default-10 connections and competed with live bot ticks under load.
 const { _pool: pool } = require("../db/database");
 
+// Prod app (ecosystem) tidak set APP_ENV; staging="staging", dev="development".
+const APP_ENV = (process.env.APP_ENV || "").toLowerCase();
+const IS_PROD = APP_ENV === "" || APP_ENV === "production" || APP_ENV === "prod";
+
 const BACKUP_DIR     = process.env.BACKUP_DIR     || "/opt/quantara-backups";
-// DEFAULT 7 days (was 30) — aggressive retention to prevent disk bloat on limited VPS.
-// Override via BACKUP_RETENTION_DAYS env if needed (e.g. production data pipeline).
-const RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || "7", 10);
+// Retensi: prod 7 hari, non-prod 3 hari. Override via BACKUP_RETENTION_DAYS.
+const RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || (IS_PROD ? "7" : "3"), 10);
 const INTERVAL_MS    = parseInt(process.env.BACKUP_INTERVAL_MS    || String(24 * 60 * 60 * 1000), 10); // 24j
 const ENABLED        = process.env.BACKUP_ENABLED !== "false";
+// Full pg_dump: default ON di prod, OFF di non-prod (biang 72GB bloat).
+// Paksa nyalakan/matikan via BACKUP_FULL_DUMP=true|false.
+const FULL_DUMP      = process.env.BACKUP_FULL_DUMP != null
+  ? process.env.BACKUP_FULL_DUMP !== "false"
+  : IS_PROD;
+// Hard-cap total ukuran folder backup (GB). Guardrail terakhir bila cleanup gagal.
+const MAX_DIR_GB     = parseFloat(process.env.BACKUP_MAX_DIR_GB || (IS_PROD ? "40" : "5"));
+// Minimal dump yang SELALU dipertahankan (restore point) walau melewati cap/retensi.
+const KEEP_MIN       = parseInt(process.env.BACKUP_KEEP_MIN || "2", 10);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -135,6 +154,60 @@ function cleanup() {
   }
 }
 
+// ── Hard size cap (guardrail terakhir) ───────────────────────────────────────
+// Bahkan jika cleanup by-mtime gagal (kode stale / retensi ke-override / mtime
+// aneh), ini menjamin folder tidak pernah melewati MAX_DIR_GB: hapus dump
+// TERTUA lebih dulu sampai < cap, selalu sisakan KEEP_MIN restore point.
+// Inilah lapisan yang mencegah 72GB bloat berulang.
+
+function enforceSizeCap() {
+  const capBytes = MAX_DIR_GB * 1024 * 1024 * 1024;
+  let entries;
+  try {
+    entries = fs.readdirSync(BACKUP_DIR)
+      .filter((f) => !f.startsWith("latest") && !f.startsWith("trades_latest") && !f.startsWith("sessions_latest"))
+      .map((f) => {
+        const fp = path.join(BACKUP_DIR, f);
+        const st = fs.lstatSync(fp);
+        return st.isSymbolicLink() ? null : { f, fp, size: st.size, mtime: st.mtimeMs };
+      })
+      .filter(Boolean);
+  } catch (err) {
+    log(`[SizeCap] ✗ readdir ERROR: ${err.message}`);
+    return;
+  }
+
+  let total = entries.reduce((s, e) => s + e.size, 0);
+  const gb = (b) => (b / 1024 / 1024 / 1024).toFixed(2);
+  if (total <= capBytes) {
+    log(`[SizeCap] ℹ ${gb(total)}GB ≤ cap ${MAX_DIR_GB}GB — OK`);
+    return;
+  }
+
+  // Prioritaskan hapus dump .sql.gz (biang volume) dari yang TERTUA.
+  const dumps = entries.filter((e) => e.f.endsWith(".sql.gz")).sort((a, b) => a.mtime - b.mtime);
+  const others = entries.filter((e) => !e.f.endsWith(".sql.gz")).sort((a, b) => a.mtime - b.mtime);
+  const purgeOrder = [...dumps, ...others];
+
+  let kept = 0, deleted = 0;
+  log(`[SizeCap] ⚠ ${gb(total)}GB > cap ${MAX_DIR_GB}GB — memangkas dump tertua`);
+  for (const e of purgeOrder) {
+    if (total <= capBytes) break;
+    // Selalu sisakan KEEP_MIN dump terbaru sebagai restore point.
+    const remainingDumps = purgeOrder.filter((x) => x.f.endsWith(".sql.gz")).length - deleted;
+    if (e.f.endsWith(".sql.gz") && remainingDumps <= KEEP_MIN) { kept++; continue; }
+    try {
+      fs.unlinkSync(e.fp);
+      total -= e.size;
+      deleted++;
+      log(`[SizeCap] deleted ${e.f} (${gb(e.size)}GB)`);
+    } catch (err) {
+      log(`[SizeCap] ⚠ gagal hapus ${e.f}: ${err.message}`);
+    }
+  }
+  log(`[SizeCap] ✓ ${deleted} file dihapus → ${gb(total)}GB (cap ${MAX_DIR_GB}GB, sisa ${KEEP_MIN} restore point dijaga)`);
+}
+
 // ── Backup utama ──────────────────────────────────────────────────────────────
 
 async function runBackup() {
@@ -171,17 +244,21 @@ async function runBackup() {
     );
     log(`  sessions CSV  : ${sessionsCsv} (${sessionCount} baris)`);
 
-    // 3. pg_dump (jika pg_dump tersedia)
-    const dumpFile = path.join(BACKUP_DIR, `quantara_${ts}.sql.gz`);
-    const dumpOk   = pgDump(dumpFile);
-    if (dumpOk) {
-      const sizeMB = (fs.statSync(dumpFile).size / 1024 / 1024).toFixed(2);
-      log(`  pg_dump       : ${dumpFile} (${sizeMB} MB)`);
-      const latestDump = path.join(BACKUP_DIR, "latest.sql.gz");
-      try { fs.unlinkSync(latestDump); } catch {}
-      fs.symlinkSync(dumpFile, latestDump);
+    // 3. pg_dump (prod saja secara default — non-prod CSV-only untuk cegah bloat)
+    if (!FULL_DUMP) {
+      log(`  pg_dump       : skip (non-prod ${APP_ENV || "?"} — CSV-only, BACKUP_FULL_DUMP=true untuk paksa)`);
     } else {
-      log(`  pg_dump       : skip (pg_dump tidak tersedia — CSV tetap ada)`);
+      const dumpFile = path.join(BACKUP_DIR, `quantara_${ts}.sql.gz`);
+      const dumpOk   = pgDump(dumpFile);
+      if (dumpOk) {
+        const sizeMB = (fs.statSync(dumpFile).size / 1024 / 1024).toFixed(2);
+        log(`  pg_dump       : ${dumpFile} (${sizeMB} MB)`);
+        const latestDump = path.join(BACKUP_DIR, "latest.sql.gz");
+        try { fs.unlinkSync(latestDump); } catch {}
+        fs.symlinkSync(dumpFile, latestDump);
+      } else {
+        log(`  pg_dump       : skip (pg_dump tidak tersedia — CSV tetap ada)`);
+      }
     }
 
     log(`Backup selesai ✅`);
@@ -194,6 +271,12 @@ async function runBackup() {
       cleanup();
     } catch (err) {
       log(`[Cleanup] FATAL: ${err.message}`);
+    }
+    // Guardrail terakhir: hard size-cap walau cleanup by-mtime gagal total.
+    try {
+      enforceSizeCap();
+    } catch (err) {
+      log(`[SizeCap] FATAL: ${err.message}`);
     }
   }
 }
@@ -217,7 +300,10 @@ function start() {
   }, 5 * 60 * 1000);
 
   const intervalHours = (INTERVAL_MS / 3_600_000).toFixed(1);
-  console.log(`[Backup] Terjadwal setiap ${intervalHours} jam → ${BACKUP_DIR} (retain ${RETENTION_DAYS} hari)`);
+  console.log(
+    `[Backup] Terjadwal tiap ${intervalHours}j → ${BACKUP_DIR} ` +
+    `(env=${APP_ENV || "prod"}, retain ${RETENTION_DAYS}h, fullDump=${FULL_DUMP}, cap ${MAX_DIR_GB}GB, keepMin ${KEEP_MIN})`,
+  );
 }
 
 function stop() {
