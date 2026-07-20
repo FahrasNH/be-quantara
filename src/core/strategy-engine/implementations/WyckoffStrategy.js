@@ -7,10 +7,9 @@
  * Entry logic follows syarat_entry_wyckoff.txt.
  * Event detection aligned with wyckoff_indicator.txt via wyckoffEntry.js.
  *
- * Default entryModel: "moderate" (Syarat §4–5 checklist enforced)
- *   Spring/UTAD + reclaim + prior trend + rejection + CHoCH + discount/premium + RR ≥ 1:2
+ * Default entryModel: "aggressive" (AF race / spring-reclaim path)
  * Set config.entryModel / config.wyckoff.entryModel to:
- *   "aggressive"   — pattern + reclaim + volume only (opt-in for race/scalping)
+ *   "moderate"     — Syarat §4–5 checklist (prior trend + CHoCH + RR ≥ 1:2)
  *   "conservative" — safest chain (§11): SOS/SOW + LPS/LPSY
  */
 
@@ -25,7 +24,7 @@ const {
 
 /** Strategy-level defaults layered on component DEFAULTS — Syarat-first. */
 const STRATEGY_DEFAULTS = {
-  entryModel: "moderate",
+  entryModel: "aggressive",
   minRr: 2.0,
   volMultiplier: 1.5,
   lookback: 100,

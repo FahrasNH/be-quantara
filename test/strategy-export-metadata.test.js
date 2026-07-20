@@ -53,7 +53,7 @@ const ctx = {
 };
 
 const EXPECTED_COUNTS = {
-  SMART_MONEY_CONCEPTS: 14,
+  SMART_MONEY_CONCEPTS: 17,
   BREAKOUT_RETEST: 14,
   AUCTION_MARKET_THEORY: 8,
   TREND_FOLLOWING: 9,
@@ -228,6 +228,9 @@ describe("SMART_MONEY_CONCEPTS metadata verify (already implemented)", () => {
       confHtfAlignment: 8,
       confMitigationDepth: 0.3,
       confObConfluence: true,
+      sweepAgeBars: 3,
+      sweepToChochBars: 2,
+      chochToEntryBars: 1,
     }, { ...ctx, strategy: "Smart Money Concepts" }, 0);
 
     for (const k of ML_FIELD_SETS.SMART_MONEY_CONCEPTS) {

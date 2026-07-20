@@ -156,6 +156,14 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     return {};
   }
 
+  /** Winner meta + gradedScore fields for CSV / Research Dataset export. */
+  _enrichedWinnerMeta(winnerKey, base = {}) {
+    return enrichMetaWithGradedScore({
+      ...base,
+      winningComponent: winnerKey,
+    }, winnerKey);
+  }
+
   /**
    * Collect per-component votes (NEUTRAL included) for vote-mode breakdown.
    * @param {object} [precomputedMulti] - optional SMC detectSignalMulti result
@@ -250,6 +258,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const active = this._resolveActiveRacers(config);
     const candidates = [];
     const evaluations = {};
+    const enrichedMetas = {};
 
     let smcMulti = precomputedMulti;
     if (active.has("SMART_MONEY_CONCEPTS")) {
@@ -267,6 +276,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
             { ...(smcMulti.meta || {}), winningComponent: "SMART_MONEY_CONCEPTS" },
             "SMART_MONEY_CONCEPTS",
           );
+          enrichedMetas.SMART_MONEY_CONCEPTS = smcMeta;
           confidence = gradedConfidenceFromMeta(smcMeta, "SMART_MONEY_CONCEPTS") || smc.confidence || 0;
           reason = smc.reason || (signal ? "smc_signal" : "smc_no_signal");
         } else {
@@ -277,6 +287,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
               "SMART_MONEY_CONCEPTS",
             )
             : null;
+          enrichedMetas.SMART_MONEY_CONCEPTS = meta;
           confidence = gradedConfidenceFromMeta(meta, "SMART_MONEY_CONCEPTS")
             || (meta?.aggregateConfidence != null ? meta.aggregateConfidence / 100 : (signal ? 0.7 : 0));
           reason = signal ? "smc_signal" : "smc_no_signal";
@@ -307,6 +318,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
           { ...(this._wyckoff.getLastSignalMeta() || {}), winningComponent: "WYCKOFF", signal },
           "WYCKOFF",
         );
+        enrichedMetas.WYCKOFF = wyMeta;
         confidence = gradedConfidenceFromMeta(wyMeta, "WYCKOFF") || result.confidence || 0;
         reason = result.reason || (signal ? "wyckoff_pattern" : "wyckoff_no_signal");
       } catch (err) {
@@ -335,6 +347,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
           { ...(this._vsa.getLastSignalMeta() || {}), winningComponent: "VOLUME_SPREAD_ANALYSIS", signal },
           "VOLUME_SPREAD_ANALYSIS",
         );
+        enrichedMetas.VOLUME_SPREAD_ANALYSIS = vsaMeta;
         confidence = gradedConfidenceFromMeta(vsaMeta, "VOLUME_SPREAD_ANALYSIS") || result.confidence || 0;
         reason = result.reason || (signal ? "vsa_pattern" : "vsa_no_signal");
       } catch (err) {
@@ -366,6 +379,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       return null;
     }
 
+    const winnerGraded = enrichedMetas[winner.key] || {};
     this._lastRaceMeta = {
       mode: "race",
       winner,
@@ -375,6 +389,9 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       reason: `race_won_by_${winner.key}`,
       winningComponent: winner.key,
       strategyLabel: winner.label,
+      gradedScore: winnerGraded.gradedScore ?? null,
+      gradedScoreBreakdown: winnerGraded.gradedScoreBreakdown ?? null,
+      scoringStrategyKey: winnerGraded.scoringStrategyKey ?? winner.key,
       signalComponents: {
         SMART_MONEY_CONCEPTS: evaluations.SMART_MONEY_CONCEPTS?.signal || (active.has("SMART_MONEY_CONCEPTS") ? "NEUTRAL" : "DISABLED"),
         WYCKOFF: evaluations.WYCKOFF?.signal || (active.has("WYCKOFF") ? "NEUTRAL" : "DISABLED"),
@@ -561,11 +578,11 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
         A: dir,
         B: null,
         C: dir,
-        meta: attachMeta({
+        meta: attachMeta(this._enrichedWinnerMeta(winnerKey, {
           ...this._winnerComponentMeta(winnerKey),
           gateDirection: dir,
           standaloneRacerEntry: true,
-        }),
+        })),
       };
     }
 
@@ -578,10 +595,10 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
       A: filter(multi?.A),
       B: filter(multi?.B),
       C: filter(multi?.C),
-      meta: attachMeta({
+      meta: attachMeta(this._enrichedWinnerMeta("SMART_MONEY_CONCEPTS", {
         ...(multi?.meta || {}),
         gateDirection: dir,
-      }),
+      })),
     };
   }
 
