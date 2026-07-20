@@ -87,6 +87,12 @@ function isOriginAllowed(origin) {
   if (ALLOWED_ORIGINS.includes(origin)) return true;
   // Localhost selalu diizinkan (development & production — tidak ada risiko keamanan)
   if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  // Staging/dev VPS: Vite `npm run dev -- --host 0.0.0.0` → Origin http://<vps-ip>:5173
+  // (bukan localhost). APP_ENV=staging|development di PM2; prod tetap strict.
+  const appEnv = process.env.APP_ENV || "";
+  if (appEnv === "staging" || appEnv === "development") {
+    if (/^https?:\/\/(\d{1,3}\.){3}\d{1,3}(:\d+)?$/.test(origin)) return true;
+  }
   return false;
 }
 
