@@ -5,11 +5,13 @@
  */
 
 const MLShadowService = require("./MLShadowService");
-const TradeFeatureCollector = require("./TradeFeatureCollector");
+// TradeFeatureCollector exports a SINGLETON instance (Sprint 14 f5d52ec), not the
+// class — the class is on `.TradeFeatureCollector`. `new`-ing the default export
+// threw "TradeFeatureCollector is not a constructor" every tick. Use the singleton.
+const featureCollector = require("./TradeFeatureCollector");
 const { indicatorsSnapshotToEntryContext } = require("../../analytics/domain/engineTradeMlAdapter");
 
 let _svc = null;
-let _collector = null;
 
 function getMlShadowService() {
   if (_svc) return _svc;
@@ -22,8 +24,7 @@ function getMlShadowService() {
 }
 
 function getFeatureCollector() {
-  if (!_collector) _collector = new TradeFeatureCollector();
-  return _collector;
+  return featureCollector;
 }
 
 /**
