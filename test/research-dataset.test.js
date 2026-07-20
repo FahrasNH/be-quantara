@@ -44,6 +44,17 @@ assert.ok(dtWib instanceof Date);
 assert.strictEqual(dtWib.getUTCHours(), 13);
 assert.strictEqual(dtWib.getUTCMinutes(), 20);
 
+const { parseTradingViewExportDateTime } = require("../src/shared/csv/exportDateTime");
+const dtTvUtc = parseTradingViewExportDateTime("Thu 21 Oct '21  20:20", "UTC");
+assert.ok(dtTvUtc instanceof Date);
+assert.strictEqual(dtTvUtc.getUTCHours(), 20);
+assert.strictEqual(dtTvUtc.getUTCMinutes(), 20);
+const dtTvWib = parseTradingViewExportDateTime("Thu 21 Oct '21  20:20", "Asia/Jakarta");
+assert.ok(dtTvWib instanceof Date);
+assert.strictEqual(dtTvWib.getUTCHours(), 13);
+assert.strictEqual(dtTvWib.getUTCMinutes(), 20);
+assert.ok(parseDateTime("Thu 21 Oct '21  20:20") instanceof Date);
+
 const sampleRow = {
   ID: "session-1-1-1",
   Symbol: "BTCUSDT",

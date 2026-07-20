@@ -109,18 +109,18 @@ describe("mapBacktestTrade entryReasons", () => {
     expect(row.component).toBe("BREAKOUT_RETEST");
     expect(row.hourUtc).toBe(9);
     expect(row.holdHours).toBe(2);
-    expect(row.openTime).toBe("1 January 2024, 09:00 AM UTC");
-    expect(row.closeTime).toBe("1 January 2024, 11:00 AM UTC");
+    expect(row.openTime).toBe("Mon 01 Jan '24  09:00");
+    expect(row.closeTime).toBe("Mon 01 Jan '24  11:00");
   });
 
-  test("open/close times use requested IANA timezone label", () => {
+  test("open/close times use requested IANA timezone (TradingView format)", () => {
     const row = mapBacktestTrade({
       side: "LONG", entry: 100, exit: 102, reason: "TP",
       openTime: "2026-07-17T16:20:00Z",
       closeTime: "2026-07-17T16:45:00Z",
     }, { ...ctx, timeZone: "Asia/Jakarta" }, 0);
-    expect(row.openTime).toBe("17 July 2026, 11:20 PM WIB");
-    expect(row.closeTime).toBe("17 July 2026, 11:45 PM WIB");
+    expect(row.openTime).toBe("Fri 17 Jul '26  23:20");
+    expect(row.closeTime).toBe("Fri 17 Jul '26  23:45");
   });
 
   test("rejects absurd atr / entryRsi magnitudes", () => {
