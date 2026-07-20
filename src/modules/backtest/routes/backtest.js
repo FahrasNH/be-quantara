@@ -530,7 +530,15 @@ module.exports = function createBacktestRouter(context) {
    * coreOnly=true → single User Export sheet (24 cols) when format=xlsx.
    */
   router.post("/export-csv", asyncHandler(async (req, res) => {
-    const { ids, mode = "trades", format = "csv", variant, strategies, coreOnly = false } = req.body;
+    const {
+      ids,
+      mode = "trades",
+      format = "csv",
+      variant,
+      strategies,
+      coreOnly = false,
+      timeZone,
+    } = req.body;
     if (!ids?.length) {
       return res.status(400).json({ ok: false, error: "ids diperlukan" });
     }
@@ -550,6 +558,7 @@ module.exports = function createBacktestRouter(context) {
         strategies: strategyList,
         adminFormat: true,
         coreOnly: Boolean(coreOnly),
+        timeZone: timeZone || "UTC",
       });
       const suffix = coreOnly ? "core" : "ml";
       res.setHeader(
@@ -571,6 +580,7 @@ module.exports = function createBacktestRouter(context) {
     const csv = BacktestCsvService.exportBacktests(records, mode, {
       variant: csvVariant,
       strategies: strategyList,
+      timeZone: timeZone || "UTC",
     });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader(

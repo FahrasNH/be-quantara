@@ -40,6 +40,7 @@ const {
   normalizeStrategyKey,
   resolveExportColumnKeys,
 } = require("../../../server/services/csv/strategyReasonFormatters");
+const { formatExportDateTime } = require("../../../shared/csv/exportDateTime");
 const { enrichMetaWithGradedScore } = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
 const { extractGradedScoreEnrichment } = require("../../../shared/csv/strategyMlEnrichment");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
@@ -161,26 +162,10 @@ function detectMarketSession(hourUtc) {
 }
 
 /**
- * Format ISO datetime to readable UTC: "20 April 2026, 01:25 AM UTC"
+ * Format ISO datetime for CSV export (delegates to shared exportDateTime SSOT).
  */
-function formatDateTime(isoStr) {
-  if (!isoStr || isoStr === NA) return NA;
-  try {
-    const d = new Date(isoStr);
-    if (Number.isNaN(d.getTime())) return NA;
-    const day = d.getUTCDate();
-    const month = d.toLocaleString("en-US", { month: "long", timeZone: "UTC" });
-    const year = d.getUTCFullYear();
-    const time = d.toLocaleString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: "UTC"
-    });
-    return `${day} ${month} ${year}, ${time} UTC`;
-  } catch {
-    return NA;
-  }
+function formatDateTime(isoStr, timeZone = "UTC") {
+  return formatExportDateTime(isoStr === NA ? "N/A" : isoStr, timeZone);
 }
 
 function metricsToRow(record) {
@@ -457,14 +442,14 @@ function mapBacktestTrade(trade, ctx, index) {
     dryRun: true,
     mode: "backtest",
     exchange: ctx.exchange ?? NA,
-    openTime: formatDateTime(openTime),
-    closeTime: formatDateTime(closeTime),
+    openTime: formatDateTime(openTime, ctx.timeZone),
+    closeTime: formatDateTime(closeTime, ctx.timeZone),
     isPartial,
     result: pnlNet > 0 ? "win" : "loss",
   };
 }
 
-function collectTradeRows(records, { adminFormat = true } = {}) {
+function collectTradeRows(records, { adminFormat = true, timeZone = "UTC" } = {}) {
   const rows = [];
   for (const rec of records) {
     const trades = rec.trades_data || [];
@@ -476,6 +461,7 @@ function collectTradeRows(records, { adminFormat = true } = {}) {
       exchange: rec.config?.exchange ?? rec.exchange ?? NA,
       sessionId: `BT-${rec.id}`,
       userLabel: "Backtest",
+      timeZone,
     };
     trades.forEach((t, i) => rows.push(mapBacktestTrade(t, ctx, i)));
   }
@@ -515,8 +501,14 @@ function resolveVariantColumns(variant, rows, records, { adminFormat = true, str
 }
 
 function buildTradesCsv(records, opts = {}) {
-  const { includeSummary = true, adminFormat = true, variant = "auto", strategies = null } = opts;
-  const rows = collectTradeRows(records, { adminFormat });
+  const {
+    includeSummary = true,
+    adminFormat = true,
+    variant = "auto",
+    strategies = null,
+    timeZone = "UTC",
+  } = opts;
+  const rows = collectTradeRows(records, { adminFormat, timeZone });
   // Back-compat: fullFormat:true is shorthand for variant:"full".
   const effVariant = opts.fullFormat ? "full" : variant;
   const columns = resolveVariantColumns(effVariant, rows, records, { adminFormat, strategies });
@@ -539,6 +531,7 @@ function exportBacktests(records, mode = "trades", opts = {}) {
     adminFormat: true,
     variant,
     strategies: opts.strategies || null,
+    timeZone: opts.timeZone || "UTC",
   });
 }
 
@@ -549,7 +542,10 @@ function exportBacktests(records, mode = "trades", opts = {}) {
  * @returns {Buffer}
  */
 function exportBacktestsXlsx(records, opts = {}) {
-  const rows = collectTradeRows(records, { adminFormat: opts.adminFormat !== false });
+  const rows = collectTradeRows(records, {
+    adminFormat: opts.adminFormat !== false,
+    timeZone: opts.timeZone || "UTC",
+  });
   const selected = Array.isArray(opts.strategies)
     ? opts.strategies.map(normalizeMlStrategyKey).filter(Boolean)
     : null;

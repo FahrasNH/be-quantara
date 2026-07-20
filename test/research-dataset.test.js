@@ -39,6 +39,11 @@ const dtUtc = parseDateTime("21 October 2021, 08:20 PM UTC");
 assert.ok(dtUtc instanceof Date);
 assert.strictEqual(dtUtc.getTime(), dt.getTime());
 
+const dtWib = parseDateTime("21 October 2021, 08:20 PM WIB");
+assert.ok(dtWib instanceof Date);
+assert.strictEqual(dtWib.getUTCHours(), 13);
+assert.strictEqual(dtWib.getUTCMinutes(), 20);
+
 const sampleRow = {
   ID: "session-1-1-1",
   Symbol: "BTCUSDT",

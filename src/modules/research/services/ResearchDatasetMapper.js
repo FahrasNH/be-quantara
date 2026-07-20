@@ -14,6 +14,7 @@ const {
   extractSmcEnrichment,
   extractGradedScoreEnrichment,
 } = require("../../../shared/csv/strategyMlEnrichment");
+const { parseLabeledExportDateTime } = require("../../../shared/csv/exportDateTime");
 const {
   resolveStrategyKey,
   smcBreakdownToFeatureScores,
@@ -52,11 +53,13 @@ function parseDurationMinutes(raw) {
 function parseDateTime(raw) {
   if (!raw) return null;
   if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
+  const labeled = parseLabeledExportDateTime(raw);
+  if (labeled) return labeled;
   const s = String(raw).trim().replace(/\s+UTC$/i, "");
   const iso = Date.parse(s);
-  if (Number.isFinite(iso)) return new Date(iso);
+  if (Number.isFinite(iso) && /[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) return new Date(iso);
   const m = s.match(
-    /^(\d{1,2})\s+(\w+)\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(AM|PM)(?:\s+UTC)?$/i
+    /^(\d{1,2})\s+(\w+)\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(AM|PM)(?:\s+UTC)?$/i,
   );
   if (m) {
     const months = {
