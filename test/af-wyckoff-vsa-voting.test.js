@@ -92,10 +92,13 @@ test("CLV guard high==low → 0.5", () => {
 });
 
 test("classifySpread wide/narrow vs ATR", () => {
-  const wide = classifySpread(110, 100, 5, 1.3, 0.7); // spread 10 >= 6.5
+  const wide = classifySpread(110, 100, 5, 1.3, 0.7, 4); // spread 10 >= 6.5
   assert.strictEqual(wide.isWideSpread, true);
+  assert.strictEqual(wide.avgSpread, 4);
   const narrow = classifySpread(101, 100, 5, 1.3, 0.7); // spread 1 <= 3.5
+  assert.strictEqual(narrow.isWideSpread, false);
   assert.strictEqual(narrow.isNarrowSpread, true);
+  assert.strictEqual(narrow.avgSpread, null);
 });
 
 test("percentileRank returns 0-100", () => {
@@ -493,6 +496,25 @@ test("AC7 VSA: zero volume → NEUTRAL", () => {
   const result = evaluateVSAComponent(c);
   assert.strictEqual(result.vote, "NEUTRAL");
   assert.strictEqual(result.reason, "missing_volume_data");
+});
+
+test("VSA meta emits volume, volSMA, avgSpread for ML export", () => {
+  const c = makeFlatRange(40, 100, 1.0, 1000);
+  c.lows[30] = 95;
+  c.highs[30] = 96;
+  c.closes[30] = 95.5;
+  c.volumes[c.lastIdx] = 1500;
+  c.atr[c.lastIdx] = 2;
+  c.highs[c.lastIdx] = 101;
+  c.lows[c.lastIdx] = 99;
+  c.closes[c.lastIdx] = 100.5;
+
+  const result = evaluateVSAComponent(c, null, { swingRadius: 15, swingScanBars: 50 });
+  assert.ok(result.meta, "expected meta object");
+  assert.strictEqual(result.meta.volume, 1500);
+  assert.ok(result.meta.volSMA > 0);
+  assert.strictEqual(result.meta.avgVolume, result.meta.volSMA);
+  assert.ok(result.meta.spreadType?.avgSpread > 0);
 });
 
 test("effort-result mismatch flag", () => {

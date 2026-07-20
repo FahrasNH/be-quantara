@@ -12,8 +12,10 @@
 const {
   relativeVolume,
   calculateCLV,
+  averageSpreadAt,
   classifySpread,
   checkSwingProximity,
+  smaAt,
 } = require("./volumeAnalysisUtils");
 
 const DEFAULTS = {
@@ -154,6 +156,10 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
     return { vote: "NEUTRAL", confidence: 0, reason: "insufficient_volume_sma" };
   }
 
+  const volSMA = relVol > 0
+    ? vol / relVol
+    : smaAt(candles.volumes, lastIdx, cfg.volumeSmaPeriod);
+
   const atr =
     candles.atr?.[lastIdx] ??
     null;
@@ -166,6 +172,17 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
   const low = candles.lows[lastIdx];
   const close = candles.closes[lastIdx];
   const open = candles.opens?.[lastIdx] ?? candles.closes[lastIdx - 1] ?? close;
+  const avgSpread = averageSpreadAt(
+    candles.highs,
+    candles.lows,
+    lastIdx,
+    cfg.atrPeriod ?? 14,
+  );
+  const volumeMeta = {
+    volume: vol,
+    volSMA,
+    avgVolume: volSMA,
+  };
 
   const nearSwing =
     swingPoints?.isNear != null
@@ -185,11 +202,18 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
       vote: "NEUTRAL",
       confidence: 0,
       reason: "not_near_structure",
-      meta: { nearSwing },
+      meta: { nearSwing, ...volumeMeta },
     };
   }
 
-  const spreadType = classifySpread(high, low, atr, cfg.wideSpreadMult, cfg.narrowSpreadMult);
+  const spreadType = classifySpread(
+    high,
+    low,
+    atr,
+    cfg.wideSpreadMult,
+    cfg.narrowSpreadMult,
+    avgSpread,
+  );
   const clv = calculateCLV(high, low, close);
   const mismatch = detectEffortResultMismatch(relVol, spreadType.spread, atr, cfg);
 
@@ -209,7 +233,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
       vote: "NEUTRAL",
       confidence: 0,
       reason: "no_pattern",
-      meta: { relVol, clv, spreadType, nearSwing, mismatch },
+      meta: { relVol, clv, spreadType, nearSwing, mismatch, ...volumeMeta },
     };
   }
 
@@ -230,6 +254,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
       nearSwing,
       mismatch,
       confidencePenalty: mismatch.isMismatch ? mismatch.penalty : 0,
+      ...volumeMeta,
     },
   };
 }

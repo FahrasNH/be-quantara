@@ -39,15 +39,32 @@ function calculateCLV(high, low, close) {
 }
 
 /**
- * Classify candle spread vs ATR.
+ * SMA of candle spread (high - low) ending at lastIdx (inclusive).
  */
-function classifySpread(high, low, atr, wideMult = 1.3, narrowMult = 0.7) {
+function averageSpreadAt(highs, lows, lastIdx, period = 14) {
+  if (!highs || !lows || lastIdx < period - 1) return null;
+  let sum = 0;
+  for (let i = lastIdx - period + 1; i <= lastIdx; i++) {
+    const h = highs[i];
+    const l = lows[i];
+    if (h == null || l == null || !Number.isFinite(h) || !Number.isFinite(l)) return null;
+    sum += h - l;
+  }
+  return sum / period;
+}
+
+/**
+ * Classify candle spread vs ATR.
+ * @param {number|null} [avgSpread] — optional SMA spread baseline for ML export
+ */
+function classifySpread(high, low, atr, wideMult = 1.3, narrowMult = 0.7, avgSpread = null) {
   if (atr == null || atr <= 0 || high == null || low == null) {
-    return { spread: null, isWideSpread: false, isNarrowSpread: false };
+    return { spread: null, avgSpread, isWideSpread: false, isNarrowSpread: false };
   }
   const spread = high - low;
   return {
     spread,
+    avgSpread,
     isWideSpread: spread >= wideMult * atr,
     isNarrowSpread: spread <= narrowMult * atr,
   };
@@ -184,6 +201,7 @@ function smaAt(values, lastIdx, period) {
 module.exports = {
   relativeVolume,
   calculateCLV,
+  averageSpreadAt,
   classifySpread,
   percentileRank,
   bbWidthSeries,

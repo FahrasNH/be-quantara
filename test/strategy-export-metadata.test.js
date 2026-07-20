@@ -437,14 +437,18 @@ describe("MARKET_STRUCTURE / MD_* / BS_* / AF_* extract helpers", () => {
     const e = extractAfVsaEnrichment({
       reason: "vsa_stopping_volume_low",
       meta: {
-        spreadType: { spread: 12 },
+        spreadType: { spread: 12, avgSpread: 8 },
         nearSwing: { distancePct: 0.3 },
         volume: 5000,
+        volSMA: 3000,
       },
     });
     expect(e.vsaPatternType).toBe("STOPPING_VOLUME");
     expect(e.vsaReversal).toBe(true);
     expect(e.vsaSpread).toBe(12);
+    expect(e.vsaVolume).toBe(5000);
+    expect(e.vsaAvgSpread).toBe(8);
+    expect(e.vsaAvgVolume).toBe(3000);
   });
 
   test("WYCKOFF extract", () => {
