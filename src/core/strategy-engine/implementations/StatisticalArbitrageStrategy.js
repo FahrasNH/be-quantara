@@ -97,7 +97,7 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       saUpperBand: result.upperBand ?? null,
       saLowerBand: result.lowerBand ?? null,
       saBandTouch: bandTouch,
-      saMeanRevertBars: null, // populated post-exit when available; entry-time N/A
+      saMeanRevertBars: result.meanRevertBars ?? result.saMeanRevertBars ?? null,
     };
     this._lastSignalMeta = {
       component: "STATISTICAL_ARBITRAGE",

@@ -11,6 +11,11 @@
 
 "use strict";
 
+const {
+  percentileRank,
+  bbWidthSeries,
+} = require("../af/volumeAnalysisUtils");
+
 const DEFAULTS = {
   oiLookback: 20,
   extremeFundingLong: 0.0005, // +0.05% / 8h
@@ -203,6 +208,23 @@ function evaluateLiquidationSqueezeEntry({
   const oiChange = Array.isArray(oiHist) ? calculateOIChangePercent(oiHist, oiLookback) : null;
   const dataAvailable = funding != null || oiChange != null;
 
+  let oiValue = null;
+  let oiPercentile = null;
+  let bbWidth = null;
+  let bbWidthPercentile = null;
+
+  if (Array.isArray(oiHist) && oiHist.length > 0) {
+    oiValue = oiHist[oiHist.length - 1];
+    const oiIdx = oiHist.length - 1;
+    oiPercentile = percentileRank(oiHist, oiIdx, Math.max(oiLookback * 2, 20));
+  }
+
+  if (closes && lastIdx >= 19) {
+    const widths = bbWidthSeries(closes, lastIdx, 20, 2);
+    bbWidth = widths[lastIdx];
+    bbWidthPercentile = percentileRank(widths, lastIdx, 100);
+  }
+
   // Squeeze from funding extremes alone (crowd trapped) — need a wick OR strong OI
   let signal = null;
   let reason = "no_ls_signal";
@@ -252,6 +274,10 @@ function evaluateLiquidationSqueezeEntry({
       funding,
       oiChange,
       dataAvailable,
+      oiValue,
+      oiPercentile,
+      bbWidth,
+      bbWidthPercentile,
     };
   }
 
@@ -264,6 +290,10 @@ function evaluateLiquidationSqueezeEntry({
     funding,
     oiChange,
     dataAvailable,
+    oiValue,
+    oiPercentile,
+    bbWidth,
+    bbWidthPercentile,
     winningComponent: "LIQUIDATION_SQUEEZE",
     strategyLabel: "Liquidation/Squeeze Trading",
   };

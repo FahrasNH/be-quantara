@@ -102,7 +102,8 @@ class SupplyDemandStrategy extends StrategyBase {
         ? Math.abs(price - mid) / atr
         : null,
       sdVolumeConfirmation: Boolean(result.hasVolConfirm),
-      sdTimeToRetestBars: zone.barsSince ?? zone.ageBars ?? null,
+      sdTimeToRetestBars: zone.barsSince ?? zone.ageBars
+        ?? (zone.idx != null ? lastIdx - zone.idx : null),
       sdConfluence: Boolean(
         zone.zoneKind && (String(zone.zoneKind).includes("ob") || String(zone.zoneKind).includes("fvg"))
       ),

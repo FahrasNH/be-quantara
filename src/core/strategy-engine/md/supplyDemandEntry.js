@@ -169,24 +169,30 @@ function evaluateSupplyDemandEntry({
     supply.dist <= radius &&
     _isReversalCandle(opens, highs, lows, closes, lastIdx, "SHORT", minReversalBodyPct);
 
+  function _zoneWithAge(zone) {
+    if (!zone) return null;
+    const barsSince = zone.idx != null ? lastIdx - zone.idx : null;
+    return barsSince != null ? { ...zone, barsSince, ageBars: barsSince } : zone;
+  }
+
   // Prefer closer zone when both fire (rare)
   if (longOk && shortOk) {
     if (demand.dist <= supply.dist) {
       signal = "LONG";
-      nearestZone = demand.zone;
+      nearestZone = _zoneWithAge(demand.zone);
       zoneType = demand.zone.zoneKind;
     } else {
       signal = "SHORT";
-      nearestZone = supply.zone;
+      nearestZone = _zoneWithAge(supply.zone);
       zoneType = supply.zone.zoneKind;
     }
   } else if (longOk) {
     signal = "LONG";
-    nearestZone = demand.zone;
+    nearestZone = _zoneWithAge(demand.zone);
     zoneType = demand.zone.zoneKind;
   } else if (shortOk) {
     signal = "SHORT";
-    nearestZone = supply.zone;
+    nearestZone = _zoneWithAge(supply.zone);
     zoneType = supply.zone.zoneKind;
   }
 

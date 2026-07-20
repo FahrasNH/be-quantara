@@ -38,9 +38,40 @@ function _rollingMeanStd(arr, endIdx, lookback) {
 }
 
 /**
- * Ordinary least-squares beta of y on x over lookback ending at endIdx.
- * Returns residual z-score of last point.
+ * Bars (inclusive) that |z| has stayed at/above entryZ on the same side as the signal bar.
  */
+function _meanRevertBars(closes, vwap, benchmarkCloses, lastIdx, lookback, entryZ, useVwap) {
+  if (!closes || lastIdx < lookback) return null;
+
+  const zAt = (idx) => {
+    if (Array.isArray(benchmarkCloses) && benchmarkCloses.length > idx) {
+      const resid = _residualZScore(closes, benchmarkCloses, idx, lookback);
+      if (resid && Number.isFinite(resid.z)) return resid.z;
+    }
+    const stats = _rollingMeanStd(closes, idx, lookback);
+    if (!stats || !(stats.std > 1e-12)) return null;
+    let z = (closes[idx] - stats.mean) / stats.std;
+    if (useVwap && Array.isArray(vwap) && vwap[idx] != null && vwap[idx] > 0) {
+      const vDev = (closes[idx] - vwap[idx]) / stats.std;
+      z = 0.7 * z + 0.3 * vDev;
+    }
+    return z;
+  };
+
+  const zLast = zAt(lastIdx);
+  if (zLast == null || Math.abs(zLast) < entryZ) return null;
+
+  let bars = 0;
+  for (let i = lastIdx; i >= lookback; i--) {
+    const z = zAt(i);
+    if (z == null) break;
+    if (Math.sign(z) !== Math.sign(zLast) || Math.abs(z) < entryZ) break;
+    bars += 1;
+  }
+  return bars > 0 ? bars : null;
+}
+
+/** Ordinary least-squares beta of y on x over lookback ending at endIdx. */
 function _residualZScore(y, x, endIdx, lookback) {
   if (!y || !x || endIdx < lookback - 1) return null;
   const start = endIdx - lookback + 1;
@@ -161,6 +192,9 @@ function evaluateStatisticalArbitrageEntry({
 
     const excess = Math.abs(z) - entryZ;
     const confidence = Math.min(maxConf, baseConf + excess * zBoost);
+    const meanRevertBars = _meanRevertBars(
+      closes, vwap, benchmarkCloses, lastIdx, lookback, entryZ, useVwap,
+    );
     _abl("passed");
     return {
       signal,
@@ -172,6 +206,8 @@ function evaluateStatisticalArbitrageEntry({
       std: stats.std,
       upperBand: stats.mean + 2 * stats.std,
       lowerBand: stats.mean - 2 * stats.std,
+      meanRevertBars,
+      saMeanRevertBars: meanRevertBars,
     };
   }
 
@@ -193,6 +229,9 @@ function evaluateStatisticalArbitrageEntry({
 
   const excess = Math.abs(z) - entryZ;
   const confidence = Math.min(maxConf, baseConf + excess * zBoost);
+  const meanRevertBars = _meanRevertBars(
+    closes, vwap, benchmarkCloses, lastIdx, lookback, entryZ, useVwap,
+  );
 
   _abl("passed");
   return {
@@ -205,6 +244,8 @@ function evaluateStatisticalArbitrageEntry({
     std: stats?.std ?? null,
     upperBand: stats ? stats.mean + 2 * stats.std : null,
     lowerBand: stats ? stats.mean - 2 * stats.std : null,
+    meanRevertBars,
+    saMeanRevertBars: meanRevertBars,
   };
 }
 

@@ -65,6 +65,8 @@ class IctStyleStrategy extends StrategyBase {
   }
 
   detectSignal(indicators, lastIdx, config = {}) {
+    const atr = indicators.atr?.[lastIdx];
+    const price = indicators.closes?.[lastIdx];
     const result = evaluateIctStyleEntry({
       highs: indicators.highs || [],
       lows: indicators.lows || [],
@@ -73,6 +75,7 @@ class IctStyleStrategy extends StrategyBase {
       volSMA: indicators.volSMA,
       timestamps: indicators.timestamps || indicators.times || indicators.openTimes || config.timestamps,
       lastIdx,
+      atr,
       ablation: this._ablation,
       config: { ...DEFAULTS, ...this.config, ...config },
     });
@@ -88,10 +91,11 @@ class IctStyleStrategy extends StrategyBase {
       ictKillZoneHour: hourUtc,
       ictKillZoneLevel: raid.level ?? null,
       ictRaidType: result.signal ? raidType : (raid.detected ? raidType : "NO_RAID"),
-      ictRaidDepthAtr: null, // needs ATR at wire-time; BotEngine/backtest may fill
-      ictVolumeRatio: raid.volOk === false ? 0.5 : (raid.volOk ? 1.2 : null),
+      ictRaidDepthAtr: raid.raidDepthAtr ?? null,
+      ictVolumeRatio: raid.volumeRatio
+        ?? (raid.volOk === false ? 0.5 : (raid.volOk ? 1.2 : null)),
       ictReversal: Boolean(result.signal && reason.includes("reversal")),
-      ictMssPct: null, // MSS % not computed in current ICT raid subset
+      ictMssPct: raid.mssPct ?? null,
     };
     this._lastSignalMeta = {
       component: "ICT_STYLE_TRADING",
@@ -102,6 +106,8 @@ class IctStyleStrategy extends StrategyBase {
       reason: result.reason,
       killZone: result.killZone,
       raid: result.raid,
+      atr,
+      price,
       ...ictFields,
     };
     return result.signal || null;

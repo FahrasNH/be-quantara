@@ -182,7 +182,12 @@ function extractMdSdEnrichment(meta) {
     sdZoneSizeAtr: sizeAtr,
     sdRetestDepthAtr: retestDepth,
     sdVolumeConfirmation: _bool(meta.sdVolumeConfirmation ?? meta.hasVolConfirm),
-    sdTimeToRetestBars: _num(meta.sdTimeToRetestBars ?? zone.barsSince ?? zone.ageBars),
+    sdTimeToRetestBars: _num(
+      meta.sdTimeToRetestBars
+      ?? zone.barsSince
+      ?? zone.ageBars
+      ?? (zone.idx != null && meta.lastIdx != null ? meta.lastIdx - zone.idx : null),
+    ),
     sdConfluence: _bool(
       meta.sdConfluence
       ?? (zone.zoneKind && (String(zone.zoneKind).includes("ob") || String(zone.zoneKind).includes("fvg"))
@@ -234,7 +239,9 @@ function extractBsIctEnrichment(meta) {
   const price = _num(meta.price);
   const raidDepth = meta.ictRaidDepthAtr != null
     ? _num(meta.ictRaidDepthAtr)
-    : (level != null && price != null && atr > 0 ? Math.abs(price - level) / atr : null);
+    : (raid.raidDepthAtr != null
+      ? _num(raid.raidDepthAtr)
+      : (level != null && price != null && atr > 0 ? Math.abs(price - level) / atr : null));
 
   return {
     ictKillZoneHour: _num(meta.ictKillZoneHour ?? kz.hourUtc ?? (kz.minuteOfDay != null ? Math.floor(kz.minuteOfDay / 60) : null)),
@@ -245,7 +252,7 @@ function extractBsIctEnrichment(meta) {
     ictReversal: _bool(
       meta.ictReversal ?? (reason.includes("reversal") || Boolean(raid.detected && meta.winningComponent === "ICT_STYLE_TRADING"))
     ),
-    ictMssPct: _num(meta.ictMssPct ?? meta.mssPct),
+    ictMssPct: _num(meta.ictMssPct ?? meta.mssPct ?? raid.mssPct),
   };
 }
 

@@ -57,6 +57,7 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
   const lookback = opts.sessionLookback ?? DEFAULTS.sessionLookback;
   const volMult = opts.volumeMult ?? DEFAULTS.volumeMult;
   const minBeyond = opts.minWickBeyondPct ?? DEFAULTS.minWickBeyondPct;
+  const atr = opts.atr;
 
   if (!highs || !lows || !closes || lastIdx < lookback + 1) {
     return { detected: false, direction: null, level: null, reason: "warmup" };
@@ -81,11 +82,24 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
   const volNow = volumes?.[lastIdx] ?? 0;
   const vsma = Array.isArray(volSMA) ? (volSMA[lastIdx] ?? volSMA[lastIdx - 1]) : volSMA;
   const volOk = !(vsma > 0) || volNow >= vsma * volMult;
+  const range = Math.max(h - l, 1e-12);
+
+  const _raidMetrics = (direction, level, sweepExtreme) => {
+    const sweepDepth = direction === "SHORT"
+      ? Math.max(0, sweepExtreme - level)
+      : Math.max(0, level - sweepExtreme);
+    const raidDepthAtr = atr > 0 ? sweepDepth / atr : null;
+    const mssPct = direction === "SHORT"
+      ? Math.min(1, Math.max(0, (level - c) / range))
+      : Math.min(1, Math.max(0, (c - level) / range));
+    return { raidDepthAtr, mssPct };
+  };
 
   // Raid HIGH → SHORT (liquidity grab above, reverse down)
   const sweptHigh = h > sessionHigh * (1 + minBeyond) || h > sessionHigh;
   const closedBackHigh = c < sessionHigh;
   if (sweptHigh && closedBackHigh && volOk) {
+    const metrics = _raidMetrics("SHORT", sessionHigh, h);
     return {
       detected: true,
       direction: "SHORT",
@@ -94,6 +108,8 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
       sessionHigh,
       sessionLow,
       volOk: true,
+      volumeRatio: vsma > 0 ? volNow / vsma : null,
+      ...metrics,
     };
   }
 
@@ -101,6 +117,7 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
   const sweptLow = l < sessionLow * (1 - minBeyond) || l < sessionLow;
   const closedBackLow = c > sessionLow;
   if (sweptLow && closedBackLow && volOk) {
+    const metrics = _raidMetrics("LONG", sessionLow, l);
     return {
       detected: true,
       direction: "LONG",
@@ -109,11 +126,14 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
       sessionHigh,
       sessionLow,
       volOk: true,
+      volumeRatio: vsma > 0 ? volNow / vsma : null,
+      ...metrics,
     };
   }
 
   // Soft path: sweep + close-back without volume (reduced confidence upstream)
   if (sweptHigh && closedBackHigh) {
+    const metrics = _raidMetrics("SHORT", sessionHigh, h);
     return {
       detected: true,
       direction: "SHORT",
@@ -122,9 +142,12 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
       sessionHigh,
       sessionLow,
       volOk: false,
+      volumeRatio: vsma > 0 ? volNow / vsma : null,
+      ...metrics,
     };
   }
   if (sweptLow && closedBackLow) {
+    const metrics = _raidMetrics("LONG", sessionLow, l);
     return {
       detected: true,
       direction: "LONG",
@@ -133,6 +156,8 @@ function detectLiquidityRaid(highs, lows, closes, volumes, volSMA, lastIdx, opts
       sessionHigh,
       sessionLow,
       volOk: false,
+      volumeRatio: vsma > 0 ? volNow / vsma : null,
+      ...metrics,
     };
   }
 
@@ -158,6 +183,7 @@ function evaluateIctStyleEntry({
   volSMA,
   timestamps,
   lastIdx,
+  atr,
   ablation = null,
   config = {},
 } = {}) {
@@ -175,6 +201,7 @@ function evaluateIctStyleEntry({
     sessionLookback: config.bsIctSessionLookback ?? DEFAULTS.sessionLookback,
     volumeMult: config.bsIctVolumeMult ?? DEFAULTS.volumeMult,
     minWickBeyondPct: config.bsIctMinWickBeyondPct ?? DEFAULTS.minWickBeyondPct,
+    atr: atr ?? config.atr,
   });
 
   if (!raid.detected) {

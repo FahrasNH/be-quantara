@@ -398,6 +398,17 @@ describe("MARKET_STRUCTURE / MD_* / BS_* / AF_* extract helpers", () => {
     expect(e.sdZoneSizeAtr).toBe(2);
     expect(e.sdVolumeConfirmation).toBe(true);
     expect(e.sdConfluence).toBe(true);
+    expect(e.sdTimeToRetestBars).toBe(5);
+  });
+
+  test("SUPPLY_AND_DEMAND extract derives barsSince from zone idx", () => {
+    const e = extractMdSdEnrichment({
+      nearestZone: { low: 98, high: 100, idx: 90 },
+      lastIdx: 100,
+      atr: 1,
+      price: 99,
+    });
+    expect(e.sdTimeToRetestBars).toBe(10);
   });
 
   test("STATISTICAL_ARBITRAGE extract", () => {
@@ -407,33 +418,53 @@ describe("MARKET_STRUCTURE / MD_* / BS_* / AF_* extract helpers", () => {
       std: 2,
       upperBand: 104,
       lowerBand: 96,
+      meanRevertBars: 4,
     });
     expect(e.saZScore).toBe(-2.5);
     expect(e.saBandTouch).toBe("LOWER");
     expect(e.saMaValue).toBe(100);
+    expect(e.saMeanRevertBars).toBe(4);
   });
 
   test("ICT_STYLE_TRADING extract", () => {
     const e = extractBsIctEnrichment({
       reason: "ict_raid_low_reversal_london",
       killZone: { minuteOfDay: 8 * 60, active: true },
-      raid: { detected: true, direction: "LONG", level: 95, volOk: true },
+      raid: {
+        detected: true,
+        direction: "LONG",
+        level: 95,
+        volOk: true,
+        raidDepthAtr: 0.5,
+        mssPct: 0.4,
+      },
+      atr: 1,
+      price: 96,
       winningComponent: "ICT_STYLE_TRADING",
     });
     expect(e.ictKillZoneHour).toBe(8);
     expect(e.ictRaidType).toBe("RAID_LOW");
     expect(e.ictReversal).toBe(true);
+    expect(e.ictRaidDepthAtr).toBe(0.5);
+    expect(e.ictMssPct).toBe(0.4);
   });
 
   test("LIQUIDATION_SQUEEZE extract", () => {
     const e = extractBsLsEnrichment({
       oiChange: 1.5,
-      wick: { level: 101, depthAtr: 0.8 },
+      oiValue: 1e6,
+      oiPercentile: 95,
       bbWidth: 0.02,
+      bbWidthPercentile: 10,
+      wick: { level: 101, depthAtr: 0.8 },
     });
     expect(e.lsOiForecast24h).toBe(1.5);
     expect(e.lsLiquidationLevel).toBe(101);
     expect(e.lsWickDepthAtr).toBe(0.8);
+    expect(e.lsOiValue).toBe(1e6);
+    expect(e.lsOiPercentile).toBe(95);
+    expect(e.lsBbWidth).toBe(0.02);
+    expect(e.lsBbWidthPercentile).toBe(10);
   });
 
   test("VOLUME_SPREAD_ANALYSIS extract", () => {

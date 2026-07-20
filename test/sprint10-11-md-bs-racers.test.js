@@ -191,6 +191,30 @@ test("ICT entry outside kill zone still soft-allows", () => {
   assert.ok(r.confidence < 0.7);
 });
 
+test("ICT raid emits raidDepthAtr and mssPct when ATR available", () => {
+  const lookback = 20;
+  const n = lookback + 5;
+  const highs = flatSeries(n, 105);
+  const lows = flatSeries(n, 95);
+  const closes = flatSeries(n, 100);
+  const volumes = flatSeries(n, 1000);
+  const volSMA = flatSeries(n, 800);
+  const timestamps = flatSeries(n, Date.UTC(2026, 6, 13, 12, 30));
+  const last = n - 1;
+  highs[last] = 108;
+  lows[last] = 103;
+  closes[last] = 104;
+  volumes[last] = 2000;
+  const raid = detectLiquidityRaid(highs, lows, closes, volumes, volSMA, last, {
+    sessionLookback: lookback,
+    atr: 2,
+  });
+  assert.strictEqual(raid.detected, true);
+  assert.strictEqual(raid.direction, "SHORT");
+  assert.ok(raid.raidDepthAtr > 0);
+  assert.ok(raid.mssPct > 0 && raid.mssPct <= 1);
+});
+
 console.log("\n═══ LIQUIDATION_SQUEEZE Liquidation/Squeeze ═══");
 
 test("OI change percent", () => {
@@ -257,6 +281,37 @@ test("liquidation wick LONG/SHORT + fail-open without OI", () => {
   assert.strictEqual(shortW.direction, "SHORT");
 });
 
+test("liquidation squeeze emits OI + BB width metrics when data available", () => {
+  const lookback = 20;
+  const n = lookback + 3;
+  const opens = flatSeries(n, 100);
+  const highs = flatSeries(n, 102);
+  const lows = flatSeries(n, 98);
+  const closes = flatSeries(n, 100);
+  const volumes = flatSeries(n, 1000);
+  const volSMA = flatSeries(n, 800);
+  for (let i = 0; i < n - 1; i++) {
+    highs[i] = 102;
+    lows[i] = 98;
+  }
+  const last = n - 1;
+  opens[last] = 99;
+  lows[last] = 95;
+  highs[last] = 101;
+  closes[last] = 100.5;
+  volumes[last] = 1500;
+  const oiHistory = Array.from({ length: 25 }, (_, i) => 900 + i * 10);
+  const entry = evaluateLiquidationSqueezeEntry({
+    highs, lows, opens, closes, volumes, volSMA, lastIdx: last,
+    exchangeData: { oiHistory, funding: -0.0006 },
+  });
+  assert.strictEqual(entry.signal, "LONG");
+  assert.strictEqual(entry.oiValue, oiHistory[oiHistory.length - 1]);
+  assert.ok(entry.oiPercentile != null);
+  assert.ok(entry.bbWidth != null);
+  assert.ok(entry.bbWidthPercentile != null);
+});
+
 console.log("\n═══ SUPPLY_AND_DEMAND Supply and Demand (smoke) ═══");
 
 test("SD entry returns structured result without crash on flat data", () => {
@@ -273,6 +328,22 @@ test("SD entry returns structured result without crash on flat data", () => {
   });
   assert.ok(r);
   assert.ok(r.signal === null || r.signal === "LONG" || r.signal === "SHORT");
+});
+
+test("SA entry emits meanRevertBars on extreme z", () => {
+  const n = 60;
+  const closes = flatSeries(n, 100);
+  for (let i = n - 5; i < n; i++) closes[i] = 90;
+  const r = evaluateStatisticalArbitrageEntry({
+    closes,
+    vwap: flatSeries(n, 100),
+    lastIdx: n - 1,
+    config: { mdSaMinBars: 50, mdSaLookback: 40, mdSaEntryZ: 1.6 },
+  });
+  if (r.signal) {
+    assert.ok(r.meanRevertBars != null && r.meanRevertBars >= 1);
+    assert.strictEqual(r.saMeanRevertBars, r.meanRevertBars);
+  }
 });
 
 console.log("\n═══ Umbrella race attribution ═══");
@@ -336,6 +407,8 @@ test("BreakoutStormUmbrella ICT_STYLE_TRADING attribution on raid", () => {
   assert.strictEqual(signal, "SHORT");
   assert.strictEqual(meta.winningComponent, "ICT_STYLE_TRADING");
   assert.strictEqual(meta.strategyLabel, "ICT-style trading");
+  assert.ok(meta.ictRaidDepthAtr != null);
+  assert.ok(meta.ictMssPct != null);
 });
 
 console.log("\n═══ Reason formatters ═══");
