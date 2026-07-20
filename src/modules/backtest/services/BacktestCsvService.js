@@ -42,6 +42,7 @@ const {
 } = require("../../../server/services/csv/strategyReasonFormatters");
 const { formatExportDateTime } = require("../../../shared/csv/exportDateTime");
 const { enrichMetaWithGradedScore } = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
+const { detectMarketSession } = require("../../../core/risk-engine/entryRiskGates");
 const { extractGradedScoreEnrichment } = require("../../../shared/csv/strategyMlEnrichment");
 const { STRATEGIES } = require("#config/strategyDefaults.js");
 
@@ -112,11 +113,6 @@ function escapeCsv(val) {
   return s;
 }
 
-/**
- * Detect market session from UTC hour (0-23).
- * Sydney: 22:00-06:59 UTC (ASX); Tokyo: 00:00-08:59 UTC (JPX)
- * London: 08:00-16:59 UTC (LSE); New York: 13:00-21:59 UTC (NYSE)
- */
 /** Resolve gradedScore fields for CSV / ML export from trade row or entry meta. */
 function resolveGradedScoreFields(trade, ctx) {
   const mlKey = resolveTradeMlStrategyKey({
@@ -149,16 +145,6 @@ function resolveGradedScoreFields(trade, ctx) {
     gradedScoreBreakdown: graded.gradedScoreBreakdown ?? NA,
     scoringStrategyKey: graded.scoringStrategyKey ?? mlKey,
   };
-}
-
-function detectMarketSession(hourUtc) {
-  if (hourUtc == null || !Number.isFinite(Number(hourUtc))) return NA;
-  const h = Number(hourUtc);
-  if ((h >= 22 && h <= 23) || (h >= 0 && h <= 6)) return "Sydney";
-  if (h >= 0 && h <= 8) return "Tokyo"; // Overlaps Sydney early hours (both active)
-  if (h >= 8 && h <= 16) return "London";
-  if (h >= 13 && h <= 21) return "New York";
-  return NA;
 }
 
 /**
@@ -253,7 +239,7 @@ function mapBacktestTrade(trade, ctx, index) {
   let session = NA;
   if (openTime !== NA) {
     const openHour = new Date(openTime).getUTCHours();
-    if (!Number.isNaN(openHour)) session = detectMarketSession(openHour);
+    if (!Number.isNaN(openHour)) session = detectMarketSession(openHour) ?? NA;
   }
   if (!session || session === NA) {
     session = detectMarketSession(trade.hourUtc) ?? NA;

@@ -7,10 +7,10 @@
 
 /** UTC hour ranges (inclusive) per market session — SSOT for session gates. */
 const SESSION_HOUR_RANGES = Object.freeze({
-  Sydney: [[22, 23], [0, 6]],
-  Tokyo: [[0, 8]],
-  London: [[8, 16]],
-  "New York": [[13, 21]],
+  Sydney: [[21, 23], [0, 6]], // 04:00–13:00 WIB
+  Tokyo: [[23, 23], [0, 8]], // 06:00–15:00 WIB (23 wraps midnight)
+  London: [[8, 16]], // 15:00–23:00 WIB
+  "New York": [[13, 21]], // 20:00–04:00 WIB
 });
 
 /**
@@ -22,7 +22,7 @@ const SESSION_HOUR_RANGES = Object.freeze({
 function detectMarketSession(hourUtc) {
   if (hourUtc == null || !Number.isFinite(Number(hourUtc))) return null;
   const h = Number(hourUtc);
-  if ((h >= 22 && h <= 23) || (h >= 0 && h <= 6)) return "Sydney";
+  if ((h >= 21 && h <= 23) || (h >= 0 && h <= 6)) return "Sydney";
   if (h >= 0 && h <= 8) return "Tokyo";
   if (h >= 8 && h <= 16) return "London";
   if (h >= 13 && h <= 21) return "New York";
