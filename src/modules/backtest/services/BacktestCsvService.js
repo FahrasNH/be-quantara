@@ -161,7 +161,7 @@ function detectMarketSession(hourUtc) {
 }
 
 /**
- * Format ISO datetime to readable: "20 April 2026, 01:25 AM"
+ * Format ISO datetime to readable UTC: "20 April 2026, 01:25 AM UTC"
  */
 function formatDateTime(isoStr) {
   if (!isoStr || isoStr === NA) return NA;
@@ -177,7 +177,7 @@ function formatDateTime(isoStr) {
       hour12: true,
       timeZone: "UTC"
     });
-    return `${day} ${month} ${year}, ${time}`;
+    return `${day} ${month} ${year}, ${time} UTC`;
   } catch {
     return NA;
   }

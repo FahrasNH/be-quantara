@@ -109,6 +109,8 @@ describe("mapBacktestTrade entryReasons", () => {
     expect(row.component).toBe("BREAKOUT_RETEST");
     expect(row.hourUtc).toBe(9);
     expect(row.holdHours).toBe(2);
+    expect(row.openTime).toBe("1 January 2024, 09:00 AM UTC");
+    expect(row.closeTime).toBe("1 January 2024, 11:00 AM UTC");
   });
 
   test("rejects absurd atr / entryRsi magnitudes", () => {

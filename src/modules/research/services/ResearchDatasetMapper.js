@@ -52,11 +52,11 @@ function parseDurationMinutes(raw) {
 function parseDateTime(raw) {
   if (!raw) return null;
   if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
-  const s = String(raw).trim();
+  const s = String(raw).trim().replace(/\s+UTC$/i, "");
   const iso = Date.parse(s);
   if (Number.isFinite(iso)) return new Date(iso);
   const m = s.match(
-    /^(\d{1,2})\s+(\w+)\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i
+    /^(\d{1,2})\s+(\w+)\s+(\d{4}),\s+(\d{1,2}):(\d{2})\s*(AM|PM)(?:\s+UTC)?$/i
   );
   if (m) {
     const months = {

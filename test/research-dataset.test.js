@@ -35,6 +35,10 @@ const dt = parseDateTime("21 October 2021, 08:20 PM");
 assert.ok(dt instanceof Date);
 assert.strictEqual(dt.getUTCFullYear(), 2021);
 
+const dtUtc = parseDateTime("21 October 2021, 08:20 PM UTC");
+assert.ok(dtUtc instanceof Date);
+assert.strictEqual(dtUtc.getTime(), dt.getTime());
+
 const sampleRow = {
   ID: "session-1-1-1",
   Symbol: "BTCUSDT",
