@@ -1,11 +1,14 @@
 /**
  * PM2 — production (port 3000) + staging (port 3001) + development (port 3002)
  *
- * Production (dari folder prod):
- *   pm2 start ecosystem.config.js --only be-quantara-prod
+ * IMPORTANT — one checkout per environment on VPS:
+ *   /opt/quantara-prod/be     → pm2 start ecosystem.config.js --only be-quantara-prod
+ *   /opt/quantara-staging/be  → pm2 start ecosystem.config.js --only be-quantara-staging
+ *   /opt/quantara-dev/be      → pm2 start ecosystem.config.js --only be-quantara-dev
  *
- * Staging (dari /opt/quantara-staging/be):
- *   pm2 start ecosystem.config.js --only be-quantara-staging
+ * Do NOT run bare `pm2 start ecosystem.config.js` from prod expecting dev/staging to
+ * appear — cwd=__dirname binds each app to the folder you run from. After accidental
+ * pm2 delete, use: bash scripts/pm2-restore-vps.sh
  *
  * OPS-003 hardening:
  *  - max_restarts + min_uptime: hentikan crash-loop (mis. env invalid) alih-alih
