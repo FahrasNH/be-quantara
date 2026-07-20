@@ -142,6 +142,20 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     return best;
   }
 
+  /** Last signal meta from the winning AF racer (Wyckoff/VSA/SMC). */
+  _winnerComponentMeta(winnerKey) {
+    if (winnerKey === "WYCKOFF" && typeof this._wyckoff.getLastSignalMeta === "function") {
+      return this._wyckoff.getLastSignalMeta() || {};
+    }
+    if (winnerKey === "VOLUME_SPREAD_ANALYSIS" && typeof this._vsa.getLastSignalMeta === "function") {
+      return this._vsa.getLastSignalMeta() || {};
+    }
+    if (typeof this._smc.getLastSignalMeta === "function") {
+      return this._smc.getLastSignalMeta() || {};
+    }
+    return {};
+  }
+
   /**
    * Collect per-component votes (NEUTRAL included) for vote-mode breakdown.
    * @param {object} [precomputedMulti] - optional SMC detectSignalMulti result
@@ -464,6 +478,14 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const voters = this._resolveActiveVoters(config);
     const smcActive = voters.has("SMART_MONEY_CONCEPTS") || voters.has("SMC");
     if (!smcActive) {
+      const voterKey = componentVotes.find((v) => v.vote === dir)?.key;
+      const winnerKey = voterKey === "SMC"
+        ? "SMART_MONEY_CONCEPTS"
+        : voterKey === "VSA"
+          ? "VOLUME_SPREAD_ANALYSIS"
+          : voterKey === "WYCKOFF"
+            ? "WYCKOFF"
+            : null;
       return {
         Scalping: dir,
         Intraday: dir,
@@ -472,7 +494,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
         B: dir,
         C: dir,
         meta: attachMeta({
-          ...(multi?.meta || {}),
+          ...(winnerKey ? this._winnerComponentMeta(winnerKey) : {}),
           gateDirection: dir,
           standaloneVoterEntry: true,
         }),
@@ -540,7 +562,7 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
         B: null,
         C: dir,
         meta: attachMeta({
-          ...(multi?.meta || {}),
+          ...this._winnerComponentMeta(winnerKey),
           gateDirection: dir,
           standaloneRacerEntry: true,
         }),

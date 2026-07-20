@@ -244,9 +244,22 @@ function resolveWinningComponentKey(meta, strategy, strategyKey) {
 
 /** Sprint 16: enrich signal meta with graded 0-100 score (live/backtest parity). */
 function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null, tradeType = null) {
-  const meta = rawMeta ?? (typeof strategy?.getLastSignalMeta === "function"
+  const signalMeta = typeof strategy?.getLastSignalMeta === "function"
     ? strategy.getLastSignalMeta()
-    : null);
+    : null;
+  // AF detectSignalMulti attaches gate/race overlays on multi.meta; merge with
+  // getLastSignalMeta() so Wyckoff/VSA ML fields propagate to positions/CSV.
+  const meta = rawMeta
+    ? {
+        ...(signalMeta || {}),
+        ...rawMeta,
+        winningComponent: resolveWinningComponentKey(
+          { ...(signalMeta || {}), ...rawMeta },
+          strategy,
+          strategyKey,
+        ),
+      }
+    : signalMeta;
   if (!meta) return null;
   const key = resolveWinningComponentKey(meta, strategy, strategyKey);
   const leg = tradeType ?? meta.tradeType ?? (

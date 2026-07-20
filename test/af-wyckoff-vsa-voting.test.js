@@ -794,6 +794,43 @@ test("REGRESSION: Wyckoff-only race promotes Scalping+Swing, not Intraday", () =
   assert.strictEqual(multi.Intraday, null, "AF racers must not attribute Intraday");
   assert.strictEqual(multi.B, null);
   assert.strictEqual(multi.meta?.standaloneRacerEntry, true);
+  assert.ok(multi.meta?.wyPatternType, "Wy* fields must propagate through AF race meta");
+  assert.ok(multi.meta?.wyAccumulationBars != null, "wyAccumulationBars must propagate");
+  assert.strictEqual(
+    multi.meta?.sweepStrength ?? multi.meta?.sequenceMeta?.sweepIdx,
+    undefined,
+    "SMC sequence meta must not replace Wyckoff winner meta",
+  );
+});
+
+test("REGRESSION: VSA-only race meta carries vsa* fields", () => {
+  const um = new AdaptiveFusionUmbrella();
+  const n = 80;
+  const closes = Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 6) * 0.2);
+  const highs = closes.map((c) => c + 0.5);
+  const lows = closes.map((c) => c - 0.5);
+  lows[n - 3] = 98.8;
+  closes[n - 2] = 100.1;
+  const volumes = Array.from({ length: n }, () => 1000);
+  volumes[n - 3] = 2500;
+  const indicators = {
+    opens: closes.map((c) => c - 0.05),
+    highs,
+    lows,
+    closes,
+    volumes,
+    volSMA: Array.from({ length: n }, () => 900),
+    atr: Array.from({ length: n }, () => 0.6),
+    rsi: Array.from({ length: n }, () => 50),
+  };
+  const multi = um.detectSignalMulti(indicators, n - 1, {
+    afActiveRacers: ["VOLUME_SPREAD_ANALYSIS"],
+    vsa: { swingProximityPct: 5 },
+  });
+  if (multi.Scalping || multi.Swing) {
+    assert.strictEqual(multi.meta?.winningComponent, "VOLUME_SPREAD_ANALYSIS");
+    assert.ok(multi.meta?.vsaPatternType, "Vsa* fields must propagate through AF race meta");
+  }
 });
 
 console.log("\n══════════════════════════════════════");
