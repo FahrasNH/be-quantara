@@ -48,6 +48,27 @@ const { STRATEGIES } = require("#config/strategyDefaults.js");
 
 const NA = "N/A";
 
+/** Finite scalar for CSV numerics — reject arrays / objects / absurd magnitudes. */
+function scalarCsvNum(v, { min = -Infinity, max = Infinity } = {}) {
+  if (v == null || v === "") return null;
+  if (Array.isArray(v)) {
+    for (let i = v.length - 1; i >= 0; i--) {
+      const n = Number(v[i]);
+      if (Number.isFinite(n) && n >= min && n <= max) return n;
+    }
+    return null;
+  }
+  if (typeof v === "object") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
+
+function numOrNa(v, opts) {
+  const n = scalarCsvNum(v, opts);
+  return n == null ? NA : n;
+}
+
 const TYPE_TRADE_CLASSES = ["Scalping", "Intraday", "Swing"];
 
 /**
@@ -195,24 +216,29 @@ function buildSummaryCsv(records) {
  * Map satu trade backtest → baris export (skema sama mapExportRow / admin Trade History).
  */
 function mapBacktestTrade(trade, ctx, index) {
-  const entry = trade.entry ?? trade.entryPrice;
-  const exit = trade.exit ?? trade.exitPrice;
+  const entry = numOrNa(trade.entry ?? trade.entryPrice, { min: 0, max: 1e12 });
+  const exit = numOrNa(trade.exit ?? trade.exitPrice, { min: 0, max: 1e12 });
   const fee = Number(trade.fee ?? 0);
   const funding = Number(trade.funding ?? 0);
   const grossPnl = trade.grossPnl != null
     ? Number(trade.grossPnl)
     : Number(trade.pnl ?? 0) + fee;
   const pnlNet = trade.pnl != null ? Number(trade.pnl) : grossPnl - fee - funding;
-  const size = trade.size ?? null;
-  const sl = trade.sl ?? null;
-  const tp = trade.tp ?? null;
+  const size = numOrNa(trade.size, { min: 0, max: 1e12 });
+  const sl = numOrNa(trade.sl, { min: 0, max: 1e12 });
+  const tp = numOrNa(trade.tp, { min: 0, max: 1e12 });
+
+  const entryNum = entry === NA ? null : entry;
+  const slNum = sl === NA ? null : sl;
+  const tpNum = tp === NA ? null : tp;
+  const sizeNum = size === NA ? null : size;
 
   const plannedRR =
-    sl != null && tp != null && entry != null && Math.abs(entry - sl) > 0
-      ? parseFloat((Math.abs(tp - entry) / Math.abs(entry - sl)).toFixed(2))
+    slNum != null && tpNum != null && entryNum != null && Math.abs(entryNum - slNum) > 0
+      ? parseFloat((Math.abs(tpNum - entryNum) / Math.abs(entryNum - slNum)).toFixed(2))
       : NA;
   const plannedRisk =
-    sl != null && size != null && entry != null ? Math.abs(entry - sl) * size : null;
+    slNum != null && sizeNum != null && entryNum != null ? Math.abs(entryNum - slNum) * sizeNum : null;
   const actualRR =
     plannedRisk && plannedRisk > 0
       ? parseFloat((pnlNet / plannedRisk).toFixed(2))
@@ -269,16 +295,10 @@ function mapBacktestTrade(trade, ctx, index) {
   const entryReasons =
     precomputed || resolveEntryReasons(strategyKeyForReasons, entryMeta) || NA;
 
-  const atrNum = Number(trade.atr);
-  const rsiNum = Number(trade.entryRsi);
-  const atrOut =
-    trade.atr == null || Array.isArray(trade.atr) || !Number.isFinite(atrNum) || atrNum < 0 || atrNum > 1e9
-      ? NA
-      : atrNum;
-  const rsiOut =
-    trade.entryRsi == null || Array.isArray(trade.entryRsi) || !Number.isFinite(rsiNum) || rsiNum < 0 || rsiNum > 100
-      ? NA
-      : rsiNum;
+  const atrNum = scalarCsvNum(trade.atr, { min: 0, max: 1e9 });
+  const rsiNum = scalarCsvNum(trade.entryRsi, { min: 0, max: 100 });
+  const atrOut = atrNum == null ? NA : atrNum;
+  const rsiOut = rsiNum == null ? NA : rsiNum;
 
   let hourUtcOut = trade.hourUtc;
   if (hourUtcOut == null && openTime !== NA) {

@@ -133,6 +133,30 @@ describe("mapBacktestTrade entryReasons", () => {
     expect(row.atr).toBe("N/A");
     expect(row.entryRsi).toBe("N/A");
   });
+
+  test("rejects absurd sl / tp magnitudes", () => {
+    const row = mapBacktestTrade({
+      side: "LONG", entry: 61877.6, exit: 62000, reason: "TP",
+      sl: 9703477651638930,
+      tp: 4430841975420590,
+      atr: 120.5,
+      entryReasons: "x",
+    }, ctx, 0);
+    expect(row.sl).toBe("N/A");
+    expect(row.tp).toBe("N/A");
+    expect(row.atr).toBe(120.5);
+  });
+
+  test("component column uses winningComponent over stale trade leg", () => {
+    const row = mapBacktestTrade({
+      side: "LONG", entry: 100, exit: 110, reason: "TP",
+      component: "Scalping",
+      winningComponent: "SMART_MONEY_CONCEPTS",
+      entryReasons: "Liquidity Sweep",
+    }, ctx, 0);
+    expect(row.component).toBe("SMART_MONEY_CONCEPTS");
+    expect(row.winningComponent).toBe("SMART_MONEY_CONCEPTS");
+  });
 });
 
 describe("CORE CSV schema (Sprint 14 redesign)", () => {

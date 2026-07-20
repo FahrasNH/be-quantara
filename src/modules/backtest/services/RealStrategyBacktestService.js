@@ -53,6 +53,8 @@ const { resolveEntryReasons } = require("../../../server/services/csv/strategyRe
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
+const TRADE_LEG_NAMES = new Set(["Scalping", "Intraday", "Swing", "A", "B", "C"]);
+
 /** Coerce indicator snapshots to a finite scalar (reject arrays / absurd values). */
 function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
   if (v == null || v === "") return null;
@@ -219,19 +221,42 @@ const {
 } = require("../../../shared/csv/strategyMlEnrichment");
 const { enrichMetaWithGradedScore } = require("../../../core/strategy-engine/scoring/ComponentScoringEngine");
 
+/**
+ * Resolve the winning racer/component key for trade attribution.
+ * Never treat trade-leg names (Scalping/Intraday/Swing) as strategy components.
+ * Prefer explicit winningComponent / afRace / getLastRaceMeta over stale meta.component
+ * (Wyckoff evaluate always stamps component:"WYCKOFF" even when SMC wins the race).
+ */
+function resolveWinningComponentKey(meta, strategy, strategyKey) {
+  if (meta?.winningComponent) return meta.winningComponent;
+  if (meta?.afRace?.winningComponent) return meta.afRace.winningComponent;
+  const raceMeta = typeof strategy?.getLastRaceMeta === "function"
+    ? strategy.getLastRaceMeta()
+    : null;
+  if (raceMeta?.winningComponent) return raceMeta.winningComponent;
+  const comp = meta?.component;
+  if (comp && !TRADE_LEG_NAMES.has(comp)) {
+    const n = normalizeStrategyKey(String(comp).toUpperCase());
+    if (n && n !== "ADAPTIVE_FUSION") return n;
+  }
+  return strategyKey;
+}
+
 /** Sprint 16: enrich signal meta with graded 0-100 score (live/backtest parity). */
 function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null, tradeType = null) {
   const meta = rawMeta ?? (typeof strategy?.getLastSignalMeta === "function"
     ? strategy.getLastSignalMeta()
     : null);
   if (!meta) return null;
-  const key = meta.winningComponent || meta.component || strategyKey;
-  const leg = tradeType ?? meta.tradeType ?? meta.component ?? null;
+  const key = resolveWinningComponentKey(meta, strategy, strategyKey);
+  const leg = tradeType ?? meta.tradeType ?? (
+    TRADE_LEG_NAMES.has(meta.component) ? meta.component : null
+  );
   return enrichMetaWithGradedScore({
     ...meta,
     winningComponent: key,
     tradeType: leg,
-    component: leg ?? meta.component,
+    component: leg ?? (TRADE_LEG_NAMES.has(meta.component) ? meta.component : key),
   }, key);
 }
 
@@ -321,16 +346,39 @@ function isoOf(c) {
 /** Attach full entryContext for RAG gate / WinPredictor (mirrors live ML pipeline). */
 function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) {
   const label = displayName || strategyKey;
+  const entryMeta = tradeObj.entryMeta ?? position?.entryMeta ?? null;
+  if (tradeObj.entryMeta == null && entryMeta != null) tradeObj.entryMeta = entryMeta;
+
   const entry = tradeObj.entry ?? position?.entry;
   // Guard against array/object bleed into CSV numeric columns (ATR/RSI showing 1e15+).
   const atr = scalarIndicator(position?.atr ?? tradeObj.atr, { min: 0, max: 1e9 });
   const entryRsi = scalarIndicator(position?.entryRsi ?? tradeObj.entryRsi, { min: 0, max: 100 });
+  const entryPx = scalarIndicator(entry, { min: 0, max: 1e12 });
+  const slPx = scalarIndicator(tradeObj.sl ?? position?.sl, { min: 0, max: 1e12 });
+  const tpPx = scalarIndicator(tradeObj.tp ?? position?.tp, { min: 0, max: 1e12 });
   if (atr != null) tradeObj.atr = atr;
+  else if (tradeObj.atr != null) tradeObj.atr = null;
   if (entryRsi != null) tradeObj.entryRsi = entryRsi;
-  else if (tradeObj.entryRsi != null && entryRsi == null) tradeObj.entryRsi = null;
+  else if (tradeObj.entryRsi != null) tradeObj.entryRsi = null;
+  if (entryPx != null) tradeObj.entry = entryPx;
+  if (slPx != null) tradeObj.sl = slPx;
+  else if (tradeObj.sl != null) tradeObj.sl = null;
+  if (tpPx != null) tradeObj.tp = tpPx;
+  else if (tradeObj.tp != null) tradeObj.tp = null;
+
+  const winner =
+    position?.winningComponent
+    ?? tradeObj.winningComponent
+    ?? resolveWinningComponentKey(entryMeta, null, strategyKey);
+  if (winner) {
+    tradeObj.winningComponent = winner;
+    tradeObj.strategyKey = winner;
+  } else {
+    tradeObj.strategyKey = strategyKey;
+  }
 
   const ctxSource = {
-    entry,
+    entry: entryPx ?? entry,
     atr:        atr ?? 0,
     entryRsi:   entryRsi ?? 50,
     htfTrend:   position?.htfTrend ?? tradeObj.htfTrend ?? null,
@@ -340,11 +388,7 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
     strategy:   label,
   };
   tradeObj.strategy = label;
-  tradeObj.strategyKey = strategyKey;
   tradeObj.strategyLabel = label;
-  if (position?.winningComponent && tradeObj.winningComponent == null) {
-    tradeObj.winningComponent = position.winningComponent;
-  }
 
   // Sprint 14/15: pass through strategy ML enrichment columns for CSV / WinPredictor
   const ENRICH_KEYS = [
@@ -359,14 +403,10 @@ function withBacktestEntryContext(tradeObj, position, strategyKey, displayName) 
 
   // Compute human-readable entryReasons at close so FE client CSV + archive
   // export both see a string (FE previously only passthrough'd entryReasons).
-  const entryMeta = tradeObj.entryMeta ?? position?.entryMeta ?? null;
-  if (tradeObj.entryMeta == null && entryMeta != null) tradeObj.entryMeta = entryMeta;
   const reasonKey =
     tradeObj.winningComponent
     || position?.winningComponent
-    || entryMeta?.winningComponent
-    || entryMeta?.component
-    || strategyKey;
+    || resolveWinningComponentKey(entryMeta, null, strategyKey);
   if (tradeObj.entryReasons == null || tradeObj.entryReasons === "") {
     const resolved = resolveEntryReasons(reasonKey, entryMeta);
     tradeObj.entryReasons = resolved || null;
@@ -886,7 +926,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     }
     const c = entryCandles[i];
     const price = c.close;
-    const atr = indicators.atr[i];
+    const atr = scalarIndicator(indicators.atr[i], { min: 0, max: 1e9 });
     if (atr == null || price == null) {
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -1171,7 +1211,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         ? resolveEnrichedSignalMeta(strategy, strategyKey, multiSignal.meta, componentId)
         : lastMeta;
       const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
-      const winningComponent = meta?.winningComponent || null;
+      const winningComponent = resolveWinningComponentKey(meta, strategy, strategyKey);
 
       // Sprint 13: granular ML features + confidence components for CSV
       const seqMeta = meta?.sequenceMeta ? { ...meta.sequenceMeta } : null;
@@ -2498,7 +2538,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
-    }, position, strategyKey, position.strategyLabel || strategyDisplayName));
+    }, position, position.winningComponent || strategyKey, position.strategyLabel || strategyDisplayName));
     position = null;
   }
 
@@ -2518,7 +2558,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     const c = entryCandles[i];
     const price = c.close;
-    const atr = indicators.atr[i];
+    const atr = scalarIndicator(indicators.atr[i], { min: 0, max: 1e9 });
     if (atr == null || price == null) {
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -2867,7 +2907,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       });
       slDist = rc.slDistance * pairSlMult;
       tpDist = rc.tpDistance * pairSlMult;
-      component = meta.winningComponent || meta.component;
+      component = resolveWinningComponentKey(meta, strategy, strategyKey);
       marketCond = meta.marketCond;
       plannedRR = rc.riskReward;
 
@@ -2902,7 +2942,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         dailyRegime,
         entryMeta: meta || null,
         strategyLabel: tradeLabel,
-        winningComponent: meta?.winningComponent || component,
+        winningComponent: meta?.winningComponent || resolveWinningComponentKey(meta, strategy, strategyKey) || component,
         ...brEnrich,
         ...mlEnrich,
       };
@@ -2932,7 +2972,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       dailyRegime,
       entryMeta: meta || null,
       strategyLabel: tradeLabel,
-      winningComponent: meta?.winningComponent || component,
+      winningComponent: resolveWinningComponentKey(meta, strategy, strategyKey) || component,
       ...brEnrich,
       ...mlEnrich,
       // SL+ partial-TP state (see checkPartialMilestones) — R is the risk distance,
