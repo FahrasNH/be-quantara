@@ -43,6 +43,11 @@ const {
   buildCostModelMeta,
   holdHoursBetween,
 } = require("../../../core/strategy-engine/af/smcEntry");
+const {
+  initPositionExcursions,
+  updatePositionExcursions,
+  computeExcursionFields,
+} = require("../../../shared/backtest/tradeExcursion");
 const { buildBacktestEntryContext } = require("../../analytics/domain/engineTradeMlAdapter");
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
@@ -772,6 +777,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       : componentId;
 
     const holdHours = holdHoursBetween(openTs, closeTs);
+    const excursions = computeExcursionFields(position, px);
 
     trades.push(withBacktestEntryContext({
       date: closeTime,
@@ -824,6 +830,14 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       confHtfAlignment: position.confHtfAlignment ?? null,
       confMitigationDepth: position.confMitigationDepth ?? null,
       confObConfluence: position.confObConfluence ?? null,
+      sweepAgeBars: position.sweepAgeBars ?? null,
+      sweepToChochBars: position.sweepToChochBars ?? null,
+      chochToEntryBars: position.chochToEntryBars ?? null,
+      mfe: excursions.mfe,
+      mae: excursions.mae,
+      mfePercent: excursions.mfePercent,
+      maePercent: excursions.maePercent,
+      exitEfficiency: excursions.exitEfficiency,
       vpVwapLevel: position.vpVwapLevel ?? null,
       vpVahLevel: position.vpVahLevel ?? null,
       vpValLevel: position.vpValLevel ?? null,
@@ -883,6 +897,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     for (const [componentId, pos] of positions.entries()) {
 
       // the SL/TP check below (mirrors runRealBacktest's single-position order).
+      updatePositionExcursions(pos, c);
       checkPartialMilestones(componentId, pos, c, i);
       if (!positions.has(componentId)) continue; // safety: milestone logic never fully closes, but guard anyway
 
@@ -1149,7 +1164,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const winningComponent = meta?.winningComponent || null;
 
       // Sprint 13: granular ML features + confidence components for CSV
-      const seqMeta = meta?.sequenceMeta || null;
+      const seqMeta = meta?.sequenceMeta ? { ...meta.sequenceMeta } : null;
+      if (seqMeta && meta?.confidenceComponents && !seqMeta.confidenceComponents) {
+        seqMeta.confidenceComponents = meta.confidenceComponents;
+      }
       if (seqMeta && atr > 0 && seqMeta.obDistanceAbs != null) {
         seqMeta.obDistanceAtr = seqMeta.obDistanceAbs / atr;
       }
@@ -1159,6 +1177,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         timestamp: c.timestamp,
         htfAdx: indicators.adx?.[i] ?? null,
         fundingRate: fundingRateNow,
+        confidenceComponents: meta?.confidenceComponents ?? seqMeta?.confidenceComponents ?? null,
       });
       const brEnrich = extractBsBrEnrichment(meta || lastMeta);
       const mlEnrich = extractStrategyMlEnrichment(meta || lastMeta);
@@ -1203,6 +1222,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         m1: false,
         m2: false,
         m3: false,
+        ...initPositionExcursions(),
       });
       execAbl.opened += 1;
 
@@ -2431,6 +2451,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     const closeTime = isoOf(entryCandles[exitIdx]);
     const holdHours = holdHoursBetween(openTs, closeTs);
+    const excursions = computeExcursionFields(position, px);
     trades.push(withBacktestEntryContext({
       date: closeTime, // display field (FE trade table reads t.date) — close-bar date
       openTime: isoOf(entryCandles[position.openIdx]),
@@ -2459,6 +2480,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       holdHours,
       fundingRateAtEntry: position.fundingRateAtEntry ?? null,
       fundingForecast24h: position.fundingForecast24h ?? null,
+      mfe: excursions.mfe,
+      mae: excursions.mae,
+      mfePercent: excursions.mfePercent,
+      maePercent: excursions.maePercent,
+      exitEfficiency: excursions.exitEfficiency,
       reason,
       result: pnl > 0 ? "win" : "loss",
       isPartial: false,
@@ -2504,6 +2530,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 1. Manage open position FIRST (intrabar SL/TP, SL checked first) ─────
     if (position) {
+      updatePositionExcursions(position, c);
       checkPartialMilestones(c, i);
     }
     if (position) {
@@ -2583,6 +2610,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
             remainingSize: size,
             originalSize: size,
             m1: false, m2: false, m3: false,
+            ...initPositionExcursions(),
           };
           pendingOrder = null;
           dailyTradeCount += 1;
@@ -2908,6 +2936,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       m1: false,
       m2: false,
       m3: false,
+      ...initPositionExcursions(),
     };
     dailyTradeCount += 1;
     diag.opened += 1;

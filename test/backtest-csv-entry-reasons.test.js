@@ -241,7 +241,6 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     expect(headerLine.split(",").length).toBe(
       FULL_EXPORT_BASE_COLUMN_COUNT + ML_FIELD_SETS.BREAKOUT_RETEST.length,
     );
-    expect(headerLine.split(",").length).toBe(31 + ML_FIELD_SETS.BREAKOUT_RETEST.length);
 
     const coreXlsx = exportBacktestsXlsx([record], { adminFormat: true, coreOnly: true });
     const coreWb = XLSX.read(coreXlsx, { type: "buffer" });

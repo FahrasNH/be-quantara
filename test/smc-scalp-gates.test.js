@@ -204,6 +204,7 @@ test("FEATURES: buildSmcEntryFeatures returns expected keys", () => {
     {
       sweepIdx: n - 8,
       dispIdx: n - 4,
+      chochIdx: n - 6,
       fvg: { size: 0.01, top: 101, bottom: 100 },
       obConfluence: true,
       confidenceComponents: {
@@ -220,6 +221,9 @@ test("FEATURES: buildSmcEntryFeatures returns expected keys", () => {
   assert.ok(feats.volumeRatio != null);
   assert.equal(feats.confHtfAlignment, 10);
   assert.equal(feats.obDistanceAtr, 0);
+  assert.equal(feats.sweepAgeBars, 7);
+  assert.equal(feats.sweepToChochBars, 2);
+  assert.equal(feats.chochToEntryBars, 5);
 });
 
 test("SESSION in detectSignalMulti: Scalping null at 03 UTC when Asia filter on", () => {

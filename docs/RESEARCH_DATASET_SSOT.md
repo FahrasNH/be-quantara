@@ -42,7 +42,7 @@ Graded total in `gradedScore` with explainable `gradedScoreBreakdown` (Component
 
 | Field | Description |
 |-------|-------------|
-| `mfe`, `mae`, `mfePercent`, `maePercent` | Excursion (estimated when intra-bar data unavailable) |
+| `mfe`, `mae`, `mfePercent`, `maePercent` | Excursion — **measured** from backtest intra-bar tracking (Sprint 19); estimated only when CSV lacks MFE/MAE columns |
 | `realizedRr` | Realized risk/reward |
 | `entryReasons`, `exitReasons` | JSON arrays |
 

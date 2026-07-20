@@ -55,6 +55,11 @@ const FULL_EXPORT_GEOMETRY_COLUMNS = [
   ["pnlPct", "PnL %"],
   ["plannedRR", "Planned R:R"],
   ["actualRR", "Actual R:R"],
+  ["mfe", "MFE"],
+  ["mae", "MAE"],
+  ["mfePercent", "MFE %"],
+  ["maePercent", "MAE %"],
+  ["exitEfficiency", "Exit Efficiency"],
 ];
 
 /**
@@ -198,6 +203,7 @@ const ML_FIELD_SETS = Object.freeze({
     "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct",
     "htfAdx", "confSweepStrength", "confFvgSize",
     "confDisplacementPct", "confHtfAlignment", "confMitigationDepth", "confObConfluence",
+    "sweepAgeBars", "sweepToChochBars", "chochToEntryBars",
   ]),
   BREAKOUT_RETEST: Object.freeze([
     "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",

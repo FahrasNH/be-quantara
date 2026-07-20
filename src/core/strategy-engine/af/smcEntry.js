@@ -171,6 +171,7 @@ function buildSmcEntryFeatures(indicators, lastIdx, sequenceMeta, opts = {}) {
 
   const sweepIdx = sequenceMeta?.sweepIdx;
   const dispIdx = sequenceMeta?.dispIdx;
+  const chochIdx = sequenceMeta?.chochIdx;
   const fvg = sequenceMeta?.fvg;
 
   let sweepStrength = null;
@@ -220,7 +221,19 @@ function buildSmcEntryFeatures(indicators, lastIdx, sequenceMeta, opts = {}) {
     bbWidth = widths[lastIdx] != null ? round4(widths[lastIdx]) : null;
   }
 
-  const comps = sequenceMeta?.confidenceComponents || null;
+  const comps = sequenceMeta?.confidenceComponents
+    || opts.confidenceComponents
+    || null;
+
+  const sweepAgeBars = Number.isInteger(sweepIdx) && sweepIdx >= 0
+    ? lastIdx - sweepIdx
+    : null;
+  const sweepToChochBars = Number.isInteger(sweepIdx) && Number.isInteger(chochIdx) && chochIdx >= sweepIdx
+    ? chochIdx - sweepIdx
+    : null;
+  const chochToEntryBars = Number.isInteger(chochIdx) && chochIdx >= 0
+    ? lastIdx - chochIdx
+    : null;
   const fundingRaw = opts.fundingRate ?? indicators?.fundingRate?.[lastIdx] ?? null;
   const fundingRateAtEntry = fundingRaw != null && Number.isFinite(Number(fundingRaw))
     ? round4(Number(fundingRaw))
@@ -245,6 +258,9 @@ function buildSmcEntryFeatures(indicators, lastIdx, sequenceMeta, opts = {}) {
     confHtfAlignment: comps?.htfAlignment ?? null,
     confMitigationDepth: comps?.mitigationDepth ?? null,
     confObConfluence: comps?.obConfluence ?? null,
+    sweepAgeBars,
+    sweepToChochBars,
+    chochToEntryBars,
   };
 }
 
@@ -315,6 +331,14 @@ const SMC_ML_CSV_COLUMNS = [
   ["confHtfAlignment", "Conf HTF Align"],
   ["confMitigationDepth", "Conf Mitigation"],
   ["confObConfluence", "Conf OB Confluence"],
+  ["sweepAgeBars", "Sweep Age Bars"],
+  ["sweepToChochBars", "Sweep To CHoCH Bars"],
+  ["chochToEntryBars", "CHoCH To Entry Bars"],
+  ["mfe", "MFE"],
+  ["mae", "MAE"],
+  ["mfePercent", "MFE %"],
+  ["maePercent", "MAE %"],
+  ["exitEfficiency", "Exit Efficiency"],
 ];
 
 module.exports = {

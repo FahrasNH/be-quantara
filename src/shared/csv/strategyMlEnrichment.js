@@ -39,6 +39,9 @@ function extractSmcEnrichment(meta) {
     confHtfAlignment: _num(meta.confHtfAlignment ?? comps.htfAlignment),
     confMitigationDepth: _num(meta.confMitigationDepth ?? comps.mitigationDepth),
     confObConfluence: _bool(meta.confObConfluence ?? comps.obConfluence),
+    sweepAgeBars: _num(meta.sweepAgeBars ?? meta.sequenceMeta?.sweepAgeBars),
+    sweepToChochBars: _num(meta.sweepToChochBars ?? meta.sequenceMeta?.sweepToChochBars),
+    chochToEntryBars: _num(meta.chochToEntryBars ?? meta.sequenceMeta?.chochToEntryBars),
     mitigationDepth: _num(comps.mitigationDepth ?? meta.confMitigationDepth),
     obConfluence: _bool(comps.obConfluence ?? meta.confObConfluence),
   };
@@ -382,6 +385,8 @@ const ALL_ML_ENRICH_KEYS = Object.freeze([
   "sweepStrength", "fvgSizeAtr", "obDistanceAtr", "displacementPct", "htfAdx",
   "confSweepStrength", "confFvgSize", "confDisplacementPct", "confHtfAlignment",
   "confMitigationDepth", "confObConfluence",
+  "sweepAgeBars", "sweepToChochBars", "chochToEntryBars",
+  "mfe", "mae", "mfePercent", "maePercent", "exitEfficiency",
   "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr", "rejectionWickPct",
   "consolidationBars", "breakoutCandleAtr", "fundingRateAtEntry", "fundingForecast24h",
   "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend", "tfVolRatio", "tfHtfTrendConfirmed", "tfEmaCrossover",

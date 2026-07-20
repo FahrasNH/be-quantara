@@ -228,7 +228,21 @@ function mapExportRowToDataset(row, opts = {}) {
   const atrPercent = entryPrice && atr ? (atr / entryPrice) * 100 : null;
 
   const graded = buildGradedFromRow(row, strategyKey);
-  const mfeMae = estimateMfeMae({ side, entryPrice, exitPrice, atr, result, pnlGross });
+  const rowMfe = _num(row.MFE ?? row.mfe);
+  const rowMae = _num(row.MAE ?? row.mae);
+  const rowMfePct = _num(row["MFE %"] ?? row.mfePercent);
+  const rowMaePct = _num(row["MAE %"] ?? row.maePercent);
+  const hasMeasuredExcursion = rowMfe != null || rowMae != null;
+  const mfeMae = hasMeasuredExcursion
+    ? {
+        mfe: rowMfe,
+        mae: rowMae,
+        mfePercent: rowMfePct ?? (entryPrice > 0 && rowMfe != null ? (rowMfe / entryPrice) * 100 : null),
+        maePercent: rowMaePct ?? (entryPrice > 0 && rowMae != null ? (rowMae / entryPrice) * 100 : null),
+        estimated: false,
+        realizedRr: _num(row["Actual R:R"] ?? row.actualRR),
+      }
+    : estimateMfeMae({ side, entryPrice, exitPrice, atr, result, pnlGross });
 
   const flags = [];
   if (graded.inferred) flags.push(DATA_QUALITY_FLAGS.INFERRED_SCORES);
