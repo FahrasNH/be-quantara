@@ -21,8 +21,9 @@ const path = require("path");
 
 const FeatureEngineer = require("./FeatureEngineer");
 const { VECTOR_DIM, FEATURE_NAMES } = require("./FeatureEngineer");
+const { WIN_PREDICTOR_PATH } = require("../constants/modelPaths");
 
-const DEFAULT_MODEL_PATH = path.join(__dirname, "../../data/models/win-predictor.json");
+const DEFAULT_MODEL_PATH = WIN_PREDICTOR_PATH;
 const DEFAULT_HYPERPARAMS = {
   nEstimators:   100,
   learningRate:  0.1,

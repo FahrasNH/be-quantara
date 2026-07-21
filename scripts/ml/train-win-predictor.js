@@ -25,13 +25,18 @@ const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
 const WinPredictor   = require("#modules/ml/domain/WinPredictor.js");
 const { _pool }      = require("../../src/infrastructure/db/database");
 const {
+  WIN_PREDICTOR_PATH,
+  TRAINING_REPORT_PATH,
+  ML_ENGINE_DATASET_PATH,
+} = require("#modules/ml/constants/modelPaths.js");
+const {
   fetchClosedEngineTrades,
   buildMlArtifactsFromEngineRows,
 } = require("#modules/analytics/domain/engineTradeMlAdapter.js");
 
-const MODEL_PATH   = path.join(__dirname, "../../data/models/win-predictor.json");
-const REPORT_PATH  = path.join(__dirname, "../../data/models/training-report.json");
-const DATASET_PATH = path.join(__dirname, "../../data/ml-engine-dataset.json");
+const MODEL_PATH   = WIN_PREDICTOR_PATH;
+const REPORT_PATH  = TRAINING_REPORT_PATH;
+const DATASET_PATH = ML_ENGINE_DATASET_PATH;
 
 async function loadPrismaDataset(featureEngineer) {
   const trades = await prisma.trade.findMany({
@@ -103,9 +108,16 @@ async function main() {
   console.log("[train-win-predictor] Loading trades...");
 
   const featureEngineer = new FeatureEngineer();
-  let { dataset, skipped, source } = await loadPrismaDataset(featureEngineer);
+  let dataset = [];
+  let skipped = 0;
+  let source = "prisma-trade";
 
-  console.log(`[train-win-predictor] Prisma Trade: ${dataset.length} samples`);
+  try {
+    ({ dataset, skipped, source } = await loadPrismaDataset(featureEngineer));
+    console.log(`[train-win-predictor] Prisma Trade: ${dataset.length} samples`);
+  } catch (err) {
+    console.warn(`[train-win-predictor] Prisma unavailable (${err.message}) — trying fallbacks`);
+  }
 
   if (dataset.length === 0) {
     const cached = loadCachedEngineDataset();

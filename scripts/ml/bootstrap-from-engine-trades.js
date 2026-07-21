@@ -36,7 +36,9 @@ const LIMIT = parseInt(args.limit ?? "5000", 10);
 const MIN   = parseInt(args.min ?? "5", 10);
 const DRY   = args["dry-run"] === true || args["dry-run"] === "true";
 
-const DATASET_PATH = path.join(__dirname, "../../data/ml-engine-dataset.json");
+const { ML_ENGINE_DATASET_PATH } = require("#modules/ml/constants/modelPaths.js");
+
+const DATASET_PATH = ML_ENGINE_DATASET_PATH;
 const REPORT_PATH  = path.join(__dirname, "../../data/ml-bootstrap-report.json");
 
 async function main() {

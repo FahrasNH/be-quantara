@@ -38,4 +38,9 @@ Thumbs.db
 /src/generated/prisma
 
 # Admin platform store (runtime state — file-backed)
-data/
+data/*
+!data/models/
+data/models/*
+!data/models/win-predictor.json
+!data/models/training-report.json
+!data/ml-engine-dataset.json

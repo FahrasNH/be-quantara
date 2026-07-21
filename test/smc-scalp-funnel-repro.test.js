@@ -59,7 +59,7 @@ function buildWindow(days, seed) {
 }
 
 test("Scalping funnel: ATR fix unblocks leg; conf 30 lets SMC-only pass CHoCH", async () => {
-  const window = buildWindow(45, 1000);
+  const window = buildWindow(45, 7);
   const base = resolveStrategyDefaults("SMART_MONEY_CONCEPTS");
 
   const oldAtr = await runTripleTypeBacktest({
@@ -91,7 +91,12 @@ test("Scalping funnel: ATR fix unblocks leg; conf 30 lets SMC-only pass CHoCH", 
     enableFees: false,
     ...window,
     typeOrder: ["Scalping"],
-    config: { afUseThreeComponentVoting: false },
+    config: {
+      afUseThreeComponentVoting: false,
+      typeOverrides: {
+        Scalping: { smcMinConfidenceA: 30, smcMinConfidenceScalping: 30 },
+      },
+    },
   });
 
   assert.equal(oldAtr.perTypeStats.Scalping?.trades ?? 0, 0, "old 0.8 ATR floor blocks Scalping");

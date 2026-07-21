@@ -1,0 +1,87 @@
+{
+  "auc": 0.6020408163265307,
+  "accuracy": 0.6666666666666666,
+  "precision": 0,
+  "recall": 0,
+  "splits": [
+    {
+      "auc": 0.45833333333333337,
+      "accuracy": 0.4,
+      "trainSize": 69,
+      "testSize": 10
+    },
+    {
+      "auc": 0.4285714285714286,
+      "accuracy": 0.7777777777777778,
+      "trainSize": 55,
+      "testSize": 9
+    },
+    {
+      "auc": 0.6666666666666667,
+      "accuracy": 0.7142857142857143,
+      "trainSize": 41,
+      "testSize": 14
+    },
+    {
+      "auc": 0.6142857142857143,
+      "accuracy": 0.631578947368421,
+      "trainSize": 32,
+      "testSize": 19
+    }
+  ],
+  "avgAuc": 0.5419642857142858,
+  "avgAccuracy": 0.6309106098579782,
+  "featureImportance": [
+    {
+      "name": "market_atrPct",
+      "importance": 0.24204480909507106
+    },
+    {
+      "name": "signal_chochScore",
+      "importance": 0.20861505328830804
+    },
+    {
+      "name": "time_hour_of_day",
+      "importance": 0.08803431447285001
+    },
+    {
+      "name": "time_day_of_week",
+      "importance": 0.06720225754606292
+    },
+    {
+      "name": "signal_votingScore",
+      "importance": 0.05485562806423237
+    },
+    {
+      "name": "time_minute_of_hour",
+      "importance": 0.05431768077703808
+    },
+    {
+      "name": "signal_fvgScore",
+      "importance": 0.05176758652714761
+    },
+    {
+      "name": "signal_confidenceScore",
+      "importance": 0.04512426520222115
+    },
+    {
+      "name": "signal_entryConfidence",
+      "importance": 0.03775670685468219
+    },
+    {
+      "name": "regime_ranging",
+      "importance": 0.03400162361077041
+    }
+  ],
+  "hyperparams": {
+    "nEstimators": 100,
+    "learningRate": 0.1,
+    "maxFeatures": 30,
+    "subsample": 0.8,
+    "minSamplesLeaf": 2
+  },
+  "trainedAt": "2026-07-21T02:44:07.072Z",
+  "tradeCount": 102,
+  "winRate": 0.35294117647058826,
+  "source": "ml-engine-dataset.json"
+}

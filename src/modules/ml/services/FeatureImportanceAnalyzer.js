@@ -19,8 +19,9 @@ const {
   buildMlArtifactsFromEngineRows,
 } = require("../../analytics/domain/engineTradeMlAdapter");
 const { _pool } = require("../../../infrastructure/db/database");
+const { FEATURE_IMPORTANCE_PATH } = require("../constants/modelPaths");
 
-const CACHE_PATH = path.join(__dirname, "../../../data/models/feature-importance.json");
+const CACHE_PATH = FEATURE_IMPORTANCE_PATH;
 
 /** Rank-based AUC (Mann-Whitney U trapezoidal). */
 function computeAUC(labels, scores) {
