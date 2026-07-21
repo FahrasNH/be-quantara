@@ -34,10 +34,8 @@ class MeanReversionStrategy extends StrategyBase {
       leverage: 1.0,
       riskPerTrade: 0.008,
       tpMultiplierA: 2.5,
-      holdMinutesA: 15,
       trailingStopAtrMultA: 0.3,
       tpMultiplierB: 2.0,
-      holdMinutesB: 90,
       trailingStopAtrMultB: 0,
       mdAdxBalanceMax: 20,
       mdAdxImbalanceMin: 25,
@@ -154,7 +152,6 @@ class MeanReversionStrategy extends StrategyBase {
       slDistance: slDist,
       tpDistance: tpDist,
       component: isComponentA ? "Scalping" : "Intraday",
-      holdMinutes: isComponentA ? this.config.holdMinutesA : this.config.holdMinutesB,
       trailingStopMult: isComponentA ? this.config.trailingStopAtrMultA : this.config.trailingStopAtrMultB,
       tpSource,
     };
@@ -216,8 +213,8 @@ class MeanReversionStrategy extends StrategyBase {
       higherTf: null,
       checkInterval: 300000,
       components: [
-        { id: "A", interval: "5m", holdMinutes: 15 },
-        { id: "B", interval: "15m", holdMinutes: 90 },
+        { id: "A", interval: "5m" },
+        { id: "B", interval: "15m" },
       ],
     };
   }

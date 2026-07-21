@@ -3836,6 +3836,138 @@ class BotEngine extends EventEmitter {
     await this._checkOpenPositions(monitorPrice, a, barHigh, barLow);
   }
 
+  /** Resolve maxHoldHours for TIME_STOP from typeOverrides (Scalping 2h / Intraday 6h / Swing 120h). */
+  _resolveMaxHoldHours(pos) {
+    const typeName = pos.tradeType
+      || ({ A: "Scalping", B: "Intraday", C: "Swing" }[pos.componentId] || pos.componentId);
+    const holdOv = this.config.typeOverrides?.[typeName] || {};
+    return holdOv.maxHoldHours ?? holdOv.scalpingMaxHoldHours ?? holdOv.swingMaxHoldHours
+      ?? (typeName === "Scalping" ? this.config.maxHoldHours : null);
+  }
+
+  _isTimeStopDue(pos, maxHoldHours) {
+    if (!maxHoldHours) return false;
+    const openMs = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+    return Number.isFinite(openMs) && (Date.now() - openMs) > maxHoldHours * 3600 * 1000;
+  }
+
+  /** Sprint 13 Swing: Telegram warn once when hold exceeds smcHoldWarnHours (default 168h). */
+  async _maybeSwingHoldWarn(pos) {
+    const typeName = pos.tradeType
+      || ({ A: "Scalping", B: "Intraday", C: "Swing" }[pos.componentId] || pos.componentId);
+    if (typeName !== "Swing" || pos._holdWarnSent) return;
+    const holdOv = this.config.typeOverrides?.[typeName] || {};
+    const warnH = holdOv.smcHoldWarnHours ?? 168;
+    const openMsWarn = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
+    if (!Number.isFinite(openMsWarn) || (Date.now() - openMsWarn) <= warnH * 3600 * 1000) return;
+    pos._holdWarnSent = true;
+    this._log("warn",
+      `[HOLD_WARN] ${pos.side} ${this.config.symbol} Swing held >${warnH}h — consider review (funding drag)`
+    );
+    await this._notifyError(
+      `⚠️ Swing hold >${warnH}h: ${pos.side} ${this.config.symbol} entry=${pos.entry} since ${new Date(openMsWarn).toISOString()}`
+    );
+  }
+
+  /**
+   * Force-close when maxHoldHours exceeded — live (market close) and dry-run parity.
+   * @returns {Promise<boolean>} true when position was closed (or already flat on exchange)
+   */
+  async _executeTimeStopClose(pos, price) {
+    const maxHoldHours = this._resolveMaxHoldHours(pos);
+    if (!this._isTimeStopDue(pos, maxHoldHours)) return false;
+
+    const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
+    let exitPrice = price;
+
+    if (!this.config.dryRun) {
+      try {
+        await this.client.closePosition(
+          this.config.symbol,
+          pos.side === "LONG" ? "close_long" : "close_short",
+          remaining,
+        );
+        if (this.client.getRecentFillPrice) {
+          const fill = await this.client.getRecentFillPrice(
+            this.config.symbol,
+            pos.side,
+            typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0),
+          );
+          if (fill) exitPrice = fill;
+        } else if (pos.markPrice) {
+          exitPrice = pos.markPrice;
+        }
+      } catch (e) {
+        const isAlreadyClosed =
+          e.message?.includes("22002") ||
+          e.message?.toLowerCase().includes("no position to close") ||
+          e.message?.includes("position not exist");
+        if (!isAlreadyClosed) {
+          this._log("error", `[TIME_STOP] Gagal tutup posisi ${pos.side}: ${e.message}`);
+          return false;
+        }
+        this._log("info", `[TIME_STOP] ${pos.side} sudah flat di exchange — bukukan TIME_STOP`);
+      }
+    }
+
+    const pnl = pos.side === "LONG"
+      ? (exitPrice - pos.entry) * remaining
+      : (pos.entry - exitPrice) * remaining;
+    const pnlPct = pos.entry > 0 ? ((pnl / (pos.entry * remaining)) * 100) : 0;
+    const fee = await this._resolveFee(pos, exitPrice, remaining);
+
+    if (this.config.dryRun) {
+      const marginBack = pos.marginReserved != null
+        ? pos.marginReserved
+        : pos.entry * remaining * this.config.riskPerTrade;
+      this.state.capital += pnl - fee + marginBack;
+    }
+
+    const closeTime = Date.now();
+    this._log("info",
+      `[TIME_STOP] ${pos.side} ${this.config.symbol} closed after ${maxHoldHours}h max hold`
+    );
+
+    let applied = true;
+    if (this.sessionId && pos.dbId) {
+      try {
+        const res = await this._closeTradeInDb(pos, {
+          exitPrice, pnl, pnlPct, fee,
+          reason: "TIME_STOP",
+          closeTime: new Date(closeTime).toISOString(),
+        });
+        applied = res?.applied !== false;
+        if (applied) onEngineTradeClose(pos.dbId, pnl);
+      } catch (dbErr) {
+        applied = false;
+        this._log("warn", `Gagal tutup trade #${pos.dbId} (TIME_STOP) di DB: ${dbErr.message}`);
+      }
+    }
+
+    if (!applied) return false;
+
+    if (!this.config.dryRun) {
+      this._notifyClose({
+        symbol:     this.config.symbol,
+        side:       pos.side,
+        entryPrice: pos.entry,
+        exitPrice,
+        pnl,
+        pnlPct,
+        reason:     "TIME_STOP",
+        dryRun:     false,
+      });
+    }
+
+    this.state.trades.push({
+      ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee,
+      reason: "TIME_STOP", closedAt: closeTime,
+    });
+    this._capTrades();
+    this._updateRiskAfterClose(pnl, pos);
+    return true;
+  }
+
   // ─────────────────────────────────────────────
   // CHECK OPEN POSITIONS — tutup trade di DB
   // ─────────────────────────────────────────────
@@ -4012,6 +4144,7 @@ class BotEngine extends EventEmitter {
         this._releaseMarginIfFlat(); // lepas margin di koordinator bila sudah flat (#5)
 
         // Update unrealized PnL + markPrice dari exchange, lalu cek SL+ milestones
+        const timeStopIds = [];
         for (const pos of this.state.openPositions) {
           const lp = liveByKey.get(pos.side);
           if (lp) {
@@ -4030,6 +4163,13 @@ class BotEngine extends EventEmitter {
 
           // ── SL+ milestone check ────────────────────────────────────────────
           await this._checkSLPlusMilestones(pos, price);
+
+          // TIME_STOP: maxHoldHours (Scalping 2h / Intraday 6h / Swing 120h)
+          await this._maybeSwingHoldWarn(pos);
+          if (await this._executeTimeStopClose(pos, price)) {
+            timeStopIds.push(pos.id);
+            continue;
+          }
 
           // Jika SL/TP gagal dipasang tadi, monitor manual sekarang
           if (pos.manualSLTP) {
@@ -4098,6 +4238,12 @@ class BotEngine extends EventEmitter {
             }
           }
         }
+
+        if (timeStopIds.length > 0) {
+          this.state.openPositions = this.state.openPositions.filter(p => !timeStopIds.includes(p.id));
+          this._releaseMarginIfFlat();
+          this._syncSessionStats();
+        }
       } catch (err) {
         this._log("warn", `Sync positions error: ${err.message} — pakai state lokal`);
       }
@@ -4110,66 +4256,10 @@ class BotEngine extends EventEmitter {
       await this._checkSLPlusMilestones(pos, price);
 
       // TIME_STOP: typeOverrides maxHoldHours (Scalping 2h / Intraday 6h / Swing 120h)
-      const typeName = pos.tradeType
-        || ({ A: "Scalping", B: "Intraday", C: "Swing" }[pos.componentId] || pos.componentId);
-      const holdOv = this.config.typeOverrides?.[typeName] || {};
-      const maxHoldHours = holdOv.maxHoldHours ?? holdOv.scalpingMaxHoldHours ?? holdOv.swingMaxHoldHours
-        ?? (typeName === "Scalping" ? this.config.maxHoldHours : null);
-
-      // Sprint 13 Swing: Telegram warn once when hold exceeds smcHoldWarnHours (default 168h)
-      if (typeName === "Swing" && !pos._holdWarnSent) {
-        const warnH = holdOv.smcHoldWarnHours ?? 168;
-        const openMsWarn = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
-        if (Number.isFinite(openMsWarn) && (Date.now() - openMsWarn) > warnH * 3600 * 1000) {
-          pos._holdWarnSent = true;
-          this._log("warn",
-            `[HOLD_WARN] ${pos.side} ${this.config.symbol} Swing held >${warnH}h — consider review (funding drag)`
-          );
-          await this._notifyError(
-            `⚠️ Swing hold >${warnH}h: ${pos.side} ${this.config.symbol} entry=${pos.entry} since ${new Date(openMsWarn).toISOString()}`
-          );
-        }
-      }
-
-      if (maxHoldHours) {
-        const openMs = typeof pos.openTime === "number" ? pos.openTime : Date.parse(pos.openTime || 0);
-        if (Number.isFinite(openMs) && (Date.now() - openMs) > maxHoldHours * 3600 * 1000) {
-          const remaining = pos.remainingSize > 0 ? pos.remainingSize : pos.size;
-          const exitPrice = price;
-          const pnl = pos.side === "LONG"
-            ? (exitPrice - pos.entry) * remaining
-            : (pos.entry - exitPrice) * remaining;
-          const pnlPct = ((pnl / (pos.entry * remaining)) * 100);
-          const fee = await this._resolveFee(pos, exitPrice, remaining);
-          const marginBack = pos.marginReserved != null
-            ? pos.marginReserved
-            : pos.entry * remaining * this.config.riskPerTrade;
-          this.state.capital += pnl - fee + marginBack;
-          const closeTime = Date.now();
-          this._log("info",
-            `[TIME_STOP] ${pos.side} ${this.config.symbol} closed after ${maxHoldHours}h max hold`
-          );
-          if (this.sessionId && pos.dbId) {
-            try {
-              await this._closeTradeInDb(pos, {
-                exitPrice, pnl, pnlPct, fee,
-                reason: "TIME_STOP",
-                closeTime: new Date(closeTime).toISOString(),
-              });
-              onEngineTradeClose(pos.dbId, pnl);
-            } catch (dbErr) {
-              this._log("warn", `Gagal tutup trade #${pos.dbId} (TIME_STOP) di DB: ${dbErr.message}`);
-            }
-          }
-          this.state.trades.push({
-            ...pos, size: remaining, exit: exitPrice, pnl, pnlPct, fee,
-            reason: "TIME_STOP", closedAt: closeTime,
-          });
-          this._capTrades();
-          this._updateRiskAfterClose(pnl, pos);
-          toClose.push(pos.id);
-          continue;
-        }
+      await this._maybeSwingHoldWarn(pos);
+      if (await this._executeTimeStopClose(pos, price)) {
+        toClose.push(pos.id);
+        continue;
       }
 
       // Cek SL / TP — intrabar wick + fallback harga monitor (ticker).
