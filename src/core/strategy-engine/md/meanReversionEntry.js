@@ -26,10 +26,13 @@ const DEFAULTS = {
   mdAdxPeriod: 14,
 };
 
-function calculateBollingerBands(closes, period = 20, stdDev = 2.0) {
+function calculateBollingerBands(closes, period = 20, stdDev = 2.0, endIdx) {
   if (!closes || closes.length < period) return null;
 
-  const lookback = closes.slice(-period);
+  const idx = endIdx != null ? endIdx : closes.length - 1;
+  if (idx < period - 1 || idx >= closes.length) return null;
+
+  const lookback = closes.slice(idx - period + 1, idx + 1);
   const mean = lookback.reduce((a, b) => a + b, 0) / period;
 
   const variance = lookback.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
@@ -111,8 +114,8 @@ function evaluateMeanReversionEntry({
     return { signal: null, meta: null, bbLevels: null };
   }
 
-  const bbA = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevA);
-  const bbB = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevB);
+  const bbA = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevA, lastIdx);
+  const bbB = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevB, lastIdx);
   if (!bbA || !bbB) {
     _abl("rejBb");
     return { signal: null, meta: null, bbLevels: null };

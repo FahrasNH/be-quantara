@@ -89,8 +89,8 @@ class MeanReversionStrategy extends StrategyBase {
     return MeanReversionStrategy.ABLATION_SCHEMA;
   }
 
-  calculateBollingerBands(closes, period = 20, stdDev = 2.0) {
-    return calculateBollingerBands(closes, period, stdDev);
+  calculateBollingerBands(closes, period = 20, stdDev = 2.0, endIdx) {
+    return calculateBollingerBands(closes, period, stdDev, endIdx);
   }
 
   detectSignal(indicators, lastIdx, config = {}) {

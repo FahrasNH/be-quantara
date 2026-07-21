@@ -36,6 +36,18 @@ describe("MeanReversionStrategy (Mean Drift — dual-component)", () => {
       const bb = strategy.calculateBollingerBands(Array(10).fill(42000), 20, 2.0);
       expect(bb).toBeNull();
     });
+
+    test("endIdx uses window ending at index, not tail of full array (no look-ahead)", () => {
+      const closes = Array(200).fill(42000);
+      for (let i = 180; i < 200; i++) closes[i] = 78000;
+
+      const bbAt100 = strategy.calculateBollingerBands(closes, 20, 2.0, 100);
+      const bbTail = strategy.calculateBollingerBands(closes, 20, 2.0);
+
+      expect(bbAt100.middle).toBeCloseTo(42000, 0);
+      expect(bbTail.middle).toBeCloseTo(78000, 0);
+      expect(bbAt100.middle).not.toBeCloseTo(bbTail.middle, 0);
+    });
   });
 
   // ──────────────────────────────────────────────────────────
