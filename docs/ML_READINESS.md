@@ -10,11 +10,26 @@ Phase 1 + Phase 2 implementation for live trade enrichment, win-probability gati
 | Entry enrichment (session, HOD/LOD, HTF, liquidation snapshot) | `BotEngine.js` → `_buildMlEntryPayload()` |
 | Exit enrichment (slippage, funding, regime, exit reason) | `BotEngine.js` close path |
 | 30d backfill | `scripts/backfill-ml-readiness.js` |
+| ML shadow log backfill | `scripts/ml/backfill-ml-shadow-log.js` |
 
 ```bash
 node scripts/backfill-ml-readiness.js --days=30          # apply
 node scripts/backfill-ml-readiness.js --days=30 --dry-run
+node scripts/ml/backfill-ml-shadow-log.js --days=30      # trades → MLShadowLog
+node scripts/ml/ml-shadow-report.js --days=30            # promotion readiness
 ```
+
+### MLShadowLog vs `trades` table
+
+| Store | Populated by | Used by |
+|-------|--------------|---------|
+| `trades` (engine) | BotEngine live/dry-run with `sessionId` | Admin dashboard, backfill scripts |
+| `MLShadowLog` | `BotEngineMlHook` on open + close (live/dry-run only) | `ml-shadow-report.js`, promotion readiness |
+| Backtest archives | `RealStrategyBacktestService` (in-memory / JSON) | Backtest UI — **not** MLShadowLog |
+
+Backtest trades never write MLShadowLog. Historical engine trades before the ML hook was deployed also have no shadow rows until you run `backfill-ml-shadow-log.js`.
+
+`ML_GATE_MODE` controls the pre-entry gate only (`shadow` / `active` / `disabled`); it does **not** disable shadow logging. There is no `ML_SHADOW_ENABLED` env var.
 
 ## Phase 2 — Feedback Loop
 

@@ -369,13 +369,20 @@ class MLShadowService {
     try {
       const WinPredictor    = require("../domain/WinPredictor");
       const FeatureEngineer = require("../domain/FeatureEngineer");
-      const VectorStore     = require("../../../infrastructure/db/VectorStore");
-      const { _pool }       = require("../../../infrastructure/db/database");
 
       const wp = new WinPredictor();
       wp.load().catch(() => {}); // async, fire-and-forget
 
-      const vs      = new VectorStore(_pool);
+      // VectorStore/pgvector is optional — shadow log writes must not depend on it.
+      let vs = null;
+      try {
+        const VectorStore = require("../../../infrastructure/db/VectorStore");
+        const { _pool }   = require("../../../infrastructure/db/database");
+        if (_pool) vs = new VectorStore(_pool);
+      } catch {
+        vs = null;
+      }
+
       const fe      = new FeatureEngineer();
       const service = new MLShadowService(wp, vs, fe);
 

@@ -28,9 +28,29 @@ async function main() {
   const service = new MLShadowService(wp, null, new FeatureEngineer());
   const report  = await service.generateWeeklyReport(weekStart, weekEnd);
 
+  const [shadowTotal, shadowOpen, engineClosed] = await Promise.all([
+    prisma.mLShadowLog.count(),
+    prisma.mLShadowLog.count({ where: { actualOutcome: null } }),
+    prisma.$queryRaw`
+      SELECT COUNT(*)::int AS count
+        FROM trades
+       WHERE status = 'closed'
+         AND close_time IS NOT NULL
+         AND open_time > NOW() - (${String(days)} || ' days')::interval
+    `.then((rows) => rows[0]?.count ?? 0).catch(() => null),
+  ]);
+
   console.log(`\n[ML Shadow Report] Last ${days} days:`);
   console.log(`  Period:       ${weekStart.toISOString().slice(0, 10)} → ${weekEnd.toISOString().slice(0, 10)}`);
-  console.log(`  Trade count:  ${report.tradeCount}`);
+  console.log(`  Trade count:  ${report.tradeCount} (MLShadowLog with outcome)`);
+  console.log(`  Diagnostics:  MLShadowLog total=${shadowTotal}, pending outcome=${shadowOpen}` +
+    (engineClosed != null ? `, engine trades closed=${engineClosed}` : ""));
+  if (report.tradeCount === 0 && engineClosed > 0) {
+    console.log(
+      "  Hint:         Engine trades exist but MLShadowLog is empty — run:\n" +
+      "                node scripts/ml/backfill-ml-shadow-log.js --days=" + days
+    );
+  }
   console.log(`  AUC:          ${report.auc.toFixed(3)}`);
   console.log(`  Accuracy:     ${(report.accuracy * 100).toFixed(1)}%`);
   console.log(`  WR diff:      ${(report.wRateDiff * 100).toFixed(1)}% (ML vs baseline)`);
