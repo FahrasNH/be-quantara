@@ -99,7 +99,7 @@ function validateBotStartInput(req, res, next) {
   next();
 }
 
-function validateSymbolParam(req, res, next) {
+function validateSymbolFormat(req, res, next) {
   const { symbol } = req.params;
 
   // Allow A-Z dan 0-9 sebelum suffix USDT. Banyak pair perp punya prefix angka —
@@ -121,17 +121,25 @@ function validateSymbolParam(req, res, next) {
     });
   }
 
-  if (!isAllowedSymbol(symbol)) {
-    return res.status(400).json({
-      ok: false,
-      statusCode: 400,
-      message: 'Symbol not allowed',
-      code: 'SYMBOL_NOT_ALLOWED',
-      errors: [`Supported symbols: ${ALLOWED_SYMBOLS.join(', ')}`],
-    });
-  }
-
   next();
+}
+
+/** Format + platform allowlist — for creating/starting bots only. */
+function validateSymbolParam(req, res, next) {
+  validateSymbolFormat(req, res, () => {
+    const { symbol } = req.params;
+    if (!isAllowedSymbol(symbol)) {
+      return res.status(400).json({
+        ok: false,
+        statusCode: 400,
+        message: 'Symbol not allowed',
+        code: 'SYMBOL_NOT_ALLOWED',
+        errors: [`Supported symbols: ${ALLOWED_SYMBOLS.join(', ')}`],
+      });
+    }
+
+    next();
+  });
 }
 
 function validateForgotPasswordInput(req, res, next) {
@@ -166,6 +174,7 @@ module.exports = {
   validateLoginInput,
   validateRegisterInput,
   validateBotStartInput,
+  validateSymbolFormat,
   validateSymbolParam,
   validateForgotPasswordInput,
   validateResetPasswordInput,

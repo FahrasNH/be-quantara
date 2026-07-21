@@ -9,7 +9,11 @@ module.exports = function createBotsRouter(helpers) {
   const express = require("express");
   const router = express.Router();
   const { asyncHandler } = require("../../../shared/middleware/errorHandler");
-  const { validateBotStartInput, validateSymbolParam } = require("../../../shared/middleware/validation");
+  const {
+    validateBotStartInput,
+    validateSymbolFormat,
+    validateSymbolParam,
+  } = require("../../../shared/middleware/validation");
   // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
   const prisma = require("../../../infrastructure/db/prismaClient");
   const AuthService = require("../../auth/services/AuthService");
@@ -394,7 +398,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get(
     "/:symbol/strategy-analysis",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -434,7 +438,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get(
     "/:symbol/confirm-token",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const token = issueConfirmToken({ symbol: req.params.symbol, userId: req.userId });
       res.json({ ok: true, confirmToken: token, expiresInMs: DEFAULT_MAX_AGE_MS });
@@ -447,7 +451,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get(
     "/:symbol",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -984,7 +988,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.post(
     "/:symbol/stop",
-    validateSymbolParam,
+    validateSymbolFormat,
     botOpLock,
     emergencyStopConfirmGuard,
     asyncHandler(async (req, res) => {
@@ -1051,7 +1055,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.post(
     "/:symbol/strategy",
-    validateSymbolParam,
+    validateSymbolFormat,
     strategyChangeLimiter,
     strategyGuard,
     asyncHandler(async (req, res) => {
@@ -1155,7 +1159,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.patch(
     "/:symbol/config",
-    validateSymbolParam,
+    validateSymbolFormat,
     strategyGuard, // memblok BREAKOUT_RETEST bila strategyKey dikirim
     asyncHandler(async (req, res) => {
       const userId = req.userId;
@@ -1286,7 +1290,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.delete(
     "/:symbol",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -1335,7 +1339,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get(
     "/:symbol/balance",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -1389,7 +1393,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get(
     "/:symbol/position-conflicts",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
@@ -1444,7 +1448,7 @@ module.exports = function createBotsRouter(helpers) {
    */
   router.get(
     "/:symbol/logs",
-    validateSymbolParam,
+    validateSymbolFormat,
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
