@@ -54,6 +54,17 @@ const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSch
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 const TRADE_LEG_NAMES = new Set(["Scalping", "Intraday", "Swing", "A", "B", "C"]);
+const LEG_ABC = Object.freeze({ A: "Scalping", B: "Intraday", C: "Swing" });
+
+/** Resolve Scalping/Intraday/Swing for typeOverrides (TIME_STOP, fees). position.component is the winning racer key, not the leg. */
+function resolvePositionTradeLeg(position, cfg = {}) {
+  return position?.tradeType
+    || position?.entryMeta?.tradeType
+    || (TRADE_LEG_NAMES.has(position?.entryMeta?.component) ? position.entryMeta.component : null)
+    || cfg.tradeType
+    || LEG_ABC[position?.component]
+    || (TRADE_LEG_NAMES.has(position?.component) ? position.component : null);
+}
 
 /** Coerce indicator snapshots to a finite scalar (reject arrays / absurd values). */
 function scalarIndicator(v, { min = -Infinity, max = Infinity } = {}) {
@@ -2602,14 +2613,17 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const hitTP = position.side === "LONG" ? c.high >= position.tp : c.low <= position.tp;
 
 
-      // typeOverrides[component].maxHoldHours (was Scalping-only/scalpingMaxHoldHours;
+      // typeOverrides[tradeLeg].maxHoldHours (was Scalping-only/scalpingMaxHoldHours;
       // TREND_FOLLOWING forensics showed >=24h-underwater positions accounted for -76.8 of the
       // -230.8 net loss on the Intraday/Swing legs — a hung thesis is a dead thesis).
       // Exit at market price if time exceeded to prevent slot-blocking.
       let hitTimeStop = false;
-      const compOv = cfg.typeOverrides?.[position.component];
-      const maxHoldHours = compOv?.maxHoldHours
-        ?? (position.component === "Scalping" ? compOv?.scalpingMaxHoldHours : undefined);
+      const tradeLeg = resolvePositionTradeLeg(position, cfg);
+      const holdOv = cfg.typeOverrides?.[tradeLeg] || {};
+      const maxHoldHours = holdOv.maxHoldHours
+        ?? holdOv.scalpingMaxHoldHours
+        ?? holdOv.swingMaxHoldHours
+        ?? (tradeLeg === "Scalping" ? cfg.maxHoldHours : undefined);
       if (maxHoldHours) {
         const holdMs = c.timestamp - entryCandles[position.openIdx].timestamp;
         const maxHoldMs = maxHoldHours * 3600 * 1000;
@@ -2651,6 +2665,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
             size,
             openIdx: i,
             component: pendingOrder.component,
+            tradeType: pendingOrder.tradeType ?? resolvePositionTradeLeg(pendingOrder, cfg),
             marketCond: pendingOrder.marketCond,
             plannedRR: pendingOrder.plannedRR,
             confidence: pendingOrder.confidence,
@@ -2899,6 +2914,10 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 8. Component-aware SL/TP (mirror step 11d) ──────────────────────────
     const tradeLabel = resolveTradeDisplayName(strategyKey, cfg, meta, strategyDisplayName);
+    const tradeLeg = meta?.tradeType
+      || (TRADE_LEG_NAMES.has(meta?.component) ? meta.component : null)
+      || cfg.tradeType
+      || null;
     let slDist, tpDist, component = "B", marketCond = null, plannedRR = null, confidence = null;
     const pairSlMult = cfg.pairSlMultiplier || 1; // STABLE/VOLATILE tier adjustment
     let brEnrich = {};
@@ -2946,6 +2965,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         riskPerTrade: adjustedRiskPerTrade,
         expiresIdx: i + (cfg.retestTtlBars ?? 12),
         component,
+        tradeType: tradeLeg,
         marketCond,
         plannedRR,
         confidence,
@@ -2976,6 +2996,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       size,
       openIdx: i,
       component,
+      tradeType: tradeLeg,
       marketCond,
       plannedRR,
       confidence,
