@@ -2666,8 +2666,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         ?? holdOv.scalpingMaxHoldHours
         ?? holdOv.swingMaxHoldHours
         ?? (tradeLeg === "Scalping" ? cfg.maxHoldHours : undefined);
-      if (maxHoldHours) {
-        const holdMs = c.timestamp - entryCandles[position.openIdx].timestamp;
+      // MEAN_EXIT / partial close may null `position` mid-block — guard before
+      // TIME_STOP (W4-W5 SA Swing walk-forward crashed on position.openIdx here).
+      if (position && maxHoldHours) {
+        const openTs = entryCandles[position.openIdx]?.timestamp ?? 0;
+        const holdMs = (c.timestamp ?? 0) - openTs;
         const maxHoldMs = maxHoldHours * 3600 * 1000;
         if (holdMs > maxHoldMs) {
           hitTimeStop = true;
@@ -2675,7 +2678,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         }
       }
 
-      if (!hitTimeStop && !hitMeanExit) {
+      if (position && !hitTimeStop && !hitMeanExit) {
         if (hitSL) closePosition(stopLevel, position.m1 ? "SL_TRAIL" : "SL", i);
         else if (hitTP) closePosition(position.tp, "TP", i);
       }

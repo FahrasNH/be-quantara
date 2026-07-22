@@ -168,4 +168,58 @@ test("runMultiTypeBacktest degrades gracefully when one type has no candles", as
   assert.ok(r.stats.totalTrades === r.trades.length);
 });
 
+/** Synthetic 4h series: flat → spike → mean revert (triggers SA MEAN_EXIT). */
+function saMeanRevertCandles() {
+  const iv = 240;
+  let t = Date.UTC(2023, 0, 1);
+  const out = [];
+  for (let i = 0; i < 80; i++) {
+    const p = 100 + (i % 2 === 0 ? 0.02 : -0.02);
+    out.push({ timestamp: t, open: p, high: p + 0.4, low: p - 0.4, close: p, volume: 1200 });
+    t += iv * 60000;
+  }
+  const spike = 82;
+  out.push({ timestamp: t, open: 100, high: 100, low: spike, close: spike, volume: 8000 });
+  t += iv * 60000;
+  for (let j = 1; j <= 20; j++) {
+    const p = spike + ((100 - spike) * j) / 20;
+    out.push({ timestamp: t, open: p, high: p + 0.8, low: p - 0.8, close: p, volume: 1200 });
+    t += iv * 60000;
+  }
+  for (let i = 0; i < 60; i++) {
+    out.push({ timestamp: t, open: 100, high: 100.5, low: 99.5, close: 100, volume: 1200 });
+    t += iv * 60000;
+  }
+  return out;
+}
+
+test("STATISTICAL_ARBITRAGE MEAN_EXIT does not crash when maxHoldHours also configured (W4-W5 regression)", async () => {
+  const swing = saMeanRevertCandles();
+  const r = await runMultiTypeBacktest({
+    entryCandles: { Swing: swing },
+    htfCandles: { Swing: [] },
+    strategyKey: "STATISTICAL_ARBITRAGE",
+    capital: 1000,
+    config: {
+      higherTf: null,
+      mdSaExitAtMean: true,
+      mdSaExitZ: 0.4,
+      mdSaEntryZ: 1.5,
+      mdSaEntryZMax: 3.0,
+      mdSaSkipHtfSideways: false,
+      mdSaHtfAlignGate: false,
+      mdSaUseBenchmarkResidual: false,
+      typeOverrides: { Swing: { maxHoldHours: 120 } },
+    },
+  }, ["Swing"]);
+  assert.ok(Array.isArray(r.trades));
+  assert.ok(r.perTypeStats.Swing);
+  assert.ok(r.trades.length > 0, "synthetic spike/revert series should produce at least one SA trade");
+  const reasons = new Set(r.trades.map((t) => t.reason));
+  assert.ok(
+    reasons.has("MEAN_EXIT") || reasons.has("SL") || reasons.has("TP") || reasons.has("TIME_STOP"),
+    `unexpected exit reasons: ${[...reasons].join(", ")}`,
+  );
+});
+
 console.log("✅ real-backtest-service.test.js — all assertions registered");

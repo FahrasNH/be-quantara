@@ -18,6 +18,11 @@
  *   node scripts/sprint20-sa-swing-walkforward-export.js --dry-run
  *   node scripts/sprint20-sa-swing-walkforward-export.js --local
  *   node scripts/sprint20-sa-swing-walkforward-export.js --window 3 --symbol ETHUSDT
+ *
+ * Network notes:
+ *   --local needs Binance/Bitget reachable from this machine (VPN or run on VPS).
+ *   If exchange API is blocked locally, use default via-api (dev server) AFTER the
+ *   MEAN_EXIT fix is deployed, or run `--local` on a VPS with network access.
  */
 
 const fs = require("fs");
