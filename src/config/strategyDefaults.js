@@ -753,10 +753,11 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
 
   mdSaLookback: 40,
   mdSaEntryZ: 1.6,
+  mdSaEntryZMax: 2.5, // Gelombang 1: cap |z| — 2.5+σ = breakout/momentum, not revert
   mdSaExitZ: 0.4,
   mdSaMinBars: 50,
   mdSaBaseConfidence: 0.58,
-  mdSaZBoostPerUnit: 0.12,
+  mdSaZBoostPerUnit: 0, // Gelombang 1: flat confidence — zBoost anti-predictive on swing
   mdSaMaxConfidence: 0.95,
   mdSaUseVwapBlend: true,
 };

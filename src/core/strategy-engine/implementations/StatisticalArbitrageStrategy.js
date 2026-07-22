@@ -35,7 +35,8 @@ class StatisticalArbitrageStrategy extends StrategyBase {
       { key: "rejRollingZ", label: "4. - Rolling-z unavailable" },
       { key: "rejVwapBlend", label: "5. - VWAP blend gate" },
       { key: "rejEntryZ", label: "6. - |z| below entryZ" },
-      { key: "rejConfidence", label: "7. - Confidence floor" },
+      { key: "rejEntryZMax", label: "7. - |z| above entryZMax (extreme/breakout)" },
+      { key: "rejConfidence", label: "8. - Confidence floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }

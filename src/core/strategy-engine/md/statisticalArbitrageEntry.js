@@ -14,10 +14,11 @@
 const DEFAULTS = {
   lookback: 40,
   entryZ: 1.6,
+  entryZMax: 2.5, // reject |z| above cap — extreme z = momentum/breakout, not revert
   exitZ: 0.4,
   minBars: 50,
   baseConfidence: 0.58,
-  zBoostPerUnit: 0.12, // extra conf per |z| above entryZ
+  zBoostPerUnit: 0, // Gelombang 1: flat confidence — zBoost was anti-predictive on swing
   maxConfidence: 0.95,
   useVwapBlend: true,
 };
@@ -137,6 +138,7 @@ function evaluateStatisticalArbitrageEntry({
 
   const lookback = config.mdSaLookback ?? DEFAULTS.lookback;
   const entryZ = config.mdSaEntryZ ?? DEFAULTS.entryZ;
+  const entryZMax = config.mdSaEntryZMax ?? DEFAULTS.entryZMax;
   const baseConf = config.mdSaBaseConfidence ?? DEFAULTS.baseConfidence;
   const zBoost = config.mdSaZBoostPerUnit ?? DEFAULTS.zBoostPerUnit;
   const maxConf = config.mdSaMaxConfidence ?? DEFAULTS.maxConfidence;
@@ -190,6 +192,16 @@ function evaluateStatisticalArbitrageEntry({
       };
     }
 
+    if (entryZMax != null && Math.abs(z) > entryZMax) {
+      _abl("rejEntryZMax");
+      return {
+        signal: null, confidence: 0, reason: "z_too_extreme", zScore: z, mode,
+        mean: stats.mean, std: stats.std,
+        upperBand: stats.mean + 2 * stats.std,
+        lowerBand: stats.mean - 2 * stats.std,
+      };
+    }
+
     const excess = Math.abs(z) - entryZ;
     const confidence = Math.min(maxConf, baseConf + excess * zBoost);
     const meanRevertBars = _meanRevertBars(
@@ -221,6 +233,16 @@ function evaluateStatisticalArbitrageEntry({
     _abl("rejEntryZ");
     return {
       signal: null, confidence: 0, reason: "z_inside_band", zScore: z, mode,
+      mean: stats?.mean ?? null, std: stats?.std ?? null,
+      upperBand: stats ? stats.mean + 2 * stats.std : null,
+      lowerBand: stats ? stats.mean - 2 * stats.std : null,
+    };
+  }
+
+  if (entryZMax != null && Math.abs(z) > entryZMax) {
+    _abl("rejEntryZMax");
+    return {
+      signal: null, confidence: 0, reason: "z_too_extreme", zScore: z, mode,
       mean: stats?.mean ?? null, std: stats?.std ?? null,
       upperBand: stats ? stats.mean + 2 * stats.std : null,
       lowerBand: stats ? stats.mean - 2 * stats.std : null,

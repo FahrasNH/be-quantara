@@ -132,6 +132,8 @@ assert.equal(STRATEGIES.MARKET_STRUCTURE.leftLook, 2);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.vwapAtrMult, 0.5);
 assert.equal(STRATEGIES.SUPPLY_AND_DEMAND.mdSdConfluenceAtrMult, 0.75);
 assert.equal(STRATEGIES.STATISTICAL_ARBITRAGE.mdSaEntryZ, 1.6);
+assert.equal(STRATEGIES.STATISTICAL_ARBITRAGE.mdSaEntryZMax, 2.5);
+assert.equal(STRATEGIES.STATISTICAL_ARBITRAGE.mdSaZBoostPerUnit, 0);
 assert.equal(STRATEGIES.ICT_STYLE_TRADING.bsIctBaseConfidence, 0.7);
 assert.equal(STRATEGIES.LIQUIDATION_SQUEEZE.bsLsWickLookback, 20);
 

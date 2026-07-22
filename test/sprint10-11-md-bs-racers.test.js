@@ -90,7 +90,7 @@ test("z-score LONG/SHORT symmetric", () => {
   const longR = evaluateStatisticalArbitrageEntry({
     closes: longCloses,
     lastIdx: n - 1,
-    config: { mdSaEntryZ: 1.5, mdSaLookback: 40 },
+    config: { mdSaEntryZ: 1.5, mdSaLookback: 40, mdSaEntryZMax: 99 },
   });
   // Spike last bar → SHORT
   const shortCloses = base.slice();
@@ -98,12 +98,41 @@ test("z-score LONG/SHORT symmetric", () => {
   const shortR = evaluateStatisticalArbitrageEntry({
     closes: shortCloses,
     lastIdx: n - 1,
-    config: { mdSaEntryZ: 1.5, mdSaLookback: 40 },
+    config: { mdSaEntryZ: 1.5, mdSaLookback: 40, mdSaEntryZMax: 99 },
   });
   assert.strictEqual(longR.signal, "LONG");
   assert.strictEqual(shortR.signal, "SHORT");
   assert.ok(longR.zScore < 0);
   assert.ok(shortR.zScore > 0);
+});
+
+test("Gelombang 1: entryZMax rejects extreme |z| > 2.5", () => {
+  const n = 60;
+  const base = flatSeries(n, 100);
+  const extremeCloses = base.slice();
+  extremeCloses[n - 1] = 70; // large crash → |z| likely > 2.5
+  const r = evaluateStatisticalArbitrageEntry({
+    closes: extremeCloses,
+    lastIdx: n - 1,
+    config: { mdSaEntryZ: 1.6, mdSaEntryZMax: 2.5, mdSaLookback: 40 },
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "z_too_extreme");
+  assert.ok(Math.abs(r.zScore) > 2.5);
+});
+
+test("Gelombang 1: zBoostPerUnit=0 yields flat base confidence", () => {
+  const n = 60;
+  const base = flatSeries(n, 100);
+  const longCloses = base.slice();
+  longCloses[n - 1] = 90;
+  const r = evaluateStatisticalArbitrageEntry({
+    closes: longCloses,
+    lastIdx: n - 1,
+    config: { mdSaEntryZ: 1.5, mdSaEntryZMax: 99, mdSaZBoostPerUnit: 0, mdSaBaseConfidence: 0.58, mdSaLookback: 40 },
+  });
+  assert.ok(r.signal);
+  assert.strictEqual(r.confidence, 0.58);
 });
 
 test("rolling mean/std helper", () => {
