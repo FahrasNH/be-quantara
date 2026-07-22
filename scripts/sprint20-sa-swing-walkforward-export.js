@@ -4,8 +4,9 @@
 /**
  * Sprint 20 — STATISTICAL_ARBITRAGE Swing walk-forward re-export (5 windows, 5 koin).
  *
- * Gelombang 1 config: mdSaEntryZMax=2.5, mdSaZBoostPerUnit=0 (strategyDefaults SSOT).
+ * Gelombang 1+2 config from strategyDefaults SSOT (entryZ 2.0, z-cap, HTF gate, BTC-residual, mean exit).
  * Runs dataset-expand via dev server API (1:1 with UI Advance) per window × symbol.
+ * Single login per run — avoids auth 429 from per-spawn logins.
  *
  * Prerequisites (be-bot-trading/.env):
  *   DATASET_EXPAND_API_URL=https://dev.quantara.software
@@ -15,18 +16,20 @@
  * Usage:
  *   node scripts/sprint20-sa-swing-walkforward-export.js
  *   node scripts/sprint20-sa-swing-walkforward-export.js --dry-run
+ *   node scripts/sprint20-sa-swing-walkforward-export.js --local
  *   node scripts/sprint20-sa-swing-walkforward-export.js --window 3 --symbol ETHUSDT
  */
 
-const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 require("dotenv").config({ path: path.join(__dirname, "../.env") });
 
+const { main: runDatasetExpand } = require("./dataset-expand/lib/runDatasetExpand");
+const { loginForToken } = require("./dataset-expand/lib/viaApi");
+
 const REPO_ROOT = path.join(__dirname, "..");
 const OUT_ROOT = path.join(REPO_ROOT, "tmp/sprint20-sa-swing-walkforward");
-const SWING_SCRIPT = path.join(__dirname, "dataset-expand/statistical-arbitrage/swing.js");
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT"];
 
@@ -41,14 +44,15 @@ const WINDOWS = [
 
 function parseArgs() {
   const dryRun = process.argv.includes("--dry-run");
+  const useLocal = process.argv.includes("--local");
   const wIdx = process.argv.indexOf("--window");
   const windowFilter = wIdx !== -1 ? parseInt(process.argv[wIdx + 1], 10) : null;
   const sIdx = process.argv.indexOf("--symbol");
   const symbolFilter = sIdx !== -1 ? process.argv[sIdx + 1] : null;
-  return { dryRun, windowFilter, symbolFilter };
+  return { dryRun, useLocal, windowFilter, symbolFilter };
 }
 
-function runWindowSymbol(win, symbol, dryRun) {
+async function runWindowSymbol(win, symbol, { dryRun, useLocal, token, api }) {
   const outDir = path.join(OUT_ROOT, `window-${String(win.id).padStart(2, "0")}`, symbol);
   fs.mkdirSync(outDir, { recursive: true });
 
@@ -59,10 +63,15 @@ function runWindowSymbol(win, symbol, dryRun) {
     symbol,
     strategy: "STATISTICAL_ARBITRAGE",
     tradeType: "Swing",
-    gelombang1: {
+    gelombang: {
+      mdSaEntryZ: 2.0,
       mdSaEntryZMax: 2.5,
       mdSaZBoostPerUnit: 0,
-      note: "Config from strategyDefaults.js SSOT — Gelombang 1",
+      mdSaSkipHtfSideways: true,
+      mdSaHtfAlignGate: true,
+      mdSaUseBenchmarkResidual: true,
+      mdSaExitAtMean: true,
+      note: "Gelombang 1+2 from strategyDefaults.js SSOT",
     },
     exportVariant: "full",
   };
@@ -73,9 +82,9 @@ function runWindowSymbol(win, symbol, dryRun) {
     return { ok: true, dryRun: true };
   }
 
-  const args = [
-    SWING_SCRIPT,
-    "--via-api",
+  console.log(`\n══ Window ${win.id} · ${symbol}: ${win.start} → ${win.end} ══`);
+
+  const argv = [
     "--symbols", symbol,
     "--start", win.start,
     "--end", win.end,
@@ -83,41 +92,55 @@ function runWindowSymbol(win, symbol, dryRun) {
     "--exchange", "binance",
     "--out", outDir,
   ];
-
-  console.log(`\n══ Window ${win.id} · ${symbol}: ${win.start} → ${win.end} ══`);
-  const result = spawnSync(process.execPath, args, {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-    env: process.env,
-  });
-
-  if (result.status !== 0) {
-    console.error(`Window ${win.id} ${symbol} failed (exit ${result.status})`);
-    return { ok: false, window: win.id, symbol };
+  if (useLocal) {
+    argv.push("--local");
+  } else {
+    argv.push("--via-api", "--api", api, "--token", token);
   }
 
-  console.log(`Window ${win.id} ${symbol} complete → ${outDir}`);
-  return { ok: true, window: win.id, symbol, outDir };
+  try {
+    await runDatasetExpand({
+      strategyKey: "STATISTICAL_ARBITRAGE",
+      tradeType: "Swing",
+      argv,
+    });
+    console.log(`Window ${win.id} ${symbol} complete → ${outDir}`);
+    return { ok: true, window: win.id, symbol, outDir };
+  } catch (err) {
+    console.error(`Window ${win.id} ${symbol} failed: ${err.message || err}`);
+    return { ok: false, window: win.id, symbol };
+  }
 }
 
-function main() {
-  const { dryRun, windowFilter, symbolFilter } = parseArgs();
+async function main() {
+  const { dryRun, useLocal, windowFilter, symbolFilter } = parseArgs();
   const api = process.env.DATASET_EXPAND_API_URL;
   const hasAuth = (process.env.DATASET_EXPAND_EMAIL && process.env.DATASET_EXPAND_PASSWORD)
     || process.env.DATASET_EXPAND_TOKEN;
 
-  console.log("Sprint 20 — SA Swing Gelombang 1 walk-forward re-export");
+  console.log("Sprint 20 — SA Swing Gelombang 1+2 walk-forward re-export");
   console.log(`Output: ${OUT_ROOT}`);
   console.log(`Windows: ${WINDOWS.length} · Symbols: ${SYMBOLS.join(", ")}`);
-  console.log("Gelombang 1: mdSaEntryZMax=2.5, mdSaZBoostPerUnit=0");
+  console.log("Config: entryZ=2.0, zMax=2.5, HTF gate, BTC-residual, mean exit");
 
-  if (!dryRun && (!api || !hasAuth)) {
+  if (!dryRun && !useLocal && (!api || !hasAuth)) {
     console.error("\n❌ Missing dev server credentials.");
     console.error("Set in be-bot-trading/.env:");
     console.error("  DATASET_EXPAND_API_URL=https://dev.quantara.software");
     console.error("  DATASET_EXPAND_EMAIL + DATASET_EXPAND_PASSWORD");
-    console.error("\nOr run with --dry-run to generate manifests only.");
+    console.error("\nOr run with --local or --dry-run.");
     process.exit(1);
+  }
+
+  let token = process.env.DATASET_EXPAND_TOKEN || null;
+  if (!dryRun && !useLocal && !token && process.env.DATASET_EXPAND_EMAIL) {
+    console.log(`[auth] Single login → ${api}`);
+    token = await loginForToken({
+      apiBase: api,
+      email: process.env.DATASET_EXPAND_EMAIL,
+      password: process.env.DATASET_EXPAND_PASSWORD,
+      log: console.log,
+    });
   }
 
   const windows = windowFilter
@@ -128,7 +151,10 @@ function main() {
   const results = [];
   for (const win of windows) {
     for (const symbol of symbols) {
-      results.push(runWindowSymbol(win, symbol, dryRun));
+      results.push(await runWindowSymbol(win, symbol, { dryRun, useLocal, token, api }));
+      if (!dryRun && !useLocal) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
   }
 
@@ -141,4 +167,7 @@ function main() {
   console.log(`\n✅ All ${results.length} run(s) complete`);
 }
 
-main();
+main().catch((err) => {
+  console.error(err.message || err);
+  process.exit(1);
+});

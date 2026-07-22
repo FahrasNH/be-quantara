@@ -116,6 +116,29 @@ function assertHeapHeadroom(job) {
   });
 }
 
+/** Fetch BTC entry-TF candles aligned to alt SA backtest windows (Gelombang 2 #4). */
+async function fetchSaBenchmarkEntryCandles(userId, entryTf, fetchOpts, abortSignal, job) {
+  try {
+    job?.progress?.({ phase: "fetch", message: `Fetching BTCUSDT benchmark (${entryTf})…`, pct: 0 });
+    const effectivePeriod = getEffectivePeriod(fetchOpts.periodId, entryTf);
+    const maxBars = TYPE_MAX_BARS[entryTf];
+    const res = await HistoricalKlinesService.fetchHistoricalKlines(userId, {
+      symbol: "BTCUSDT",
+      timeframe: entryTf,
+      ...fetchOpts,
+      periodId: effectivePeriod,
+      allowClamp: true,
+      abortSignal,
+      ...(maxBars ? { maxBarsOverride: maxBars } : {}),
+    });
+    return res.candles || [];
+  } catch (e) {
+    if (e.code === "CANCELLED") throw e;
+    console.warn(`SA benchmark fetch failed (${entryTf}):`, e.message);
+    return [];
+  }
+}
+
 /**
  * Clamp total entry bars across types so multi-TF 12m+ AF cannot balloon RAM.
  * Keeps the most recent bars per type; stamps dataInfo.clamped.
@@ -419,11 +442,22 @@ async function runBacktestJob(job, userId, opts) {
       dailyCandles = [];
     }
 
+    const btcEntryCandles = {};
+    if (normalizeStrategyKey(strategyKey) === "STATISTICAL_ARBITRAGE" && sym.toUpperCase() !== "BTCUSDT") {
+      for (const type of typeOrder) {
+        const tfs = TYPE_TF[type];
+        btcEntryCandles[type] = await fetchSaBenchmarkEntryCandles(
+          userId, tfs.entry, fetchOpts, abortSignal, job,
+        );
+      }
+    }
+
     const feeModel = feeOptsFor(candleExchange);
     const computeOpts = {
       entryCandles,
       htfCandles,
       dailyCandles,
+      btcEntryCandles,
       naturalTypeOrder: STRATEGY_SUPPORTED_TYPES[strategyKey]
         || (isAF ? ["Scalping", "Swing"] : multiTypeOrder),
       strategyKey,
@@ -593,11 +627,19 @@ async function runBacktestJob(job, userId, opts) {
   assertHeapHeadroom(job);
   job.progress({ phase: "compute", message: "Running backtest simulation…", pct: 0 });
 
+  let btcEntryCandles = null;
+  if (normalizeStrategyKey(strategyKey) === "STATISTICAL_ARBITRAGE" && sym.toUpperCase() !== "BTCUSDT") {
+    btcEntryCandles = await fetchSaBenchmarkEntryCandles(
+      userId, entryTf, fetchOpts, abortSignal, job,
+    );
+  }
+
   const feeModel = feeOptsFor(entryRes.exchange);
   const result = await runRealBacktest({
     entryCandles,
     htfCandles,
     dailyCandles,
+    btcEntryCandles,
     strategyKey,
     capital: Number(capital) || 1000,
     enableFees: enableFees !== false,

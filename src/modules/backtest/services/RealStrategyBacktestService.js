@@ -31,6 +31,7 @@ const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefaults.js");
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
+const { computeStatisticalArbitrageZ } = require("../../../core/strategy-engine/md/statisticalArbitrageEntry");
 const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
 const { buildAtrBaseline, checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
@@ -104,6 +105,21 @@ const isSmcKey = (k) => {
   const n = normalizeStrategyKey(String(k || "").toUpperCase());
   return SMC_COMPONENTS.has(n) || n === "ADAPTIVE_FUSION";
 };
+
+const isSaKey = (k) => String(k || "").toUpperCase() === "STATISTICAL_ARBITRAGE";
+
+/** Align benchmark (BTC) closes to entry-TF bar timestamps for SA residual z-score. */
+function alignBenchmarkCloses(entryCandles, benchmarkCandles) {
+  if (!Array.isArray(entryCandles) || !Array.isArray(benchmarkCandles) || !benchmarkCandles.length) {
+    return null;
+  }
+  const byTs = new Map();
+  for (const c of benchmarkCandles) byTs.set(c.timestamp, c.close);
+  return entryCandles.map((c) => {
+    const v = byTs.get(c.timestamp);
+    return v == null ? null : v;
+  });
+}
 
 /**
  * Deep-merge per-leg typeOverrides so a partial/empty client payload cannot
@@ -2235,6 +2251,17 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  if (isSaKey(strategyKey) && opts.btcEntryCandles?.length) {
+    const sym = String(opts.symbol || "").toUpperCase();
+    if (sym && sym !== "BTCUSDT") {
+      const aligned = alignBenchmarkCloses(entryCandles, opts.btcEntryCandles);
+      if (aligned?.some((v) => v != null)) {
+        indicators.btcCloses = aligned;
+        indicators.benchmarkCloses = aligned;
+      }
+    }
+  }
+
   // MEAN_REVERSION entry-TF ADX regime gate (MD-SUB-01)
   const isMeanReversion = isMRKey(strategyKey);
   if (isMeanReversion) {
@@ -2612,6 +2639,21 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const hitSL = position.side === "LONG" ? c.low <= stopLevel : c.high >= stopLevel;
       const hitTP = position.side === "LONG" ? c.high >= position.tp : c.low <= position.tp;
 
+      let hitMeanExit = false;
+      if (isSaKey(strategyKey) && cfg.mdSaExitAtMean !== false) {
+        const exitZ = cfg.mdSaExitZ ?? 0.4;
+        const zNow = computeStatisticalArbitrageZ({
+          closes: indicators.closes,
+          vwap: indicators.vwap,
+          benchmarkCloses: indicators.benchmarkCloses || indicators.btcCloses,
+          lastIdx: i,
+          config: cfg,
+        });
+        if (zNow != null && Math.abs(zNow) <= exitZ) {
+          hitMeanExit = true;
+          closePosition(price, "MEAN_EXIT", i);
+        }
+      }
 
       // typeOverrides[tradeLeg].maxHoldHours (was Scalping-only/scalpingMaxHoldHours;
       // TREND_FOLLOWING forensics showed >=24h-underwater positions accounted for -76.8 of the
@@ -2633,7 +2675,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         }
       }
 
-      if (!hitTimeStop) {
+      if (!hitTimeStop && !hitMeanExit) {
         if (hitSL) closePosition(stopLevel, position.m1 ? "SL_TRAIL" : "SL", i);
         else if (hitTP) closePosition(position.tp, "TP", i);
       }
@@ -3159,6 +3201,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
         strategyKey,
         capital: startCapital,
         config: typeConfig,
+        btcEntryCandles: opts.btcEntryCandles?.[tradeType] ?? opts.btcEntryCandles ?? null,
         abortSignal: opts.abortSignal,
         onProgress: opts.onProgress
           ? (pct, bar, total) => opts.onProgress(pct, bar, total, tradeType)

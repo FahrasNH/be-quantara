@@ -114,11 +114,67 @@ test("Gelombang 1: entryZMax rejects extreme |z| > 2.5", () => {
   const r = evaluateStatisticalArbitrageEntry({
     closes: extremeCloses,
     lastIdx: n - 1,
-    config: { mdSaEntryZ: 1.6, mdSaEntryZMax: 2.5, mdSaLookback: 40 },
+    config: { mdSaEntryZ: 2.0, mdSaEntryZMax: 2.5, mdSaLookback: 40 },
   });
   assert.strictEqual(r.signal, null);
   assert.strictEqual(r.reason, "z_too_extreme");
   assert.ok(Math.abs(r.zScore) > 2.5);
+});
+
+test("Gelombang 2: entryZ floor 2.0 rejects mild z in 1.6–1.9 band", () => {
+  const n = 60;
+  const noisy = [];
+  for (let i = 0; i < n; i++) noisy.push(100 + Math.sin(i / 3) * 0.5);
+  noisy[n - 1] = 100.75; // ~1.99σ — below entryZ 2.0 floor
+  const r = evaluateStatisticalArbitrageEntry({
+    closes: noisy,
+    lastIdx: n - 1,
+    config: { mdSaEntryZ: 2.0, mdSaEntryZMax: 2.5, mdSaLookback: 40 },
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "z_inside_band");
+  assert.ok(Math.abs(r.zScore) < 2.0);
+});
+
+test("Gelombang 2: HTF SIDEWAYS skip", () => {
+  const n = 60;
+  const base = flatSeries(n, 100);
+  const longCloses = base.slice();
+  longCloses[n - 1] = 88;
+  const r = evaluateStatisticalArbitrageEntry({
+    closes: longCloses,
+    lastIdx: n - 1,
+    config: {
+      mdSaEntryZ: 1.5,
+      mdSaEntryZMax: 99,
+      mdSaLookback: 40,
+      mdSaSkipHtfSideways: true,
+      htfTrend: "SIDEWAYS",
+    },
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "htf_sideways");
+});
+
+test("Gelombang 2: HTF align gate blocks SHORT in BULLISH", () => {
+  const n = 60;
+  const base = flatSeries(n, 100);
+  const shortCloses = base.slice();
+  shortCloses[n - 1] = 112;
+  const r = evaluateStatisticalArbitrageEntry({
+    closes: shortCloses,
+    lastIdx: n - 1,
+    config: {
+      mdSaEntryZ: 1.5,
+      mdSaEntryZMax: 99,
+      mdSaLookback: 40,
+      mdSaSkipHtfSideways: false,
+      mdSaHtfAlignGate: true,
+      htfTrend: "BULLISH",
+    },
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "htf_align_short_bullish");
 });
 
 test("Gelombang 1: zBoostPerUnit=0 yields flat base confidence", () => {

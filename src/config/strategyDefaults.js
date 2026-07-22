@@ -752,7 +752,7 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
   signalType: "MEAN_REVERSION",
 
   mdSaLookback: 40,
-  mdSaEntryZ: 1.6,
+  mdSaEntryZ: 2.0, // Gelombang 2: band 2.0–2.5σ (post-patch analysis sweet spot)
   mdSaEntryZMax: 2.5, // Gelombang 1: cap |z| — 2.5+σ = breakout/momentum, not revert
   mdSaExitZ: 0.4,
   mdSaMinBars: 50,
@@ -760,6 +760,10 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
   mdSaZBoostPerUnit: 0, // Gelombang 1: flat confidence — zBoost anti-predictive on swing
   mdSaMaxConfidence: 0.95,
   mdSaUseVwapBlend: true,
+  mdSaSkipHtfSideways: true, // Gelombang 2 #3: skip HTF 1w SIDEWAYS whipsaw
+  mdSaHtfAlignGate: true, // Gelombang 2 #3: no fade against HTF trend
+  mdSaUseBenchmarkResidual: true, // Gelombang 2 #4: BTC-residual z when btcCloses wired
+  mdSaExitAtMean: true, // Gelombang 2 #5: exit when |z| <= mdSaExitZ
 };
 STRATEGIES.ICT_STYLE_TRADING = {
   ...BS_COMPONENT_BASE,

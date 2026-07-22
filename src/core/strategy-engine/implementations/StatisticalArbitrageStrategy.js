@@ -31,12 +31,14 @@ class StatisticalArbitrageStrategy extends StrategyBase {
     return [
       { key: "evaluated", label: "1. Bars evaluated" },
       { key: "rejWarmup", label: "2. - Warmup/lookback insufficient" },
-      { key: "rejResidualZ", label: "3. - Residual-z (benchmark) gate" },
-      { key: "rejRollingZ", label: "4. - Rolling-z unavailable" },
-      { key: "rejVwapBlend", label: "5. - VWAP blend gate" },
-      { key: "rejEntryZ", label: "6. - |z| below entryZ" },
-      { key: "rejEntryZMax", label: "7. - |z| above entryZMax (extreme/breakout)" },
-      { key: "rejConfidence", label: "8. - Confidence floor" },
+      { key: "rejHtfSideways", label: "3. - HTF SIDEWAYS skip" },
+      { key: "rejHtfAlign", label: "4. - HTF trend-align block" },
+      { key: "rejResidualZ", label: "5. - Residual-z (benchmark) gate" },
+      { key: "rejRollingZ", label: "6. - Rolling-z unavailable" },
+      { key: "rejVwapBlend", label: "7. - VWAP blend gate" },
+      { key: "rejEntryZ", label: "8. - |z| below entryZ" },
+      { key: "rejEntryZMax", label: "9. - |z| above entryZMax (extreme/breakout)" },
+      { key: "rejConfidence", label: "10. - Confidence floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
@@ -76,12 +78,13 @@ class StatisticalArbitrageStrategy extends StrategyBase {
   }
 
   detectSignal(indicators, lastIdx, config = {}) {
+    const merged = { ...DEFAULTS, ...this.config, ...config };
     const result = evaluateStatisticalArbitrageEntry({
       closes: indicators.closes || [],
       vwap: indicators.vwap,
       benchmarkCloses: indicators.benchmarkCloses || indicators.btcCloses || null,
       lastIdx,
-      config: { ...DEFAULTS, ...this.config, ...config },
+      config: merged,
       ablation: this._ablation,
     });
     const z = result.zScore;

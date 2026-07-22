@@ -573,6 +573,11 @@ async function runSymbol(symbol, strategyKey, tradeType, cfg, opts) {
   const entryRes = await loadCandles(symbol, tfs.entry, opts, "entry");
   const htfRes = await loadCandles(symbol, tfs.trend, opts, "htf");
   const dailyRes = await loadCandles(symbol, "1d", opts, "daily");
+  let btcEntry = null;
+  if (strategyKey === "STATISTICAL_ARBITRAGE" && symbol.toUpperCase() !== "BTCUSDT") {
+    const btcRes = await loadCandles("BTCUSDT", tfs.entry, opts, "btc-benchmark");
+    btcEntry = btcRes.candles;
+  }
   const entry = entryRes.candles;
   const htf = htfRes.candles;
   const daily = dailyRes.candles;
@@ -598,6 +603,7 @@ async function runSymbol(symbol, strategyKey, tradeType, cfg, opts) {
     htfCandles: { [tradeType]: htf },
     dailyCandles: daily,
     symbol,
+    btcEntryCandles: btcEntry,
     dataSource: opts.source,
     ablationMeta: {
       entryTf: tfs.entry,
