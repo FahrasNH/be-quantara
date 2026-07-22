@@ -31,14 +31,15 @@ class StatisticalArbitrageStrategy extends StrategyBase {
     return [
       { key: "evaluated", label: "1. Bars evaluated" },
       { key: "rejWarmup", label: "2. - Warmup/lookback insufficient" },
-      { key: "rejHtfSideways", label: "3. - HTF SIDEWAYS skip" },
-      { key: "rejHtfAlign", label: "4. - HTF trend-align block" },
-      { key: "rejResidualZ", label: "5. - Residual-z (benchmark) gate" },
-      { key: "rejRollingZ", label: "6. - Rolling-z unavailable" },
-      { key: "rejVwapBlend", label: "7. - VWAP blend gate" },
-      { key: "rejEntryZ", label: "8. - |z| below entryZ" },
-      { key: "rejEntryZMax", label: "9. - |z| above entryZMax (extreme/breakout)" },
-      { key: "rejConfidence", label: "10. - Confidence floor" },
+      { key: "rejDailyRegime", label: "3. - Daily regime ≠ TRANSITION" },
+      { key: "rejHtfSideways", label: "4. - HTF SIDEWAYS skip" },
+      { key: "rejHtfAlign", label: "5. - HTF trend-align block" },
+      { key: "rejResidualZ", label: "6. - Residual-z (benchmark) gate" },
+      { key: "rejRollingZ", label: "7. - Rolling-z unavailable" },
+      { key: "rejVwapBlend", label: "8. - VWAP blend gate" },
+      { key: "rejEntryZ", label: "9. - |z| below entryZ" },
+      { key: "rejEntryZMax", label: "10. - |z| above entryZMax (extreme/breakout)" },
+      { key: "rejConfidence", label: "11. - Confidence floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }

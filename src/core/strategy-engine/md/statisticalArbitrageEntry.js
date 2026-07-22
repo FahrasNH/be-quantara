@@ -24,6 +24,7 @@ const DEFAULTS = {
   skipHtfSideways: true, // Gelombang 2: HTF 1w SIDEWAYS whipsaw (−702 NET in analysis)
   htfAlignGate: true, // Gelombang 2: block fade against HTF trend (LONG/BEARISH, SHORT/BULLISH)
   useBenchmarkResidual: true,
+  requireTransitionRegime: false, // production SSOT: strategyDefaults.mdSaRequireTransitionRegime=true
 };
 
 function _rollingMeanStd(arr, endIdx, lookback) {
@@ -209,6 +210,20 @@ function evaluateStatisticalArbitrageEntry({
   const htfAlignGate = config.mdSaHtfAlignGate ?? DEFAULTS.htfAlignGate;
   const useBenchmark = config.mdSaUseBenchmarkResidual ?? DEFAULTS.useBenchmarkResidual;
   const htfTrend = config.htfTrend ?? null;
+  const requireTransition = config.mdSaRequireTransitionRegime ?? DEFAULTS.requireTransitionRegime;
+  const dailyRegime = config.dailyRegime ?? null;
+
+  if (requireTransition && dailyRegime !== "TRANSITION") {
+    _abl("rejDailyRegime");
+    return {
+      signal: null,
+      confidence: 0,
+      reason: "daily_regime_not_transition",
+      zScore: null,
+      mode: null,
+      dailyRegime,
+    };
+  }
 
   if (!closes || lastIdx < Math.max(minBars, lookback)) {
     _abl("rejWarmup");

@@ -764,6 +764,7 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
   mdSaHtfAlignGate: true, // Gelombang 2 #3: no fade against HTF trend
   mdSaUseBenchmarkResidual: true, // Gelombang 2 #4: BTC-residual z when btcCloses wired
   mdSaExitAtMean: true, // Gelombang 2 #5: exit when |z| <= mdSaExitZ
+  mdSaRequireTransitionRegime: true, // Sprint 20: SA Swing edge in daily TRANSITION band only
 };
 STRATEGIES.ICT_STYLE_TRADING = {
   ...BS_COMPONENT_BASE,

@@ -226,6 +226,8 @@ class AdaptiveStrategyEngine extends BotEngine {
         }
       }
 
+      await this._refreshDailyRegime(candles[lastIdx]?.timestamp ?? Date.now());
+
       // 6c. FAIL-CLOSED — HTF dikonfigurasi tapi trend tak bisa ditentukan →
       //     blok entry baru (mirror BotEngine._tick() STEP 3).
       if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
@@ -237,10 +239,12 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       // 7. Deteksi sinyal — kirim htfTrend dari state (bukan hardcoded "NEUTRAL")
       const signal = this.strategy.detectSignal(indicators, lastIdx, {
+        ...this.config,
         balance:        this.capital || this.config.capital,
         volatility:     this.lastVolatility,
         trend_strength: this.lastTrendStrength,
         htfTrend:       this.state.htfTrend,
+        dailyRegime:    this.state.dailyRegime,
         // FEE-01/01b: knob entry-quality AF — diteruskan dari config bot/strategi
         // agar anti-chase & conviction-veto bisa di-tune live tanpa ubah kode.
         maxEntryExtensionATR: this.config.maxEntryExtensionATR,

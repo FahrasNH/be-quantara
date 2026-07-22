@@ -177,6 +177,39 @@ test("Gelombang 2: HTF align gate blocks SHORT in BULLISH", () => {
   assert.strictEqual(r.reason, "htf_align_short_bullish");
 });
 
+test("Sprint 20: daily TRANSITION regime gate blocks non-TRANSITION", () => {
+  const n = 60;
+  const base = flatSeries(n, 100);
+  const longCloses = base.slice();
+  longCloses[n - 1] = 90;
+  const blocked = evaluateStatisticalArbitrageEntry({
+    closes: longCloses,
+    lastIdx: n - 1,
+    config: {
+      mdSaEntryZ: 1.5,
+      mdSaEntryZMax: 99,
+      mdSaLookback: 40,
+      mdSaRequireTransitionRegime: true,
+      dailyRegime: "CHOP",
+    },
+  });
+  assert.strictEqual(blocked.signal, null);
+  assert.strictEqual(blocked.reason, "daily_regime_not_transition");
+
+  const allowed = evaluateStatisticalArbitrageEntry({
+    closes: longCloses,
+    lastIdx: n - 1,
+    config: {
+      mdSaEntryZ: 1.5,
+      mdSaEntryZMax: 99,
+      mdSaLookback: 40,
+      mdSaRequireTransitionRegime: true,
+      dailyRegime: "TRANSITION",
+    },
+  });
+  assert.strictEqual(allowed.signal, "LONG");
+});
+
 test("Gelombang 1: zBoostPerUnit=0 yields flat base confidence", () => {
   const n = 60;
   const base = flatSeries(n, 100);

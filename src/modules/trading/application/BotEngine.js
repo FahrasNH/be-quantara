@@ -13,6 +13,7 @@ const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSi
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
+const { computeDailyTrendStrength, getRegimeForDate } = require("../../../core/signal-engine/dailyRegimeGate");
 const { getStrategy } = require("#config/strategyDefaults.js");
 const { buildTradeAttribution } = require("../../analytics/domain/tradeAttribution"); // TASK 2.3
 const db       = require("../../../infrastructure/db/database");
@@ -321,6 +322,7 @@ class BotEngine extends EventEmitter {
 
       // HTF trend state
       htfTrend:        "UNKNOWN", // BULLISH / BEARISH / SIDEWAYS / UNKNOWN
+      dailyRegime:     "UNKNOWN", // STRONG_TREND / CHOP / TRANSITION / UNKNOWN
 
       // Sideways breakout state (untuk Strat C retest)
       sidewaysBreakout: null,     // { signal, rangeHigh, rangeLow, rangeEdge, buffer, atr, detectedAt }
@@ -1237,6 +1239,9 @@ class BotEngine extends EventEmitter {
         }
       }
 
+      // Daily regime (ADX-proxy on 1d) — SA TRANSITION gate + CSV export parity
+      await this._refreshDailyRegime(candles[lastIdx]?.timestamp ?? Date.now());
+
       // Reset sidewaysBreakout state jika HTF sudah tidak SIDEWAYS lagi
       if (this.state.htfTrend !== "SIDEWAYS" && this.state.sidewaysBreakout) {
         this._log("info", `HTF ${this.config.higherTf} tidak lagi SIDEWAYS — reset sideways breakout state`);
@@ -1354,6 +1359,7 @@ class BotEngine extends EventEmitter {
             }
 
             const signal = detectSignal(indicators, lastIdx, {
+              ...this.config,
               rsiOverbought:    this.config.rsiOverbought,
               rsiOversold:      this.config.rsiOversold,
               rsiLongMin:       this.config.rsiLongMin,
@@ -1384,6 +1390,7 @@ class BotEngine extends EventEmitter {
               tsUseVwapPrecision:   this.config.tsUseVwapPrecision,
               vwapAtrMult:          this.config.vwapAtrMult,
               selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
+              dailyRegime:          this.state.dailyRegime,
             });
 
 
@@ -1484,6 +1491,7 @@ class BotEngine extends EventEmitter {
                 afActiveRacers:       this.config.afActiveRacers || this.config.afActiveVoters,
                 typeOverrides:        this.config.typeOverrides,
                 candleTimestamp:      Date.now(),
+                dailyRegime:          this.state.dailyRegime,
               });
               // Persist vote breakdown onto indicator snapshot for entryContext
               if (multiSignal?.meta?.afVotes || multiSignal?.meta?.signalComponents || multiSignal?.meta?.afRace) {
@@ -1749,6 +1757,38 @@ class BotEngine extends EventEmitter {
     } catch { /* ticker juga gagal — gunakan harga hardcode sebagai last resort */ }
 
     return this._generateDryRunCandles(seedPrice);
+  }
+
+  /** Daily regime cache — ADX-proxy on 1d candles (parity with RealStrategyBacktestService). */
+  async _refreshDailyRegime(timestamp) {
+    try {
+      const dailyCandles = await fetchCandlesWithCache(this.client, {
+        exchange:        this.config.exchange,
+        symbol:          this.config.symbol,
+        interval:        "1d",
+        limit:           120,
+        cacheTtlSeconds: HTF_CACHE_TTL,
+        minBars:         30,
+      });
+      if (!dailyCandles?.length) {
+        this.state.dailyRegime = "UNKNOWN";
+        return;
+      }
+      const dailyTrend = computeDailyTrendStrength({
+        close: dailyCandles.map((c) => c.close),
+        high: dailyCandles.map((c) => c.high),
+        low: dailyCandles.map((c) => c.low),
+      });
+      const dateMap = new Map();
+      for (let i = 0; i < dailyCandles.length; i++) {
+        dateMap.set(new Date(dailyCandles[i].timestamp).toISOString().split("T")[0], i);
+      }
+      this._dailyTrendCache = { dailyTrend, dateMap };
+      const entryDate = new Date(timestamp).toISOString().split("T")[0];
+      this.state.dailyRegime = getRegimeForDate(entryDate, this._dailyTrendCache);
+    } catch {
+      this.state.dailyRegime = "UNKNOWN";
+    }
   }
 
   /** HTF candles dengan cache DB (10 menit) — hindari fetch tiap tick / tiap strategi. */

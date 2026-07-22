@@ -1026,6 +1026,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const htfTrend = htfTrendAt(i);
     if (htfTrend === "UNKNOWN") continue; // fail-closed
 
+    const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
+    const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
+
     // Detect multi-component signals (AF v3.0 / SMC v3.1)
     const multiSignal = strategy.detectSignalMulti(indicators, i, {
       // BT-FIX: spread full strategy config so SMC knobs (smcMinConfidenceA/B/C,
@@ -1051,6 +1054,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       regimeDetection: cfg.regimeDetection, // EMA gap thresholds, ADX strength
       typeOverrides: cfg.typeOverrides, // per-leg overrides (Scalping/Intraday/Swing)
       candleTimestamp: c.timestamp, // Sprint 13 session filter
+      dailyRegime,
     });
 
 
@@ -2766,7 +2770,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     // ── 4. REAL signal detection (same call signature live uses) ────────────
+    const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
+    const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
+
     const signal = strategy.detectSignal(indicators, i, {
+      ...cfg,
       balance: capital,
       volatility,
       trend_strength: trendStrength,
@@ -2819,6 +2827,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       donchianPeriod: cfg.donchianPeriod,
       adxMinStrength: cfg.adxMinStrength,
       minVolRatio: cfg.minVolRatio,
+      dailyRegime,
     });
     if (!signal) { diag.signalNull += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
@@ -2858,8 +2867,6 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
-    const entryDate = new Date(c.timestamp).toISOString().split("T")[0];
-    const dailyRegime = dailyTrendCache ? getRegimeForDate(entryDate, dailyTrendCache) : "UNKNOWN";
     const regimeResult = applyRegimeGate({
       signal,
       strategyKey,
