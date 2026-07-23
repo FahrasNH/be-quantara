@@ -14,6 +14,7 @@ const { requireFeature } = require("../../../shared/middleware/subscriptionGuard
 const XaiTrainingService = require("../services/XaiTrainingService");
 const OptimizationAnalysisService = require("../../analytics/services/OptimizationAnalysisService");
 const GrokConfirmService = require("../services/GrokConfirmService");
+const RagExplainService = require("../rag/RagExplainService");
 const cfg = require("../../../config/env");
 
 module.exports = function createAiRouter() {
@@ -152,6 +153,44 @@ module.exports = function createAiRouter() {
     const { includeStrategyDefaults = true } = req.body || {};
     const result = await XaiTrainingService.syncKnowledgeBase({ includeStrategyDefaults });
 
+    res.json({ ok: true, data: result });
+  }));
+
+  /**
+   * POST /explain — True-RAG evidence-grounded research Q&A (offline-first).
+   * Input: { question, strategyKey?, regime?, symbol?, backtest_id? }
+   */
+  router.post("/explain", requireAiOptimizer, asyncHandler(async (req, res) => {
+    const access = await XaiTrainingService.canUseAiOptimizer(req.userId);
+    if (!access.allowed) {
+      return res.status(403).json({ ok: false, error: access.reason, tier: access.tier ?? null });
+    }
+
+    const { question, strategyKey, regime, symbol, timeframe, skipLlm } = req.body || {};
+    if (!question || String(question).trim().length < 5) {
+      return res.status(400).json({ ok: false, error: "question is required (min 5 chars)" });
+    }
+
+    const result = await RagExplainService.explain({
+      question: String(question).trim(),
+      strategyKey,
+      regime,
+      symbol,
+      timeframe,
+      skipLlm: skipLlm === true,
+    });
+
+    res.json({ ok: true, data: result });
+  }));
+
+  router.post("/rag/ingest", asyncHandler(async (req, res) => {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const headerSecret = req.headers["x-admin-secret"];
+    if (!adminSecret || headerSecret !== adminSecret) {
+      return res.status(403).json({ ok: false, error: "Admin secret required" });
+    }
+
+    const result = await RagExplainService.ingest(req.body || {});
     res.json({ ok: true, data: result });
   }));
 

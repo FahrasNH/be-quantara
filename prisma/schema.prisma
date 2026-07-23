@@ -559,6 +559,22 @@ model TradeEmbedding {
   @@index([createdAt])
 }
 
+// ── Sprint 21 / True-RAG — Document Embeddings (text ~384d, separate from trade 60d) ──
+model DocEmbedding {
+  id           String   @id @default(cuid())
+  docId        String
+  chunkIndex   Int      @default(0)
+  content      String
+  searchVector Unsupported("tsvector")?
+  vector       Unsupported("vector(384)")?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@unique([docId, chunkIndex])
+  @@index([docId])
+  @@index([createdAt])
+}
+
 // ── Sprint 5 / RL-4 — ML Shadow Log ──────────────────────────────────────────
 model MLShadowLog {
   id            String   @id @default(cuid())
