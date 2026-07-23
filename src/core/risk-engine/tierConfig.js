@@ -78,8 +78,8 @@ const TIER_CONFIG = {
     maxConcurrentPositions: 16,
     maxActiveBots: 50,
     autoSelector: true,
-    // AI optimizer feature flag — disabled until Fase 3
-    aiOptimizer: process.env.VAULT_AI_OPTIMIZER_ENABLED === "true",
+    // Sprint 21: Explain Why / RAG research enabled for VAULT (opt-out via env)
+    aiOptimizer: process.env.VAULT_AI_OPTIMIZER_ENABLED !== "false",
     supportSLA: "2h",
     capitalRange: { min: 30_000_000, max: null },
     badge: "Premium",

@@ -116,7 +116,7 @@ class XaiTrainingService {
     if (tierCfg?.aiOptimizer) return { allowed: true, reason: "tier" };
     return {
       allowed: false,
-      reason: "AI Optimizer membutuhkan tier VAULT dengan VAULT_AI_OPTIMIZER_ENABLED=true",
+      reason: "AI Optimizer membutuhkan tier VAULT (nonaktifkan dengan VAULT_AI_OPTIMIZER_ENABLED=false)",
       tier,
     };
   }

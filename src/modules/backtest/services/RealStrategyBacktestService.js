@@ -1547,7 +1547,20 @@ async function _applyGrokGate(trades, ctx = {}) {
 }
 
 const RAG_CONSERVATIVE_DISCOUNT = 0.9;
-const RAG_APPROVE_THRESHOLD = 0.5;
+const RAG_APPROVE_THRESHOLD = parseFloat(process.env.RAG_APPROVE_THRESHOLD || "0.4");
+
+/** Resolve win/loss from TradeEmbedding metadata (outcome field or pnlPct fallback). */
+function _resolveSimilarOutcome(metadata) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const o = metadata.outcome;
+  if (o === "win" || o === "loss") return o;
+  const pnl = metadata.pnlPct ?? metadata.pnl ?? metadata.pnlNet;
+  if (typeof pnl === "number" && Number.isFinite(pnl)) {
+    if (pnl > 0) return "win";
+    if (pnl < 0) return "loss";
+  }
+  return null;
+}
 
 let _ragGateDeps = null;
 function getRagGateDeps() {
@@ -1571,6 +1584,61 @@ function _applyConservativeDiscount(score) {
   if (!Number.isFinite(score)) return 0.5;
   if (score > 0.5) return 0.5 + (score - 0.5) * RAG_CONSERVATIVE_DISCOUNT;
   return score;
+}
+
+/** Best-effort: persist backtest trades with outcome metadata for future RAG similarity. */
+async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
+  if (!deps?.vs || !deps?.fe || !Array.isArray(trades) || trades.length === 0) return 0;
+  try {
+    const available = await deps.vs.checkAvailability();
+    if (!available) return 0;
+  } catch {
+    return 0;
+  }
+
+  const batch = [];
+  for (const t of trades) {
+    const pnl = t.pnl ?? t.pnlNet ?? 0;
+    const outcome = pnl > 0 ? "win" : pnl < 0 ? "loss" : null;
+    if (!outcome) continue;
+    const tradeId = t.id || t.tradeId || `bt-${ctx.strategyKey}-${t.openTime || t.date}`;
+    const entryContext = t.entryContext || {
+      rsi: t.entryRsi,
+      side: t.side,
+      confidence: t.confidence,
+      regime: t.regime || t.marketCond,
+    };
+    try {
+      const features = deps.fe.buildFeatureVector(entryContext, {
+        strategyKey: ctx.strategyKey,
+        symbol: ctx.symbol || t.symbol,
+        side: t.side,
+      });
+      batch.push({
+        tradeId: String(tradeId),
+        vector: features,
+        metadata: {
+          strategyKey: ctx.strategyKey,
+          symbol: ctx.symbol || t.symbol,
+          side: t.side,
+          regime: entryContext.regime || t.regime || t.marketCond,
+          outcome,
+          pnlPct: typeof t.pnlPct === "number" ? t.pnlPct : pnl,
+          timestamp: new Date(t.openTime || t.date || Date.now()).toISOString(),
+          source: "backtest",
+        },
+      });
+    } catch { /* skip bad row */ }
+  }
+
+  if (batch.length === 0) return 0;
+  try {
+    await deps.vs.batchUpsert(batch);
+    return batch.length;
+  } catch (err) {
+    console.warn("[Backtest] RAG embedding seed failed:", err.message);
+    return 0;
+  }
 }
 
 /**
@@ -1658,19 +1726,34 @@ async function _applyRagGate(trades, ctx = {}) {
         beforeDate: tradeTime.toISOString(),
       });
       if (similar.length > 0) {
-        const wins = similar.filter((s) => s.metadata?.outcome === "win").length;
-        const withOutcome = similar.filter(
-          (s) => s.metadata?.outcome === "win" || s.metadata?.outcome === "loss"
-        ).length;
-        if (withOutcome > 0) ragScore = wins / withOutcome;
+        const outcomes = similar.map((s) => _resolveSimilarOutcome(s.metadata)).filter(Boolean);
+        if (outcomes.length > 0) {
+          const wins = outcomes.filter((o) => o === "win").length;
+          ragScore = wins / outcomes.length;
+        }
       }
     } catch { /* ignore */ }
 
     let rawScore;
     if (lgbScore !== null && ragScore !== null) rawScore = 0.5 * lgbScore + 0.5 * ragScore;
-    else if (lgbScore !== null) rawScore = lgbScore;
     else if (ragScore !== null) rawScore = ragScore;
-    else {
+    else if (lgbScore !== null) {
+      // LGB-only without RAG evidence — fail-open (RAG gate must not reject on ML alone)
+      kept.push(t);
+      approved += 1;
+      skipped += 1;
+      logs.push({
+        time: tradeTime.getTime(),
+        symbol: ctx.symbol,
+        side: t.side,
+        approved: true,
+        reason: "lgb-only-no-rag-evidence (kept)",
+        ragScore: null,
+        lgbScore,
+      });
+      if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
+      continue;
+    } else {
       kept.push(t);
       approved += 1;
       skipped += 1;
@@ -1730,6 +1813,10 @@ async function _applyRagGate(trades, ctx = {}) {
       ? "No WinPredictor model and empty TradeEmbedding store — RAG ON matches baseline (fail-open)"
       : "All entries had no ML signal (kept) — RAG ON matches baseline; train a model or seed embeddings";
   }
+
+  // Seed embeddings from backtest trades (outcome metadata) for future RAG runs.
+  const seeded = await _seedBacktestTradeEmbeddings(trades, ctx, deps).catch(() => 0);
+  if (seeded > 0) stats.embeddingsSeeded = seeded;
 
   return {
     trades: kept,
