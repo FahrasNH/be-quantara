@@ -37,6 +37,8 @@ const { buildAtrBaseline, checkNoTradeSessionGate } = require("../../../core/ris
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const {
   resolveScalpingGateFlags,
+  resolveIntradayGateFlags,
+  resolveSmcSessionGateFlags,
   resolveSwingGateFlags,
   buildSmcEntryFeatures,
   applySmcSideRegimeGate,
@@ -1118,6 +1120,9 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const scalpFlags = componentId === "Scalping"
         ? resolveScalpingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Scalping || {}) })
         : {};
+      const intradayFlags = componentId === "Intraday"
+        ? resolveIntradayGateFlags({ ...cfg, ...(cfg.typeOverrides?.Intraday || {}) })
+        : {};
       const swingFlags = componentId === "Swing"
         ? resolveSwingGateFlags({ ...cfg, ...(cfg.typeOverrides?.Swing || {}) })
         : {};
@@ -1128,6 +1133,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         riskPerTrade,
         // Sprint 13: Side×Regime — block LONG in CHOP for Scalping (config flag)
         blockLongInChop: componentId === "Scalping" && scalpFlags.smcBlockLongInChop === true,
+        // Sprint 22: Intraday — block ALL sides in CHOP (both sides lose on BNB data)
+        blockAllInChop: componentId === "Intraday" && intradayFlags.smcBlockAllInChop === true,
       });
       if (!regimeResult.allow) { execAbl.rejRegimeGate += 1; continue; }
 
@@ -1138,6 +1145,15 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
           signal,
           dailyRegime,
           enabled: scalpFlags.smcBlockLongInChop === true,
+        });
+        if (!sideGate.allow) { execAbl.rejSideRegime += 1; continue; }
+      }
+      if (componentId === "Intraday") {
+        const sideGate = applySmcSideRegimeGate({
+          signal,
+          dailyRegime,
+          enabled: intradayFlags.smcBlockAllInChop === true,
+          blockAllInChop: true,
         });
         if (!sideGate.allow) { execAbl.rejSideRegime += 1; continue; }
       }
@@ -2920,11 +2936,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     const entryMeta = resolveEnrichedSignalMeta(strategy, strategyKey);
     const tradeTier = cfg.tradeType || entryMeta?.component || entryMeta?.winningComponent || null;
-    const scalpGateFlags = resolveScalpingGateFlags({ ...cfg, typeOverrides: cfg.typeOverrides });
+    const sessionGateFlags = resolveSmcSessionGateFlags({ ...cfg, typeOverrides: cfg.typeOverrides }, tradeTier);
     const sessionGate = checkNoTradeSessionGate({
       timestamp: c.timestamp,
-      noTradeSessions: scalpGateFlags.noTradeSessions,
-      enabled: scalpGateFlags.smcSessionFilter,
+      noTradeSessions: sessionGateFlags.noTradeSessions,
+      enabled: sessionGateFlags.smcSessionFilter,
       tradeTier,
       strategyKey,
     });

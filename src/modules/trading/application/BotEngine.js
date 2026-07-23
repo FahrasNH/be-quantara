@@ -3102,7 +3102,7 @@ class BotEngine extends EventEmitter {
 
     const SmartMoneyConceptsStrategy = require("../../../core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
     const afStrategy = new SmartMoneyConceptsStrategy();
-    const { resolveScalpingGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcEntry");
+    const { resolveScalpingGateFlags, resolveIntradayGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcEntry");
     const { checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
 
     // Map legacy letters → type names for typeOverrides lookup
@@ -3145,6 +3145,36 @@ class BotEngine extends EventEmitter {
         signal,
         dailyRegime,
         enabled: flags.smcBlockLongInChop === true,
+      });
+      if (!sideGate.allow) {
+        this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${sideGate.reason}`);
+        return;
+      }
+    }
+
+    // Sprint 22: Intraday session (London block) + CHOP all-sides gate (live parity)
+    if (typeName === "Intraday") {
+      const flags = resolveIntradayGateFlags({ ...this.config, ...typeOverride, typeOverrides: this.config.typeOverrides });
+      const ts = indicatorSnapshot?.candleTimestamp
+        ?? indicators?.timestamps?.[lastIdx]
+        ?? Date.now();
+      const sessionGate = checkNoTradeSessionGate({
+        timestamp: ts,
+        noTradeSessions: flags.noTradeSessions,
+        enabled: flags.smcSessionFilter,
+        tradeTier: "Intraday",
+        strategyKey: this.config.strategyKey || "SMART_MONEY_CONCEPTS",
+      });
+      if (!sessionGate.ok) {
+        this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${sessionGate.reason}`);
+        return;
+      }
+      const dailyRegime = this.state.dailyRegime || indicatorSnapshot?.dailyRegime || "UNKNOWN";
+      const sideGate = applySmcSideRegimeGate({
+        signal,
+        dailyRegime,
+        enabled: flags.smcBlockAllInChop === true,
+        blockAllInChop: true,
       });
       if (!sideGate.allow) {
         this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — ${sideGate.reason}`);

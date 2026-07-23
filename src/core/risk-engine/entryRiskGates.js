@@ -58,8 +58,9 @@ function hourUtcFromTimestamp(timestamp) {
 }
 
 /**
- * Block SMC Scalping entries during configured no-trade sessions (Sydney/Tokyo).
- * Fail-open when timestamp missing. Only Scalping + SMART_MONEY_CONCEPTS.
+ * Block SMC entries during configured no-trade sessions.
+ * Scalping: Sydney/Tokyo (Sprint 13). Intraday: London (Sprint 22 — tier-specific).
+ * Fail-open when timestamp missing. Only Scalping/Intraday + SMART_MONEY_CONCEPTS.
  *
  * @returns {{ ok: boolean, reason?: string, hourUtc?: number|null, session?: string|null }}
  */
@@ -71,7 +72,7 @@ function checkNoTradeSessionGate({
   strategyKey,
 } = {}) {
   if (enabled !== true) return { ok: true };
-  if (tradeTier !== "Scalping") return { ok: true };
+  if (tradeTier !== "Scalping" && tradeTier !== "Intraday") return { ok: true };
   const sk = String(strategyKey || "");
   if (!sk.includes("SMART_MONEY_CONCEPTS")) return { ok: true };
 
@@ -87,7 +88,7 @@ function checkNoTradeSessionGate({
         ok: false,
         hourUtc,
         session: sess,
-        reason: `Session ${sess} blocked for SMC Scalping (hour ${hourUtc} UTC)`,
+        reason: `Session ${sess} blocked for SMC ${tradeTier} (hour ${hourUtc} UTC)`,
       };
     }
   }

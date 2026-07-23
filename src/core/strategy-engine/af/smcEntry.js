@@ -73,17 +73,22 @@ function applySmcSessionFilter(timestamp, opts = {}) {
 }
 
 /**
- * Side × Daily Regime gate — block counter-trend LONGs in CHOP.
- * SHORT remains allowed (mean-reversion / fade works better in chop).
+ * Side × Daily Regime gate — Scalping blocks counter-trend LONGs in CHOP;
+ * Intraday may block ALL sides when blockAllInChop is set (both sides lose on BNB data).
  * @returns {{ allow: boolean, reason: string }}
  */
-function applySmcSideRegimeGate({ signal, dailyRegime, enabled } = {}) {
+function applySmcSideRegimeGate({ signal, dailyRegime, enabled, blockAllInChop } = {}) {
   if (!enabled) return { allow: true, reason: "side_regime_gate_off" };
   if (!signal || !dailyRegime || dailyRegime === "UNKNOWN") {
     return { allow: true, reason: "no_signal_or_unknown_regime" };
   }
-  if (dailyRegime === "CHOP" && signal === "LONG") {
-    return { allow: false, reason: "chop_long_blocked" };
+  if (dailyRegime === "CHOP") {
+    if (blockAllInChop === true) {
+      return { allow: false, reason: "chop_all_blocked" };
+    }
+    if (signal === "LONG") {
+      return { allow: false, reason: "chop_long_blocked" };
+    }
   }
   return { allow: true, reason: "side_regime_pass" };
 }
@@ -131,9 +136,33 @@ function resolveScalpingGateFlags(config = {}) {
       config.smcSessionBlockHoursUtc ?? ov.smcSessionBlockHoursUtc ?? DEFAULT_BLOCK_HOURS_UTC,
     noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
     smcBlockLongInChop: config.smcBlockLongInChop ?? ov.smcBlockLongInChop ?? false,
+    smcBlockAllInChop: false,
     smcRequireObRetest: config.smcRequireObRetest ?? ov.smcRequireObRetest ?? false,
     maxHoldHours: config.maxHoldHours ?? ov.maxHoldHours ?? ov.scalpingMaxHoldHours ?? null,
   };
+}
+
+/**
+ * Resolve Intraday gate flags from flattened cfg + typeOverrides.Intraday.
+ */
+function resolveIntradayGateFlags(config = {}) {
+  const ov = config.typeOverrides?.Intraday || {};
+  return {
+    smcSessionFilter: config.smcSessionFilter ?? ov.smcSessionFilter ?? false,
+    smcSessionBlockHoursUtc:
+      config.smcSessionBlockHoursUtc ?? ov.smcSessionBlockHoursUtc ?? DEFAULT_BLOCK_HOURS_UTC,
+    noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
+    smcBlockAllInChop: config.smcBlockAllInChop ?? ov.smcBlockAllInChop ?? false,
+    smcPivotStructure: config.smcPivotStructure ?? ov.smcPivotStructure ?? false,
+    maxHoldHours: config.maxHoldHours ?? ov.maxHoldHours ?? null,
+  };
+}
+
+/** Session + chop flags for a given SMC trade tier (Scalping / Intraday). */
+function resolveSmcSessionGateFlags(config = {}, tradeTier) {
+  if (tradeTier === "Scalping") return resolveScalpingGateFlags(config);
+  if (tradeTier === "Intraday") return resolveIntradayGateFlags(config);
+  return { smcSessionFilter: false, noTradeSessions: null };
 }
 
 /**
@@ -350,6 +379,8 @@ module.exports = {
   applySmcSideRegimeGate,
   applySmcFundingGuard,
   resolveScalpingGateFlags,
+  resolveIntradayGateFlags,
+  resolveSmcSessionGateFlags,
   resolveSwingGateFlags,
   buildSmcEntryFeatures,
   buildCostModelMeta,

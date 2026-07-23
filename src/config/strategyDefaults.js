@@ -99,10 +99,28 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
   Intraday: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,
     ...INTRADAY_HOLD,
-    smcMinConfidenceIntraday: 45,
-    smcMinConfidenceB: 45,
+    // Sprint 22: BNB 2-window threshold sweep — edge robust only at conf≥80 (PF 1.33/1.33)
+    smcMinConfidenceIntraday: 80,
+    smcMinConfidenceB: 80,
+    // Sprint 22: enable pivot-structure OB leg (was default false → OB confluence 100% dead)
+    smcPivotStructure: true,
+    // Explicit geometry — Planned RR ~2.0 (matches ~1.8 realized structure-SL on BNB)
+    slAtrMult: 1.8,
+    tpAtrMult: 3.6,
+    // Sprint 22: London session worst on BNB Intraday (PF 0.53/0.63) — do NOT copy Scalping Asia block
+    smcSessionFilter: true,
+    noTradeSessions: ["London"],
+    // Sprint 22: both sides lose in CHOP on Intraday — block all entries (not Scalping LONG-only)
+    smcBlockAllInChop: true,
+    // smcSweepVolMult intentionally unset — Scalping floor (1.2) hurts Intraday PF (Sprint 22 ablation)
   },
-  Swing: { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, ...SWING_HOLD },
+  Swing: {
+    ...DEFAULT_LEG_TYPE_OVERRIDES.Swing,
+    ...SWING_HOLD,
+    // Explicit geometry — Planned RR ~3.0 (longer hold needs larger payoff)
+    slAtrMult: 1.2,
+    tpAtrMult: 3.6,
+  },
 });
 
 /** Shared AF component geometry (no smc* — Wyckoff/VSA racers + SMC base). */

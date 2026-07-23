@@ -61,6 +61,96 @@ test("GATE-SESSION: symmetric — same hours block regardless of side (filter is
   assert.equal(r.hourUtc, 22);
 });
 
+test("GATE-CHOP-ALL: blocks both LONG and SHORT in CHOP when blockAllInChop", () => {
+  const long = applySmcSideRegimeGate({
+    signal: "LONG",
+    dailyRegime: "CHOP",
+    enabled: true,
+    blockAllInChop: true,
+  });
+  assert.equal(long.allow, false);
+  assert.equal(long.reason, "chop_all_blocked");
+
+  const short = applySmcSideRegimeGate({
+    signal: "SHORT",
+    dailyRegime: "CHOP",
+    enabled: true,
+    blockAllInChop: true,
+  });
+  assert.equal(short.allow, false);
+  assert.equal(short.reason, "chop_all_blocked");
+});
+
+test("GATE-CHOP-ALL: applyRegimeGate blockAllInChop for SMART_MONEY_CONCEPTS", () => {
+  const blocked = applyRegimeGate({
+    signal: "SHORT",
+    strategyKey: "SMART_MONEY_CONCEPTS",
+    regime: "CHOP",
+    riskPerTrade: 0.01,
+    blockAllInChop: true,
+  });
+  assert.equal(blocked.allow, false);
+  assert.equal(blocked.reason, "chop_all_blocked");
+});
+
+test("GATE-SESSION-INTRADAY: blocks London hours for Intraday preset", () => {
+  const tsLondon = Date.UTC(2026, 6, 13, 14, 0, 0);
+  const tsNy = Date.UTC(2026, 6, 13, 18, 0, 0);
+
+  const blocked = applySmcSessionFilter(tsLondon, {
+    enabled: true,
+    noTradeSessions: ["London"],
+  });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.hourUtc, 14);
+
+  const open = applySmcSessionFilter(tsNy, {
+    enabled: true,
+    noTradeSessions: ["London"],
+  });
+  assert.equal(open.blocked, false);
+});
+
+test("GATE-FLAGS: resolveIntradayGateFlags reads typeOverrides", () => {
+  const { resolveIntradayGateFlags } = require("#core/strategy-engine/af/smcEntry.js");
+  const flags = resolveIntradayGateFlags({
+    typeOverrides: {
+      Intraday: {
+        smcSessionFilter: true,
+        smcBlockAllInChop: true,
+        smcPivotStructure: true,
+        noTradeSessions: ["London"],
+        maxHoldHours: 6,
+      },
+    },
+  });
+  assert.equal(flags.smcSessionFilter, true);
+  assert.equal(flags.smcBlockAllInChop, true);
+  assert.equal(flags.smcPivotStructure, true);
+  assert.deepEqual(flags.noTradeSessions, ["London"]);
+  assert.equal(flags.maxHoldHours, 6);
+});
+
+test("INTRADAY-SSOT: strategyDefaults Intraday has Sprint 22 gates + geometry", () => {
+  const { STRATEGIES } = require("#config/strategyDefaults.js");
+  const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Intraday;
+  assert.equal(ov.smcMinConfidenceIntraday, 80);
+  assert.equal(ov.smcPivotStructure, true);
+  assert.equal(ov.smcBlockAllInChop, true);
+  assert.equal(ov.smcSessionFilter, true);
+  assert.deepEqual(ov.noTradeSessions, ["London"]);
+  assert.equal(ov.slAtrMult, 1.8);
+  assert.equal(ov.tpAtrMult, 3.6);
+  assert.equal(ov.smcSweepVolMult, undefined);
+});
+
+test("SWING-SSOT: strategyDefaults Swing has explicit geometry", () => {
+  const { STRATEGIES } = require("#config/strategyDefaults.js");
+  const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Swing;
+  assert.equal(ov.slAtrMult, 1.2);
+  assert.equal(ov.tpAtrMult, 3.6);
+});
+
 test("GATE-CHOP-LONG: blocks LONG in CHOP, allows SHORT", () => {
   const long = applySmcSideRegimeGate({ signal: "LONG", dailyRegime: "CHOP", enabled: true });
   assert.equal(long.allow, false);

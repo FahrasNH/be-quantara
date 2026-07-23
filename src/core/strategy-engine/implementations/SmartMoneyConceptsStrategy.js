@@ -22,6 +22,7 @@ const { evaluateAtrEntryGate } = require("../../risk-engine/entryRiskGates");
 const {
   applySmcSessionFilter,
   resolveScalpingGateFlags,
+  resolveIntradayGateFlags,
   resolveSwingGateFlags,
   sweetSpotPts,
 } = require("../af/smcEntry");
@@ -1782,7 +1783,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     let rawA, rawB, rawC, confA, confB, confC;
 
     if (useSequence) {
-      const seq = this._detectSMCSequence(indicators, lastIdx, config);
+      // Sprint 22: pivot-structure OB leg lives in typeOverrides.Intraday — merge for sequence engine
+      const seqConfig = typeOverrides.Intraday?.smcPivotStructure === true
+        ? { ...config, smcPivotStructure: true }
+        : config;
+      const seq = this._detectSMCSequence(indicators, lastIdx, seqConfig);
       const sig = seq.signal;
       const score = seq.meta?.score ?? 0;
       this._lastSequenceMeta = seq.meta; // structural levels for SL placement
@@ -1803,6 +1808,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     }
 
     const scalpGates = resolveScalpingGateFlags(config);
+    const intradayGates = resolveIntradayGateFlags(config);
     const swingGates = resolveSwingGateFlags(config);
 
     // Sprint 13: UTC session filter (default on for Scalping via typeOverrides).
@@ -1821,6 +1827,24 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         this._abl("rejBySession");
         rawA = null;
         confA = 0;
+      }
+    }
+
+    // Sprint 22: Intraday session filter — London block (NOT Scalping Asia copy).
+    if (rawB && intradayGates.smcSessionFilter) {
+      const ts = config.candleTimestamp
+        ?? indicators.timestamps?.[lastIdx]
+        ?? indicators.time?.[lastIdx]
+        ?? null;
+      const sess = applySmcSessionFilter(ts, {
+        enabled: true,
+        blockHoursUtc: intradayGates.smcSessionBlockHoursUtc,
+        noTradeSessions: intradayGates.noTradeSessions,
+      });
+      if (sess.blocked) {
+        this._abl("rejBySession");
+        rawB = null;
+        confB = 0;
       }
     }
 

@@ -98,10 +98,11 @@ function getRegimeForDate(date, cache) {
  *   - riskPerTrade: base risk %
  *   - blockLongInChop: Sprint 13 — when true, block LONG in CHOP for structure strategies
  *     (SHORT still allowed). Fail-open when false/undefined.
+ *   - blockAllInChop: Sprint 22 — when true, block ALL sides in CHOP (Intraday tier).
  * @returns {Object} { allow: boolean, riskPerTrade: adjusted%, reason: string }
  */
 function applyRegimeGate(params) {
-  const { signal, strategyKey, regime, riskPerTrade, blockLongInChop } = params;
+  const { signal, strategyKey, regime, riskPerTrade, blockLongInChop, blockAllInChop } = params;
 
   if (!signal || regime === "UNKNOWN") {
     return { allow: true, riskPerTrade, reason: "no_signal_or_unknown_regime" };
@@ -124,6 +125,10 @@ function applyRegimeGate(params) {
       return { allow: false, riskPerTrade: 0, reason: "chop_momentum_blocked" };
     }
     if (isStructure) {
+      // Sprint 22: Intraday tier — both sides lose in CHOP; skip entirely.
+      if (blockAllInChop === true) {
+        return { allow: false, riskPerTrade: 0, reason: "chop_all_blocked" };
+      }
       // Sprint 13: optional Side×Regime gate — counter-trend LONGs in CHOP are
       // historically weak; SHORT fades remain allowed.
       if (blockLongInChop && signal === "LONG") {

@@ -25,8 +25,10 @@ const DEFAULT_LIVE_ELIGIBLE_TYPES = ["Intraday", "Swing"];
 
 // Optional per-strategy overrides (keyed by any strategy/engine key). Empty =
 // use the default set. Populate when a specific strategy validates a leg.
+// An explicit [] means dry-run only (no real-money legs) for that strategy.
 const PER_STRATEGY_LIVE_ELIGIBLE_TYPES = {
-  // e.g. SMART_MONEY_CONCEPTS: ["Intraday", "Swing"],  // Scalping stays backtest-only
+  // Sprint 22: Intraday PF<1 on BNB pre-fix — all SMC legs dry-run until walk-forward re-validates
+  SMART_MONEY_CONCEPTS: [],
 };
 
 /**
