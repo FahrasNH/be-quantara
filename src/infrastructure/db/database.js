@@ -805,9 +805,13 @@ async function getAdminStrategyStats({ sinceDays = null } = {}) {
 
 // Daily PnL per strategy for time-series line chart (Admin strategy-pnl-history endpoint).
 // Returns rows [{day: "2026-06-10", strategy: "ADAPTIVE_FUSION", daily_pnl: 5.5}, ...]
-// covering the trailing `days` window (default 30). Only closed trades are counted.
-async function getAdminStrategyPnlHistory({ days = 30 } = {}) {
-  const d = Math.min(Math.max(parseInt(days, 10) || 30, 1), 365);
+// covering the trailing `sinceDays` window (null = all time). Only closed trades are counted.
+async function getAdminStrategyPnlHistory({ sinceDays = null } = {}) {
+  const windowClause =
+    sinceDays != null
+      ? "AND close_time >= now() - ($1 || ' days')::interval"
+      : "";
+  const params = sinceDays != null ? [sinceDays] : [];
   const { rows } = await pool.query(
     `SELECT date_trunc('day', close_time)::date::text AS day,
             COALESCE(strategy_name, 'Untracked')       AS strategy,
@@ -815,10 +819,10 @@ async function getAdminStrategyPnlHistory({ days = 30 } = {}) {
        FROM trades
       WHERE close_time IS NOT NULL
         AND pnl IS NOT NULL
-        AND close_time >= now() - ($1 || ' days')::interval
+        ${windowClause}
       GROUP BY day, strategy
       ORDER BY day ASC`,
-    [d]
+    params
   );
   return rows;
 }

@@ -1096,15 +1096,17 @@ module.exports = function createAdminRouter(helpers = {}) {
 
   /**
    * GET /api/v1/admin/strategy-pnl-history — daily PnL per strategy for the
-   * Net PnL time-series line chart. Query: days (trailing window, default 30, max 365).
+   * Net PnL time-series line chart. Query: days (trailing window; omit for all time, max 365).
    * → { ok, series: [{date, [strategyKey]: dailyPnl, ...}], strategies: ["AF", ...] }
    */
   router.get(
     "/strategy-pnl-history",
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
-      const rows = await db.getAdminStrategyPnlHistory({ days });
+      const daysRaw = parseInt(req.query.days, 10);
+      const sinceDays =
+        Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 365) : null;
+      const rows = await db.getAdminStrategyPnlHistory({ sinceDays });
 
       // Pivot: [{day, strategy, daily_pnl}] → [{date, AF: x, TM: y, MR: z}, ...]
       const dayMap = new Map();
@@ -1124,7 +1126,7 @@ module.exports = function createAdminRouter(helpers = {}) {
       });
 
       res.setHeader("Cache-Control", "public, max-age=300");
-      res.json({ ok: true, series, strategies, days });
+      res.json({ ok: true, series, strategies, window: sinceDays ? `${sinceDays}d` : "all" });
     })
   );
 
