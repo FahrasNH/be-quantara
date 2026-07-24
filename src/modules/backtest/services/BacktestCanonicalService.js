@@ -6,7 +6,7 @@
 const crypto = require("crypto");
 
 /** Bump saat RealStrategyBacktestService / rubric SMC / gate SSOT berubah material. */
-const ENGINE_VERSION = "be-real-2.0.2-vsa-sprint23";
+const ENGINE_VERSION = "be-real-2.0.2-vsa-sprint23b";
 
 function stableStringify(value) {
   if (value === null || value === undefined) return "null";
