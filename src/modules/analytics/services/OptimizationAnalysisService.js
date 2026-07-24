@@ -4,7 +4,6 @@
  */
 
 const BacktestLoader = require("../../backtest/services/BacktestLoader");
-const BacktestHistoryService = require("../../backtest/services/BacktestHistoryService");
 
 class OptimizationAnalysisService {
   /**
@@ -388,18 +387,9 @@ class OptimizationAnalysisService {
    */
   static async _getBacktestData(symbol, backtest_id = null) {
     if (backtest_id) {
-      const backtest = await BacktestHistoryService.getById(backtest_id);
-      if (!backtest) {
-        const err = new Error(`Backtest ${backtest_id} not found`);
-        err.statusCode = 404;
-        throw err;
-      }
-      return backtest;
-    }
-
-    if (symbol) {
-      const history = await BacktestHistoryService.getHistory(symbol.toUpperCase(), 1);
-      if (history?.length) return history[0];
+      const err = new Error("backtest_id archive lookup removed — pass session metrics instead");
+      err.statusCode = 400;
+      throw err;
     }
 
     const summary = await BacktestLoader.loadSummary(symbol);

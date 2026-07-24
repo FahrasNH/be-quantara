@@ -4,7 +4,6 @@
  */
 
 const BacktestLoader = require("../../backtest/services/BacktestLoader");
-const BacktestHistoryService = require("../../backtest/services/BacktestHistoryService");
 
 class ReportGeneratorService {
   /**
@@ -57,32 +56,22 @@ class ReportGeneratorService {
    */
   static async _getReportData(symbol, backtest_id = null) {
     if (backtest_id) {
-      const backtest = await BacktestHistoryService.getById(backtest_id);
-      if (!backtest) throw new Error(`Backtest ${backtest_id} not found`);
-      return {
-        symbol: backtest.symbol,
-        timestamp: backtest.timestamp,
-        metrics: backtest.metrics,
-        equity_curve: backtest.equity_curve || [],
-        trades_data: backtest.trades_data || [],
-        config: backtest.config || {},
-      };
-    } else {
-      const summary = await BacktestLoader.loadSummary(symbol);
-      const equity = await BacktestLoader.loadEquityCurve(symbol);
-      const trades = await BacktestLoader.loadTrades(symbol);
-
-      if (!summary) throw new Error(`No backtest data found for ${symbol}`);
-
-      return {
-        symbol,
-        timestamp: summary.timestamp_generated || new Date().toISOString(),
-        metrics: summary.metrics || {},
-        equity_curve: equity || [],
-        trades_data: trades || [],
-        config: {},
-      };
+      throw new Error("backtest_id archive lookup removed — use symbol or session metrics");
     }
+    const summary = await BacktestLoader.loadSummary(symbol);
+    const equity = await BacktestLoader.loadEquityCurve(symbol);
+    const trades = await BacktestLoader.loadTrades(symbol);
+
+    if (!summary) throw new Error(`No backtest data found for ${symbol}`);
+
+    return {
+      symbol,
+      timestamp: summary.timestamp_generated || new Date().toISOString(),
+      metrics: summary.metrics || {},
+      equity_curve: equity || [],
+      trades_data: trades || [],
+      config: {},
+    };
   }
 
   /**
