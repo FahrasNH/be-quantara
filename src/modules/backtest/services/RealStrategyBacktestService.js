@@ -2147,6 +2147,11 @@ async function runTripleTypeBacktest(opts = {}) {
   const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
     ? opts.naturalTypeOrder
     : ["Scalping", "Intraday", "Swing"];
+  const TYPE_TF_HTF = {
+    Scalping: "1h",
+    Intraday: "1h",
+    Swing: "1w",
+  };
   for (const tradeType of typeOrder) {
     const typeConfig = {
       ...baseTypeConfig,
@@ -2155,7 +2160,13 @@ async function runTripleTypeBacktest(opts = {}) {
       // proven Swing leg keeps EXACT baseline behaviour. Ladder risk stays
       // authoritative (applied after the spread).
       ...(cfg.typeOverrides?.[tradeType] ?? {}),
+      higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
+      tradeType,
+      entryTf: tradeType === "Swing" ? "4h"
+        : tradeType === "Intraday" ? "15m"
+          : tradeType === "Scalping" ? "5m"
+            : cfg.entryTf,
     };
     const entryCandles = opts.entryCandles?.[tradeType];
     const htfCandles   = opts.htfCandles?.[tradeType];
