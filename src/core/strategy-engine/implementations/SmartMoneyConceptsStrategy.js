@@ -1783,8 +1783,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     let rawA, rawB, rawC, confA, confB, confC;
 
     if (useSequence) {
-      // Sprint 22: pivot-structure OB leg lives in typeOverrides.Intraday — merge for sequence engine
-      const seqConfig = typeOverrides.Intraday?.smcPivotStructure === true
+      // Sprint 22: pivot-structure OB leg — Intraday only (not Scalping/Swing legs).
+      const seqConfig = (config.tradeType === "Intraday" || config.smcPivotStructure === true)
+        && typeOverrides.Intraday?.smcPivotStructure === true
         ? { ...config, smcPivotStructure: true }
         : config;
       const seq = this._detectSMCSequence(indicators, lastIdx, seqConfig);

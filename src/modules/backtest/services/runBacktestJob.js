@@ -227,6 +227,15 @@ function _isWyckoffOnlyJob(strategyKey, parameters) {
   return active.length === 1 && active[0] === "WYCKOFF";
 }
 
+/** True when only the SMC racer is active under an AF/SMC engine key. */
+function _isSmcOnlyJob(strategyKey, parameters) {
+  if (!AF_SMC_KEYS.has(strategyKey)) return false;
+  const active = _normalizeAfRacerKeys(
+    parameters.afActiveRacers || parameters.afActiveVoters || parameters.selectedComponents,
+  );
+  return active.length === 1 && active[0] === "SMART_MONEY_CONCEPTS";
+}
+
 /** Apply per-strategy defaults before a backtest job runs (exported for tests). */
 function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
   const parameters = { ...(parametersIn || {}) };
@@ -245,6 +254,10 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
       && !(parameters.wyckoff && "entryModel" in parameters.wyckoff)) {
     parameters.entryModel = "aggressive";
     parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "aggressive" };
+  }
+  // SMC-only AF run — skip Wyckoff/VSA race overhead (still 1:1 for SMC signals).
+  if (_isSmcOnlyJob(strategyKey, parameters) && parameters.afCombinationMode == null) {
+    parameters.afCombinationMode = "smc_only";
   }
 
   // Standalone Dow / AMT (incl. FE collapse MARKET_STRUCTURE/AUCTION_MARKET_THEORY → TREND_FOLLOWING) — pin single-racer isolation.
