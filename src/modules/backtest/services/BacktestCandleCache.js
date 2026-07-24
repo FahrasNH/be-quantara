@@ -3,7 +3,8 @@
  *
  * Key: {exchange}:{symbol}:{timeframe} (full series, slice on date range).
  * Survives multiple fetches within the same Node process (multi-TF job, warm worker).
- * Cross-process sharing falls through to PostgreSQL candle_cache in HistoricalKlinesService.
+ * Cross-process sharing falls through to PostgreSQL candle_cache (SSOT OHLC archive).
+ * Partial hits expose missingRanges so HistoricalKlinesService fetches only gaps.
  */
 
 "use strict";

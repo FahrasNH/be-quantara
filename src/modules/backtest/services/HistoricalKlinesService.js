@@ -1,6 +1,7 @@
 /**
  * HistoricalKlinesService — OHLCV historis real dari exchange user (Phase 2 backtest).
  *
+ * Flow: query candle_cache → partial hit → fetch gap only → merge → write cache.
  * Paginasi via CCXT fetchOHLCV + exchangeRateGate, cache DB + mem TTL,
  * gap-fill bar hilang, clamp rentang ke 2020-01-01 atau listing date.
  */
