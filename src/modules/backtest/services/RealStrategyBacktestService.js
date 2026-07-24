@@ -168,6 +168,69 @@ function mergeBacktestCfg(base, optsConfig, feeModel) {
   });
 }
 
+/** Normalize FE/BE AF component aliases to canonical racer keys. */
+function _normalizeAfRacerKeys(raw) {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const out = new Set();
+  for (const c of raw) {
+    const k = normalizeStrategyKey(String(c || "").toUpperCase());
+    if (k === "SMART_MONEY_CONCEPTS" || String(c || "").toUpperCase() === "SMC") {
+      out.add("SMART_MONEY_CONCEPTS");
+    } else if (k === "WYCKOFF") {
+      out.add("WYCKOFF");
+    } else if (k === "VOLUME_SPREAD_ANALYSIS" || k === "VSA") {
+      out.add("VOLUME_SPREAD_ANALYSIS");
+    }
+  }
+  return [...out];
+}
+
+function _resolveAfActiveRacers(config = {}) {
+  return _normalizeAfRacerKeys(
+    config.afActiveRacers || config.afActiveVoters || config.selectedComponents,
+  );
+}
+
+/** VSA-only job — standalone key or FE collapse to SMART_MONEY_CONCEPTS engine. */
+function _isVsaOnlyJob(strategyKey, config = {}) {
+  if (strategyKey === "VOLUME_SPREAD_ANALYSIS") return true;
+  if (!isSmcKey(strategyKey)) return false;
+  const active = _resolveAfActiveRacers(config);
+  return active.length === 1 && active[0] === "VOLUME_SPREAD_ANALYSIS";
+}
+
+function _afRacersIncludeVsa(config = {}) {
+  return _resolveAfActiveRacers(config).includes("VOLUME_SPREAD_ANALYSIS");
+}
+
+/**
+ * Backtest SSOT: merge component leg overrides when FE collapses racers into umbrella
+ * engine keys. Sprint 23 VSA gates (vsaScalpingShelved, vsaSwingLongOnly, …) live in
+ * STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides — NOT in SMART_MONEY_CONCEPTS.
+ */
+function resolveBacktestStrategyDefaults(strategyKey, config = {}) {
+  const base = resolveStrategyDefaults(strategyKey);
+  const vsaDefaults = STRATEGIES.VOLUME_SPREAD_ANALYSIS;
+  if (!vsaDefaults) return base;
+
+  if (_isVsaOnlyJob(strategyKey, config)) {
+    const vsaBase = resolveStrategyDefaults("VOLUME_SPREAD_ANALYSIS");
+    return {
+      ...vsaBase,
+      typeOverrides: mergeTypeOverrides(vsaBase.typeOverrides, base.typeOverrides),
+    };
+  }
+
+  if (_afRacersIncludeVsa(config) && isSmcKey(strategyKey)) {
+    return {
+      ...base,
+      typeOverrides: mergeTypeOverrides(base.typeOverrides, vsaDefaults.typeOverrides),
+    };
+  }
+
+  return base;
+}
+
 /**
  * Resolve MD race participants from Advance selectedComponents.
  */
@@ -2054,7 +2117,7 @@ async function runTripleTypeBacktest(opts = {}) {
   const strategy = validation.strategy;
 
   const feeModel = resolveFeeModel({ ...opts, enableFees });
-  const base = resolveStrategyDefaults(strategyKey);
+  const base = resolveBacktestStrategyDefaults(strategyKey, opts.config);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
@@ -2288,7 +2351,7 @@ async function runRealBacktest(opts = {}) {
 
   // Canonical live config (legacyStrategies) merged with caller overrides.
   const feeModel = resolveFeeModel({ ...opts, enableFees });
-  const base = resolveStrategyDefaults(strategyKey);
+  const base = resolveBacktestStrategyDefaults(strategyKey, opts.config);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
 
   const feeRate = feeModel.feeRate;
@@ -3260,7 +3323,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const strategy = validation.strategy;
 
   const feeModel = resolveFeeModel({ ...opts, enableFees });
-  const base = resolveStrategyDefaults(strategyKey);
+  const base = resolveBacktestStrategyDefaults(strategyKey, opts.config);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
@@ -3469,6 +3532,8 @@ module.exports = {
   runMultiTypeBacktest,
   mergeTypeOverrides,
   mergeBacktestCfg,
+  resolveBacktestStrategyDefaults,
+  _isVsaOnlyJob,
   formatScalpingFunnel,
   formatStrategyFunnel,
   formatExecSection,
