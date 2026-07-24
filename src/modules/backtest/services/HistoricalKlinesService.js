@@ -44,6 +44,8 @@ const MIN_CACHE_COVERAGE = 0.85;
 const clientCache = new Map();
 const memCache = new Map();
 const listingCache = new Map();
+/** In-flight coalescing — concurrent jobs share one exchange fetch per range (singleflight). */
+const inFlightRangeFetches = new Map();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -284,6 +286,28 @@ function findMissingRanges(candles, startMs, endMs, timeframe) {
   return ranges.length ? ranges : [];
 }
 
+function rangeFetchKey(exchange, marketSymbol, timeframe, startMs, endMs) {
+  return `${String(exchange).toLowerCase()}:${marketSymbol}:${String(timeframe).toLowerCase()}:${startMs}:${endMs}`;
+}
+
+/**
+ * Coalesce identical range fetches — prevents duplicate CCXT load when multiple
+ * backtest jobs (or users) request the same gap simultaneously.
+ */
+function coalesceRangeFetch(key, fn) {
+  const existing = inFlightRangeFetches.get(key);
+  if (existing) return existing;
+  const promise = Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      if (inFlightRangeFetches.get(key) === promise) {
+        inFlightRangeFetches.delete(key);
+      }
+    });
+  inFlightRangeFetches.set(key, promise);
+  return promise;
+}
+
 async function fetchPaginated(exchange, client, marketSymbol, timeframe, startMs, endMs, opts = {}) {
   const { onProgress, deadlineMs = Date.now() + FETCH_DEADLINE_MS, abortSignal } = opts;
   const tfMs = CANDLE_INTERVAL_MS[String(timeframe).toLowerCase()];
@@ -351,14 +375,17 @@ async function fetchPaginatedRanges(exchange, client, marketSymbol, timeframe, r
   const merged = new Map();
   for (const range of ranges) {
     if (range.startMs >= range.endMs) continue;
-    const chunk = await fetchPaginated(
-      exchange,
-      client,
-      marketSymbol,
-      timeframe,
-      range.startMs,
-      range.endMs,
-      opts
+    const key = rangeFetchKey(exchange, marketSymbol, timeframe, range.startMs, range.endMs);
+    const chunk = await coalesceRangeFetch(key, () =>
+      fetchPaginated(
+        exchange,
+        client,
+        marketSymbol,
+        timeframe,
+        range.startMs,
+        range.endMs,
+        opts
+      )
     );
     for (const c of chunk) merged.set(c.timestamp, c);
   }
@@ -714,8 +741,11 @@ async function fetchHistoricalKlines(userId, opts = {}) {
         if (!source?.includes("exchange")) source = candles.length && source === "db" ? "exchange+db" : "exchange";
       }
     } else {
-      candles = await fetchPaginated(
-        exchange, client, marketSymbol, timeframe, effectiveStart, effectiveEnd, fetchOpts
+      const fullKey = rangeFetchKey(exchange, marketSymbol, timeframe, effectiveStart, effectiveEnd);
+      candles = await coalesceRangeFetch(fullKey, () =>
+        fetchPaginated(
+          exchange, client, marketSymbol, timeframe, effectiveStart, effectiveEnd, fetchOpts
+        )
       );
       source = "exchange";
     }
@@ -811,6 +841,7 @@ function _clearCaches() {
   clientCache.clear();
   memCache.clear();
   listingCache.clear();
+  inFlightRangeFetches.clear();
   BacktestCandleCache.clear();
 }
 
@@ -831,4 +862,6 @@ module.exports = {
   MAX_BARS,
   SUPPORTED,
   _clearCaches,
+  _coalesceRangeFetch: coalesceRangeFetch,
+  _rangeFetchKey: rangeFetchKey,
 };

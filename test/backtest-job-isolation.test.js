@@ -51,10 +51,27 @@ function makeCandles(n) {
 console.log("\n=== Backtest Job Isolation Tests ===\n");
 
 (async () => {
-  await test("getEffectivePeriod caps 15m max to 365d", () => {
-    assert.strictEqual(getEffectivePeriod("max", "15m"), "365d");
+  await test("getEffectivePeriod passes through 5m/15m presets (no day cap)", () => {
+    assert.strictEqual(getEffectivePeriod("max", "15m"), "max");
     assert.strictEqual(getEffectivePeriod("12m", "15m"), "12m");
-    assert.strictEqual(getEffectivePeriod("12m", "5m"), "180d");
+    assert.strictEqual(getEffectivePeriod("12m", "5m"), "12m");
+    assert.strictEqual(getEffectivePeriod("max", "5m"), "max");
+  });
+
+  await test("getEffectivePeriod still caps long presets on 1m", () => {
+    assert.strictEqual(getEffectivePeriod("12m", "1m"), "30d");
+  });
+
+  await test("getEffectivePeriod respects BACKTEST_5M_MAX_DAYS env override", () => {
+    const prev = process.env.BACKTEST_5M_MAX_DAYS;
+    process.env.BACKTEST_5M_MAX_DAYS = "90";
+    try {
+      assert.strictEqual(getEffectivePeriod("12m", "5m"), "90d");
+      assert.strictEqual(getEffectivePeriod("3m", "5m"), "3m");
+    } finally {
+      if (prev === undefined) delete process.env.BACKTEST_5M_MAX_DAYS;
+      else process.env.BACKTEST_5M_MAX_DAYS = prev;
+    }
   });
 
   await test("enforceTotalEntryBarCap trims multi-type series", () => {

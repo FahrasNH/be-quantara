@@ -154,3 +154,34 @@ const {
 }
 
 console.log("✓ historical-klines tests passed");
+
+// ── in-flight fetch coalescing (singleflight) ───────────────────────────────
+(async () => {
+  const {
+    _coalesceRangeFetch,
+    _rangeFetchKey,
+    _clearCaches,
+  } = require("../src/server/services/HistoricalKlinesService");
+
+  let calls = 0;
+  const key = _rangeFetchKey("binance", "BTC/USDT:USDT", "1h", 1000, 2000);
+  _clearCaches();
+
+  const slow = () => new Promise((resolve) => {
+    calls += 1;
+    setTimeout(() => resolve("ok"), 30);
+  });
+
+  const [a, b] = await Promise.all([
+    _coalesceRangeFetch(key, slow),
+    _coalesceRangeFetch(key, slow),
+  ]);
+
+  assert.strictEqual(calls, 1, "concurrent identical range fetches coalesce to one call");
+  assert.strictEqual(a, "ok");
+  assert.strictEqual(b, "ok");
+  console.log("✓ coalesceRangeFetch deduplicates concurrent range fetches");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
