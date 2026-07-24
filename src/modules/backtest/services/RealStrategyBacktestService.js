@@ -27,6 +27,29 @@
 const fs = require("fs");
 const path = require("path");
 const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX } = require("../../../core/analytics-engine/indicators");
+
+/**
+ * O(1) HTF trend at closed HTF index j — parity with detectHTFTrend(htfCandles.slice(0, j + 1)).
+ * The slice+recalc path was O(j) per unique HTF index (~4k× on a 180d Scalping run) and
+ * dominated bar-loop time on large 5m datasets.
+ */
+function htfTrendAtIndex(j, htfCandles, htfEmaFastArr, htfEmaSlowArr, cfg = {}) {
+  if (j < 0) return "UNKNOWN";
+  const htfEmaSlowPeriod = cfg.htfEmaSlow ?? 21;
+  if (!htfCandles?.length || j < htfEmaSlowPeriod + 5) return "SIDEWAYS";
+  const idx = j - 1; // detectHTFTrend(window len j+1) reads ema at index length-2
+  if (idx < 0) return "SIDEWAYS";
+  const ef = htfEmaFastArr?.[idx];
+  const es = htfEmaSlowArr?.[idx];
+  const price = htfCandles[idx]?.close;
+  if (ef == null || es == null || price == null) return "SIDEWAYS";
+  const spreadPct = Math.abs(ef - es) / price * 100;
+  const sidewaysThresholdPct = cfg.sidewaysThresholdPct ?? 0.2;
+  if (spreadPct < sidewaysThresholdPct) return "SIDEWAYS";
+  if (ef > es && price > ef) return "BULLISH";
+  if (ef < es && price < ef) return "BEARISH";
+  return "SIDEWAYS";
+}
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefaults.js");
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
@@ -706,17 +729,19 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   function htfTrendAt(i) {
     if (!htfPtr) return null;
     const j = htfPtr[i];
-    if (j < 0) return "UNKNOWN";
     if (htfTrendCache.has(j)) return htfTrendCache.get(j);
-    const window = htfCandles.slice(0, j + 1);
-    const trend = detectHTFTrend(window, {
-      htfEmaFast: cfg.htfEmaFast ?? 9,
-      htfEmaSlow: cfg.htfEmaSlow ?? 21,
-      sidewaysThresholdPct: cfg.sidewaysThresholdPct ?? 0.2,
-    });
+    const trend = htfEmaFastArr
+      ? htfTrendAtIndex(j, htfCandles, htfEmaFastArr, htfEmaSlowArr, cfg)
+      : detectHTFTrend(htfCandles.slice(0, j + 1), {
+        htfEmaFast: cfg.htfEmaFast ?? 9,
+        htfEmaSlow: cfg.htfEmaSlow ?? 21,
+        sidewaysThresholdPct: cfg.sidewaysThresholdPct ?? 0.2,
+      });
     htfTrendCache.set(j, trend);
     return trend;
   }
+
+  const loopTiming = process.env.BACKTEST_TIMING === "1" ? Date.now() : 0;
 
   const trades = [];
   const equity = [{ date: isoOf(entryCandles[0]), value: startCapital }];
@@ -1403,6 +1428,15 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     }
 
     equity.push({ date: isoOf(c), value: round2(capital) });
+  }
+
+  if (loopTiming) {
+    const bars = Math.max(0, entryCandles.length - warmup);
+    const ms = Date.now() - loopTiming;
+    console.log(
+      `[BACKTEST_TIMING] ${strategyKey}/${cfg.tradeType || "multi"} ${bars} bars ${ms}ms`
+      + ` (${bars > 0 ? (ms / bars).toFixed(2) : "?"}ms/bar)`,
+    );
   }
 
   // Compile stats
@@ -2153,14 +2187,20 @@ async function runTripleTypeBacktest(opts = {}) {
     Swing: "1w",
   };
   for (const tradeType of typeOrder) {
+    const legOverrides = cfg.typeOverrides?.[tradeType];
     const typeConfig = {
       ...baseTypeConfig,
 
       // Lets the FE A/B new entry-engine flags on Scalping/Intraday while the
       // proven Swing leg keeps EXACT baseline behaviour. Ladder risk stays
       // authoritative (applied after the spread).
-      ...(cfg.typeOverrides?.[tradeType] ?? {}),
-      higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
+      ...(legOverrides ?? {}),
+      // Scope typeOverrides to the active leg only — prevents Intraday-only flags
+      // (e.g. smcPivotStructure) from leaking into Scalping-only runs.
+      typeOverrides: legOverrides ? { [tradeType]: legOverrides } : {},
+      enabledComponents: [tradeType],
+      smcEnabledComponents: [tradeType],
+      higherTf: legOverrides?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
       tradeType,
       activeComponents: [tradeType],
@@ -2503,18 +2543,25 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     ? buildHtfIndexPointer(entryCandles, htfCandles)
     : null;
   const htfTrendCache = new Map(); // htfIdx → trend string (recompute only on advance)
+  let htfEmaFastArr = null;
+  let htfEmaSlowArr = null;
+  if (htfCandles?.length) {
+    const htfCloses = htfCandles.map(c => c.close);
+    htfEmaFastArr = calcEMA(htfCloses, cfg.htfEmaFast ?? 9);
+    htfEmaSlowArr = calcEMA(htfCloses, cfg.htfEmaSlow ?? 21);
+  }
 
   function htfTrendAt(i) {
     if (!htfPtr) return null;
     const j = htfPtr[i];
-    if (j < 0) return "UNKNOWN"; // no closed HTF candle yet → fail-closed (live parity)
     if (htfTrendCache.has(j)) return htfTrendCache.get(j);
-    const window = htfCandles.slice(0, j + 1);
-    const trend = detectHTFTrend(window, {
-      htfEmaFast: cfg.htfEmaFast ?? 9,
-      htfEmaSlow: cfg.htfEmaSlow ?? 21,
-      sidewaysThresholdPct: cfg.sidewaysThresholdPct ?? 0.2,
-    });
+    const trend = htfEmaFastArr
+      ? htfTrendAtIndex(j, htfCandles, htfEmaFastArr, htfEmaSlowArr, cfg)
+      : detectHTFTrend(htfCandles.slice(0, j + 1), {
+        htfEmaFast: cfg.htfEmaFast ?? 9,
+        htfEmaSlow: cfg.htfEmaSlow ?? 21,
+        sidewaysThresholdPct: cfg.sidewaysThresholdPct ?? 0.2,
+      });
     htfTrendCache.set(j, trend);
     return trend;
   }

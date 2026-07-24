@@ -264,6 +264,15 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(vsaOnly.entryModel, undefined);
   });
 
+  await test("SMC-only racer gets afCombinationMode smc_only (skip Wyckoff/VSA race)", () => {
+    const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
+    const smcOnly = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
+      afActiveVoters: ["SMART_MONEY_CONCEPTS"],
+      selectedComponents: ["SMART_MONEY_CONCEPTS"],
+    });
+    assert.strictEqual(smcOnly.afCombinationMode, "smc_only");
+  });
+
   await test("AMT / AUCTION_MARKET_THEORY supports all 3 trade types; pins single-racer isolation", () => {
     const {
       applyStrategyJobDefaults,
