@@ -106,6 +106,43 @@ test("SMC funnel surfaces the previously-hidden UTC session filter in dash forma
   assert.ok(!text.includes("Funding guard (Swing)     : -${"), "no template leakage");
 });
 
+test("VSA ablation schema lists shelved gate immediately after evaluated", () => {
+  const schema = svc.getAblationSchemaFor("VOLUME_SPREAD_ANALYSIS");
+  assert.equal(schema[0].key, "evaluated");
+  assert.equal(schema[1].key, "rejScalpingShelved");
+});
+
+test("VSA shelved ablation funnel shows zero passed and zero execution signals", () => {
+  const abl = {
+    evaluated: 50056,
+    rejScalpingShelved: 50056,
+    rejMinBars: 0,
+    rejVolume: 0,
+    rejRelVol: 0,
+    rejAtr: 0,
+    rejSwingProximity: 0,
+    rejClassify: 0,
+    rejPattern: 0,
+    rejBySession: 0,
+    rejSwingShort: 0,
+    rejMinConfidence: 0,
+    passed: 0,
+  };
+  const exec = { signalBars: 0, rejRegimeGate: 0, rejSideRegime: 0, rejFunding: 0,
+    rejPositionOpen: 0, rejCooldown: 0, rejConsecLoss: 0, rejDailyTrades: 0,
+    rejDailyLoss: 0, rejAtrGate: 0, rejSlTp: 0, rejSize: 0, opened: 0 };
+  const text = svc.formatStrategyFunnel(
+    "VOLUME_SPREAD_ANALYSIS",
+    abl,
+    exec,
+    "VOLUME_SPREAD_ANALYSIS filter funnel (Scalping, via-api, 0 trades):",
+  );
+  assert.ok(text.includes("- Scalping shelved (fee-bound) : 50056"));
+  assert.ok(text.includes("- PASSED (tradeable signals) : 0"));
+  assert.ok(text.includes("- Signals reaching execution : 0"));
+  assert.ok(text.includes("- No VSA pattern : 0"));
+});
+
 test("runtime smoke: Swing funnel dispatch renders with dash format and does not throw", () => {
   const text = svc.formatStrategyFunnel(
     "SMART_MONEY_CONCEPTS",

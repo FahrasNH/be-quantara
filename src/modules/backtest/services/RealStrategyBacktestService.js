@@ -2163,6 +2163,7 @@ async function runTripleTypeBacktest(opts = {}) {
       higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
       tradeType,
+      activeComponents: [tradeType],
       entryTf: tradeType === "Swing" ? "4h"
         : tradeType === "Intraday" ? "15m"
           : tradeType === "Scalping" ? "5m"
@@ -3369,6 +3370,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
       // AMT / AUCTION_MARKET_THEORY: Swing → utc_week session; Intraday → utc_day (volumeProfileComponent)
       tradeType,
+      activeComponents: [tradeType],
       entryTf: tradeType === "Swing" ? "4h"
         : tradeType === "Intraday" ? "15m"
           : tradeType === "Scalping" ? "5m"
