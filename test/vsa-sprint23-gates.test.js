@@ -7,6 +7,7 @@ const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   applyVsaSessionFilter,
+  applyVsaEntryGates,
   evaluateVSAComponent,
   resolveVsaScalpingGateFlags,
   resolveVsaSwingGateFlags,
@@ -64,7 +65,7 @@ describe("VSA Sprint 23 gates", () => {
       atr: Array(30).fill(1),
       lastIdx: 29,
     };
-    const ablation = { rejScalpingShelved: 0, evaluated: 0 };
+    const ablation = { rejScalpingShelved: 0, evaluated: 0, rejPattern: 0, passed: 0 };
     const result = evaluateVSAComponent(candles, null, {
       tradeType: "Scalping",
       typeOverrides: { Scalping: { vsaScalpingShelved: true } },
@@ -73,5 +74,51 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(result.vote, "NEUTRAL");
     assert.equal(result.reason, "vsa_scalping_shelved");
     assert.equal(ablation.rejScalpingShelved, 1);
+    assert.equal(ablation.rejPattern, 0);
+    assert.equal(ablation.passed, 0);
+  });
+
+  test("Scalping shelved via activeComponents when tradeType omitted", () => {
+    const candles = {
+      opens: Array(30).fill(100),
+      highs: Array(30).fill(101),
+      lows: Array(30).fill(99),
+      closes: Array(30).fill(100.5),
+      volumes: Array(30).fill(1000),
+      atr: Array(30).fill(1),
+      lastIdx: 29,
+    };
+    const ablation = { rejScalpingShelved: 0, evaluated: 0, passed: 0 };
+    const result = evaluateVSAComponent(candles, null, {
+      activeComponents: ["Scalping"],
+      vsaScalpingShelved: true,
+      ablation,
+    });
+    assert.equal(result.reason, "vsa_scalping_shelved");
+    assert.equal(ablation.rejScalpingShelved, 1);
+    assert.equal(ablation.passed, 0);
+  });
+
+  test("passed is not incremented when post-pattern session gate blocks", () => {
+    const ablation = { passed: 0, rejBySession: 0 };
+    const raw = { vote: "LONG", confidence: 0.8, reason: "no_supply" };
+    const gated = applyVsaEntryGates(raw, {
+      config: {
+        tradeType: "Scalping",
+        typeOverrides: {
+          Scalping: {
+            vsaSessionFilter: true,
+            noTradeSessions: ["Sydney", "Tokyo"],
+          },
+        },
+        candleTimestamp: Date.parse("2024-06-01T03:00:00.000Z"),
+      },
+      candles: { lastIdx: 0 },
+      ablation,
+    });
+    if (gated.vote === "LONG" || gated.vote === "SHORT") ablation.passed += 1;
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(ablation.rejBySession, 1);
+    assert.equal(ablation.passed, 0);
   });
 });

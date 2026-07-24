@@ -69,6 +69,14 @@ function resolveVsaSessionGateFlags(config = {}, tradeTier) {
   return { vsaSessionFilter: false, noTradeSessions: null };
 }
 
+/** Backtest/live leg hint when tradeType is omitted from a per-type pass config. */
+function resolveVsaTradeTier(config = {}) {
+  if (config.tradeType) return config.tradeType;
+  const active = config.activeComponents;
+  if (Array.isArray(active) && active.length === 1) return active[0];
+  return null;
+}
+
 function timestampFromConfig(config, candles) {
   const lastIdx = candles?.lastIdx;
   return config.candleTimestamp
@@ -88,7 +96,7 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   const _abl = (k) => {
     if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
   };
-  const tradeTier = config.tradeType || null;
+  const tradeTier = resolveVsaTradeTier(config);
   if (!result || (result.vote !== "LONG" && result.vote !== "SHORT")) return result;
 
   const sessionFlags = resolveVsaSessionGateFlags(config, tradeTier);
@@ -273,7 +281,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
   };
   _abl("evaluated");
 
-  const tradeTier = config.tradeType || cfg.tradeType || null;
+  const tradeTier = resolveVsaTradeTier(config);
   if (tradeTier === "Scalping") {
     const scalpFlags = resolveVsaScalpingGateFlags(cfg);
     if (scalpFlags.vsaScalpingShelved === true) {
@@ -388,7 +396,6 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
     confidence = Math.max(0, confidence - mismatch.penalty);
   }
 
-  _abl("passed");
   const raw = {
     vote: signal.vote,
     confidence,
@@ -403,7 +410,9 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
       ...volumeMeta,
     },
   };
-  return applyVsaEntryGates(raw, { config: cfg, candles, ablation });
+  const gated = applyVsaEntryGates(raw, { config: cfg, candles, ablation });
+  if (gated.vote === "LONG" || gated.vote === "SHORT") _abl("passed");
+  return gated;
 }
 
 function candlesFromIndicators(indicators, lastIdx) {
@@ -431,5 +440,6 @@ module.exports = {
   resolveVsaScalpingGateFlags,
   resolveVsaSwingGateFlags,
   resolveVsaSessionGateFlags,
+  resolveVsaTradeTier,
   applyVsaEntryGates,
 };
