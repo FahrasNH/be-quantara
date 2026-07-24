@@ -56,12 +56,14 @@ const MULTI_TYPE_STRATEGY_MAP = {
   LIQUIDATION_SQUEEZE: ALL_THREE_TYPES,
 };
 
-/** Day caps per TF — 5m/15m uncapped by default (bar guards apply instead). Ops may set BACKTEST_5M_MAX_DAYS / BACKTEST_15M_MAX_DAYS. */
+/** Per-run fetch window caps per TF — trims long presets/custom ranges so each job stays fast; cache extends backward across runs. Ops may override 5m/15m via BACKTEST_5M_MAX_DAYS / BACKTEST_15M_MAX_DAYS. */
 const TYPE_MAX_PERIOD = {
   "1m":  "30d",
-  "1h":  "730d",
-  "4h": "1460d",
-  "1w": "3650d",
+  "5m": "180d",
+  "15m": "365d",
+  "1h":  "365d",
+  "4h": "365d",
+  "1w": "365d",
 };
 
 function envMaxDaysForTf(timeframe) {
