@@ -51,11 +51,11 @@ function makeCandles(n) {
 console.log("\n=== Backtest Job Isolation Tests ===\n");
 
 (async () => {
-  await test("getEffectivePeriod passes through 5m/15m presets (no day cap)", () => {
-    assert.strictEqual(getEffectivePeriod("max", "15m"), "max");
+  await test("getEffectivePeriod caps long presets on 5m/15m per run", () => {
+    assert.strictEqual(getEffectivePeriod("max", "15m"), "365d");
     assert.strictEqual(getEffectivePeriod("12m", "15m"), "12m");
-    assert.strictEqual(getEffectivePeriod("12m", "5m"), "12m");
-    assert.strictEqual(getEffectivePeriod("max", "5m"), "max");
+    assert.strictEqual(getEffectivePeriod("12m", "5m"), "180d");
+    assert.strictEqual(getEffectivePeriod("max", "5m"), "180d");
   });
 
   await test("getEffectivePeriod still caps long presets on 1m", () => {
