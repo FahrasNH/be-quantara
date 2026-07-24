@@ -567,20 +567,33 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     const dir = signal;
     const winnerKey = race.winningComponent;
 
-    // Non-SMC racers: promote into AF-supported type legs only (Scalping + Swing).
-    // Do NOT paint Intraday — WYCKOFF/VOLUME_SPREAD_ANALYSIS are not Intraday strategies, and
-    // painting all three legs caused false Intraday type attribution when the
-    // multi-position engine ran without per-type activeComponents filtering.
+    // Non-SMC racers: default promotion is Scalping + Swing only (not Intraday) so
+    // live multi-position runs do not mis-attribute Intraday when activeComponents
+    // is unfiltered. Per-type backtest passes set config.tradeType — paint that leg.
     if (winnerKey === "WYCKOFF" || winnerKey === "VOLUME_SPREAD_ANALYSIS") {
       const scalpShelved = winnerKey === "VOLUME_SPREAD_ANALYSIS"
         && resolveVsaScalpingGateFlags(config).vsaScalpingShelved === true;
+      const activeLeg = config.tradeType || null;
+      let scalping = null;
+      let intraday = null;
+      let swing = null;
+      if (activeLeg === "Scalping") {
+        scalping = scalpShelved ? null : dir;
+      } else if (activeLeg === "Intraday") {
+        intraday = dir;
+      } else if (activeLeg === "Swing") {
+        swing = dir;
+      } else {
+        scalping = scalpShelved ? null : dir;
+        swing = dir;
+      }
       return {
-        Scalping: scalpShelved ? null : dir,
-        Intraday: null,
-        Swing:    dir,
-        A: dir,
+        Scalping: scalping,
+        Intraday: intraday,
+        Swing: swing,
+        A: scalping ?? intraday ?? swing,
         B: null,
-        C: dir,
+        C: scalping ?? intraday ?? swing,
         meta: attachMeta(this._enrichedWinnerMeta(winnerKey, {
           ...this._winnerComponentMeta(winnerKey),
           gateDirection: dir,
