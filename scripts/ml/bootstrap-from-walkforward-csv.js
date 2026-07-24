@@ -116,7 +116,7 @@ function main() {
 
   if (csvFiles.length === 0) {
     console.error(`[bootstrap-walkforward] No trades.csv under ${dir}`);
-    console.error("[bootstrap-walkforward] Run sprint19 walkforward export first.");
+    console.error("[bootstrap-walkforward] Run scripts/walkforward/smart-money-concepts/scalping-research.js first.");
     process.exit(1);
   }
 

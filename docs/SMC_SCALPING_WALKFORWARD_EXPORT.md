@@ -1,6 +1,6 @@
-# SMC Scalping Walk-Forward Export (Sprint 18)
+# SMC Scalping Walk-Forward Export
 
-Fresh SMC 5m Scalping backtest exports **after Sprint 16 config**:
+Fresh SMC 5m Scalping backtest exports with current config:
 
 - Asia session block (Sydney/Tokyo)
 - ATR% floor 0.287 (dual-gate atop relative)
@@ -31,13 +31,13 @@ Fresh SMC 5m Scalping backtest exports **after Sprint 16 config**:
 # DATASET_EXPAND_PASSWORD=...
 
 # Dry-run (manifests only, no API calls)
-node scripts/sprint18-smc-scalping-walkforward-export.js --dry-run
+node scripts/walkforward/smart-money-concepts/scalping.js --dry-run
 
 # Run all 8 windows (requires dev server + credentials)
-node scripts/sprint18-smc-scalping-walkforward-export.js
+node scripts/walkforward/smart-money-concepts/scalping.js
 
 # Single window
-node scripts/sprint18-smc-scalping-walkforward-export.js --window 3
+node scripts/walkforward/smart-money-concepts/scalping.js --window 3
 ```
 
 Output: `tmp/sprint18-smc-walkforward/window-NN/` (trades.csv, stats.json, manifest.json)

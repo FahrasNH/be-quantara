@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
 SA Swing walk-forward validation: TRANSITION regime lead (2026-07-22 diagnosis).
+
 Purpose: Test whether Daily Regime=TRANSITION + |z|≥2.15 survives walk-forward splits.
+
+Run:
+  python3 scripts/walkforward/statistical-arbitrage/transition-research.py
+
+Requires local xlsx exports: ~/Desktop/sa-12m-{btc,eth,bnb,sol,xrp}.xlsx
 """
 
 import openpyxl
 import json
 from datetime import datetime, timedelta
 from collections import defaultdict
-import statistics as st
 
 SYMS = ['btc', 'eth', 'bnb', 'sol', 'xrp']
 DESKTOP = '/Users/fahras/Desktop'
