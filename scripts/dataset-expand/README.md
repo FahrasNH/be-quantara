@@ -137,3 +137,24 @@ scripts/dataset-expand/
 - `--mock` over-fires (ratusan trades) — jangan dibanding ke UI.
 - Token JWT expire → refresh dari FE lalu update `.env`.
 - Setelah deploy: spot-check MR Scalping 180d Binance $1000 — CLI via-api vs UI Advance harus sejalan (pair tier + geometry).
+
+## Walk-forward batch (Sprint 22 SMC Intraday)
+
+Pre live-promotion gate for `SMART_MONEY_CONCEPTS` Intraday (5 windows × 5 coins):
+
+```bash
+# Dry-run manifests only
+node scripts/sprint22-smc-intraday-walkforward-export.js --dry-run
+
+# Full grid via dev BE (default — single login, 1:1 UI)
+node scripts/sprint22-smc-intraday-walkforward-export.js
+
+# Single cell
+node scripts/sprint22-smc-intraday-walkforward-export.js --window 3 --symbol BNBUSDT
+
+# Re-print NET% table from existing stats.json
+node scripts/sprint22-smc-intraday-walkforward-export.js --summary-only
+```
+
+Output: `tmp/sprint22-smc-intraday-walkforward/window-XX/SYMBOL/` + `walkforward-summary.json`.
+Engine must include Sprint 22 Intraday fixes (`0cd068a+` on dev/staging BE).
