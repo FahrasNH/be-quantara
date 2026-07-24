@@ -15,6 +15,15 @@
 const MS_DAY = 86_400_000;
 const MS_WEEK = 7 * MS_DAY;
 const MS_4H = 4 * 3_600_000;
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: AMT / Volume Profile Scalping session filter (Asia block). */
+function applyAmtSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   bins: 20,
@@ -398,6 +407,10 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const ablation = config.ablation || null;
   const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(cfg, indicators, lastIdx, "amtSessionFilter", applyAmtSessionFilter, ablation)) {
+    return { vote: "NEUTRAL", signal: null, confidence: 0, reason: "amt_session_block", meta: {} };
+  }
 
   const highs = indicators.highs || [];
   const lows = indicators.lows || [];

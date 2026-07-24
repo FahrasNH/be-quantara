@@ -8,6 +8,15 @@
 "use strict";
 
 const RETEST_TOUCH_TOL = 0.003; // 0.3%
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Breakout Scalping session filter (Asia block). */
+function applyBrSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   lookbackBars: 20,
@@ -315,6 +324,10 @@ function evaluateBreakoutTradingEntry({
   const state = breakoutState || freshBreakoutState();
 
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(cfg, indicators, lastIdx, "brSessionFilter", applyBrSessionFilter, ablation)) {
+    return { signal: null, meta: null, state, resetState: false };
+  }
 
   if (lastIdx < 30) {
     _abl("rejWarmup");

@@ -488,7 +488,7 @@ function collectExportComponents(rows, records) {
 
 /**
  * Resolve CSV columns for a given export variant:
- *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (24): compact essentials
+ *   - core     → ADMIN_TRADE_EXPORT_COLUMNS (25): compact essentials
  *   - full     → buildFullExportColumns (31 base + ML union)
  *   - specific → alias of full (API back-compat)
  */

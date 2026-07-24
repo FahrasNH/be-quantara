@@ -60,7 +60,12 @@ const SWING_HOLD = Object.freeze({ maxHoldHours: 120 });
 /** DEFAULT + per-leg geometry / hold limits — TS / MD / BS parents + AF Wyckoff/VSA components. */
 const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
   ...DEFAULT_LEG_TYPE_OVERRIDES,
-  Scalping: { ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping, ...SCALP_GEOMETRY },
+  Scalping: {
+    ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
+    ...SCALP_GEOMETRY,
+    // Sprint 23: Asia block default for all Scalping legs (each strategy enforces via own apply fn)
+    noTradeSessions: ["Sydney", "Tokyo"],
+  },
   Intraday: { ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday, ...INTRADAY_HOLD },
   Swing:    { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, ...SWING_HOLD },
 });
@@ -120,6 +125,28 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     // Explicit geometry — Planned RR ~3.0 (longer hold needs larger payoff)
     slAtrMult: 1.2,
     tpAtrMult: 3.6,
+  },
+});
+
+/**
+ * VSA per-leg overrides — Sprint 23 FOUNDRY fixes.
+ * Scalping shelved (fee-bound); Swing Asia block + LONG-only + conf≥60 or Stopping-Volume.
+ */
+const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
+  Scalping: {
+    ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
+    vsaScalpingShelved: true,
+    vsaSessionFilter: true,
+  },
+  Intraday: {
+    ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+  },
+  Swing: {
+    ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
+    noTradeSessions: ["Sydney", "Tokyo"],
+    vsaSessionFilter: true,
+    vsaSwingLongOnly: true,
+    vsaMinConfidenceSwing: 60,
   },
 });
 
@@ -359,6 +386,7 @@ const STRATEGIES = {
     // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
+      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, tsSessionFilter: true },
       Swing: { ...STANDARD_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
 
@@ -428,7 +456,10 @@ const STRATEGIES = {
     signalType:    "MEAN_REVERSION",
 
     enabledComponents: ["Scalping", "Intraday", "Swing"],
-    typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
+    typeOverrides: {
+      ...STANDARD_LEG_TYPE_OVERRIDES,
+      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, mrSessionFilter: true },
+    },
 
     bbPeriod:     20,
     minVolRatio:  0.7,
@@ -506,7 +537,10 @@ const STRATEGIES = {
     signalType:    "BREAKOUT_RETEST",
 
     enabledComponents: ["Scalping", "Intraday", "Swing"],
-    typeOverrides: { ...STANDARD_LEG_TYPE_OVERRIDES },
+    typeOverrides: {
+      ...STANDARD_LEG_TYPE_OVERRIDES,
+      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, brSessionFilter: true },
+    },
 
     lookbackBars:          20,
     volumeMultiplier:      1.5,
@@ -701,12 +735,17 @@ STRATEGIES.WYCKOFF = {
   minRr: 2.0,
   maxEntryProximityPct: 0.35,
   eventScanBars: 80,
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, wyckoffSessionFilter: true },
+  },
 };
 STRATEGIES.VOLUME_SPREAD_ANALYSIS = {
   ...AF_COMPONENT_BASE,
   name: "VOLUME_SPREAD_ANALYSIS",
   label: "Volume Spread Analysis",
   signalType: "SMART_MONEY_CONCEPTS",
+  typeOverrides: { ...VSA_LEG_TYPE_OVERRIDES },
 
   minBars: 20,
   volumeSmaPeriod: 20,
@@ -732,6 +771,10 @@ STRATEGIES.MARKET_STRUCTURE = {
   minSwingPairs: 2,
   entryPullbackPct: 0.35,
   entryAtrMult: 0.75,
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, msSessionFilter: true },
+  },
 };
 STRATEGIES.AUCTION_MARKET_THEORY = {
   ...TS_COMPONENT_BASE,
@@ -745,6 +788,10 @@ STRATEGIES.AUCTION_MARKET_THEORY = {
   vwapTolerancePct: 0.005,
   minSessionBars: 20,
   minSessionBarsSwing: 6,
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, amtSessionFilter: true },
+  },
 };
 STRATEGIES.SUPPLY_AND_DEMAND = {
   ...MD_COMPONENT_BASE,
@@ -762,6 +809,10 @@ STRATEGIES.SUPPLY_AND_DEMAND = {
   mdSdObLookback: 25,
   mdSdObDispMult: 1.3,
   minReversalBodyPct: 0.35,
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, sdSessionFilter: true },
+  },
 };
 STRATEGIES.STATISTICAL_ARBITRAGE = {
   ...MD_COMPONENT_BASE,
@@ -783,6 +834,10 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
   mdSaUseBenchmarkResidual: true, // Gelombang 2 #4: BTC-residual z when btcCloses wired
   mdSaExitAtMean: true, // Gelombang 2 #5: exit when |z| <= mdSaExitZ
   mdSaRequireTransitionRegime: true, // Sprint 20: SA Swing edge in daily TRANSITION band only
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, saSessionFilter: true },
+  },
 };
 STRATEGIES.ICT_STYLE_TRADING = {
   ...BS_COMPONENT_BASE,
@@ -797,6 +852,10 @@ STRATEGIES.ICT_STYLE_TRADING = {
   bsIctOutsideKzConfidence: 0.45,
   bsIctRequireKillZone: false,
   bsIctMinWickBeyondPct: 0.0005,
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, ictSessionFilter: true },
+  },
 };
 STRATEGIES.LIQUIDATION_SQUEEZE = {
   ...BS_COMPONENT_BASE,
@@ -816,6 +875,10 @@ STRATEGIES.LIQUIDATION_SQUEEZE = {
   bsLsOiBoost: 0.15,
   bsLsDisplacementOnlyConfidence: 0.5,
   bsLsMaxConfidence: 0.92,
+  typeOverrides: {
+    ...STANDARD_LEG_TYPE_OVERRIDES,
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, lsSessionFilter: true },
+  },
 };
 
 const DEFAULT_STRATEGY_KEY = "SMART_MONEY_CONCEPTS";
@@ -862,5 +925,6 @@ module.exports = {
   SWING_HOLD,
   STANDARD_LEG_TYPE_OVERRIDES,
   SMC_LEG_TYPE_OVERRIDES,
+  VSA_LEG_TYPE_OVERRIDES,
   DEFAULT_STRATEGY_KEY,
 };

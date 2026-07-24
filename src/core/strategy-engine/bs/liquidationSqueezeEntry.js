@@ -15,6 +15,15 @@ const {
   percentileRank,
   bbWidthSeries,
 } = require("../af/volumeAnalysisUtils");
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Liquidation Squeeze Scalping session filter (Asia block). */
+function applyLsSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   oiLookback: 20,
@@ -196,6 +205,10 @@ function evaluateLiquidationSqueezeEntry({
   const oiConfirm = config.bsLsOiChangeConfirmPct ?? DEFAULTS.oiChangeConfirmPct;
 
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(config, { timestamps: config.timestamps }, lastIdx, "lsSessionFilter", applyLsSessionFilter, ablation)) {
+    return { signal: null, confidence: 0, reason: "ls_session_block", meta: null };
+  }
 
   const wick = detectLiquidationWick(highs, lows, opens, closes, volumes, volSMA, lastIdx, {
     wickLookback: config.bsLsWickLookback ?? DEFAULTS.wickLookback,

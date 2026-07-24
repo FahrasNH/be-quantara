@@ -39,6 +39,10 @@ class VsaStrategy extends StrategyBase {
       { key: "rejSwingProximity", label: "6. - Swing proximity gate" },
       { key: "rejClassify", label: "7. - Spread/CLV classify fail" },
       { key: "rejPattern", label: "8. - No VSA pattern" },
+      { key: "rejBySession", label: "9. - Session filter (Asia)" },
+      { key: "rejScalpingShelved", label: "10. - Scalping shelved (fee-bound)" },
+      { key: "rejSwingShort", label: "11. - Swing LONG-only gate" },
+      { key: "rejMinConfidence", label: "12. - Swing graded conf floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }

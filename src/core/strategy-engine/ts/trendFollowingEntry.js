@@ -8,6 +8,15 @@
 "use strict";
 
 const { calcDonchian } = require("../../analytics-engine/indicators");
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Trend Following Scalping session filter (Asia block). */
+function applyTsSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   htfRatio: 12,
@@ -219,6 +228,10 @@ function evaluateTrendFollowingEntry({
 
   const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(cfg, indicators, lastIdx, "tsSessionFilter", applyTsSessionFilter, ablation)) {
+    return { signal: null, trendState: state, entryChecklist: null };
+  }
 
   if (lastIdx < 50) {
     _abl("rejWarmup");

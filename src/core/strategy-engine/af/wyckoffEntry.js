@@ -22,6 +22,15 @@ const {
   bbWidthSeries,
   smaAt,
 } = require("./volumeAnalysisUtils");
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Wyckoff-owned Scalping session filter (Asia block). */
+function applyWyckoffSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   minBars: 100,
@@ -1252,6 +1261,10 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
   };
   _abl("evaluated");
 
+  if (scalpingSessionBlocked(cfg, candles, lastIdx, "wyckoffSessionFilter", applyWyckoffSessionFilter, ablation)) {
+    return { vote: "NEUTRAL", confidence: 0, reason: "wyckoff_session_block" };
+  }
+
   if (lastIdx == null || !candles?.closes || candles.closes.length < cfg.minBars) {
     _abl("rejMinBars");
     return { vote: "NEUTRAL", confidence: 0, reason: "insufficient_data" };
@@ -1377,4 +1390,5 @@ module.exports = {
   evaluateWyckoffComponent,
   candlesFromIndicators,
   relativeVolume,
+  applyWyckoffSessionFilter,
 };

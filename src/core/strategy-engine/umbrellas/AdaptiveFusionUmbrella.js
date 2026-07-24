@@ -20,6 +20,7 @@ const SmartMoneyConceptsStrategy = require("../implementations/SmartMoneyConcept
 const WyckoffStrategy            = require("../implementations/WyckoffStrategy");
 const VsaStrategy                = require("../implementations/VsaStrategy");
 const { aggregateAfVotes }       = require("../af/afVoting");
+const { resolveVsaScalpingGateFlags } = require("../af/vsaEntry");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 const {
   enrichMetaWithGradedScore,
@@ -571,8 +572,10 @@ class AdaptiveFusionUmbrella extends UmbrellaStrategy {
     // painting all three legs caused false Intraday type attribution when the
     // multi-position engine ran without per-type activeComponents filtering.
     if (winnerKey === "WYCKOFF" || winnerKey === "VOLUME_SPREAD_ANALYSIS") {
+      const scalpShelved = winnerKey === "VOLUME_SPREAD_ANALYSIS"
+        && resolveVsaScalpingGateFlags(config).vsaScalpingShelved === true;
       return {
-        Scalping: dir,
+        Scalping: scalpShelved ? null : dir,
         Intraday: null,
         Swing:    dir,
         A: dir,

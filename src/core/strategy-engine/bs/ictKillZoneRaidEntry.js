@@ -11,6 +11,16 @@
 
 "use strict";
 
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: ICT Scalping session filter (Asia block). */
+function applyIctSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
+
 const KILL_ZONES = [
   { name: "london_open", startMin: 7 * 60, endMin: 9 * 60 },
   { name: "ny_open", startMin: 12 * 60, endMin: 14 * 60 },
@@ -193,6 +203,10 @@ function evaluateIctStyleEntry({
   const outsideConf = config.bsIctOutsideKzConfidence ?? DEFAULTS.outsideKzConfidence;
 
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(config, { timestamps }, lastIdx, "ictSessionFilter", applyIctSessionFilter, ablation)) {
+    return { signal: null, confidence: 0, reason: "ict_session_block", meta: null };
+  }
 
   const ts = Array.isArray(timestamps) ? timestamps[lastIdx] : timestamps;
   const kz = isKillZone(ts);

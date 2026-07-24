@@ -2,7 +2,7 @@
  * tradeExportCsv.js — kolom & helper CSV export trade (selaras admin Trade History).
  *
  * Export variants:
- * - Core (24): ADMIN_TRADE_EXPORT_COLUMNS — compact essentials
+ * - Core (25): ADMIN_TRADE_EXPORT_COLUMNS — compact essentials
  * - Full (31 base + ML union): core + geometry + ML_FIELD_SETS for strategies in batch
  */
 
@@ -15,6 +15,7 @@ const TRADE_EXPORT_COLUMNS = [
   ["side",         "Side"],
   ["strategy",     "Strategy"],
   ["component",    "Component"],
+  ["tradeType",    "Trade Type"],
   ["entryPrice",   "Entry Price"],
   ["exitPrice",    "Exit Price"],
   ["pnl",          "PnL Gross"],

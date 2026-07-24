@@ -17,6 +17,12 @@ const {
   checkSwingProximity,
   smaAt,
 } = require("./volumeAnalysisUtils");
+const {
+  applyNoTradeSessionFilter,
+} = require("../../risk-engine/entryRiskGates");
+const {
+  enrichMetaWithGradedScore,
+} = require("../scoring/ComponentScoringEngine");
 
 const DEFAULTS = {
   minBars: 20,
@@ -32,6 +38,137 @@ const DEFAULTS = {
   swingScanBars: 50,
   mismatchConfidencePenalty: 0.25,
 };
+
+/** Sprint 23: VSA-owned session filter (Scalping + Swing Asia block). */
+function applyVsaSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
+
+function resolveVsaScalpingGateFlags(config = {}) {
+  const ov = config.typeOverrides?.Scalping || {};
+  return {
+    vsaSessionFilter: config.vsaSessionFilter ?? ov.vsaSessionFilter ?? false,
+    noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
+    vsaScalpingShelved: config.vsaScalpingShelved ?? ov.vsaScalpingShelved ?? false,
+  };
+}
+
+function resolveVsaSwingGateFlags(config = {}) {
+  const ov = config.typeOverrides?.Swing || {};
+  return {
+    vsaSessionFilter: config.vsaSessionFilter ?? ov.vsaSessionFilter ?? false,
+    noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
+    vsaSwingLongOnly: config.vsaSwingLongOnly ?? ov.vsaSwingLongOnly ?? false,
+    vsaMinConfidenceSwing: config.vsaMinConfidenceSwing ?? ov.vsaMinConfidenceSwing ?? null,
+  };
+}
+
+function resolveVsaSessionGateFlags(config = {}, tradeTier) {
+  if (tradeTier === "Scalping") return resolveVsaScalpingGateFlags(config);
+  if (tradeTier === "Swing") return resolveVsaSwingGateFlags(config);
+  return { vsaSessionFilter: false, noTradeSessions: null };
+}
+
+function timestampFromConfig(config, candles) {
+  const lastIdx = candles?.lastIdx;
+  return config.candleTimestamp
+    ?? candles?.timestamps?.[lastIdx]
+    ?? config.timestamps?.[lastIdx]
+    ?? null;
+}
+
+function isStoppingVolumeReason(reason) {
+  return String(reason || "").includes("stopping_volume");
+}
+
+/**
+ * Sprint 23 post-pattern gates: shelve Scalping, session, Swing LONG-only, graded conf floor.
+ */
+function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null } = {}) {
+  const _abl = (k) => {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
+  };
+  const tradeTier = config.tradeType || null;
+  if (!result || (result.vote !== "LONG" && result.vote !== "SHORT")) return result;
+
+  const sessionFlags = resolveVsaSessionGateFlags(config, tradeTier);
+  if (
+    (tradeTier === "Scalping" || tradeTier === "Swing")
+    && sessionFlags.vsaSessionFilter === true
+  ) {
+    const ts = timestampFromConfig(config, candles);
+    const sess = applyVsaSessionFilter(ts, {
+      enabled: true,
+      noTradeSessions: sessionFlags.noTradeSessions,
+    });
+    if (sess.blocked) {
+      _abl("rejBySession");
+      return { vote: "NEUTRAL", confidence: 0, reason: sess.reason || "vsa_session_block" };
+    }
+  }
+
+  if (tradeTier === "Swing") {
+    const swingFlags = resolveVsaSwingGateFlags(config);
+    if (swingFlags.vsaSwingLongOnly === true && result.vote === "SHORT") {
+      _abl("rejSwingShort");
+      return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_long_only" };
+    }
+
+    const metaBase = {
+      ...(result.meta || {}),
+      vsaPatternType: isStoppingVolumeReason(result.reason) ? "STOPPING_VOLUME"
+        : String(result.reason || "").includes("no_demand") ? "NO_DEMAND"
+          : String(result.reason || "").includes("no_supply") ? "NO_SUPPLY"
+            : null,
+      vsaReversal: isStoppingVolumeReason(result.reason),
+      vote: result.vote,
+      signal: result.vote,
+      tradeType: tradeTier,
+    };
+    const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
+    const graded = enriched?.gradedScore ?? Math.round((result.confidence || 0) * 100);
+    const minConf = swingFlags.vsaMinConfidenceSwing;
+    const stoppingBypass = isStoppingVolumeReason(result.reason);
+    if (minConf != null && graded < minConf && !stoppingBypass) {
+      _abl("rejMinConfidence");
+      return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_conf_below_floor" };
+    }
+    return {
+      ...result,
+      confidence: graded / 100,
+      meta: {
+        ...(result.meta || {}),
+        gradedScore: enriched?.gradedScore ?? graded,
+        gradedScoreBreakdown: enriched?.gradedScoreBreakdown ?? null,
+        componentConfidence: enriched?.componentConfidence ?? graded,
+      },
+    };
+  }
+
+  const metaBase = {
+    ...(result.meta || {}),
+    vsaPatternType: isStoppingVolumeReason(result.reason) ? "STOPPING_VOLUME"
+      : String(result.reason || "").includes("no_demand") ? "NO_DEMAND"
+        : String(result.reason || "").includes("no_supply") ? "NO_SUPPLY"
+          : null,
+    vsaReversal: isStoppingVolumeReason(result.reason),
+    vote: result.vote,
+    signal: result.vote,
+    tradeType: tradeTier,
+  };
+  const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
+  const graded = enriched?.gradedScore ?? Math.round((result.confidence || 0) * 100);
+  return {
+    ...result,
+    confidence: graded / 100,
+    meta: {
+      ...(result.meta || {}),
+      gradedScore: enriched?.gradedScore ?? graded,
+      gradedScoreBreakdown: enriched?.gradedScoreBreakdown ?? null,
+      componentConfidence: enriched?.componentConfidence ?? graded,
+    },
+  };
+}
 
 /**
  * Detect VSA patterns at lastIdx.
@@ -135,6 +272,15 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
     if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
   };
   _abl("evaluated");
+
+  const tradeTier = config.tradeType || cfg.tradeType || null;
+  if (tradeTier === "Scalping") {
+    const scalpFlags = resolveVsaScalpingGateFlags(cfg);
+    if (scalpFlags.vsaScalpingShelved === true) {
+      _abl("rejScalpingShelved");
+      return { vote: "NEUTRAL", confidence: 0, reason: "vsa_scalping_shelved" };
+    }
+  }
 
   if (lastIdx == null || !candles?.closes || lastIdx < cfg.minBars - 1) {
     _abl("rejMinBars");
@@ -243,7 +389,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
   }
 
   _abl("passed");
-  return {
+  const raw = {
     vote: signal.vote,
     confidence,
     reason: signal.reason,
@@ -257,6 +403,7 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
       ...volumeMeta,
     },
   };
+  return applyVsaEntryGates(raw, { config: cfg, candles, ablation });
 }
 
 function candlesFromIndicators(indicators, lastIdx) {
@@ -280,4 +427,9 @@ module.exports = {
   calculateCLV,
   relativeVolume,
   classifySpread,
+  applyVsaSessionFilter,
+  resolveVsaScalpingGateFlags,
+  resolveVsaSwingGateFlags,
+  resolveVsaSessionGateFlags,
+  applyVsaEntryGates,
 };

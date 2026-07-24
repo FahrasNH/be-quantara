@@ -504,7 +504,7 @@ function resolveEntryReasons(strategyKey, meta) {
 
 /** @type {readonly string[]} */
 const UNIVERSAL_CSV_COLUMN_KEYS = [
-  "id", "symbol", "side", "strategy", "component",
+  "id", "symbol", "side", "strategy", "component", "tradeType",
   "entryPrice", "exitPrice", "pnl", "fee", "pnlNet", "result",
   "confidence", "htfTrend", "dailyRegime", "session", "atr",
   "entryReasons", "exitReason", "duration",

@@ -58,6 +58,67 @@ function hourUtcFromTimestamp(timestamp) {
 }
 
 /**
+ * Generic session filter — block entries during named sessions or legacy UTC hours.
+ * SSOT loop used by per-strategy applyXxxSessionFilter wrappers in entry modules.
+ *
+ * @returns {{ blocked: boolean, hourUtc: number|null, reason: string|null }}
+ */
+function applyNoTradeSessionFilter(timestamp, opts = {}) {
+  const enabled = opts.enabled === true;
+  const hourUtc = hourUtcFromTimestamp(timestamp);
+  if (!enabled) {
+    return { blocked: false, hourUtc, reason: null };
+  }
+  if (hourUtc == null) {
+    return { blocked: false, hourUtc: null, reason: "no_timestamp_fail_open" };
+  }
+
+  const noTradeSessions = opts.noTradeSessions;
+  if (Array.isArray(noTradeSessions) && noTradeSessions.length) {
+    for (const sess of noTradeSessions) {
+      if (hourInMarketSession(hourUtc, sess)) {
+        return { blocked: true, hourUtc, reason: `session_block_${String(sess).toLowerCase()}` };
+      }
+    }
+    return { blocked: false, hourUtc, reason: null };
+  }
+
+  const blockHours = Array.isArray(opts.blockHoursUtc) && opts.blockHoursUtc.length
+    ? opts.blockHoursUtc
+    : [21, 22];
+  if (blockHours.includes(hourUtc)) {
+    return { blocked: true, hourUtc, reason: `session_block_utc_${hourUtc}` };
+  }
+  return { blocked: false, hourUtc, reason: null };
+}
+
+/**
+ * Scalping-only session block helper for strategy entry modules (Sprint 23).
+ * Each strategy passes its own filterKey + applyXxxSessionFilter wrapper.
+ */
+function scalpingSessionBlocked(config, indicators, lastIdx, filterKey, applyFilter, ablation) {
+  const tradeTier = config?.tradeType;
+  if (tradeTier !== "Scalping") return false;
+  const ov = config.typeOverrides?.Scalping || {};
+  const enabled = config[filterKey] ?? ov[filterKey] ?? false;
+  if (enabled !== true) return false;
+  const noTradeSessions = config.noTradeSessions ?? ov.noTradeSessions ?? null;
+  const timestamp = config.candleTimestamp
+    ?? indicators?.timestamps?.[lastIdx]
+    ?? config?.timestamps?.[lastIdx]
+    ?? indicators?.time?.[lastIdx]
+    ?? null;
+  const r = applyFilter(timestamp, { enabled: true, noTradeSessions });
+  if (r.blocked) {
+    if (ablation && Object.prototype.hasOwnProperty.call(ablation, "rejBySession")) {
+      ablation.rejBySession += 1;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
  * Block SMC entries during configured no-trade sessions.
  * Scalping: Sydney/Tokyo (Sprint 13). Intraday: London (Sprint 22 — tier-specific).
  * Fail-open when timestamp missing. Only Scalping/Intraday + SMART_MONEY_CONCEPTS.
@@ -294,6 +355,8 @@ module.exports = {
   checkEntryRiskGates,
   checkAtrRangeGate,
   checkNoTradeSessionGate,
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
   evaluateAtrEntryGate,
   buildAtrBaseline,
   resolveAtrLegOverride,

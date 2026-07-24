@@ -10,6 +10,15 @@
 const { evaluateAdxRegimeGate } = require("../md/adxRegimeGate");
 const { refineMdEntry, resolveMdTakeProfit } = require("../md/orderBlockFvg");
 const { calcADX } = require("../../analytics-engine/indicators");
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Mean Reversion Scalping session filter (Asia block). */
+function applyMrSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   rsiPeriod: 14,
@@ -85,6 +94,10 @@ function evaluateMeanReversionEntry({
     if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
   };
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(cfg, indicators, lastIdx, "mrSessionFilter", applyMrSessionFilter, ablation)) {
+    return { signal: null, meta: null, bbLevels: null };
+  }
 
   if (lastIdx < 50) {
     _abl("rejWarmup");

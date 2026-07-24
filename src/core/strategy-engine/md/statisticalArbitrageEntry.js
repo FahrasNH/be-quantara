@@ -11,6 +11,16 @@
 
 "use strict";
 
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Statistical Arbitrage Scalping session filter (Asia block). */
+function applySaSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
+
 const DEFAULTS = {
   lookback: 40,
   entryZ: 2.0, // Gelombang 2: band 2.0–2.5σ — post-patch analysis sweet spot
@@ -197,6 +207,10 @@ function evaluateStatisticalArbitrageEntry({
     if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
   };
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(config, { timestamps: config.timestamps }, lastIdx, "saSessionFilter", applySaSessionFilter, ablation)) {
+    return { signal: null, confidence: 0, reason: "sa_session_block", meta: null };
+  }
 
   const lookback = config.mdSaLookback ?? DEFAULTS.lookback;
   const entryZ = config.mdSaEntryZ ?? DEFAULTS.entryZ;

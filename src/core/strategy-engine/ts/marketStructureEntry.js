@@ -12,6 +12,16 @@
 
 "use strict";
 
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Market Structure Scalping session filter (Asia block). */
+function applyMsSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
+
 const DEFAULTS = {
   // Spec TS-SUB-01 / bug report: confirm swing with 2 bars after pivot (anti-repaint).
   // rightLook=5 was over-strict on HTF and starved confirmed swings → structure forever unclear.
@@ -268,6 +278,16 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
   const ablation = config.ablation || null;
   const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(cfg, { timestamps: cfg.timestamps }, lastIdx, "msSessionFilter", applyMsSessionFilter, ablation)) {
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "ms_session_block",
+      meta: {},
+    };
+  }
 
   if (!Number.isInteger(lastIdx) || lastIdx < 1) {
     _abl("rejWarmup");

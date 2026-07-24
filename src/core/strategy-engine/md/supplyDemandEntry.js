@@ -15,6 +15,15 @@ const {
   detectOrderBlocks,
   resolveMdTakeProfit,
 } = require("./orderBlockFvg");
+const {
+  applyNoTradeSessionFilter,
+  scalpingSessionBlocked,
+} = require("../../risk-engine/entryRiskGates");
+
+/** Sprint 23: Supply/Demand Scalping session filter (Asia block). */
+function applySdSessionFilter(timestamp, opts = {}) {
+  return applyNoTradeSessionFilter(timestamp, opts);
+}
 
 const DEFAULTS = {
   confluenceAtrMult: 0.75,
@@ -80,6 +89,10 @@ function evaluateSupplyDemandEntry({
     if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
   };
   _abl("evaluated");
+
+  if (scalpingSessionBlocked(config, { timestamps: config.timestamps }, lastIdx, "sdSessionFilter", applySdSessionFilter, ablation)) {
+    return { signal: null, confidence: 0, reason: "sd_session_block", meta: null };
+  }
 
   const atrMult = config.mdSdConfluenceAtrMult ?? config.confluenceAtrMult ?? DEFAULTS.confluenceAtrMult;
   const volMult = config.mdSdVolConfirmMult ?? config.volConfirmMult ?? DEFAULTS.volConfirmMult;

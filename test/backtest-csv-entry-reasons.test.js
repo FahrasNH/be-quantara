@@ -234,7 +234,7 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     expect(csv).toContain("DryRun");
     expect(csv).not.toContain("Hour UTC");
     expect(csv).not.toContain("Hold Hours");
-    expect(csv).not.toContain("Trade Type");
+    expect(csv).toContain("Trade Type");
     expect(csv).not.toContain("Funding Rate At Entry");
   });
 
@@ -246,7 +246,7 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     const headerLine = csv.split("\n")[0];
     const colCount = headerLine.split(",").length;
     expect(colCount).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length);
-    expect(colCount).toBe(24);
+    expect(colCount).toBe(25);
     expect(csv).not.toContain("Session ID");
     expect(csv).not.toContain("Planned R:R");
   });
@@ -282,7 +282,7 @@ describe("CORE CSV schema (Sprint 14 redesign)", () => {
     const coreWb = XLSX.read(coreXlsx, { type: "buffer" });
     const coreHeader = XLSX.utils.sheet_to_json(coreWb.Sheets["User Export"], { header: 1 })[0];
     expect(coreHeader.length).toBe(ADMIN_TRADE_EXPORT_COLUMNS.length);
-    expect(coreHeader.length).toBe(24);
+    expect(coreHeader.length).toBe(25);
     expect(coreHeader).not.toContain("Session ID");
 
     const stratXlsx = exportBacktestsXlsx([record], {
