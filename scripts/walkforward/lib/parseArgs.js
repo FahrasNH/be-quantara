@@ -1,0 +1,33 @@
+"use strict";
+
+function parseIntArg(argv, flag) {
+  const i = argv.indexOf(flag);
+  return i !== -1 ? parseInt(argv[i + 1], 10) : null;
+}
+
+function parseStringArg(argv, flag) {
+  const i = argv.indexOf(flag);
+  return i !== -1 ? argv[i + 1] : null;
+}
+
+/**
+ * Common walk-forward CLI flags shared by grid export scripts.
+ * @param {string[]} [argv]
+ */
+function parseGridArgs(argv = process.argv.slice(2)) {
+  return {
+    dryRun: argv.includes("--dry-run"),
+    useLocal: argv.includes("--local"),
+    summaryOnly: argv.includes("--summary-only"),
+    exportOnly: argv.includes("--export-only"),
+    analyzeOnly: argv.includes("--analyze-only"),
+    windowFilter: parseIntArg(argv, "--window"),
+    symbolFilter: parseStringArg(argv, "--symbol"),
+  };
+}
+
+module.exports = {
+  parseGridArgs,
+  parseIntArg,
+  parseStringArg,
+};
