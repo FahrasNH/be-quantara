@@ -51,7 +51,7 @@ Backtest default: `runBacktestJob.js` forces `entryModel: "aggressive"` when uns
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `wyckoffSessionFilter: true`, Asia block, RR 2.0 / 2h hold
+- **Scalping:** `atrGateRelative: true`, `wyckoffSessionFilter: false`, RR 2.0 / 2h hold
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -187,7 +187,7 @@ Trading Range → Spring (LONG) or Upthrust (SHORT) → Entry Checklist → sign
 - **Trading range valid:** hard gate
 - **Spring / Upthrust:** entry trigger
 - **Checklist (model-dependent):** hard gate
-- **Session filter:** Scalping only (`wyckoffSessionFilter`)
+- **Session filter:** **off** (`wyckoffSessionFilter: false`)
 - **ATR gate:** per-leg `atrMinMult` / relative band
 - **Cooldown:** `cooldownBars` between signals
 - **Live money:** Scalping blocked; Intraday + Swing allowed

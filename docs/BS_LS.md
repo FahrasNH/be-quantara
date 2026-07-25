@@ -41,7 +41,7 @@ Per-leg SL/TP: `LiquidationSqueezeStrategy.calculateRiskConfig` (engine 1.6 / 2.
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `lsSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `lsSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -92,7 +92,7 @@ Pure **ATR-based** SL/TP (no structure override). Wick detection sets entry; OI/
 - **TP method:** ATR × 2.8 / 3.0
 - **ATR mult / R:R:** **RR ~1.75–2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `lsSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -174,7 +174,7 @@ Final `reason` prefixed with `ls_`.
 
 - **Wick detection:** primary trigger
 - **OI/funding:** boost or alt path; **fail-open** if missing
-- **Session filter:** Scalping only (`lsSessionFilter`)
+- **Session filter:** **off** (`lsSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

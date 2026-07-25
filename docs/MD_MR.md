@@ -42,7 +42,7 @@ Per-leg SL/TP: `MeanReversionStrategy.calculateRiskConfig` + optional `tpOverrid
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `mrSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `mrSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -94,7 +94,7 @@ SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefer
 - **TP method:** FVG/BB mid override **or** 2.5× SL (`tpMultiplierA`) **or** 3.0× ATR
 - **ATR mult / R:R:** 1.5 / up to 3.0 → **RR ≤ 2.0** planned
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `mrSessionFilter`; trailing stop 0.3×ATR; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; trailing stop 0.3×ATR; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -182,7 +182,7 @@ BB+RSI+VWAP extreme → volume floor → ADX regime gate → OB/FVG refine → s
 - **ADX imbalance (≥25):** hard block
 - **ADX balance / transition:** pass (transition reduces confidence)
 - **OB/FVG confluence:** confidence/TP boost; soft miss `OB/FVG~`
-- **Session filter:** Scalping only (`mrSessionFilter`)
+- **Session filter:** **off** (`mrSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

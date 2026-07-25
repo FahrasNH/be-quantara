@@ -41,7 +41,7 @@ Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `ictSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `ictSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -65,7 +65,7 @@ Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (
 ### Scalping
 
 - **Floor:** none — confidence ranks BS racers (BR / ICT / LS)
-- **Formula / components:** same kill-zone + raid stack; `ictSessionFilter` is session hard gate
+- **Formula / components:** same kill-zone + raid stack; `ictSessionFilter: false` (session filter OFF)
 
 ### Intraday
 
@@ -90,7 +90,7 @@ SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buff
 - **TP method:** ATR × 3.0 (typeOverride) / 2.5 (engine)
 - **ATR mult / R:R:** **RR ~1.67–2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `ictSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -171,7 +171,7 @@ Kill Zone Check (optional hard) → Liquidity Raid → confidence adjust → sig
 
 - **Kill zone:** hard only if `bsIctRequireKillZone`; else confidence boost/penalty
 - **Raid detection:** entry trigger
-- **Session filter:** Scalping only (`ictSessionFilter`)
+- **Session filter:** **off** (`ictSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

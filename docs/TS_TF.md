@@ -36,7 +36,7 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `tsSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `tsSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, `adxMinStrength: 20`, 120h hold
 
@@ -89,7 +89,7 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 - **TP method:** ATR × 3.0 (`tpAtrMult`)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `tsSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -172,7 +172,7 @@ HTF Trend Align → Donchian Breakout → Entry-TF Pullback (EMA9 retest + ADX +
 - **HTF trend + ADX:** hard gate
 - **Donchian break:** hard gate
 - **EMA9 retest + volume + RSI:** hard gate
-- **Session filter:** Scalping only (`tsSessionFilter`)
+- **Session filter:** **off** (`tsSessionFilter: false`)
 - **ATR gate:** per-leg overrides (Swing ADX floor 20)
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

@@ -90,9 +90,10 @@ describe("resolveBacktestStrategyDefaults — Sprint 23 VSA leg merge", () => {
       selectedComponents: ["VOLUME_SPREAD_ANALYSIS"],
     });
     assert.equal(cfg.typeOverrides.Scalping.vsaScalpingShelved, true);
-    assert.equal(cfg.typeOverrides.Scalping.vsaSessionFilter, true);
+    assert.equal(cfg.typeOverrides.Scalping.vsaSessionFilter, false);
     assert.equal(cfg.typeOverrides.Intraday.vsaIntradayDetectorMode, "confirmation");
-    assert.deepEqual(cfg.typeOverrides.Intraday.noTradeSessions, ["London"]);
+    assert.equal(cfg.typeOverrides.Intraday.vsaSessionFilter, false);
+    assert.equal(cfg.typeOverrides.Intraday.noTradeSessions, undefined);
     assert.equal(cfg.typeOverrides.Swing.vsaSwingLongOnly, true);
     assert.equal(cfg.typeOverrides.Swing.vsaMinConfidenceSwing, 60);
   });
@@ -102,7 +103,7 @@ describe("resolveBacktestStrategyDefaults — Sprint 23 VSA leg merge", () => {
       afActiveVoters: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
       selectedComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
     });
-    assert.equal(cfg.typeOverrides.Scalping.smcSessionFilter, true);
+    assert.equal(cfg.typeOverrides.Scalping.smcSessionFilter, false);
     assert.equal(cfg.typeOverrides.Scalping.vsaScalpingShelved, true);
     assert.equal(cfg.typeOverrides.Swing.vsaSwingLongOnly, true);
   });
@@ -112,7 +113,7 @@ describe("resolveBacktestStrategyDefaults — Sprint 23 VSA leg merge", () => {
       afActiveVoters: ["SMART_MONEY_CONCEPTS"],
       selectedComponents: ["SMART_MONEY_CONCEPTS"],
     });
-    assert.equal(cfg.typeOverrides.Scalping.smcSessionFilter, true);
+    assert.equal(cfg.typeOverrides.Scalping.smcSessionFilter, false);
     assert.equal(cfg.typeOverrides.Scalping.vsaScalpingShelved, undefined);
   });
 

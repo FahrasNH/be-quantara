@@ -44,7 +44,7 @@ Per-leg SL/TP + z-score exit: [`STATISTICAL_ARBITRAGE`](#risk--sltp-per-trade-ty
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `saSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `saSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold, `mdSaRequireTransitionRegime: true`
 
@@ -93,7 +93,7 @@ Per-leg SL/TP + z-score exit: [`STATISTICAL_ARBITRAGE`](#risk--sltp-per-trade-ty
 - **TP method:** ATR × 3.0 (typeOverride) **or** 2.0× SL (engine default)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `saSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -180,7 +180,7 @@ Rolling Mean + Std → Z-Score in [entryZ, entryZMax] → HTF/regime gates → s
 - **HTF SIDEWAYS (1w):** skip when `mdSaSkipHtfSideways`
 - **HTF align gate:** block fade vs HTF trend
 - **Transition regime (Swing):** required when `mdSaRequireTransitionRegime`
-- **Session filter:** Scalping only (`saSessionFilter`)
+- **Session filter:** **off** (`saSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

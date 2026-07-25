@@ -57,8 +57,8 @@ Per-leg SL/TP geometry: [`SMC_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) a
 
 ### Per trade type overrides (`SMC_LEG_TYPE_OVERRIDES`)
 
-- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `maxHoldHours: 2`, `smcSessionFilter: true`, `noTradeSessions: ["Sydney","Tokyo"]`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
-- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `maxHoldHours: 6`, `smcSessionFilter: true`, `noTradeSessions: ["London"]`, `smcBlockAllInChop: true`
+- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `maxHoldHours: 2`, `smcSessionFilter: false`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
+- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `maxHoldHours: 6`, `smcSessionFilter: false`, `smcBlockAllInChop: true`
 - **Swing:** `slAtrMult/tpAtrMult: 1.2/3.6`, `maxHoldHours: 120`
 
 Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread confidence from `typeOverrides` into `detectSignalMulti`). Backtest merges per-leg overrides onto cfg.
@@ -87,7 +87,7 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 
 - **Floor:** ≥**40** backtest (`SMC_LEG_TYPE_OVERRIDES.Scalping.smcMinConfidenceA`); live top-level **60** (typeOverrides not merged into live `detectSignalMulti`)
 - **Formula / components:** same sequence `_scoreSequence`; optional side-specific overrides `smcMinConfidenceALong` / `AShort` (default = floor)
-- **Post-gates:** CHoCH validation, session, chop (LONG block), OB retest, ATR gate — see [How Entry Works](#how-entry-works)
+- **Post-gates:** CHoCH validation, chop (LONG block), OB retest, ATR gate — see [How Entry Works](#how-entry-works) (session filter OFF)
 
 ### Intraday
 
@@ -113,7 +113,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × `tpAtrMult` (3.0)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; Asia block; OB retest required; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; OB retest required; `maxHoldHours` **2** (session filter OFF)
 
 ### Intraday
 
@@ -122,7 +122,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × 3.6
 - **ATR mult / R:R:** 1.8 / 3.6 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** London session block; conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6**
+- **Notes:** conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6** (session filter OFF)
 
 ### Swing
 
@@ -200,8 +200,8 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 
 ### Session filter
 
-- **Scalping (5m):** Asia block (Sydney+Tokyo)
-- **Intraday (15m):** **London** block
+- **Scalping (5m):** **off** (`smcSessionFilter: false` — Asia block removed)
+- **Intraday (15m):** **off** (`smcSessionFilter: false` — London block removed)
 - **Swing (4h):** off (default)
 
 ### Chop / regime

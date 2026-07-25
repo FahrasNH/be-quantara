@@ -33,7 +33,7 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `amtSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `amtSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -85,7 +85,7 @@ Session **VWAP proximity** for entries uses `vwapAtrMult` 0.5×ATR — separate 
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `amtSessionFilter`; UTC-day session; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; UTC-day session; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -179,7 +179,7 @@ Precision helpers (`vwap_retest`, `poc_retest`) exist for rollback mode; race-mo
 
 - **Session warmup (`minSessionBars`):** hard gate
 - **`awaiting_amt_trigger`:** no trade
-- **Session filter:** Scalping only (`amtSessionFilter`)
+- **Session filter:** **off** (`amtSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

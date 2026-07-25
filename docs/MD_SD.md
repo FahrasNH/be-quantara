@@ -35,7 +35,7 @@ Per-leg SL/TP: `SupplyDemandStrategy.calculateRiskConfig` + zone/FVG `tpOverride
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `sdSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `sdSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -86,7 +86,7 @@ Zone **retest radius** uses `mdSdConfluenceAtrMult` 0.75×ATR (entry) — not th
 - **TP method:** FVG/structure override **or** ATR × 2.5
 - **ATR mult / R:R:** 1.5 / 2.5 → **RR ~1.67**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `sdSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -165,7 +165,7 @@ Scan OB/FVG Zones → Price Retest in Zone → Reversal Candle → signal
 - **Zone proximity:** hard gate
 - **Reversal candle:** hard gate
 - **Volume confirm:** confidence boost only
-- **Session filter:** Scalping only (`sdSessionFilter`)
+- **Session filter:** **off** (`sdSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

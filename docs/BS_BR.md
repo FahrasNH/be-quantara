@@ -45,7 +45,7 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `brSessionFilter: true`, RR 2.0 / 2h
+- **Scalping:** `atrGateRelative: true`, `brSessionFilter: false`, RR 2.0 / 2h
 - **Intraday:** `atrMinMult: 0.4`, 6h hold
 - **Swing:** `atrMinMult: 0.8`, 120h hold
 
@@ -98,7 +98,7 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 - **TP method:** Structural target **or** ATR × 3.2, cap **2.5R**
 - **ATR mult / R:R:** Planned ≤ **2.5R**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `brSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
 
 ### Intraday
 
@@ -180,7 +180,7 @@ S&R Levels → BB Squeeze / Vol Floor → Breakout + Volume → Displacement Wai
 - **Consolidation / vol floor:** hard gate
 - **Blocked regimes (`COILED`/`SQUEEZE`/`DRY_SQUEEZE`):** hard block
 - **Breakout volume cap (`maxVolumeRatio`):** hard block
-- **Session filter:** Scalping only (`brSessionFilter`)
+- **Session filter:** **off** (`brSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

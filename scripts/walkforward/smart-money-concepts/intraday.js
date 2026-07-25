@@ -48,10 +48,9 @@ function buildManifest({ win, symbol }) {
       smcPivotStructure: true,
       slAtrMult: 1.8,
       tpAtrMult: 3.6,
-      smcSessionFilter: true,
-      noTradeSessions: ["London"],
+      smcSessionFilter: false,
       smcBlockAllInChop: true,
-      note: "Intraday SSOT from strategyDefaults.js — engine 0cd068a+",
+      note: "Intraday SSOT from strategyDefaults.js — session filter OFF",
     },
     exportVariant: "full",
   };
@@ -72,7 +71,7 @@ async function main() {
   console.log("SMC Intraday walk-forward re-validation");
   console.log(`Output: ${OUT_ROOT}`);
   console.log(`Windows: ${windows.length} · Symbols: ${symbols.join(", ")}`);
-  console.log("Config: conf≥80, pivot OB, London block, CHOP block (Intraday SSOT)");
+  console.log("Config: conf≥80, pivot OB, session OFF, CHOP block (Intraday SSOT)");
 
   if (summaryOnly) {
     const summary = collectSummary(OUT_ROOT, windows, symbols, MIN_PASSES_PER_SYMBOL, PROMOTE_HINT);

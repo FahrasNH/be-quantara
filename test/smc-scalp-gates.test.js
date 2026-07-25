@@ -137,8 +137,8 @@ test("INTRADAY-SSOT: strategyDefaults Intraday has Sprint 22 gates + geometry", 
   assert.equal(ov.smcMinConfidenceIntraday, 80);
   assert.equal(ov.smcPivotStructure, true);
   assert.equal(ov.smcBlockAllInChop, true);
-  assert.equal(ov.smcSessionFilter, true);
-  assert.deepEqual(ov.noTradeSessions, ["London"]);
+  assert.equal(ov.smcSessionFilter, false);
+  assert.equal(ov.noTradeSessions, undefined);
   assert.equal(ov.slAtrMult, 1.8);
   assert.equal(ov.tpAtrMult, 3.6);
   assert.equal(ov.smcSweepVolMult, undefined);
@@ -218,12 +218,12 @@ test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + 120m time-stop + gates 
   assert.equal(ov.slAtrMult, 1.5);
   assert.equal(ov.tpAtrMult, 3.0);
   assert.equal(ov.maxHoldHours, 2);
-  assert.equal(ov.smcSessionFilter, true);
+  assert.equal(ov.smcSessionFilter, false);
   assert.equal(ov.smcBlockLongInChop, true);
   assert.equal(ov.smcRequireObRetest, true);
   assert.equal(ov.smcMinConfidenceScalping, 40);
   assert.equal(ov.smcSweepVolMult, 1.2);
-  assert.deepEqual(ov.noTradeSessions, ["Sydney", "Tokyo"]);
+  assert.equal(ov.noTradeSessions, undefined);
   assert.equal(ov.atrMinMult, 0.287);
 
   const smc = new SmartMoneyConceptsStrategy();
