@@ -158,5 +158,5 @@ node scripts/walkforward/smart-money-concepts/intraday.js --window 3 --symbol BN
 node scripts/walkforward/smart-money-concepts/intraday.js --summary-only
 ```
 
-Output: `tmp/sprint22-smc-intraday-walkforward/window-XX/SYMBOL/` + `walkforward-summary.json`.
+Output: `tmp/smc-intraday-walkforward/window-XX/SYMBOL/` + `walkforward-summary.json`.
 Engine must include Intraday fixes (`0cd068a+` on dev/staging BE).

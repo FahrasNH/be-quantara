@@ -11,7 +11,7 @@
  *   node scripts/walkforward/smart-money-concepts/scalping.js --dry-run
  *   node scripts/walkforward/smart-money-concepts/scalping.js --window 3
  *
- * Output: tmp/sprint18-smc-walkforward/window-XX/
+ * Output: tmp/smc-scalping-walkforward/window-XX/
  */
 
 process.stdout.write("[walkforward] SMC Scalping export…\n");
@@ -27,7 +27,7 @@ const { parseGridArgs } = require("../lib/parseArgs");
 const { runSpawnGrid } = require("../lib/runSpawnExport");
 const { requireViaApiCredentials } = require("../lib/auth");
 
-const OUT_ROOT = path.join(REPO_ROOT, "tmp/sprint18-smc-walkforward");
+const OUT_ROOT = path.join(REPO_ROOT, "tmp/smc-scalping-walkforward");
 const SCALPING_SCRIPT = path.join(REPO_ROOT, "scripts/dataset-expand/smart-money-concepts/scalping.js");
 
 function buildManifest({ win }) {

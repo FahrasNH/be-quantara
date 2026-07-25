@@ -8,11 +8,12 @@
  * Saves the best model to data/models/win-predictor.json.
  *
  * Data sources (in order):
- *   1. Prisma "Trade" with entryContext + exitContext
- *   2. Engine `trades` table via ml-engine-dataset.json (from bootstrap script)
- *   3. Engine `trades` table live query (fallback)
+ *   1. Cached `data/ml-engine-dataset.json` (from ml:bootstrap-walkforward / engine bootstrap)
+ *   2. Prisma "Trade" with entryContext + exitContext (needs local Postgres)
+ *   3. Engine `trades` table live query (needs local Postgres)
  *
  * Usage: node scripts/ml/train-win-predictor.js
+ *        node scripts/ml/train-win-predictor.js --prefer-db   # hit Prisma first
  * npm script: ml:train-win-predictor
  */
 
@@ -104,45 +105,68 @@ async function loadEngineTradesDataset(featureEngineer) {
   return { dataset, skipped, source: "engine-trades" };
 }
 
+async function loadFromPrismaOrEngine(featureEngineer) {
+  try {
+    const prismaResult = await loadPrismaDataset(featureEngineer);
+    if (prismaResult.dataset.length > 0) {
+      console.log(`[train-win-predictor] Prisma Trade: ${prismaResult.dataset.length} samples`);
+      return prismaResult;
+    }
+    console.log("[train-win-predictor] Prisma Trade: 0 samples — trying engine trades");
+  } catch (err) {
+    const brief = String(err.message || err).split("\n")[0].trim();
+    console.warn(`[train-win-predictor] Prisma unavailable (${brief}) — trying fallbacks`);
+  }
+
+  try {
+    const engine = await loadEngineTradesDataset(featureEngineer);
+    console.log(
+      `[train-win-predictor] Engine trades fallback: ${engine.dataset.length} samples (${engine.skipped} skipped)`,
+    );
+    return engine;
+  } catch (err) {
+    const brief = String(err.message || err).split("\n")[0].trim();
+    console.warn(`[train-win-predictor] Engine trades unavailable (${brief})`);
+    return { dataset: [], skipped: 0, source: "none" };
+  }
+}
+
 async function main() {
   console.log("[train-win-predictor] Loading trades...");
 
+  const preferDb = process.argv.includes("--prefer-db");
   const featureEngineer = new FeatureEngineer();
   let dataset = [];
   let skipped = 0;
-  let source = "prisma-trade";
+  let source = "none";
+  let usedPrisma = false;
 
-  try {
-    ({ dataset, skipped, source } = await loadPrismaDataset(featureEngineer));
-    console.log(`[train-win-predictor] Prisma Trade: ${dataset.length} samples`);
-  } catch (err) {
-    console.warn(`[train-win-predictor] Prisma unavailable (${err.message}) — trying fallbacks`);
-  }
+  const cached = loadCachedEngineDataset();
 
-  if (dataset.length === 0) {
-    const cached = loadCachedEngineDataset();
-    if (cached?.dataset?.length) {
+  if (!preferDb && cached?.dataset?.length) {
+    ({ dataset, skipped, source } = cached);
+    console.log(`[train-win-predictor] Using cached engine dataset: ${dataset.length} samples`);
+  } else {
+    usedPrisma = true;
+    ({ dataset, skipped, source } = await loadFromPrismaOrEngine(featureEngineer));
+    if (dataset.length === 0 && cached?.dataset?.length) {
       ({ dataset, skipped, source } = cached);
       console.log(`[train-win-predictor] Using cached engine dataset: ${dataset.length} samples`);
-    } else {
-      const engine = await loadEngineTradesDataset(featureEngineer);
-      ({ dataset, skipped, source } = engine);
-      console.log(`[train-win-predictor] Engine trades fallback: ${dataset.length} samples (${skipped} skipped)`);
     }
   }
 
   if (dataset.length === 0) {
-    console.warn("[train-win-predictor] No training data. Run: npm run ml:bootstrap-engine-trades");
+    console.warn("[train-win-predictor] No training data. Run: npm run ml:bootstrap-walkforward");
     console.warn("[train-win-predictor] Not saving empty model — RAG gate stays disabled until data exists.");
     const report = {
       auc: 0.5, accuracy: 0.5, splits: [], featureImportance: [],
       hyperparams: {}, trainedAt: new Date().toISOString(), tradeCount: 0,
-      note: "No training data — run ml:bootstrap-engine-trades after bots accumulate trades",
+      note: "No training data — run ml:bootstrap-walkforward or start Postgres + ml:bootstrap-engine-trades",
       source,
     };
     ensureDir(REPORT_PATH);
     fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
-    await prisma.$disconnect();
+    if (usedPrisma) await prisma.$disconnect().catch(() => {});
     process.exit(1);
   }
 
@@ -208,7 +232,7 @@ async function main() {
   fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
   console.log(`\n[train-win-predictor] Report saved: ${REPORT_PATH}`);
 
-  await prisma.$disconnect();
+  if (usedPrisma) await prisma.$disconnect().catch(() => {});
   process.exit(0);
 }
 

@@ -13,7 +13,7 @@
  *   node scripts/walkforward/smart-money-concepts/intraday.js --window 3 --symbol ETHUSDT
  *   node scripts/walkforward/smart-money-concepts/intraday.js --summary-only
  *
- * Output: tmp/sprint22-smc-intraday-walkforward/window-XX/SYMBOL/
+ * Output: tmp/smc-intraday-walkforward/window-XX/SYMBOL/
  */
 
 process.stdout.write("[walkforward] SMC Intraday export…\n");
@@ -31,7 +31,7 @@ const { runGrid } = require("../lib/runGridExport");
 const { collectSummary, printSummaryTable, printVerdict } = require("../lib/summary");
 const { requireViaApiCredentials, resolveViaApiToken } = require("../lib/auth");
 
-const OUT_ROOT = path.join(REPO_ROOT, "tmp/sprint22-smc-intraday-walkforward");
+const OUT_ROOT = path.join(REPO_ROOT, "tmp/smc-intraday-walkforward");
 const MIN_PASSES_PER_SYMBOL = 3;
 const PROMOTE_HINT = "liveTradeTypeGate.js (SMART_MONEY_CONCEPTS Intraday)";
 

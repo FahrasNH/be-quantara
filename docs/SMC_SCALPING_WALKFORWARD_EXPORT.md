@@ -40,7 +40,7 @@ node scripts/walkforward/smart-money-concepts/scalping.js
 node scripts/walkforward/smart-money-concepts/scalping.js --window 3
 ```
 
-Output: `tmp/sprint18-smc-walkforward/window-NN/` (trades.csv, stats.json, manifest.json)
+Output: `tmp/smc-scalping-walkforward/window-NN/` (trades.csv, stats.json, manifest.json)
 
 Each window uses `scripts/dataset-expand/smart-money-concepts/scalping.js --via-api`
 (1:1 with UI Advance backtest engine on dev server).
