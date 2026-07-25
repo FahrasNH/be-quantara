@@ -1,27 +1,23 @@
 # AUCTION_MARKET_THEORY — Entry Triggers (AS-IS)
 
-**Scope**: What triggers a AUCTION_MARKET_THEORY entry and the signal labels emitted on fill.  
+**Scope**: What triggers an AUCTION_MARKET_THEORY entry and the signal labels emitted on fill.  
 **Strategy key**: `AUCTION_MARKET_THEORY` (`VolumeProfileStrategy`, v2.0) — label: **Auction Market Theory**  
-**Engine SSOT**: `volumeProfileComponent.js` → `evaluateVolumeProfileEntry`  
-**Config SSOT**: `strategyDefaults.js` → `AUCTION_MARKET_THEORY` (inherits `TREND_FOLLOWING`) + component DEFAULTS  
-**FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
-**Doc date**: 2026-07-15
-
-> Describes **what the code emits today**, not aspirational PRD copy.
+**Engine SSOT**: `volumeProfileEntry.js` → `evaluateVolumeProfileEntry`  
+**Config SSOT**: `strategyDefaults.js` → `AUCTION_MARKET_THEORY` (inherits `TS_COMPONENT_BASE`)  
+**Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
+**Doc date**: 2026-07-25
 
 ---
 
 ## Default Config (Factory Reset)
 
-Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). Risk/SL/TP dari **`AUCTION_MARKET_THEORY`** preset (= Trend Following geometry); AMT-specific knobs dari **component DEFAULTS**.
-
-### Risk & SL/TP (umbrella preset)
+### Risk & SL/TP
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.01 | fraksi equity | 1% risk per trade |
+| `riskPerTrade` | 0.05 | fraksi equity | preset; engine ctor 0.015 |
 | `atrMultiplier` | 1.5 | × ATR | Stop-loss |
-| `riskReward` | 2.0 | × SL | Take-profit = 3.0×ATR (RR 1:2) |
+| `riskReward` | 2.0 | × SL | TP nominal |
 | `maxTradesPerDay` | 4 | trade | Cap harian |
 | `leverage` | 2 | × | Leverage default |
 
@@ -32,143 +28,95 @@ Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). 
 | `bins` | 20 | bin | Volume profile histogram |
 | `valueAreaPct` | 0.7 | fraksi | Value Area = 70% volume |
 | `vwapAtrMult` | 0.5 | × ATR | VWAP proximity tolerance |
-| `vwapTolerancePct` | 0.005 | fraksi harga | Fallback VWAP tolerance (~0.5%) |
+| `vwapTolerancePct` | 0.005 | fraksi | Fallback VWAP tolerance (~0.5%) |
 | `minSessionBars` | 20 | bar | Intraday UTC-day session floor |
 | `minSessionBarsSwing` | 6 | bar | Swing UTC-week session floor |
 
-### FORGE umbrella (race)
-
-| Parameter | Default | Kegunaan |
-| --- | --- | --- |
-| `tsCombinationMode` | `"race"` | TREND_FOLLOWING / MARKET_STRUCTURE / AUCTION_MARKET_THEORY race independently |
-| `tsUseVwapPrecision` | `false` | Precision/gate path OFF in factory reset |
-
 ### Per trade type overrides
 
-| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| Leg | Overrides |
 | --- | --- |
-| Scalping | 0.15 |
-| Intraday | 0.4 |
-| Swing | 0.8 |
-
-Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
-
+| Scalping | `atrGateRelative: true`, `amtSessionFilter: true`, RR 2.0 / 2h |
+| Intraday | `atrMinMult: 0.4`, 6h hold |
+| Swing | `atrMinMult: 0.8`, 120h hold |
 
 ---
 
-## What triggers an entry
+## How Entry Works
 
-AUCTION_MARKET_THEORY trades **session auction imbalances** — price reclaiming or rejecting VWAP and value-area edges.
+Trades **session auction imbalances** — price reclaiming or rejecting VWAP and value-area edges.
+
+### Entry triggers
 
 ```
 Session VWAP/VA Compute → Trigger at VWAP or VA edge → signal
 ```
 
-**Entry triggers** (`evaluateVolumeProfileEntry`):
-
-| `reason` code | Direction | Condition (summary) |
+| `reason` code | Direction | Condition |
 | --- | --- | --- |
 | `vwap_reclaim` | LONG | Close crosses back above session VWAP |
 | `vwap_lose` | SHORT | Close crosses back below session VWAP |
 | `val_bounce` | LONG | Rejection from Value Area Low (VAL) |
 | `vah_reject` | SHORT | Rejection from Value Area High (VAH) |
 
-Precision/gate helpers (`evaluateVolumeProfilePrecision`, `vwap_retest`, `poc_retest`) exist for rollback mode; race-mode fills use the four codes above. Session warmup and `awaiting_amt_trigger` do not open trades.
+Precision helpers (`vwap_retest`, `poc_retest`) exist for rollback mode; race-mode fills use the four codes above.
+
+### Gate funnel
+
+| Stage | Effect |
+| --- | --- |
+| Session warmup (`minSessionBars`) | hard gate |
+| `awaiting_amt_trigger` | no trade |
+| Session filter | Scalping only (`amtSessionFilter`) |
+| ATR gate | per-leg overrides |
+| Live money | Scalping blocked; Intraday + Swing allowed |
+
+Swing uses UTC-week session (`minSessionBarsSwing: 6`) because 4h bars have ≤6 per UTC-day.
+
+**SL/TP**: TS parent geometry; per-leg TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
 
 ---
 
-## Trade types (brief)
+## Trade types
 
-| Type | Entry / Confirm / Trend TF | Live eligible |
-| --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
-| Intraday | 15m / 1h / 4h | Yes |
-| Swing | 4h / 1d / 1w | Yes |
+| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
+| --- | --- | --- | --- | --- |
+| Scalping | 5m | 1h | Blocked | Allowed |
+| Intraday | 15m | 1h | Allowed | Allowed |
+| Swing | 4h | 1w | Allowed | Allowed |
 
-Signal labels are **one label per trade** — the trigger type. Trade type affects timeframe, not label vocabulary.
+Each fill maps to **exactly one** trigger label.
 
 ---
 
 ## Tick open trade
 
-**Production path (default):** `MULTI_STRATEGY_ENABLED=true` → `MultiStrategyCoordinator` → `AdaptiveStrategyEngine._tick()`. Signal on the **confirmed** candle (`lastIdx = length−2`); **entry fill** at exchange ticker `last`. Fail-closed if ticker unavailable; skip when |ticker − signal close| > 1×ATR (stale guard). ATR gate uses **per-leg** overrides via `resolveAtrLegOverride`.
-
-**Legacy path:** `MULTI_STRATEGY_ENABLED=false` or explicit single `strategyKey` → `BotEngine._tick()` only. Signal and entry both at **confirmed candle close** (no ticker entry). **Generic** config-level ATR gate (`atrMinMult` / `atrMaxMult`, no per-leg `atrGateRelative` baseline unless interval maps to a leg).
-
-Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestService`).
-
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `interval` | `5m` | TF | Signal / indicator candle polled each tick |
-| `checkInterval` | `60_000` | ms | Minimum spacing between live ticks (~60 s) |
-| `higherTf` | `1h` | TF | HTF trend filter (`BotEngine` HTF cache) |
-
-**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
-
-| Leg | Real money | Dry-run / backtest |
+| Parameter | Default | Unit |
 | --- | --- | --- |
-| Scalping | Blocked | Allowed |
-| Intraday | Allowed | Allowed |
-| Swing | Allowed | Allowed |
-
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
-
-Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
+| `interval` | `5m` | TF |
+| `checkInterval` | `60_000` | ms |
+| `higherTf` | `1h` | HTF |
 
 ---
 
 ## Entry signal labels
 
-Labels map directly from `entryMeta.reason` via `VP_REASON_MAP`.
-
-### Label vocabulary
-
-| Label | `reason` code | Direction |
+| Label | `reason` | Direction |
 | --- | --- | --- |
 | **VWAP Reclaim** | `vwap_reclaim` | LONG |
 | **VWAP Lose** | `vwap_lose` | SHORT |
 | **VAL Bounce** | `val_bounce` | LONG |
 | **VAH Reject** | `vah_reject` | SHORT |
-| **VWAP Retest** | `vwap_retest` | *(precision/gate path only)* |
-| **POC Retest** | `poc_retest` | *(precision/gate path only)* |
-
-### When each label actually appears
-
-Each fill maps to **exactly one** mapped label from the four race-mode triggers.
-
-**Variance between trades**: which trigger fired (VWAP vs VA edge, direction).
-
-Unmapped `reason` strings become `titleCaseSnake(raw)` — e.g. `Awaiting Amt Trigger` never appears on fills.
-
-### Typical examples
-
-| Trigger | Example label |
-| --- | --- |
-| VWAP cross up | `VWAP Reclaim` |
-| VWAP cross down | `VWAP Lose` |
-| VAL support | `VAL Bounce` |
-| VAH resistance | `VAH Reject` |
-| No signal | *(empty)* |
+| **VWAP Retest** / **POC Retest** | precision path only | — |
 
 ---
 
 ## AS-IS quirks
 
-- **FORGE umbrella**: AUCTION_MARKET_THEORY wins stamp `winningComponent: "AUCTION_MARKET_THEORY"`.
-- **Single label per fill**: unlike TREND_FOLLOWING checklist, each trade gets one trigger label.
-- **Session bar floors**: Swing uses UTC-week (`minSessionBarsSwing: 6`) because 4h bars have ≤6 per UTC-day.
+- **Trend Surge umbrella**: AMT wins stamp `winningComponent: "AUCTION_MARKET_THEORY"`.
+- **Single label per fill** — unlike TF checklist multi-label fills.
+- **`tsUseVwapPrecision` default false** in factory reset.
 
 ---
 
-## Quick reference — trigger vs label
-
-| Trigger | Drives entry? | Signal label |
-| --- | --- | --- |
-| VWAP reclaim | Yes | `VWAP Reclaim` |
-| VWAP lose | Yes | `VWAP Lose` |
-| VAL bounce | Yes | `VAL Bounce` |
-| VAH reject | Yes | `VAH Reject` |
-
----
-
-*Update this file when `evaluateVolumeProfileEntry` reason codes or `VP_REASON_MAP` change.*
+*Update when `evaluateVolumeProfileEntry` reason codes or `VP_REASON_MAP` change.*

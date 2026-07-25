@@ -1,11 +1,12 @@
 # WYCKOFF — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an WYCKOFF entry and the signal labels emitted on fill.  
+**Scope**: What triggers a WYCKOFF entry and the signal labels emitted on fill.  
 **Strategy key**: `WYCKOFF` (`WyckoffStrategy`, v2.0)  
-**Engine SSOT**: `wyckoffComponent.js` → `evaluateWyckoffComponent`  
-**Config SSOT**: `strategyDefaults.js` → `WYCKOFF` (inherits `SMART_MONEY_CONCEPTS` risk) + `wyckoffComponent.js` DEFAULTS  
+**Engine SSOT**: `wyckoffEntry.js` → `evaluateWyckoffComponent`  
+**Config SSOT**: `strategyDefaults.js` → `WYCKOFF` (inherits `AF_COMPONENT_BASE`)  
+**Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]` (Scalping blocked globally)  
 **FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
-**Doc date**: 2026-07-15
+**Doc date**: 2026-07-25
 
 > Describes **what the code emits today**, not aspirational PRD copy.
 
@@ -13,13 +14,13 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). Risk/SL/TP dari **`WYCKOFF`** preset (= SMC geometry); Wyckoff-specific knobs dari **component DEFAULTS**.
+Wyckoff-specific knobs on `STRATEGIES.WYCKOFF`; leg geometry from `STANDARD_LEG_TYPE_OVERRIDES`.
 
 ### Risk & SL/TP (umbrella preset)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.01 | fraksi equity | 1% combined risk |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined risk; engine ctor fallback 0.01 |
 | `atrMultiplier` | 1.5 | × ATR | Stop-loss dasar |
 | `riskReward` | 2.0 | × SL | Take-profit = 3.0×ATR (RR 1:2) |
 | `maxTradesPerDay` | 8 | trade | Batas frekuensi harian |
@@ -48,136 +49,92 @@ Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). 
 | `moderate` | + `priorTrend`, `rejection`, `choch`, `proximityOk`, `rrOk` |
 | `conservative` | + `climaxOrWeakening`, `sosOrSow`, `lpsOrLpsy` |
 
-### AF umbrella (race)
-
-| Parameter | Default | Kegunaan |
-| --- | --- | --- |
-| `afCombinationMode` | `"race"` | SMC / Wyckoff / VSA race-to-confirm |
+Backtest default: `runBacktestJob.js` forces `entryModel: "aggressive"` when unset.
 
 ### Per trade type overrides
 
-| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| Leg | Overrides |
 | --- | --- |
-| Scalping | 0.15 |
-| Intraday | 0.4 |
-| Swing | 0.8 |
-
-Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
-
+| Scalping | `atrGateRelative: true`, `wyckoffSessionFilter: true`, Asia block, RR 2.0 / 2h hold |
+| Intraday | `atrMinMult: 0.4`, 6h hold |
+| Swing | `atrMinMult: 0.8`, 120h hold |
 
 ---
 
-## What triggers an entry
+## How Entry Works
 
-WYCKOFF scans for a **valid trading range**, then looks for a schematic manipulation event and an entry checklist pass.
+Wyckoff scans for a **valid trading range**, then a schematic manipulation event and entry checklist pass.
+
+### Detection sequence
 
 ```
 Trading Range → Spring (LONG) or Upthrust (SHORT) → Entry Checklist → signal
 ```
 
-**Detection sequence** (`evaluateWyckoffComponent`):
-
 1. **Trading range** — BB-width compression + mature horizontal range (`detectTradingRange`)
 2. **Manipulation event**:
-   - LONG: **Spring** — fake break below range low + reclaim (`detectSpring`)
-   - SHORT: **Upthrust** — fake break above range high + rejection (`detectUpthrust`)
-3. **Entry checklist** (`evaluateEntryChecklist`) — layers vary by `entryModel` (default **`aggressive`**)
-4. On pass: `reason` is `wyckoff_spring` (LONG) or `wyckoff_upthrust` (SHORT)
+   - LONG: **Spring** — fake break below range low + reclaim
+   - SHORT: **Upthrust** — fake break above range high + rejection
+3. **Entry checklist** (`evaluateEntryChecklist`) — layers vary by `entryModel`
+4. On pass: `reason` = `wyckoff_spring` (LONG) or `wyckoff_upthrust` (SHORT)
 
-Failed checklist → no signal (`entry_checklist_failed:…`). Cooldown and range gates can block without changing signal labels on fills.
+### Gate funnel (pattern → execution)
+
+| Stage | All legs |
+| --- | --- |
+| Trading range valid | hard gate |
+| Spring / Upthrust | entry trigger |
+| Checklist (model-dependent) | hard gate |
+| Session filter | Scalping only (`wyckoffSessionFilter`) |
+| ATR gate | per-leg `atrMinMult` / relative band |
+| Cooldown | `cooldownBars` between signals |
+| Live money | Scalping blocked; Intraday + Swing allowed |
+
+**SL/TP**: `STANDARD_LEG_TYPE_OVERRIDES` — Scalping 1.5/3.0 ATR, 2h TIME_STOP; Intraday/Swing default parent geometry.
 
 ---
 
-## Trade types (brief)
+## Trade types
 
-| Type | Entry / Confirm / Trend TF | Live eligible |
-| --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
-| Intraday | 15m / 1h / 4h | Yes |
-| Swing | 4h / 1d / 1w | Yes |
-
-Signal labels are **the same across trade types**; only timeframe and which pattern fired differ.
+| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
+| --- | --- | --- | --- | --- |
+| Scalping | 5m | 1h | Blocked | Allowed |
+| Intraday | 15m | 1h | Allowed | Allowed |
+| Swing | 4h | 1w | Allowed | Allowed |
 
 ---
 
 ## Tick open trade
 
-**Production path (default):** `MULTI_STRATEGY_ENABLED=true` → `MultiStrategyCoordinator` → `AdaptiveStrategyEngine._tick()`. Signal on the **confirmed** candle (`lastIdx = length−2`); **entry fill** at exchange ticker `last`. Fail-closed if ticker unavailable; skip when |ticker − signal close| > 1×ATR (stale guard). ATR gate uses **per-leg** overrides via `resolveAtrLegOverride`.
-
-**Legacy path:** `MULTI_STRATEGY_ENABLED=false` or explicit single `strategyKey` → `BotEngine._tick()` only. Signal and entry both at **confirmed candle close** (no ticker entry). **Generic** config-level ATR gate (`atrMinMult` / `atrMaxMult`, no per-leg `atrGateRelative` baseline unless interval maps to a leg).
-
-Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestService`).
+**Production path:** `AdaptiveStrategyEngine._tick()` — confirmed candle signal, ticker entry with stale guard.
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `interval` | `1h` | TF | Signal / indicator candle polled each tick |
-| `checkInterval` | `3_600_000` | ms | Minimum spacing between live ticks (~1 h) |
-| `higherTf` | `4h` | TF | HTF trend filter (`BotEngine` HTF cache) |
-
-**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
-
-| Leg | Real money | Dry-run / backtest |
-| --- | --- | --- |
-| Scalping | Blocked | Allowed |
-| Intraday | Allowed | Allowed |
-| Swing | Allowed | Allowed |
-
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
-
-Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
+| `interval` | `1h` | TF | Live tick candle |
+| `checkInterval` | `3_600_000` | ms | ~1 h between ticks |
+| `higherTf` | `4h` | TF | HTF trend filter |
 
 ---
 
 ## Entry signal labels
 
-Labels come from the **pattern reason code** and optional **checklist flags** on `entryMeta`.
-
-### Label vocabulary
-
-| Label | Emitted when | Code condition |
-| --- | --- | --- |
-| **Spring** | LONG manipulation event | `reason === "wyckoff_spring"` or `/spring/i` |
-| **Upthrust** | SHORT manipulation event | `reason === "wyckoff_upthrust"` or `/upthrust\|utad/i` |
-| **LPS** | Last-point-of-support context | `/lps/i` in reason (not LPSY) |
-| **LPSY** | Last-point-of-supply context | `/lpsy/i` in reason |
-| **LPS/LPSY** | Checklist flag without specific LPS/LPSY label yet | `checklist.lpsOrLpsy` true |
-| **SOS** | Sign of strength (LONG bias) | `checklist.sosOrSow` + side LONG |
-| **SOW** | Sign of weakness (SHORT bias) | `checklist.sosOrSow` + side SHORT |
-| **Volume Climax** | Volume climax / confirm in checklist | `checklist.volumeConfirm` or `checklist.volumeClimax` or `/climax/i` in reason |
-
-### When each label actually appears
-
-**Default `aggressive` model** — most fills show only the pattern label:
-
-| Side | Typical labels |
+| Label | Emitted when |
 | --- | --- |
-| LONG | `Spring` |
-| SHORT | `Upthrust` |
+| **Spring** | `reason === "wyckoff_spring"` |
+| **Upthrust** | `reason === "wyckoff_upthrust"` |
+| **LPS** / **LPSY** / **LPS/LPSY** | checklist flags (moderate/conservative) |
+| **SOS** / **SOW** | `checklist.sosOrSow` + side |
+| **Volume Climax** | volume confirm / climax flags |
 
-**`moderate` / `conservative` models** — checklist extras appear when those layers pass:
-
-| Label | Typical factory-default behavior |
-| --- | --- |
-| **SOS** / **SOW** | Only when `checklist.sosOrSow === true` (conservative path, or events detected in range) |
-| **LPS/LPSY** | When `checklist.lpsOrLpsy` true and no standalone LPS/LPSY already emitted |
-| **Volume Climax** | When volume-confirm or climax flags set in checklist |
-
-### Typical examples
-
-| Side / model | Example labels |
-| --- | --- |
-| LONG (aggressive) | `Spring` |
-| SHORT (aggressive) | `Upthrust` |
-| LONG + conservative checklist | `Spring, SOS, LPS/LPSY, Volume Climax` |
-| Failed / no meta | *(empty)* |
+**Aggressive model** — most fills: `Spring` or `Upthrust` only.
 
 ---
 
 ## AS-IS quirks
 
-- **AF umbrella**: When WYCKOFF wins the FOUNDRY race, SMC/VSA wins use their own label vocabularies.
-- **Backtest default**: `runBacktestJob.js` forces `entryModel: "aggressive"` when unset — aligns with factory reset.
-- **Low variance on aggressive**: direction (Spring vs Upthrust) is the main difference between fills.
+- **AF umbrella**: Wyckoff wins stamp `winningComponent: "WYCKOFF"`.
+- **Backtest forces aggressive** — aligns with factory reset.
+- **Low label variance on aggressive** — direction (Spring vs Upthrust) is main difference.
 
 ---
 
@@ -186,9 +143,8 @@ Labels come from the **pattern reason code** and optional **checklist flags** on
 | Sequence step | Drives entry? | Signal label? |
 | --- | --- | --- |
 | Valid trading range | Yes (gate) | No |
-| Spring / Upthrust | Yes (trigger) | Yes — `Spring` / `Upthrust` |
-| Reclaim / rejection | Yes (checklist) | No (implicit in pattern) |
-| SOS / SOW / LPS | Model-dependent | Yes — when checklist flags set |
+| Spring / Upthrust | Yes (trigger) | Yes |
+| SOS / SOW / LPS | Model-dependent | Yes when flagged |
 | Volume confirm | Yes (checklist) | Yes — `Volume Climax` when flagged |
 
 ---

@@ -1,176 +1,119 @@
 # SUPPLY_AND_DEMAND — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an SUPPLY_AND_DEMAND entry and the signal labels emitted on fill.  
+**Scope**: What triggers a SUPPLY_AND_DEMAND entry and the signal labels emitted on fill.  
 **Strategy key**: `SUPPLY_AND_DEMAND` (`SupplyDemandStrategy`, v1.0) — Mean Drift racer #1  
 **Engine SSOT**: `supplyDemandEntry.js` → `evaluateSupplyDemandEntry`  
-**Config SSOT**: `strategyDefaults.js` → `SUPPLY_AND_DEMAND` (inherits `MEAN_REVERSION`) + component DEFAULTS  
-**FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
-**Doc date**: 2026-07-15
-
-> Describes **what the code emits today**, not aspirational PRD copy.
+**Config SSOT**: `strategyDefaults.js` → `SUPPLY_AND_DEMAND` (inherits `MD_COMPONENT_BASE`)  
+**Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
+**Doc date**: 2026-07-25
 
 ---
 
 ## Default Config (Factory Reset)
 
-Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). Risk/SL/TP dari **`SUPPLY_AND_DEMAND`** preset (= Mean Reversion geometry); S&D-specific knobs dari **component DEFAULTS**.
-
-### Risk & SL/TP (umbrella preset)
+### Risk & SL/TP
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.01 | fraksi equity | 1% risk per trade |
+| `riskPerTrade` | 0.05 | fraksi equity | preset; engine ctor 0.01 |
 | `atrMultiplier` | 1.5 | × ATR | Stop-loss |
-| `riskReward` | 2.0 | × SL | Take-profit = 3.0×ATR (RR 1:2) |
+| `riskReward` | 2.0 | × SL | TP nominal |
 | `maxTradesPerDay` | 3 | trade | Cap harian |
 | `leverage` | 1.0 | × | Tanpa leverage |
 
-### Entry thresholds (Supply & Demand component)
+### Entry thresholds
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `confluenceAtrMult` | 0.75 | × ATR | Radius zone retest |
-| `minReversalBodyPct` | 0.35 | fraksi range | Body minimum reversal candle |
-| `volConfirmMult` | 0.9 | × vol SMA | Soft volume confirm (fail-soft) |
-| `scanBars` | 40 | bar | Zone scan window |
-| `fvgMinGapPct` | 0.0015 | fraksi harga | FVG gap minimum |
-| `obLookback` | 25 | bar | Order block lookback |
-| `obDispMult` | 1.3 | × vol SMA | OB displacement volume |
-| `baseConfidence` | 0.62 | 0–1 | Confidence floor dasar |
-
-### MINT umbrella (race)
-
-| Parameter | Default | Kegunaan |
-| --- | --- | --- |
-| *(implicit)* | race | MEAN_REVERSION / SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE race independently |
+| `mdSdConfluenceAtrMult` | 0.75 | × ATR | Radius zone retest |
+| `mdSdMinReversalBodyPct` / `minReversalBodyPct` | 0.35 | fraksi | Body minimum reversal candle |
+| `mdSdVolConfirmMult` | 0.9 | × vol SMA | Soft volume confirm |
+| `mdSdScanBars` | 40 | bar | Zone scan window |
+| `mdSdFvgMinGapPct` | 0.0015 | fraksi | FVG gap minimum |
+| `mdSdObLookback` | 25 | bar | Order block lookback |
+| `mdSdObDispMult` | 1.3 | × vol SMA | OB displacement volume |
+| `mdSdBaseConfidence` | 0.62 | 0–1 | Confidence floor |
 
 ### Per trade type overrides
 
-| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| Leg | Overrides |
 | --- | --- |
-| Scalping | 0.15 |
-| Intraday | 0.4 |
-| Swing | 0.8 |
-
-Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
-
+| Scalping | `atrGateRelative: true`, `sdSessionFilter: true`, RR 2.0 / 2h |
+| Intraday | `atrMinMult: 0.4`, 6h hold |
+| Swing | `atrMinMult: 0.8`, 120h hold |
 
 ---
 
-## What triggers an entry
+## How Entry Works
 
-SUPPLY_AND_DEMAND enters on **retest of a demand or supply zone** with a reversal candle confirmation.
+Enters on **retest of demand or supply zone** with reversal candle confirmation.
+
+### Entry sequence
 
 ```
-Scan OB/FVG-style Zones → Price Retest in Zone → Reversal Candle → signal
+Scan OB/FVG Zones → Price Retest in Zone → Reversal Candle → signal
 ```
 
-**Entry sequence** (`evaluateSupplyDemandEntry`):
-
-1. Build **demand** and **supply** zones from recent displacement (OB/FVG-style zone kinds)
+1. Build **demand** and **supply** zones from recent displacement (OB/FVG-style)
 2. Find nearest zone within ATR radius of current price
-3. **Reversal candle** required at zone (`_isReversalCandle`)
-4. Prefer closer zone when both sides qualify (rare)
-5. `reason` set to `sd_retest_{zoneKind}_{long|short}[_vol_ok|_vol_soft]`
+3. **Reversal candle** required at zone
+4. Prefer closer zone when both sides qualify
+5. `reason` = `sd_retest_{zoneKind}_{long|short}[_vol_ok|_vol_soft]`
 
-Volume confirmation boosts confidence but does not add a separate signal label.
+### Gate funnel
+
+| Stage | Effect |
+| --- | --- |
+| Zone proximity | hard gate |
+| Reversal candle | hard gate |
+| Volume confirm | confidence boost only |
+| Session filter | Scalping only (`sdSessionFilter`) |
+| ATR gate | per-leg overrides |
+| Live money | Scalping blocked; Intraday + Swing allowed |
+
+Volume confirmation does not add a separate signal label.
 
 ---
 
-## Trade types (brief)
+## Trade types
 
-| Type | Entry / Confirm / Trend TF | Live eligible |
-| --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
-| Intraday | 15m / 1h / 4h | Yes |
-| Swing | 4h / 1d / 1w | Yes |
-
-Default strategy interval is 15m; multi-TF harness stamps trade type. Signal labels are unchanged across types.
+| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
+| --- | --- | --- | --- | --- |
+| Scalping | 5m | 1h | Blocked | Allowed |
+| Intraday | 15m | 1h | Allowed | Allowed |
+| Swing | 4h | 1w | Allowed | Allowed |
 
 ---
 
 ## Tick open trade
 
-**Production path (default):** `MULTI_STRATEGY_ENABLED=true` → `MultiStrategyCoordinator` → `AdaptiveStrategyEngine._tick()`. Signal on the **confirmed** candle (`lastIdx = length−2`); **entry fill** at exchange ticker `last`. Fail-closed if ticker unavailable; skip when |ticker − signal close| > 1×ATR (stale guard). ATR gate uses **per-leg** overrides via `resolveAtrLegOverride`.
-
-**Legacy path:** `MULTI_STRATEGY_ENABLED=false` or explicit single `strategyKey` → `BotEngine._tick()` only. Signal and entry both at **confirmed candle close** (no ticker entry). **Generic** config-level ATR gate (`atrMinMult` / `atrMaxMult`, no per-leg `atrGateRelative` baseline unless interval maps to a leg).
-
-Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestService`).
-
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `interval` | `15m` | TF | Signal / indicator candle polled each tick |
-| `checkInterval` | `60_000` | ms | Minimum spacing between live ticks (~60 s) |
-| `higherTf` | `15m` | TF | HTF trend filter (`BotEngine` HTF cache) |
-
-**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
-
-| Leg | Real money | Dry-run / backtest |
+| Parameter | Default | Unit |
 | --- | --- | --- |
-| Scalping | Blocked | Allowed |
-| Intraday | Allowed | Allowed |
-| Swing | Allowed | Allowed |
-
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
-
-Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
+| `interval` | `15m` | TF |
+| `checkInterval` | `60_000` | ms |
+| `higherTf` | `15m` | HTF |
 
 ---
 
 ## Entry signal labels
 
-Labels come from `entryMeta.zoneType` + `entryMeta.reason`.
-
-### Label vocabulary
-
-| Label | Emitted when | Code condition |
-| --- | --- | --- |
-| **Demand Retest** | LONG at demand zone | `/demand/i` in `zoneType` or `reason` |
-| **Supply Retest** | SHORT at supply zone | `/supply/i` in `zoneType` or `reason` |
-| **OB/FVG Structure** | Zone is OB or FVG kind | `/fvg/i`, `/ob/i`, or `/order.?block/i` in `zoneType` or `reason` |
-
-### When each label actually appears
-
-**LONG demand retest** at an OB/FVG zone typically shows:
-
-`Demand Retest, OB/FVG Structure`
-
-**SHORT supply retest** typically shows:
-
-`Supply Retest, OB/FVG Structure`
-
-Only **one** of Demand/Supply Retest appears per fill (direction-specific).
-
-**Formatter fallback quirk**: If no zone fields match but `winningComponent === "SUPPLY_AND_DEMAND"`, formatter returns all three labels — sparse meta only; normal fills include `zoneType`.
-
-### Typical examples
-
-| Side / zone | Example labels |
+| Label | Condition |
 | --- | --- |
-| LONG demand OB | `Demand Retest, OB/FVG Structure` |
-| SHORT supply FVG | `Supply Retest, OB/FVG Structure` |
-| Plain demand (no ob/fvg in zoneType) | `Demand Retest` |
-| Missing meta | *(empty)* |
+| **Demand Retest** | LONG at demand zone |
+| **Supply Retest** | SHORT at supply zone |
+| **OB/FVG Structure** | zone kind is OB or FVG |
+
+Typical LONG: `Demand Retest, OB/FVG Structure`
+
+Reversal candle is a gate — no separate label.
 
 ---
 
 ## AS-IS quirks
 
-- **MINT umbrella**: SUPPLY_AND_DEMAND wins stamp `winningComponent: "SUPPLY_AND_DEMAND"`.
-- **Reversal candle is a gate**: no separate label for reversal confirmation.
-- **Formatter fallback**: can emit all three labels when meta is sparse — not typical on real fills.
+- **Mean Drift umbrella**: wins stamp `winningComponent: "SUPPLY_AND_DEMAND"`.
+- **Formatter fallback** can emit all three labels when meta sparse — not typical on real fills.
 
 ---
 
-## Quick reference — sequence vs labels
-
-| Sequence step | Drives entry? | Signal label? |
-| --- | --- | --- |
-| Zone identification | Yes | Partial — via `OB/FVG Structure` when zone kind matches |
-| Demand/supply retest | Yes (trigger) | Yes — `Demand Retest` / `Supply Retest` |
-| Reversal candle | Yes (gate) | No |
-| Volume confirm | No (confidence) | No |
-
----
-
-*Update this file when `evaluateSupplyDemandEntry` zone kinds or signal label mapping change.*
+*Update when zone kinds or label mapping change.*
