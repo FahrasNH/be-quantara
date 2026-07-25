@@ -13,35 +13,29 @@
 
 ### Global risk preset (combined cap)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
-| `maxDailyLossPct` | 0.06 | fraksi equity | Daily loss halt |
-| `maxTradesPerDay` | 4 | trade | Per-bot daily count |
-| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
-| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
-| `leverage` | 2 | × | Default leverage |
+- **`riskPerTrade`:** 0.05 (fraksi equity) — Combined cap → split 1% / 2% / 2% per leg
+- **`maxDailyLossPct`:** 0.06 (fraksi equity) — Daily loss halt
+- **`maxTradesPerDay`:** 4 (trade) — Per-bot daily count
+- **`cooldownAfterLoss`:** 5 (menit) — Cooldown after loss
+- **`maxConsecLoss`:** 3 (loss) — Consecutive-loss stop
+- **`leverage`:** 2 (×) — Default leverage
 
 Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 ### Entry thresholds (Auction Market Theory)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `bins` | 20 | bin | Volume profile histogram |
-| `valueAreaPct` | 0.7 | fraksi | Value Area = 70% volume |
-| `vwapAtrMult` | 0.5 | × ATR | VWAP proximity tolerance |
-| `vwapTolerancePct` | 0.005 | fraksi | Fallback VWAP tolerance (~0.5%) |
-| `minSessionBars` | 20 | bar | Intraday UTC-day session floor |
-| `minSessionBarsSwing` | 6 | bar | Swing UTC-week session floor |
+- **`bins`:** 20 (bin) — Volume profile histogram
+- **`valueAreaPct`:** 0.7 (fraksi) — Value Area = 70% volume
+- **`vwapAtrMult`:** 0.5 (× ATR) — VWAP proximity tolerance
+- **`vwapTolerancePct`:** 0.005 (fraksi) — Fallback VWAP tolerance (~0.5%)
+- **`minSessionBars`:** 20 (bar) — Intraday UTC-day session floor
+- **`minSessionBarsSwing`:** 6 (bar) — Swing UTC-week session floor
 
 ### Per trade type overrides
 
-| Leg | Overrides |
-| --- | --- |
-| Scalping | `atrGateRelative: true`, `amtSessionFilter: true`, RR 2.0 / 2h |
-| Intraday | `atrMinMult: 0.4`, 6h hold |
-| Swing | `atrMinMult: 0.8`, 120h hold |
+- **Scalping:** `atrGateRelative: true`, `amtSessionFilter: true`, RR 2.0 / 2h
+- **Intraday:** `atrMinMult: 0.4`, 6h hold
+- **Swing:** `atrMinMult: 0.8`, 120h hold
 
 ---
 
@@ -49,23 +43,68 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 Session **VWAP proximity** for entries uses `vwapAtrMult` 0.5×ATR — separate from SL/TP distances below. Entry triggers: [How Entry Works](#how-entry-works).
 
-| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Scalping | 5m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **1%** | Relative ATR gate; `amtSessionFilter`; UTC-day session; `maxHoldHours` **2** |
-| Intraday | 15m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | `minSessionBars` 20; `maxHoldHours` **6** |
-| Swing | 4h / 1w | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | UTC-**week** session (`minSessionBarsSwing` 6); `maxHoldHours` **120** |
+### Scalping
+
+- **Entry TF / HTF:** 5m / 1h
+- **SL method:** ATR × 1.5
+- **TP method:** ATR × 3.0
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **1%**
+- **Notes:** Relative ATR gate; `amtSessionFilter`; UTC-day session; `maxHoldHours` **2**
+
+### Intraday
+
+- **Entry TF / HTF:** 15m / 1h
+- **SL method:** ATR × 1.5
+- **TP method:** ATR × 3.0
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **2%**
+- **Notes:** `minSessionBars` 20; `maxHoldHours` **6**
+
+### Swing
+
+- **Entry TF / HTF:** 4h / 1w
+- **SL method:** ATR × 1.5
+- **TP method:** ATR × 3.0
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **2%**
+- **Notes:** UTC-**week** session (`minSessionBarsSwing` 6); `maxHoldHours` **120**
 
 ### Execution limits (all legs)
 
-| Limit | Value | SSOT |
-| --- | --- | --- |
-| Max trades/day | 4 | `TS_COMPONENT_BASE` |
-| Cooldown after loss | 5 min | `cooldownAfterLoss` |
-| Consecutive loss stop | 3 | `maxConsecLoss` |
-| Daily loss limit | 6% equity (incl. floating) | `maxDailyLossPct` |
-| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8% | `entryRiskGates.js` |
-| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
-| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
+**Limit:** Max trades/day
+**Value:** 4
+**SSOT:** `TS_COMPONENT_BASE`
+
+---
+**Limit:** Cooldown after loss
+**Value:** 5 min
+**SSOT:** `cooldownAfterLoss`
+
+---
+**Limit:** Consecutive loss stop
+**Value:** 3
+**SSOT:** `maxConsecLoss`
+
+---
+**Limit:** Daily loss limit
+**Value:** 6% equity (incl. floating)
+**SSOT:** `maxDailyLossPct`
+
+---
+**Limit:** ATR range gate
+**Value:** Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8%
+**SSOT:** `entryRiskGates.js`
+
+---
+**Limit:** Position sizing
+**Value:** `size = (equity × legRiskPct) / slDistance`
+**SSOT:** `typeRiskLadder.js`
+
+---
+**Limit:** TIME_STOP
+**Value:** Scalping 2h · Intraday 6h · Swing 120h
+**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
 
 ---
 
@@ -79,24 +118,35 @@ Trades **session auction imbalances** — price reclaiming or rejecting VWAP and
 Session VWAP/VA Compute → Trigger at VWAP or VA edge → signal
 ```
 
-| `reason` code | Direction | Condition |
-| --- | --- | --- |
-| `vwap_reclaim` | LONG | Close crosses back above session VWAP |
-| `vwap_lose` | SHORT | Close crosses back below session VWAP |
-| `val_bounce` | LONG | Rejection from Value Area Low (VAL) |
-| `vah_reject` | SHORT | Rejection from Value Area High (VAH) |
+### `vwap_reclaim`
+
+- **Direction:** LONG
+- **Condition:** Close crosses back above session VWAP
+
+### `vwap_lose`
+
+- **Direction:** SHORT
+- **Condition:** Close crosses back below session VWAP
+
+### `val_bounce`
+
+- **Direction:** LONG
+- **Condition:** Rejection from Value Area Low (VAL)
+
+### `vah_reject`
+
+- **Direction:** SHORT
+- **Condition:** Rejection from Value Area High (VAH)
 
 Precision helpers (`vwap_retest`, `poc_retest`) exist for rollback mode; race-mode fills use the four codes above.
 
 ### Gate funnel
 
-| Stage | Effect |
-| --- | --- |
-| Session warmup (`minSessionBars`) | hard gate |
-| `awaiting_amt_trigger` | no trade |
-| Session filter | Scalping only (`amtSessionFilter`) |
-| ATR gate | per-leg overrides |
-| Live money | Scalping blocked; Intraday + Swing allowed |
+- **Session warmup (`minSessionBars`):** hard gate
+- **`awaiting_amt_trigger`:** no trade
+- **Session filter:** Scalping only (`amtSessionFilter`)
+- **ATR gate:** per-leg overrides
+- **Live money:** Scalping blocked; Intraday + Swing allowed
 
 Swing uses UTC-week session (`minSessionBarsSwing: 6`) because 4h bars have ≤6 per UTC-day.
 
@@ -106,11 +156,26 @@ Swing uses UTC-week session (`minSessionBarsSwing: 6`) because 4h bars have ≤6
 
 ## Trade types
 
-| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
-| --- | --- | --- | --- | --- |
-| Scalping | 5m | 1h | Blocked | Allowed |
-| Intraday | 15m | 1h | Allowed | Allowed |
-| Swing | 4h | 1w | Allowed | Allowed |
+### Scalping
+
+- **Entry TF:** 5m
+- **Trend / HTF TF:** 1h
+- **Real money:** Blocked
+- **Dry-run / backtest:** Allowed
+
+### Intraday
+
+- **Entry TF:** 15m
+- **Trend / HTF TF:** 1h
+- **Real money:** Allowed
+- **Dry-run / backtest:** Allowed
+
+### Swing
+
+- **Entry TF:** 4h
+- **Trend / HTF TF:** 1w
+- **Real money:** Allowed
+- **Dry-run / backtest:** Allowed
 
 Each fill maps to **exactly one** trigger label.
 
@@ -118,23 +183,19 @@ Each fill maps to **exactly one** trigger label.
 
 ## Tick open trade
 
-| Parameter | Default | Unit |
-| --- | --- | --- |
-| `interval` | `5m` | TF |
-| `checkInterval` | `60_000` | ms |
-| `higherTf` | `1h` | HTF |
+- **`interval`:** `5m` (TF)
+- **`checkInterval`:** `60_000` (ms)
+- **`higherTf`:** `1h` (HTF)
 
 ---
 
 ## Entry signal labels
 
-| Label | `reason` | Direction |
-| --- | --- | --- |
-| **VWAP Reclaim** | `vwap_reclaim` | LONG |
-| **VWAP Lose** | `vwap_lose` | SHORT |
-| **VAL Bounce** | `val_bounce` | LONG |
-| **VAH Reject** | `vah_reject` | SHORT |
-| **VWAP Retest** / **POC Retest** | precision path only | — |
+- **VWAP Reclaim:** — LONG
+- **VWAP Lose:** — SHORT
+- **VAL Bounce:** — LONG
+- **VAH Reject:** — SHORT
+- **VWAP Retest** / **POC Retest:**
 
 ---
 

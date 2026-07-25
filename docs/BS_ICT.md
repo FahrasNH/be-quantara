@@ -15,43 +15,35 @@
 
 ### Global risk preset (combined cap)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
-| `maxDailyLossPct` | 0.08 | fraksi equity | Daily loss halt |
-| `maxTradesPerDay` | 5 | trade | Per-bot daily count |
-| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
-| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
-| `leverage` | 1 | × | Spot-only default |
+- **`riskPerTrade`:** 0.05 (fraksi equity) — Combined cap → split 1% / 2% / 2% per leg
+- **`maxDailyLossPct`:** 0.08 (fraksi equity) — Daily loss halt
+- **`maxTradesPerDay`:** 5 (trade) — Per-bot daily count
+- **`cooldownAfterLoss`:** 5 (menit) — Cooldown after loss
+- **`maxConsecLoss`:** 3 (loss) — Consecutive-loss stop
+- **`leverage`:** 1 (×) — Spot-only default
 
 Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ### Entry thresholds (Kill Zone + Liquidity Raid)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `bsIctRequireKillZone` | `false` | bool | `true` = hard gate; default soft preference |
-| `bsIctSessionLookback` | 20 | bar | Session high/low window |
-| `bsIctVolumeMult` | 1.25 | × vol SMA | Volume minimum pada raid |
-| `bsIctMinWickBeyondPct` | 0.0005 | fraksi | Sweep minimum beyond level |
-| `bsIctBaseConfidence` | 0.7 | 0–1 | Confidence in kill zone |
-| `bsIctOutsideKzConfidence` | 0.45 | 0–1 | Confidence outside kill zone |
+- **`bsIctRequireKillZone`:** `false` (bool) — `true` = hard gate; default soft preference
+- **`bsIctSessionLookback`:** 20 (bar) — Session high/low window
+- **`bsIctVolumeMult`:** 1.25 (× vol SMA) — Volume minimum pada raid
+- **`bsIctMinWickBeyondPct`:** 0.0005 (fraksi) — Sweep minimum beyond level
+- **`bsIctBaseConfidence`:** 0.7 (0–1) — Confidence in kill zone
+- **`bsIctOutsideKzConfidence`:** 0.45 (0–1) — Confidence outside kill zone
 
 ### Kill zone windows (UTC)
 
-| Zone | Window (UTC) |
-| --- | --- |
-| `london_open` | 07:00–09:00 |
-| `ny_open` | 12:00–14:00 |
-| `london_close` | 15:00–16:00 |
+- **``london_open``:** 07:00–09:00
+- **``ny_open``:** 12:00–14:00
+- **``london_close``:** 15:00–16:00
 
 ### Per trade type overrides
 
-| Leg | Overrides |
-| --- | --- |
-| Scalping | `atrGateRelative: true`, `ictSessionFilter: true`, RR 2.0 / 2h |
-| Intraday | `atrMinMult: 0.4`, 6h hold |
-| Swing | `atrMinMult: 0.8`, 120h hold |
+- **Scalping:** `atrGateRelative: true`, `ictSessionFilter: true`, RR 2.0 / 2h
+- **Intraday:** `atrMinMult: 0.4`, 6h hold
+- **Swing:** `atrMinMult: 0.8`, 120h hold
 
 ---
 
@@ -59,25 +51,70 @@ Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (
 
 SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buffer); otherwise ATR × 1.5. TP fixed ATR multiple. Kill-zone entry logic: [How Entry Works](#how-entry-works).
 
-| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Scalping | 5m / 1h | Raid wick **or** ATR × 1.5 | ATR × 3.0 (typeOverride) / 2.5 (engine) | **RR ~1.67–2.0** | **1%** | Relative ATR gate; `ictSessionFilter`; `maxHoldHours` **2** |
-| Intraday | 15m / 1h | Raid wick **or** ATR × 1.5 | ATR × 2.5 (engine) / 3.0 (merged) | **RR ~1.67–2.0** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
-| Swing | 4h / 1w | Raid wick **or** ATR × 1.5 | ATR × 2.5–3.0 | **RR ~1.67–2.0** | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+### Scalping
+
+- **Entry TF / HTF:** 5m / 1h
+- **SL method:** Raid wick **or** ATR × 1.5
+- **TP method:** ATR × 3.0 (typeOverride) / 2.5 (engine)
+- **ATR mult / R:R:** **RR ~1.67–2.0**
+- **Risk %:** **1%**
+- **Notes:** Relative ATR gate; `ictSessionFilter`; `maxHoldHours` **2**
+
+### Intraday
+
+- **Entry TF / HTF:** 15m / 1h
+- **SL method:** Raid wick **or** ATR × 1.5
+- **TP method:** ATR × 2.5 (engine) / 3.0 (merged)
+- **ATR mult / R:R:** **RR ~1.67–2.0**
+- **Risk %:** **2%**
+- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+
+### Swing
+
+- **Entry TF / HTF:** 4h / 1w
+- **SL method:** Raid wick **or** ATR × 1.5
+- **TP method:** ATR × 2.5–3.0
+- **ATR mult / R:R:** **RR ~1.67–2.0**
+- **Risk %:** **2%**
+- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
 
 Parent `riskReward` 3.0 is preset nominal; engine ctor defaults 1.5 / 2.5 unless typeOverride scalping geometry applies.
 
 ### Execution limits (all legs)
 
-| Limit | Value | SSOT |
-| --- | --- | --- |
-| Max trades/day | 5 | `BS_COMPONENT_BASE` |
-| Cooldown after loss | 5 min | `cooldownAfterLoss` |
-| Consecutive loss stop | 3 | `maxConsecLoss` |
-| Daily loss limit | 8% equity (incl. floating) | `maxDailyLossPct` |
-| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8% | `entryRiskGates.js` |
-| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
-| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
+**Limit:** Max trades/day
+**Value:** 5
+**SSOT:** `BS_COMPONENT_BASE`
+
+---
+**Limit:** Cooldown after loss
+**Value:** 5 min
+**SSOT:** `cooldownAfterLoss`
+
+---
+**Limit:** Consecutive loss stop
+**Value:** 3
+**SSOT:** `maxConsecLoss`
+
+---
+**Limit:** Daily loss limit
+**Value:** 8% equity (incl. floating)
+**SSOT:** `maxDailyLossPct`
+
+---
+**Limit:** ATR range gate
+**Value:** Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8%
+**SSOT:** `entryRiskGates.js`
+
+---
+**Limit:** Position sizing
+**Value:** `size = (equity × legRiskPct) / slDistance`
+**SSOT:** `typeRiskLadder.js`
+
+---
+**Limit:** TIME_STOP
+**Value:** Scalping 2h · Intraday 6h · Swing 120h
+**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
 
 ---
 
@@ -100,13 +137,11 @@ Kill Zone Check (optional hard) → Liquidity Raid → confidence adjust → sig
 
 ### Gate funnel
 
-| Stage | Effect |
-| --- | --- |
-| Kill zone | hard only if `bsIctRequireKillZone`; else confidence boost/penalty |
-| Raid detection | entry trigger |
-| Session filter | Scalping only (`ictSessionFilter`) |
-| ATR gate | per-leg overrides |
-| Live money | Scalping blocked; Intraday + Swing allowed |
+- **Kill zone:** hard only if `bsIctRequireKillZone`; else confidence boost/penalty
+- **Raid detection:** entry trigger
+- **Session filter:** Scalping only (`ictSessionFilter`)
+- **ATR gate:** per-leg overrides
+- **Live money:** Scalping blocked; Intraday + Swing allowed
 
 **Not implemented**: MSS, OTE — formatter vocabulary only.
 
@@ -116,11 +151,26 @@ Kill Zone Check (optional hard) → Liquidity Raid → confidence adjust → sig
 
 ## Trade types
 
-| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
-| --- | --- | --- | --- | --- |
-| Scalping | 5m | 1h | Blocked | Allowed |
-| Intraday | 15m | 1h | Allowed | Allowed |
-| Swing | 4h | 1w | Allowed | Allowed |
+### Scalping
+
+- **Entry TF:** 5m
+- **Trend / HTF TF:** 1h
+- **Real money:** Blocked
+- **Dry-run / backtest:** Allowed
+
+### Intraday
+
+- **Entry TF:** 15m
+- **Trend / HTF TF:** 1h
+- **Real money:** Allowed
+- **Dry-run / backtest:** Allowed
+
+### Swing
+
+- **Entry TF:** 4h
+- **Trend / HTF TF:** 1w
+- **Real money:** Allowed
+- **Dry-run / backtest:** Allowed
 
 Default interval: `15m`.
 
@@ -128,22 +178,18 @@ Default interval: `15m`.
 
 ## Tick open trade
 
-| Parameter | Default | Unit |
-| --- | --- | --- |
-| `interval` | `15m` | TF |
-| `checkInterval` | `900_000` | ms |
-| `higherTf` | `4h` | HTF |
+- **`interval`:** `15m` (TF)
+- **`checkInterval`:** `900_000` (ms)
+- **`higherTf`:** `4h` (HTF)
 
 ---
 
 ## Entry signal labels
 
-| Label | Condition |
-| --- | --- |
-| **Kill Zone** | `killZone.active` or session in reason |
-| **Liquidity Raid (Lo→Long)** | raid of session low |
-| **Liquidity Raid (Hi→Short)** | raid of session high |
-| **MSS** / **OTE** | **not set by engine** |
+- **Kill Zone:** `killZone.active` or session in reason
+- **Liquidity Raid (Lo→Long):** raid of session low
+- **Liquidity Raid (Hi→Short):** raid of session high
+- **MSS** / **OTE:** **not set by engine**
 
 Typical: `Kill Zone, Liquidity Raid (Lo→Long)` or `(Hi→Short)`.
 
