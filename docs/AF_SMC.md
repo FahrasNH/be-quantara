@@ -77,7 +77,7 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 - **Range:** 0–100 (`sequenceMeta.score` / per-leg `confA|B|C`)
 - **Default path (sequence engine):** base **40** + sweep quality (sweet-spot vol ratio, up to ~14) + displacement (ATR-normalized by default via `smcScoreAtrNorm !== false`) + FVG size + mitigation depth (up to 18) + sweep freshness (+8 / +3 / −8) + OB confluence (+12) − weak displacement volume (−12) − breakout/slice-through (−15)
 - **HTF align (post-score):** soft **−15** when counter-HTF (Scalping); hard block when `smcHtfHardBlock` or pair `regimeFilterRequired`
-- **Legacy path:** weighted `_componentConfidence` per leg (sweep/CVD/OB for A; CHoCH/EMA/OB for B; FVG/displacement/OB for C) — capped at 100
+- **Legacy path:** weighted `_componentConfidence` per leg (sweep/CVD/OB for A; CHoCH/OB/CVD for B — **no EMA trendAlign**; FVG/displacement/OB for C) — capped at 100
 - **Race / CSV graded overlay:** `enrichMetaWithGradedScore` recomputes 0–100 from ML features (`sweepStrength`, `fvgSizeAtr`, `obDistanceAtr`, …) using Scalping vs Intraday/Swing rubric caps
 - **Aggregate:** `smcMinAggregateConfidence` default **0** (no aggregate gate)
 
@@ -243,6 +243,10 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 **Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 **Legacy path** (`smcUseSequenceEngine === false`): separate single-bar detectors per leg (A/B/C). No `sequenceMeta` → **signal labels usually empty**.
+
+- **A (Scalping):** liquidity sweep + CVD align
+- **B (Intraday):** **CHoCH structure only** — direction from `_detectCHoCH`; EMA fast/slow is **not** a hard gate (Sprint 23: lagging EMA delayed early-reversal entries). Legacy conf B weights: choch 40 / obStrength 35 / cvdAlign 25
+- **C (Swing):** FVG + displacement + discount/premium zone
 
 ---
 

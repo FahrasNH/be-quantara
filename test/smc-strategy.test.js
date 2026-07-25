@@ -3,7 +3,7 @@
  *
  * Coverage:
  *   Component A — Sweep detection, CVD, OB confluence
- *   Component B — CHoCH detection, EMA trend, OB strength
+ *   Component B — CHoCH detection (structure-only; no EMA lag gate)
  *   Component C — FVG detection, Displacement, premium/discount
  *   Confidence scoring per component
  *   Voting / conflict resolution
@@ -81,7 +81,7 @@ function chochBearishIndicators() {
   // Last bar closes below old period's swing low → bearish CHoCH
   ind.closes[N] = 98.0;
   ind.lows[N]   = 97.5;
-  // EMA confirms downtrend
+  // EMA values unused by _detectSignalB (kept for call-site / confidence fixtures)
   ind.emaFast = mk(N, 99.0);
   ind.emaSlow = mk(N, 101.0);
   return ind;
@@ -261,7 +261,7 @@ test("SMC-12: Component A returns null when CVD is negative (counter to sweep)",
 
 // ── Component B — CHoCH detector ─────────────────────────────────────────────
 
-test("SMC-13: Component B fires SHORT on bearish CHoCH + EMA downtrend", () => {
+test("SMC-13: Component B fires SHORT on bearish CHoCH (no EMA gate)", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const ind = chochBearishIndicators();
   const raw = smc._detectSignalB(
@@ -271,17 +271,17 @@ test("SMC-13: Component B fires SHORT on bearish CHoCH + EMA downtrend", () => {
   assert.equal(raw, "SHORT");
 });
 
-test("SMC-14: Component B blocked when EMA trend conflicts with CHoCH", () => {
+test("SMC-14: Component B still fires when EMA trend conflicts with CHoCH", () => {
   const smc = new SmartMoneyConceptsStrategy();
   const ind = chochBearishIndicators();
-  // Force EMA uptrend (blocks bearish entry)
+  // EMA uptrend would previously block bearish CHoCH — now structure wins alone
   ind.emaFast = mk(N, 102.0);
   ind.emaSlow = mk(N, 99.0);
   const raw = smc._detectSignalB(
     ind.closes, ind.highs, ind.lows, ind.volumes, ind.volSMA,
     ind.emaFast, ind.emaSlow, N, {}
   );
-  assert.equal(raw, null);
+  assert.equal(raw, "SHORT");
 });
 
 // ── Component C — FVG + Displacement ─────────────────────────────────────────
