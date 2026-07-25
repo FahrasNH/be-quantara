@@ -121,4 +121,58 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ablation.rejBySession, 1);
     assert.equal(ablation.passed, 0);
   });
+
+  test("Intraday HTF gate: hard block SHORT×BULLISH", () => {
+    const ablation = { rejHtfShortBullish: 0, passed: 0 };
+    const gated = applyVsaEntryGates(
+      { vote: "SHORT", confidence: 0.8, reason: "vsa_no_demand" },
+      {
+        config: { tradeType: "Intraday", htfTrend: "BULLISH", vsaHtfAlignGate: true },
+        ablation,
+      },
+    );
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_htf_short_bullish");
+    assert.equal(ablation.rejHtfShortBullish, 1);
+  });
+
+  test("Intraday HTF gate: hard block STOPPING_VOLUME counter-trend", () => {
+    const ablation = { rejHtfStoppingCounter: 0 };
+    const gated = applyVsaEntryGates(
+      { vote: "LONG", confidence: 0.9, reason: "vsa_stopping_volume_low" },
+      {
+        config: { tradeType: "Intraday", htfTrend: "BEARISH", vsaHtfAlignGate: true },
+        ablation,
+      },
+    );
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_htf_stopping_counter");
+    assert.equal(ablation.rejHtfStoppingCounter, 1);
+  });
+
+  test("Intraday HTF gate: penalty LONG×BEARISH (non-stopping)", () => {
+    const ablation = { rejHtfLongBearishPenalty: 0 };
+    const gated = applyVsaEntryGates(
+      { vote: "LONG", confidence: 0.8, reason: "vsa_no_supply" },
+      {
+        config: {
+          tradeType: "Intraday",
+          htfTrend: "BEARISH",
+          vsaHtfAlignGate: true,
+          vsaHtfCounterPenalty: 0.5,
+        },
+        ablation,
+      },
+    );
+    assert.equal(gated.vote, "LONG");
+    assert.equal(ablation.rejHtfLongBearishPenalty, 1);
+    assert.ok(gated.confidence < 0.8);
+    assert.equal(gated.meta?.htfCounterPenalty, 0.5);
+  });
+
+  test("Intraday defaults enable HTF align gate", () => {
+    const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
+    assert.equal(ov.Intraday.vsaHtfAlignGate, true);
+    assert.equal(ov.Intraday.vsaHtfCounterPenalty, 0.5);
+  });
 });

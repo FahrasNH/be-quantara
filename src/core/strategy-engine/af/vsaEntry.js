@@ -63,6 +63,22 @@ function resolveVsaSwingGateFlags(config = {}) {
   };
 }
 
+function resolveVsaIntradayGateFlags(config = {}) {
+  const ov = config.typeOverrides?.Intraday || {};
+  return {
+    vsaHtfAlignGate: config.vsaHtfAlignGate ?? ov.vsaHtfAlignGate ?? false,
+    /** Confidence multiplier removed on LONG×BEARISH (0.5 = halve confidence). */
+    vsaHtfCounterPenalty: config.vsaHtfCounterPenalty ?? ov.vsaHtfCounterPenalty ?? 0.5,
+  };
+}
+
+function isVsaCounterTrend(vote, htfTrend) {
+  if (!htfTrend || htfTrend === "SIDEWAYS" || htfTrend === "UNKNOWN") return false;
+  if (vote === "SHORT" && htfTrend === "BULLISH") return true;
+  if (vote === "LONG" && htfTrend === "BEARISH") return true;
+  return false;
+}
+
 function resolveVsaSessionGateFlags(config = {}, tradeTier) {
   if (tradeTier === "Scalping") return resolveVsaScalpingGateFlags(config);
   if (tradeTier === "Swing") return resolveVsaSwingGateFlags(config);
@@ -90,7 +106,7 @@ function isStoppingVolumeReason(reason) {
 }
 
 /**
- * Sprint 23 post-pattern gates: shelve Scalping, session, Swing LONG-only, graded conf floor.
+ * Sprint 23 post-pattern gates: shelve Scalping, session, Swing LONG-only, Intraday HTF-align.
  */
 function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null } = {}) {
   const _abl = (k) => {
@@ -98,6 +114,8 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   };
   const tradeTier = resolveVsaTradeTier(config);
   if (!result || (result.vote !== "LONG" && result.vote !== "SHORT")) return result;
+
+  let gated = result;
 
   const sessionFlags = resolveVsaSessionGateFlags(config, tradeTier);
   if (
@@ -115,37 +133,74 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
     }
   }
 
+  if (tradeTier === "Intraday") {
+    const intradayFlags = resolveVsaIntradayGateFlags(config);
+    const htfTrend = config.htfTrend ?? null;
+    if (intradayFlags.vsaHtfAlignGate === true && htfTrend) {
+      const stopping = isStoppingVolumeReason(gated.reason);
+      const counter = isVsaCounterTrend(gated.vote, htfTrend);
+
+      if (gated.vote === "SHORT" && htfTrend === "BULLISH") {
+        _abl("rejHtfShortBullish");
+        return { vote: "NEUTRAL", confidence: 0, reason: "vsa_htf_short_bullish" };
+      }
+
+      if (stopping && counter) {
+        _abl("rejHtfStoppingCounter");
+        return { vote: "NEUTRAL", confidence: 0, reason: "vsa_htf_stopping_counter" };
+      }
+
+      if (gated.vote === "LONG" && htfTrend === "BEARISH") {
+        const penalty = Math.min(1, Math.max(0, intradayFlags.vsaHtfCounterPenalty));
+        const scaled = gated.confidence * (1 - penalty);
+        _abl("rejHtfLongBearishPenalty");
+        if (scaled < 0.01) {
+          return { vote: "NEUTRAL", confidence: 0, reason: "vsa_htf_long_bearish_penalty" };
+        }
+        gated = {
+          ...gated,
+          confidence: scaled,
+          meta: {
+            ...(gated.meta || {}),
+            htfTrend,
+            htfCounterPenalty: penalty,
+          },
+        };
+      }
+    }
+  }
+
   if (tradeTier === "Swing") {
     const swingFlags = resolveVsaSwingGateFlags(config);
-    if (swingFlags.vsaSwingLongOnly === true && result.vote === "SHORT") {
+    if (swingFlags.vsaSwingLongOnly === true && gated.vote === "SHORT") {
       _abl("rejSwingShort");
       return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_long_only" };
     }
 
     const metaBase = {
-      ...(result.meta || {}),
-      vsaPatternType: isStoppingVolumeReason(result.reason) ? "STOPPING_VOLUME"
-        : String(result.reason || "").includes("no_demand") ? "NO_DEMAND"
-          : String(result.reason || "").includes("no_supply") ? "NO_SUPPLY"
+      ...(gated.meta || {}),
+      vsaPatternType: isStoppingVolumeReason(gated.reason) ? "STOPPING_VOLUME"
+        : String(gated.reason || "").includes("no_demand") ? "NO_DEMAND"
+          : String(gated.reason || "").includes("no_supply") ? "NO_SUPPLY"
             : null,
-      vsaReversal: isStoppingVolumeReason(result.reason),
-      vote: result.vote,
-      signal: result.vote,
+      vsaReversal: isStoppingVolumeReason(gated.reason),
+      vote: gated.vote,
+      signal: gated.vote,
       tradeType: tradeTier,
     };
     const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
-    const graded = enriched?.gradedScore ?? Math.round((result.confidence || 0) * 100);
+    const graded = enriched?.gradedScore ?? Math.round((gated.confidence || 0) * 100);
     const minConf = swingFlags.vsaMinConfidenceSwing;
-    const stoppingBypass = isStoppingVolumeReason(result.reason);
+    const stoppingBypass = isStoppingVolumeReason(gated.reason);
     if (minConf != null && graded < minConf && !stoppingBypass) {
       _abl("rejMinConfidence");
       return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_conf_below_floor" };
     }
     return {
-      ...result,
+      ...gated,
       confidence: graded / 100,
       meta: {
-        ...(result.meta || {}),
+        ...(gated.meta || {}),
         gradedScore: enriched?.gradedScore ?? graded,
         gradedScoreBreakdown: enriched?.gradedScoreBreakdown ?? null,
         componentConfidence: enriched?.componentConfidence ?? graded,
@@ -154,23 +209,23 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   }
 
   const metaBase = {
-    ...(result.meta || {}),
-    vsaPatternType: isStoppingVolumeReason(result.reason) ? "STOPPING_VOLUME"
-      : String(result.reason || "").includes("no_demand") ? "NO_DEMAND"
-        : String(result.reason || "").includes("no_supply") ? "NO_SUPPLY"
+    ...(gated.meta || {}),
+    vsaPatternType: isStoppingVolumeReason(gated.reason) ? "STOPPING_VOLUME"
+      : String(gated.reason || "").includes("no_demand") ? "NO_DEMAND"
+        : String(gated.reason || "").includes("no_supply") ? "NO_SUPPLY"
           : null,
-    vsaReversal: isStoppingVolumeReason(result.reason),
-    vote: result.vote,
-    signal: result.vote,
+    vsaReversal: isStoppingVolumeReason(gated.reason),
+    vote: gated.vote,
+    signal: gated.vote,
     tradeType: tradeTier,
   };
   const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
-  const graded = enriched?.gradedScore ?? Math.round((result.confidence || 0) * 100);
+  const graded = enriched?.gradedScore ?? Math.round((gated.confidence || 0) * 100);
   return {
-    ...result,
+    ...gated,
     confidence: graded / 100,
     meta: {
-      ...(result.meta || {}),
+      ...(gated.meta || {}),
       gradedScore: enriched?.gradedScore ?? graded,
       gradedScoreBreakdown: enriched?.gradedScoreBreakdown ?? null,
       componentConfidence: enriched?.componentConfidence ?? graded,
@@ -439,7 +494,9 @@ module.exports = {
   applyVsaSessionFilter,
   resolveVsaScalpingGateFlags,
   resolveVsaSwingGateFlags,
+  resolveVsaIntradayGateFlags,
   resolveVsaSessionGateFlags,
   resolveVsaTradeTier,
+  isVsaCounterTrend,
   applyVsaEntryGates,
 };
