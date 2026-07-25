@@ -140,6 +140,8 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
   },
   Intraday: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+    vsaHtfAlignGate: true,
+    vsaHtfCounterPenalty: 0.5,
   },
   Swing: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Swing,

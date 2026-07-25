@@ -41,8 +41,11 @@ class VsaStrategy extends StrategyBase {
       { key: "rejClassify", label: "8. - Spread/CLV classify fail" },
       { key: "rejPattern", label: "9. - No VSA pattern" },
       { key: "rejBySession", label: "10. - Session filter (Asia)" },
-      { key: "rejSwingShort", label: "11. - Swing LONG-only gate" },
-      { key: "rejMinConfidence", label: "12. - Swing graded conf floor" },
+      { key: "rejHtfShortBullish", label: "11. - Intraday HTF SHORT×BULLISH block" },
+      { key: "rejHtfStoppingCounter", label: "12. - Intraday HTF stopping-volume counter" },
+      { key: "rejHtfLongBearishPenalty", label: "13. - Intraday HTF LONG×BEARISH penalty" },
+      { key: "rejSwingShort", label: "14. - Swing LONG-only gate" },
+      { key: "rejMinConfidence", label: "15. - Swing graded conf floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
