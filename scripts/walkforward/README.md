@@ -32,6 +32,11 @@ node scripts/walkforward/smart-money-concepts/scalping-research.js --analyze-onl
 
 # SA Swing Gelombang 1+2
 node scripts/walkforward/statistical-arbitrage/swing.js --window 3 --symbol ETHUSDT
+
+# VSA Intraday Sprint 23 GO/NO-GO — 3 windows BTC (2023 / 2024-25 / 2025-26)
+node scripts/walkforward/volume-spread-analysis/intraday.js --dry-run
+node scripts/walkforward/volume-spread-analysis/intraday.js --window 2 --symbol BTCUSDT
+node scripts/walkforward/volume-spread-analysis/intraday.js --summary-only
 ```
 
 ## Common flags
@@ -53,6 +58,7 @@ node scripts/walkforward/statistical-arbitrage/swing.js --window 3 --symbol ETHU
 | `GAP_POLICY_5` | 5 (2020–2024, bear gap excluded) | SMC Intraday, SA Swing |
 | `GAP_POLICY_8` | 8 (2020–2026) | SMC Scalping, Scalping research |
 | `GAP_POLICY_8_WITH_FORMAT` | 8 + xlsx on W8 | SMC Scalping export |
+| `VSA_INTRADAY_3` | 3 (2023 / 2024-25 / 2025-26) | VSA Intraday GO/NO-GO |
 
 Gap **2021-12 → 2022-10** intentionally excluded in all sets.
 
@@ -66,6 +72,7 @@ Legacy output paths preserved for existing `tmp/` artifacts:
 | SMC Scalping research | `tmp/sprint19-smc-walkforward/window-XX/` |
 | SA Swing | `tmp/sprint20-sa-swing-walkforward/window-XX/SYMBOL/` |
 | SMC Intraday | `tmp/sprint22-smc-intraday-walkforward/window-XX/SYMBOL/` |
+| VSA Intraday | `tmp/vsa-intraday-walkforward/window-XX/SYMBOL/` |
 
 New exports may also use `tmp/walkforward/<slug>/<type>/` via `lib/paths.defaultOutRoot()`.
 
@@ -101,7 +108,7 @@ scripts/walkforward/
 |----------|----------|----------|-------|
 | Smart Money Concepts | ✅ Scalping (+ research) | ✅ Intraday | stub |
 | Statistical Arbitrage | stub | stub | ✅ Swing (+ transition-research.py) |
-| Volume Spread Analysis | stub | stub | stub |
+| Volume Spread Analysis | stub | ✅ Intraday (3-window GO/NO-GO) | stub |
 | Wyckoff | stub | stub | stub |
 | Trend Following | stub | stub | stub |
 | Market Structure | stub | stub | stub |
