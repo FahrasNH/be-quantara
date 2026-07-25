@@ -13,34 +13,28 @@
 
 ### Global risk preset (combined cap)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
-| `maxDailyLossPct` | 0.06 | fraksi equity | Daily loss halt |
-| `maxTradesPerDay` | 4 | trade | Per-bot daily count |
-| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
-| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
-| `leverage` | 2 | × | Default leverage |
+- **`riskPerTrade`:** 0.05 (fraksi equity) — Combined cap → split 1% / 2% / 2% per leg
+- **`maxDailyLossPct`:** 0.06 (fraksi equity) — Daily loss halt
+- **`maxTradesPerDay`:** 4 (trade) — Per-bot daily count
+- **`cooldownAfterLoss`:** 5 (menit) — Cooldown after loss
+- **`maxConsecLoss`:** 3 (loss) — Consecutive-loss stop
+- **`leverage`:** 2 (×) — Default leverage
 
 Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0).
 
 ### Entry thresholds (Dow structure)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `leftLook` / `rightLook` | 2 / 2 | bar | Fractal swing confirmation |
-| `scanBars` | 80 | bar | Swing scan window |
-| `minSwingPairs` | 2 | pair | Minimum HH/HL or LH/LL pairs |
-| `entryPullbackPct` | 0.35 | fraksi | Pullback vs last swing span |
-| `entryAtrMult` | 0.75 | × ATR | Pullback tolerance (ATR preferred) |
+- **`leftLook` / `rightLook`:** 2 / 2 (bar) — Fractal swing confirmation
+- **`scanBars`:** 80 (bar) — Swing scan window
+- **`minSwingPairs`:** 2 (pair) — Minimum HH/HL or LH/LL pairs
+- **`entryPullbackPct`:** 0.35 (fraksi) — Pullback vs last swing span
+- **`entryAtrMult`:** 0.75 (× ATR) — Pullback tolerance (ATR preferred)
 
 ### Per trade type overrides
 
-| Leg | Overrides |
-| --- | --- |
-| Scalping | `atrGateRelative: true`, `msSessionFilter: true`, RR 2.0 / 2h |
-| Intraday | `atrMinMult: 0.4`, 6h hold |
-| Swing | `atrMinMult: 0.8`, 120h hold |
+- **Scalping:** `atrGateRelative: true`, `msSessionFilter: true`, RR 2.0 / 2h
+- **Intraday:** `atrMinMult: 0.4`, 6h hold
+- **Swing:** `atrMinMult: 0.8`, 120h hold
 
 ---
 
@@ -48,23 +42,68 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 
 Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) — distinct from **stop-loss** distance in `calculateRiskConfig`. Entry structure gates: [How Entry Works](#how-entry-works).
 
-| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Scalping | 5m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **1%** | Relative ATR gate; `msSessionFilter`; `maxHoldHours` **2** |
-| Intraday | 15m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
-| Swing | 4h / 1w | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+### Scalping
+
+- **Entry TF / HTF:** 5m / 1h
+- **SL method:** ATR × 1.5
+- **TP method:** ATR × 3.0
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **1%**
+- **Notes:** Relative ATR gate; `msSessionFilter`; `maxHoldHours` **2**
+
+### Intraday
+
+- **Entry TF / HTF:** 15m / 1h
+- **SL method:** ATR × 1.5
+- **TP method:** ATR × 3.0
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **2%**
+- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+
+### Swing
+
+- **Entry TF / HTF:** 4h / 1w
+- **SL method:** ATR × 1.5
+- **TP method:** ATR × 3.0
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **2%**
+- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
 
 ### Execution limits (all legs)
 
-| Limit | Value | SSOT |
-| --- | --- | --- |
-| Max trades/day | 4 | `TS_COMPONENT_BASE` |
-| Cooldown after loss | 5 min | `cooldownAfterLoss` |
-| Consecutive loss stop | 3 | `maxConsecLoss` |
-| Daily loss limit | 6% equity (incl. floating) | `maxDailyLossPct` |
-| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute floors 0.4% / 0.8% | `entryRiskGates.js` |
-| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
-| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
+**Limit:** Max trades/day
+**Value:** 4
+**SSOT:** `TS_COMPONENT_BASE`
+
+---
+**Limit:** Cooldown after loss
+**Value:** 5 min
+**SSOT:** `cooldownAfterLoss`
+
+---
+**Limit:** Consecutive loss stop
+**Value:** 3
+**SSOT:** `maxConsecLoss`
+
+---
+**Limit:** Daily loss limit
+**Value:** 6% equity (incl. floating)
+**SSOT:** `maxDailyLossPct`
+
+---
+**Limit:** ATR range gate
+**Value:** Scalping: relative 0.4–4.0; Intraday/Swing: absolute floors 0.4% / 0.8%
+**SSOT:** `entryRiskGates.js`
+
+---
+**Limit:** Position sizing
+**Value:** `size = (equity × legRiskPct) / slDistance`
+**SSOT:** `typeRiskLadder.js`
+
+---
+**Limit:** TIME_STOP
+**Value:** Scalping 2h · Intraday 6h · Swing 120h
+**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
 
 ---
 
@@ -88,14 +127,12 @@ Awaiting states do not open trades.
 
 ### Gate funnel
 
-| Stage | Effect |
-| --- | --- |
-| Structure classification | hard gate |
-| Pullback to swing | hard gate (no separate label) |
-| Bounce/reject bar | entry trigger |
-| Session filter | Scalping only (`msSessionFilter`) |
-| ATR gate | per-leg overrides |
-| Live money | Scalping blocked; Intraday + Swing allowed |
+- **Structure classification:** hard gate
+- **Pullback to swing:** hard gate (no separate label)
+- **Bounce/reject bar:** entry trigger
+- **Session filter:** Scalping only (`msSessionFilter`)
+- **ATR gate:** per-leg overrides
+- **Live money:** Scalping blocked; Intraday + Swing allowed
 
 Race mode uses HTF arrays (`highsHTF`, `lowsHTF`, `closesHTF`).
 
@@ -103,30 +140,41 @@ Race mode uses HTF arrays (`highsHTF`, `lowsHTF`, `closesHTF`).
 
 ## Trade types
 
-| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
-| --- | --- | --- | --- | --- |
-| Scalping | 5m | 1h | Blocked | Allowed |
-| Intraday | 15m | 1h | Allowed | Allowed |
-| Swing | 4h | 1w | Allowed | Allowed |
+### Scalping
+
+- **Entry TF:** 5m
+- **Trend / HTF TF:** 1h
+- **Real money:** Blocked
+- **Dry-run / backtest:** Allowed
+
+### Intraday
+
+- **Entry TF:** 15m
+- **Trend / HTF TF:** 1h
+- **Real money:** Allowed
+- **Dry-run / backtest:** Allowed
+
+### Swing
+
+- **Entry TF:** 4h
+- **Trend / HTF TF:** 1w
+- **Real money:** Allowed
+- **Dry-run / backtest:** Allowed
 
 ---
 
 ## Tick open trade
 
-| Parameter | Default | Unit |
-| --- | --- | --- |
-| `interval` | `5m` | TF |
-| `checkInterval` | `60_000` | ms |
-| `higherTf` | `1h` | HTF |
+- **`interval`:** `5m` (TF)
+- **`checkInterval`:** `60_000` (ms)
+- **`higherTf`:** `1h` (HTF)
 
 ---
 
 ## Entry signal labels
 
-| Side | Typical labels |
-| --- | --- |
-| LONG | `Swing Structure, HH/HL Pattern, Pullback Bounce, Same-Bar Confirm` |
-| SHORT | `Swing Structure, HH/HL Pattern, Pullback Reject, Same-Bar Confirm` |
+- **LONG:** `Swing Structure, HH/HL Pattern, Pullback Bounce, Same-Bar Confirm`
+- **SHORT:** `Swing Structure, HH/HL Pattern, Pullback Reject, Same-Bar Confirm`
 
 Pullback step has no separate label.
 

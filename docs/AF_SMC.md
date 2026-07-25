@@ -20,56 +20,46 @@ Per-leg tuning hidup di `SMC_LEG_TYPE_OVERRIDES` (bukan geometri seragam).
 
 ### Global risk preset (combined cap)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg (`typeRiskLadder.js`) |
-| `maxDailyLossPct` | 0.03 | fraksi equity | Daily loss halt (realized + floating) |
-| `maxTradesPerDay` | 8 | trade | Per-bot daily count |
-| `cooldownAfterLoss` | 60 | menit | Cooldown after any loss |
-| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
-| `leverage` | 3 | × | Default bot leverage |
+- **`riskPerTrade`:** 0.05 (fraksi equity) — Combined cap → split 1% / 2% / 2% per leg (`typeRiskLadder.js`)
+- **`maxDailyLossPct`:** 0.03 (fraksi equity) — Daily loss halt (realized + floating)
+- **`maxTradesPerDay`:** 8 (trade) — Per-bot daily count
+- **`cooldownAfterLoss`:** 60 (menit) — Cooldown after any loss
+- **`maxConsecLoss`:** 3 (loss) — Consecutive-loss stop
+- **`leverage`:** 3 (×) — Default bot leverage
 
 Per-leg SL/TP geometry: [`SMC_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) and `SmartMoneyConceptsStrategy.calculateRiskConfig`.
 
 ### Entry thresholds (sequence engine)
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `smcUseSequenceEngine` | `true` | bool | `false` = legacy single-bar (signal labels biasanya kosong) |
-| `smcMinConfidenceScalping/Intraday/Swing` (alias `A/B/C`) | 60 / 60 / 60 | 0–100 | Top-level floors (live). Backtest merges per-leg `typeOverrides` |
-| `smcSeqWindow` | 60 | bar | Lookback maksimal untuk merakit sweep→CHoCH→FVG |
-| `smcSweepVolMult` | 0.9 | × vol SMA | Volume minimum pada liquidity sweep |
-| `smcFvgMinGap` | 0.0015 | fraksi harga | Gap FVG minimum (0.15%) |
-| `smcDispVolMult` | 1.8 | × vol SMA | Volume minimum bar displacement |
-| `smcOBDispMult` | 1.3 | × vol SMA | Displacement minimum order block |
-| `vwapLookback` | 14 | bar | Lookback VWAP / CVD |
+- **`smcUseSequenceEngine`:** `true` (bool) — `false` = legacy single-bar (signal labels biasanya kosong)
+- **`smcMinConfidenceScalping/Intraday/Swing` (alias `A/B/C`)`:** 60 / 60 / 60 (0–100) — Top-level floors (live). Backtest merges per-leg `typeOverrides`
+- **`smcSeqWindow`:** 60 (bar) — Lookback maksimal untuk merakit sweep→CHoCH→FVG
+- **`smcSweepVolMult`:** 0.9 (× vol SMA) — Volume minimum pada liquidity sweep
+- **`smcFvgMinGap`:** 0.0015 (fraksi harga) — Gap FVG minimum (0.15%)
+- **`smcDispVolMult`:** 1.8 (× vol SMA) — Volume minimum bar displacement
+- **`smcOBDispMult`:** 1.3 (× vol SMA) — Displacement minimum order block
+- **`vwapLookback`:** 14 (bar) — Lookback VWAP / CVD
 
 ### Gates (opt-in — default OFF at top level)
 
-| Parameter | Default | Efek jika `true` |
-| --- | --- | --- |
-| `smcPivotStructure` | `false` | CHoCH dari pivot engine; mengaktifkan label **Fresh OB** |
-| `smcPremiumDiscountGate` | `false` | LONG hanya di discount / SHORT di premium |
-| `smcRejectionEntry` | `false` | Wajib rejection wick di zona mitigasi |
-| `smcHtfHardBlock` | `false` | Blok keras entry melawan HTF trend |
-| `smcScoreAtrNorm` | `false`* | Normalisasi skor confidence vs ATR |
+- **`smcPivotStructure`:** `false` — CHoCH dari pivot engine; mengaktifkan label **Fresh OB**
+- **`smcPremiumDiscountGate`:** `false` — LONG hanya di discount / SHORT di premium
+- **`smcRejectionEntry`:** `false` — Wajib rejection wick di zona mitigasi
+- **`smcHtfHardBlock`:** `false` — Blok keras entry melawan HTF trend
+- **`smcScoreAtrNorm`:** `false`* — Normalisasi skor confidence vs ATR
 
 \* Di engine, `smcScoreAtrNorm !== false` = ON.
 
 ### AF umbrella (race)
 
-| Parameter | Default | Kegunaan |
-| --- | --- | --- |
-| `afCombinationMode` | `"race"` | SMC / Wyckoff / VSA race-to-confirm (bukan vote 2/3) |
-| `afMinVotes` | 2 | Hanya relevan jika mode diubah ke `"vote"` |
+- **`afCombinationMode`:** `"race"` — SMC / Wyckoff / VSA race-to-confirm (bukan vote 2/3)
+- **`afMinVotes`:** 2 — Hanya relevan jika mode diubah ke `"vote"`
 
 ### Per trade type overrides (`SMC_LEG_TYPE_OVERRIDES`)
 
-| Leg | Key overrides |
-| --- | --- |
-| **Scalping** | `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `maxHoldHours: 2`, `smcSessionFilter: true`, `noTradeSessions: ["Sydney","Tokyo"]`, `smcBlockLongInChop: true`, `smcRequireObRetest: true` |
-| **Intraday** | conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `maxHoldHours: 6`, `smcSessionFilter: true`, `noTradeSessions: ["London"]`, `smcBlockAllInChop: true` |
-| **Swing** | `slAtrMult/tpAtrMult: 1.2/3.6`, `maxHoldHours: 120` |
+- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `maxHoldHours: 2`, `smcSessionFilter: true`, `noTradeSessions: ["Sydney","Tokyo"]`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
+- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `maxHoldHours: 6`, `smcSessionFilter: true`, `noTradeSessions: ["London"]`, `smcBlockAllInChop: true`
+- **Swing:** `slAtrMult/tpAtrMult: 1.2/3.6`, `maxHoldHours: 120`
 
 Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread confidence from `typeOverrides` into `detectSignalMulti`). Backtest merges per-leg overrides onto cfg.
 
@@ -79,23 +69,68 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 
 Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRiskConfig` using per-leg `typeOverrides.slAtrMult` / `tpAtrMult` (merged from `SMC_LEG_TYPE_OVERRIDES`). Entry funnel gates (session, chop, confidence) live in [How Entry Works](#how-entry-works) — not repeated here.
 
-| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Scalping | 5m / 1h | ATR × `slAtrMult` (1.5) | ATR × `tpAtrMult` (3.0) | 1.5 / 3.0 → **RR 2.0** | **1%** | Relative ATR gate 0.4–4.0 + abs floor 0.287%; Asia block; OB retest required; `maxHoldHours` **2** |
-| Intraday | 15m / 1h | ATR × 1.8 | ATR × 3.6 | 1.8 / 3.6 → **RR 2.0** | **2%** | London session block; conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6** |
-| Swing | 4h / 1w | ATR × 1.2 | ATR × 3.6 | 1.2 / 3.6 → **RR 3.0** | **2%** | Optional STRONG_TREND TP boost (`strongTrendTPMult`); `maxHoldHours` **120** (5d) |
+### Scalping
+
+- **Entry TF / HTF:** 5m / 1h
+- **SL method:** ATR × `slAtrMult` (1.5)
+- **TP method:** ATR × `tpAtrMult` (3.0)
+- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Risk %:** **1%**
+- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; Asia block; OB retest required; `maxHoldHours` **2**
+
+### Intraday
+
+- **Entry TF / HTF:** 15m / 1h
+- **SL method:** ATR × 1.8
+- **TP method:** ATR × 3.6
+- **ATR mult / R:R:** 1.8 / 3.6 → **RR 2.0**
+- **Risk %:** **2%**
+- **Notes:** London session block; conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6**
+
+### Swing
+
+- **Entry TF / HTF:** 4h / 1w
+- **SL method:** ATR × 1.2
+- **TP method:** ATR × 3.6
+- **ATR mult / R:R:** 1.2 / 3.6 → **RR 3.0**
+- **Risk %:** **2%**
+- **Notes:** Optional STRONG_TREND TP boost (`strongTrendTPMult`); `maxHoldHours` **120** (5d)
 
 ### Execution limits (all legs)
 
-| Limit | Value | SSOT |
-| --- | --- | --- |
-| Max trades/day | 8 | `AF_COMPONENT_BASE` / `checkEntryRiskGates` |
-| Cooldown after loss | 60 min | `cooldownAfterLoss` |
-| Consecutive loss stop | 3 | `maxConsecLoss` |
-| Daily loss limit | 3% equity (incl. floating) | `maxDailyLossPct` |
-| ATR range gate | Scalping: **relative** 0.4–4.0 vs 100-bar SMA + abs 0.287%; Intraday: **absolute** ≥0.4%; Swing: **absolute** ≥0.8% | `entryRiskGates.evaluateAtrEntryGate` |
-| Position sizing | `size = (equity × legRiskPct) / slDistance` — legRiskPct from `riskShareForType` (1% / 2% / 2%) | `RealStrategyBacktestService`, `typeRiskLadder.js` |
-| TIME_STOP | Force-close open leg at max hold | Scalping 2h · Intraday 6h · Swing 120h |
+**Limit:** Max trades/day
+**Value:** 8
+**SSOT:** `AF_COMPONENT_BASE` / `checkEntryRiskGates`
+
+---
+**Limit:** Cooldown after loss
+**Value:** 60 min
+**SSOT:** `cooldownAfterLoss`
+
+---
+**Limit:** Consecutive loss stop
+**Value:** 3
+**SSOT:** `maxConsecLoss`
+
+---
+**Limit:** Daily loss limit
+**Value:** 3% equity (incl. floating)
+**SSOT:** `maxDailyLossPct`
+
+---
+**Limit:** ATR range gate
+**Value:** Scalping: **relative** 0.4–4.0 vs 100-bar SMA + abs 0.287%; Intraday: **absolute** ≥0.4%; Swing: **absolute** ≥0.8%
+**SSOT:** `entryRiskGates.evaluateAtrEntryGate`
+
+---
+**Limit:** Position sizing
+**Value:** `size = (equity × legRiskPct) / slDistance` — legRiskPct from `riskShareForType` (1% / 2% / 2%)
+**SSOT:** `RealStrategyBacktestService`, `typeRiskLadder.js`
+
+---
+**Limit:** TIME_STOP
+**Value:** Force-close open leg at max hold
+**SSOT:** Scalping 2h · Intraday 6h · Swing 120h
 
 ---
 
@@ -120,16 +155,53 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 
 ### Gate funnel (pattern → execution)
 
-| Stage | Scalping (5m) | Intraday (15m) | Swing (4h) |
-| --- | --- | --- | --- |
-| Sequence + confidence | conf≥40 (backtest merge) | conf≥**80** | conf≥60 |
-| Session filter | Asia block (Sydney+Tokyo) | **London** block | off (default) |
-| Chop / regime | LONG blocked in CHOP | **all sides** blocked in CHOP | off |
-| OB retest | **required** | off (default) | off (default) |
-| Pivot OB (`Fresh OB` label) | off | **on** (`smcPivotStructure`) | off |
-| HTF align | soft −15 pts (hard if `smcHtfHardBlock` or tier) | soft −15 pts | soft −15 pts; optional funding guard |
-| ATR gate | relative 0.4–4.0 + abs 0.287% | abs 0.4% | abs 0.8% |
-| Live money | **blocked** | **blocked** | **blocked** |
+### Sequence + confidence
+
+- **Scalping (5m):** conf≥40 (backtest merge)
+- **Intraday (15m):** conf≥**80**
+- **Swing (4h):** conf≥60
+
+### Session filter
+
+- **Scalping (5m):** Asia block (Sydney+Tokyo)
+- **Intraday (15m):** **London** block
+- **Swing (4h):** off (default)
+
+### Chop / regime
+
+- **Scalping (5m):** LONG blocked in CHOP
+- **Intraday (15m):** **all sides** blocked in CHOP
+- **Swing (4h):** off
+
+### OB retest
+
+- **Scalping (5m):** **required**
+- **Intraday (15m):** off (default)
+- **Swing (4h):** off (default)
+
+### Pivot OB (`Fresh OB` label)
+
+- **Scalping (5m):** off
+- **Intraday (15m):** **on** (`smcPivotStructure`)
+- **Swing (4h):** off
+
+### HTF align
+
+- **Scalping (5m):** soft −15 pts (hard if `smcHtfHardBlock` or tier)
+- **Intraday (15m):** soft −15 pts
+- **Swing (4h):** soft −15 pts; optional funding guard
+
+### ATR gate
+
+- **Scalping (5m):** relative 0.4–4.0 + abs 0.287%
+- **Intraday (15m):** abs 0.4%
+- **Swing (4h):** abs 0.8%
+
+### Live money
+
+- **Scalping (5m):** **blocked**
+- **Intraday (15m):** **blocked**
+- **Swing (4h):** **blocked**
 
 **Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
@@ -139,11 +211,26 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 
 ## Trade types
 
-| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
-| --- | --- | --- | --- | --- |
-| Scalping | 5m | 1h | Blocked | Allowed |
-| Intraday | 15m | 1h | Blocked | Allowed |
-| Swing | 4h | 1w | Blocked | Allowed |
+### Scalping
+
+- **Entry TF:** 5m
+- **Trend / HTF TF:** 1h
+- **Real money:** Blocked
+- **Dry-run / backtest:** Allowed
+
+### Intraday
+
+- **Entry TF:** 15m
+- **Trend / HTF TF:** 1h
+- **Real money:** Blocked
+- **Dry-run / backtest:** Allowed
+
+### Swing
+
+- **Entry TF:** 4h
+- **Trend / HTF TF:** 1w
+- **Real money:** Blocked
+- **Dry-run / backtest:** Allowed
 
 Backtest ladder SSOT: `runBacktestJob.TYPE_TF` (global, all strategies).  
 **Walk-forward**: all SMC legs dry-run until Intraday re-validates post conf≥80 threshold sweep. Scalping remains backtest/dry-run only (global Scalping gate + SMC-specific block).
@@ -160,11 +247,9 @@ Signal labels are **identical across trade types** for a given sequence; only ti
 
 Backtest: fill at signal bar **close** (`RealStrategyBacktestService`).
 
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `interval` | `1h` | TF | Live tick candle (per bot config) |
-| `checkInterval` | `3_600_000` | ms | Minimum spacing between live ticks (~1 h) |
-| `higherTf` | `4h` | TF | HTF trend cache (`BotEngine`) |
+- **`interval`:** `1h` (TF) — Live tick candle (per bot config)
+- **`checkInterval`:** `3_600_000` (ms) — Minimum spacing between live ticks (~1 h)
+- **`higherTf`:** `4h` (TF) — HTF trend cache (`BotEngine`)
 
 ---
 
@@ -174,24 +259,20 @@ Labels derived **only** from `sequenceMeta` fields on fill.
 
 ### Label vocabulary
 
-| Label | Emitted when | Code condition |
-| --- | --- | --- |
-| **Liquidity Sweep** | Qualifying sweep preceded CHoCH | `sweepIdx >= 0` |
-| **CHoCH** | Change of character preceded displacement | `chochIdx >= 0` |
-| **Bullish FVG** | LONG bias; FVG type contains `"bull"` | `fvg.type` |
-| **Bearish FVG** | SHORT bias; FVG type contains `"bear"` | `fvg.type` |
-| **FVG** | FVG present but type unrecognized | fallback |
-| **Fresh OB** | Entry inside live same-bias order block | `obConfluence` (needs `smcPivotStructure`) |
-| **Displacement** | Displacement bar identified | `dispIdx != null` |
-| **Mitigation** | Formatter sees mitigation flags | usually **absent** (depth in `confidenceComponents`) |
+- **Liquidity Sweep:** Qualifying sweep preceded CHoCH — `sweepIdx >= 0`
+- **CHoCH:** Change of character preceded displacement — `chochIdx >= 0`
+- **Bullish FVG:** LONG bias; FVG type contains `"bull"` — `fvg.type`
+- **Bearish FVG:** SHORT bias; FVG type contains `"bear"` — `fvg.type`
+- **FVG:** FVG present but type unrecognized — fallback
+- **Fresh OB:** Entry inside live same-bias order block — `obConfluence` (needs `smcPivotStructure`)
+- **Displacement:** Displacement bar identified — `dispIdx != null`
+- **Mitigation:** Formatter sees mitigation flags — usually **absent** (depth in `confidenceComponents`)
 
 ### Typical examples
 
-| Side | Example labels |
-| --- | --- |
-| LONG (default config) | `Liquidity Sweep, CHoCH, Bullish FVG, Displacement` |
-| LONG + Intraday pivot OB | `Liquidity Sweep, CHoCH, Fresh OB, Bullish FVG, Displacement` |
-| Legacy engine | *(empty)* |
+- **LONG (default config):** `Liquidity Sweep, CHoCH, Bullish FVG, Displacement`
+- **LONG + Intraday pivot OB:** `Liquidity Sweep, CHoCH, Fresh OB, Bullish FVG, Displacement`
+- **Legacy engine:** *(empty)*
 
 ---
 
@@ -205,13 +286,30 @@ Labels derived **only** from `sequenceMeta` fields on fill.
 
 ## Quick reference — sequence vs labels
 
-| Sequence step | Drives entry? | Signal label? |
-| --- | --- | --- |
-| Liquidity sweep | Yes (prerequisite) | Yes — `Liquidity Sweep` |
-| CHoCH | Yes (prerequisite) | Yes — `CHoCH` |
-| Displacement / FVG | Yes (prerequisite) | Yes — `Bullish/Bearish FVG` + `Displacement` |
-| FVG mitigation | Yes (entry trigger) | Intended `Mitigation` — usually missing |
-| OB confluence | No (quality bonus) | Yes — `Fresh OB` when `obConfluence` true |
+### Liquidity sweep
+
+- **Drives entry?:** Yes (prerequisite)
+- **Signal label?:** Yes — `Liquidity Sweep`
+
+### CHoCH
+
+- **Drives entry?:** Yes (prerequisite)
+- **Signal label?:** Yes — `CHoCH`
+
+### Displacement / FVG
+
+- **Drives entry?:** Yes (prerequisite)
+- **Signal label?:** Yes — `Bullish/Bearish FVG` + `Displacement`
+
+### FVG mitigation
+
+- **Drives entry?:** Yes (entry trigger)
+- **Signal label?:** Intended `Mitigation` — usually missing
+
+### OB confluence
+
+- **Drives entry?:** No (quality bonus)
+- **Signal label?:** Yes — `Fresh OB` when `obConfluence` true
 
 ---
 
