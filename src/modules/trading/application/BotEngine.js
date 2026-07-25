@@ -198,6 +198,8 @@ class BotEngine extends EventEmitter {
       maxPositions: 1,
       leverage:     strat.leverage,
       useBothSides: false,
+      // Delisted / outside allowlist: monitor SL/TP only (set via start overrides).
+      legacyMonitorOnly: false,
 
       // Interval diambil dari strategi; fallback "15m" jika strategi tidak mendefinisikan
       interval:      strat.interval      || "15m",
@@ -1308,6 +1310,10 @@ class BotEngine extends EventEmitter {
 
       if (this.config.strategyKey === "GROK_AI_TRADING") {
         await this._tickGrokAi(price, indicators, lastIdx, htfCandlesCache);
+      } else if (this.config.legacyMonitorOnly) {
+        if (this._shouldLogDecision()) {
+          this._log("info", "⏸ Legacy monitor-only — tidak buka posisi baru");
+        }
       } else if (this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
         const atrLegOv = resolveAtrLegOverride(this.config, null);

@@ -139,8 +139,9 @@ Legacy output paths preserved for existing `tmp/` artifacts:
 | SMC Intraday | `tmp/smc-intraday-walkforward/window-XX/SYMBOL/` |
 | SMC Swing | `tmp/smc-swing-walkforward/window-XX/SYMBOL/` |
 | VSA Intraday | `tmp/vsa-intraday-walkforward/window-XX/SYMBOL/` |
+| Other strategy×type | `tmp/<prefix>-{scalping\|intraday\|swing}-walkforward/` |
 
-New exports may also use `tmp/walkforward/<slug>/<type>/` via `lib/paths.defaultOutRoot()`.
+`<prefix>` examples: `wyckoff`, `vsa`, `tf`, `ms`, `amt`, `mr`, `snd`, `sa`, `br`, `ict`, `ls`.
 
 Per cell: `manifest.json` · `trades.csv` · `stats.json` (+ `walkforward-summary.json` for promotion gates).
 
@@ -158,9 +159,10 @@ scripts/walkforward/
 │   ├── auth.js               # Single login for via-api grids
 │   ├── runGridExport.js      # window×symbol via runDatasetExpand
 │   ├── runSpawnExport.js     # window via spawn dataset-expand script
+│   ├── runWalkforwardMain.js # generic runner for all strategy×type
 │   ├── researchAnalysis.js   # R#1/R#3 CSV analysis
 │   ├── strategyRegistry.js   # re-export from dataset-expand
-│   └── stubExport.js         # placeholder exit for unimplemented combos
+│   └── stubExport.js         # thin re-export → runWalkforwardMain
 └── <strategy-slug>/
     ├── scalping.js
     ├── intraday.js
@@ -168,38 +170,42 @@ scripts/walkforward/
     └── … (e.g. scalping-research.js, transition-research.py)
 ```
 
-## Implemented vs gaps
+## Implemented (12 strategies × 3 types)
 
 | Strategy | Scalping | Intraday | Swing |
 |----------|----------|----------|-------|
-| Smart Money Concepts | ✅ Scalping (+ research) | ✅ Intraday | ✅ Swing |
-| Statistical Arbitrage | stub | stub | ✅ Swing (+ transition-research.py) |
-| Volume Spread Analysis | stub | ✅ Intraday (3-window GO/NO-GO) | stub |
-| Wyckoff | stub | stub | stub |
-| Trend Following | stub | stub | stub |
-| Market Structure | stub | stub | stub |
-| Auction Market Theory | stub | stub | stub |
-| Mean Reversion | stub | stub | stub |
-| Supply and Demand | stub | stub | stub |
-| Breakout Retest | stub | stub | stub |
-| ICT Style Trading | stub | stub | stub |
-| Liquidation Squeeze | stub | stub | stub |
+| Smart Money Concepts | ✅ custom (8w BTC + research) | ✅ custom (5×5) | ✅ custom (5×5) |
+| Wyckoff | ✅ generic | ✅ generic | ✅ generic |
+| Volume Spread Analysis | ✅ generic | ✅ custom (3w GO/NO-GO) | ✅ generic |
+| Trend Following | ✅ generic | ✅ generic | ✅ generic |
+| Market Structure | ✅ generic | ✅ generic | ✅ generic |
+| Auction Market Theory | ✅ generic | ✅ generic | ✅ generic |
+| Mean Reversion | ✅ generic | ✅ generic | ✅ generic |
+| Supply and Demand | ✅ generic | ✅ generic | ✅ generic |
+| Statistical Arbitrage | ✅ generic | ✅ generic | ✅ custom (5×5) |
+| Breakout Retest | ✅ generic | ✅ generic | ✅ generic |
+| ICT Style Trading | ✅ generic | ✅ generic | ✅ generic |
+| Liquidation Squeeze | ✅ generic | ✅ generic | ✅ generic |
 
-## Adding a new walk-forward script
+**Generic** = `lib/runWalkforwardMain.js` via entry scripts under each slug.  
+Scalping default: 8 windows × BTCUSDT. Intraday/Swing default: 5×5 symbols.
 
-1. Copy `smart-money-concepts/intraday.js` (multi-coin grid + summary) or `scalping.js` (spawn / single-symbol).
-2. Set `strategyKey`, `tradeType`, `OUT_ROOT`, `buildManifest`, and window set from `lib/windows.js`.
-3. Replace the matching stub under `<slug>/<type>.js`.
+## Adding / customizing a walk-forward script
+
+1. Prefer the generic entry (`stubMain` / `walkforwardMain`) already wired under `<slug>/<type>.js`.
+2. For a custom gate (special windows, manifests, promote hints), copy `smart-money-concepts/intraday.js` or `volume-spread-analysis/intraday.js` and replace the entry file.
+3. Window sets live in `lib/windows.js`.
 
 Shared runners:
 
-- **`runGridExport`** — direct `runDatasetExpand` + single JWT (multi-coin grid pattern).
-- **`runSpawnExport`** — spawn `dataset-expand/<slug>/<type>.js` per window (spawn pattern).
+- **`runWalkforwardMain`** — default for all strategy×type.
+- **`runGridExport`** — direct `runDatasetExpand` + single JWT (multi-coin grid).
+- **`runSpawnExport`** — spawn `dataset-expand/<slug>/<type>.js` per window.
 
 Promotion gate helpers in **`summary.js`**: `collectSummary`, `printSummaryTable`, `buildVerdict`.
 
 ## Related
 
 - `scripts/dataset-expand/` — single-window backtest / ablation (feeds walk-forward cells)
-- `scripts/ml/bootstrap-from-walkforward-csv.js` — ML bootstrap from `tmp/sprint19-smc-walkforward`
+- `scripts/ml/bootstrap-from-walkforward-csv.js` — ML bootstrap (`--smc-all` merges SMC legs)
 - `docs/SMC_SCALPING_WALKFORWARD_EXPORT.md` — Full ML column export for Scalping windows

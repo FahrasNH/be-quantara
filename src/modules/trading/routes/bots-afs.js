@@ -14,6 +14,8 @@ module.exports = function createBotsRouter(helpers) {
     validateSymbolFormat,
     validateSymbolParam,
   } = require("../../../shared/middleware/validation");
+  const { isAllowedSymbol, ALLOWED_SYMBOLS } = require("../../../shared/constants/allowedSymbols");
+  const { forceCloseOpenTrades } = require("../services/forceCloseOpenTrades");
   // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
   const prisma = require("../../../infrastructure/db/prismaClient");
   const AuthService = require("../../auth/services/AuthService");
@@ -590,11 +592,15 @@ module.exports = function createBotsRouter(helpers) {
 
   /**
    * POST /api/v1/bots/:symbol/start
-   * Start a bot
+   * Start a bot.
+   *
+   * Allowlist applies to *new* bots only. Existing bots on delisted symbols
+   * (e.g. GRASSUSDT after the 5-coin cut) may start in legacyMonitorOnly mode
+   * so SL/TP can be monitored / positions wound down.
    */
   router.post(
     "/:symbol/start",
-    validateSymbolParam,
+    validateSymbolFormat,
     botOpLock,
     validateBotStartInput,
     strategyGuard,
@@ -608,6 +614,7 @@ module.exports = function createBotsRouter(helpers) {
       // FE lama mengirim strategyKey; FE baru (multi-strategy) tidak. Bedakan keduanya.
       const explicitStrategyKey = req.body.strategyKey;
       const mode = dryRun === false ? "live" : "dry";
+      const legacyMonitorOnly = !isAllowedSymbol(symbol);
 
       // ── Tentukan jalur eksekusi: multi-strategy (otomatis dari tier) vs legacy ──
       // Multi aktif hanya bila flag ON DAN FE tidak memilih strategi manual.
@@ -653,11 +660,8 @@ module.exports = function createBotsRouter(helpers) {
       const tierOverrides = pairClass.paramOverrides;
 
       // Block strategies the classifier itself marks blocked for this tier (AC-PAIR-04).
-      // AF-FIX-REGIME (Sprint 7, re-scoped 2026-07-02): previously only checked
-      // tier === "VOLATILE", but STRATEGIES_BY_PAIR_TIER.SEMI_VOLATILE.blocked also
-      // lists ADAPTIVE_FUSION — that block was defined but never enforced here, so
-      // AF could still be started live on SEMI_VOLATILE altcoins (thin-book risk).
-      if (pairClass.blockedStrategies.length) {
+      // Legacy delisted symbols: skip — start is monitor-only (no new entries).
+      if (!legacyMonitorOnly && pairClass.blockedStrategies.length) {
         const blockedStrategies = strategies.filter(s => pairClass.blockedStrategies.includes(s));
         if (blockedStrategies.length) {
           // Allow if user explicitly chose a strategy (legacy path) and it's MR
@@ -678,9 +682,12 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       // Build strategy warning if pair tier is not LIQUID
-      const strategyWarning = pairClass.tier !== "LIQUID"
+      let strategyWarning = pairClass.tier !== "LIQUID"
         ? `${symbol} adalah pair ${pairClass.tier} (risiko ${pairClass.riskLevel}). SL diperlebar ${tierOverrides.slMultiplier}×, ukuran posisi dikurangi ke ${Math.round(tierOverrides.positionSizeAdjustment * 100)}%.`
         : null;
+      if (legacyMonitorOnly) {
+        strategyWarning = `${symbol} di luar allowlist platform — mode monitor-only (tidak buka posisi baru). Tutup posisi lalu hapus bot.`;
+      }
 
       const capitalPerStrategy = (capital || 500) / strategies.length;
 
@@ -688,6 +695,16 @@ module.exports = function createBotsRouter(helpers) {
       let bot = await prisma.bot.findUnique({
         where: { userId_symbol: { userId, symbol } },
       });
+
+      if (legacyMonitorOnly && !bot) {
+        return res.status(400).json({
+          ok: false,
+          statusCode: 400,
+          message: "Symbol not allowed",
+          code: "SYMBOL_NOT_ALLOWED",
+          errors: [`Supported symbols: ${ALLOWED_SYMBOLS.join(", ")}`],
+        });
+      }
 
       // Per-tier bot cap — hanya saat start akan membuat bot BARU.
       if (!bot) {
@@ -890,6 +907,7 @@ module.exports = function createBotsRouter(helpers) {
             passphrase: decryptedPassphrase,
             pairMetrics,
             maxAccountOpenPositions: accountOpenCap,
+            legacyMonitorOnly,
             grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
             grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
             grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
@@ -911,6 +929,7 @@ module.exports = function createBotsRouter(helpers) {
               passphrase:  decryptedPassphrase,
               pairMetrics,
               maxAccountOpenPositions: accountOpenCap,
+              legacyMonitorOnly,
               grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
               grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
               grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
@@ -994,6 +1013,7 @@ module.exports = function createBotsRouter(helpers) {
     asyncHandler(async (req, res) => {
       const userId = req.userId;
       const { symbol } = req.params;
+      const forceClose = Boolean(req.body?.forceClose);
 
       const bot = await prisma.bot.findUnique({
         where: { userId_symbol: { userId, symbol } },
@@ -1015,11 +1035,28 @@ module.exports = function createBotsRouter(helpers) {
       // while DB says stopped, then push running=true back to the FE over WS. Stopping
       // on `starting` too guarantees stop() actually halts the engine/coordinator.
       const instance = getBot(userId, symbol);
+      let flatten = { closed: 0, failed: 0, reasons: [] };
+
+      if (forceClose && instance) {
+        // Close in-memory positions while engine still has client/price context.
+        flatten = await forceCloseOpenTrades({ userId, symbol, instance });
+      }
+
       if (instance) {
         const st = instance.getState();
         if (st.running || st.starting) {
           await instance.stop();
         }
+      }
+
+      if (forceClose) {
+        // Catch DB orphans (stopped bot / positions restored only in DB).
+        const rest = await forceCloseOpenTrades({ userId, symbol, instance: null });
+        flatten = {
+          closed: flatten.closed + rest.closed,
+          failed: flatten.failed + rest.failed,
+          reasons: [...flatten.reasons, ...rest.reasons],
+        };
       }
 
       // Update DB
@@ -1034,7 +1071,7 @@ module.exports = function createBotsRouter(helpers) {
       // Log action
       await AuthService.logAction(
         userId,
-        "BOT_STOP",
+        forceClose ? "BOT_FORCE_CLOSE" : "BOT_STOP",
         "bot",
         bot.id,
         req.ip,
@@ -1043,8 +1080,12 @@ module.exports = function createBotsRouter(helpers) {
 
       res.json({
         ok: true,
-        message: `Bot ${symbol} stopped`,
+        message: forceClose
+          ? `Bot ${symbol} stopped — force-closed ${flatten.closed} position(s)`
+          : `Bot ${symbol} stopped`,
         symbol,
+        forceClose,
+        flatten,
       });
     })
   );

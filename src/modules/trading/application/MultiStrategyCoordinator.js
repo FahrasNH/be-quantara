@@ -89,6 +89,8 @@ class MultiStrategyCoordinator extends EventEmitter {
     // Race-to-confirm: max 1 posisi terbuka per koin lintas-strategi (PRD §9.2).
     // Strategi lain baru boleh entry SETELAH posisi yang berjalan flat.
     this.maxPositionsPerCoin = Math.max(1, Number(maxPositionsPerCoin) || 1);
+    // Delisted symbol wind-down: block canEnter entirely.
+    this.legacyMonitorOnly = engineConfig?.legacyMonitorOnly === true;
     // DB di-inject (DI) → canEnter pakai DB sebagai sumber kebenaran tunggal.
     // Null saat unit test → fallback ke state engine live.
     this._db = db;
@@ -489,6 +491,14 @@ class MultiStrategyCoordinator extends EventEmitter {
    * @returns {Promise<{ allowed: boolean, reason: string, open: number, cap: number }>}
    */
   async canEnter(strategyKey, direction) {
+    if (this.legacyMonitorOnly) {
+      return {
+        allowed: false,
+        open: 0,
+        cap: this.maxPositionsPerCoin,
+        reason: `Legacy monitor-only — ${this.symbol} di luar allowlist, tidak buka posisi baru`,
+      };
+    }
     const dir = String(direction || "").toUpperCase();
     const positions = await this._collectOpenPositions();
 

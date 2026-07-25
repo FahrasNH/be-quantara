@@ -197,6 +197,7 @@ class AdaptiveStrategyEngine extends BotEngine {
 
       // 6. Jika posisi sudah penuh, skip deteksi sinyal baru
       if (this.state.openPositions.length >= this.config.maxPositions) return;
+      if (this.config.legacyMonitorOnly) return;
 
       // Reset per-tick conflict state (MultiStrategyCoordinator.evaluate may set these)
       this._conflictAllowed = true;
