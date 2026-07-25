@@ -12,9 +12,9 @@ function hasViaApiAuth(env = process.env) {
 function requireViaApiCredentials({ dryRun, useLocal, api }) {
   if (dryRun || useLocal) return;
   if (!api || !hasViaApiAuth()) {
-    console.error("\n❌ Missing dev server credentials.");
+    console.error("\n❌ Missing BE credentials for --via-api.");
     console.error("Set in be-bot-trading/.env:");
-    console.error("  DATASET_EXPAND_API_URL=https://dev.quantara.software");
+    console.error("  DATASET_EXPAND_API_URL=https://dev.quantara.software   # or https://staging.quantara.software");
     console.error("  DATASET_EXPAND_EMAIL + DATASET_EXPAND_PASSWORD");
     console.error("\nOr run with --local or --dry-run.");
     process.exit(1);

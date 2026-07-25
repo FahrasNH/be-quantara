@@ -5,11 +5,15 @@
  * bootstrap-from-walkforward-csv.js — Offline ML bootstrap from walk-forward exports.
  *
  * Builds data/ml-engine-dataset.json when staging DB is unavailable locally.
- * Reads trades.csv from tmp/sprint19-smc-walkforward (or --dir=).
  *
  * Usage:
  *   node scripts/ml/bootstrap-from-walkforward-csv.js
- *   node scripts/ml/bootstrap-from-walkforward-csv.js --dir=tmp/sprint19-smc-walkforward
+ *   node scripts/ml/bootstrap-from-walkforward-csv.js --dir=tmp/smc-swing-walkforward
+ *   node scripts/ml/bootstrap-from-walkforward-csv.js \
+ *     --dir=tmp/smc-scalping-walkforward \
+ *     --dir=tmp/smc-intraday-walkforward \
+ *     --dir=tmp/smc-swing-walkforward
+ *   node scripts/ml/bootstrap-from-walkforward-csv.js --smc-all
  * npm: ml:bootstrap-walkforward
  */
 
@@ -18,11 +22,27 @@ const path = require("path");
 const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
 const { ML_ENGINE_DATASET_PATH, REPO_ROOT } = require("#modules/ml/constants/modelPaths.js");
 
+const SMC_ALL_DIRS = [
+  "tmp/smc-scalping-walkforward",
+  "tmp/smc-intraday-walkforward",
+  "tmp/smc-swing-walkforward",
+];
+
 function parseArgs() {
-  const out = { dir: path.join(REPO_ROOT, "tmp/sprint19-smc-walkforward"), min: 20 };
+  const out = {
+    dirs: [],
+    min: 20,
+    smcAll: false,
+  };
   for (const arg of process.argv.slice(2)) {
-    if (arg.startsWith("--dir=")) out.dir = path.resolve(REPO_ROOT, arg.slice(6));
+    if (arg === "--smc-all") out.smcAll = true;
+    else if (arg.startsWith("--dir=")) out.dirs.push(path.resolve(REPO_ROOT, arg.slice(6)));
     else if (arg.startsWith("--min=")) out.min = parseInt(arg.slice(6), 10);
+  }
+  if (out.smcAll) {
+    out.dirs = SMC_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
+  } else if (out.dirs.length === 0) {
+    out.dirs = [path.join(REPO_ROOT, "tmp/smc-scalping-walkforward")];
   }
   return out;
 }
@@ -111,24 +131,41 @@ function findTradeCsvFiles(rootDir) {
 }
 
 function main() {
-  const { dir, min } = parseArgs();
-  const csvFiles = findTradeCsvFiles(dir);
+  const { dirs, min } = parseArgs();
+  const csvFiles = [];
+  const missing = [];
+  for (const dir of dirs) {
+    const found = findTradeCsvFiles(dir);
+    if (found.length === 0) missing.push(dir);
+    else csvFiles.push(...found);
+  }
+  csvFiles.sort();
 
   if (csvFiles.length === 0) {
-    console.error(`[bootstrap-walkforward] No trades.csv under ${dir}`);
-    console.error("[bootstrap-walkforward] Run scripts/walkforward/smart-money-concepts/scalping-research.js first.");
+    console.error(`[bootstrap-walkforward] No trades.csv under: ${dirs.join(", ")}`);
+    console.error("[bootstrap-walkforward] Run walk-forward export first (scripts/walkforward/smart-money-concepts/*).");
     process.exit(1);
+  }
+  if (missing.length) {
+    console.warn(`[bootstrap-walkforward] No CSV in: ${missing.map((d) => path.relative(REPO_ROOT, d)).join(", ")}`);
   }
 
   const fe = new FeatureEngineer();
   const samples = [];
+  const seen = new Set();
   let skipped = 0;
+  let dupes = 0;
 
   for (const csvPath of csvFiles) {
     const rows = loadCsv(csvPath);
     for (const row of rows) {
       if (row.Result !== "win" && row.Result !== "loss") { skipped++; continue; }
       try {
+        const tradeId = row.ID || `${row.Symbol}-${row["Open Time"]}-${row.Side}`;
+        const dedupeKey = `${tradeId}|${path.relative(REPO_ROOT, csvPath)}`;
+        if (seen.has(dedupeKey)) { dupes++; continue; }
+        seen.add(dedupeKey);
+
         const entryContext = csvRowToEntryContext(row);
         const features = fe.buildFeatureVector(entryContext, {
           strategyKey: entryContext.strategyKey,
@@ -139,7 +176,7 @@ function main() {
           features:  Array.from(features),
           label:     row.Result === "win" ? 1 : 0,
           timestamp: row["Open Time"] || new Date().toISOString(),
-          tradeId:   row.ID || `${row.Symbol}-${samples.length}`,
+          tradeId,
           sourceFile: path.relative(REPO_ROOT, csvPath),
         });
       } catch {
@@ -148,7 +185,12 @@ function main() {
     }
   }
 
-  console.log(`[bootstrap-walkforward] CSV files: ${csvFiles.length}, samples: ${samples.length}, skipped: ${skipped}`);
+  // Stable chronological order for walk-forward splits
+  samples.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+
+  const sourceDirs = dirs.map((d) => path.relative(REPO_ROOT, d));
+  console.log(`[bootstrap-walkforward] Dirs: ${sourceDirs.join(", ")}`);
+  console.log(`[bootstrap-walkforward] CSV files: ${csvFiles.length}, samples: ${samples.length}, skipped: ${skipped}, dupes: ${dupes}`);
 
   if (samples.length < min) {
     console.error(`[bootstrap-walkforward] Need >= ${min} samples, got ${samples.length}`);
@@ -160,8 +202,8 @@ function main() {
 
   fs.writeFileSync(ML_ENGINE_DATASET_PATH, JSON.stringify({
     generatedAt: new Date().toISOString(),
-    source:      "walkforward-csv",
-    sourceDir:   path.relative(REPO_ROOT, dir),
+    source:      "walkforward-csv-merged",
+    sourceDirs,
     tradeCount:  samples.length,
     samples,
   }, null, 2));

@@ -11,7 +11,9 @@ function stubMain({ strategyKey, tradeType, slug }) {
   console.error("  smart-money-concepts/scalping.js       (8 windows BTC)");
   console.error("  smart-money-concepts/scalping-research.js (export + R#1/R#3)");
   console.error("  smart-money-concepts/intraday.js       (5×5 promotion gate)");
+  console.error("  smart-money-concepts/swing.js          (5×5 promotion gate)");
   console.error("  statistical-arbitrage/swing.js         (5×5 SA Swing)");
+  console.error("  volume-spread-analysis/intraday.js     (3-window GO/NO-GO)");
   console.error("\nSee scripts/walkforward/README.md for structure and template.");
   process.exit(2);
 }
