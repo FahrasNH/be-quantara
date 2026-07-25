@@ -51,6 +51,42 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `breakoutTradingEntry.js` → `scoreConfidence`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreBreakoutRetest` via `BreakoutStormUmbrella.js`
+
+### How score is built
+
+- **Range:** 50–95 (integer `componentConfidence`; stored as 0–1 `confidence` on meta)
+- **Base:** **60** + tiered bonuses:
+  - BB squeeze width (`squeezeWidthPct`)
+  - Breakout volume ratio (1.3× → 3.0×+ tiers)
+  - Retest rejection wick share
+  - Bars since breakout (sweet spot 16–32)
+  - Retest depth in ATR (sweet spot 0.30–0.55)
+- **Clamp:** `max(50, min(95, round(score)))`
+- **Race winner:** `gradedConfidenceFromMeta` prefers 0–100 rubric (squeeze tightness, breakout volume, retest quality, wick, consolidation maturity, funding tailwind)
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none — confidence ranks BS racers only
+- **Formula / components:** same `scoreConfidence` at retest confirm bar
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same; `minRetestBars` / `retestWindow` scale with 15m bar count
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same sequence; longer `maxHoldHours` only
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 **Hybrid structure + ATR** SL: tighter of ATR stop vs structure stop (retest extreme ± 0.2×ATR or breakout level ± 0.25×ATR), floored at `minSlAtrFloor` 1.5×ATR. TP: structural target when on correct side, else ATR × `tpMultiplier`, **capped** at `maxPlannedRR` 2.5× actual SL distance. Pre-entry RR room checked in phase 12 ablation. Entry phases: [How Entry Works](#how-entry-works).

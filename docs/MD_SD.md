@@ -41,6 +41,40 @@ Per-leg SL/TP: `SupplyDemandStrategy.calculateRiskConfig` + zone/FVG `tpOverride
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `supplyDemandEntry.js` → `evaluateSupplyDemandEntry`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreSupplyDemand` via `MeanDriftUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–1 (`confidence` on fill)
+- **Base:** `mdSdBaseConfidence` (**0.62**)
+- **Zone retest boost:** +`mdSdZoneBoost` (**0.18**) when price retests demand/supply with reversal body
+- **Volume confirm boost:** +`mdSdVolBoost` (**0.10**) when volume ≥ `mdSdVolConfirmMult`× SMA (soft — entry fires without it)
+- **Cap:** `min(1, base + boosts)`
+- **Note:** `mdSdBaseConfidence` is additive base, not a reject floor
+- **Graded overlay (race):** zone freshness, zone strength, retest depth, volume confirm flag, confluence, zone size fit
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none
+- **Formula / components:** same additive stack at zone retest
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 Zone **retest radius** uses `mdSdConfluenceAtrMult` 0.75×ATR (entry) — not the SL distance. TP prefers nearest opposing FVG/structure via `resolveMdTakeProfit`. Entry zone gates: [How Entry Works](#how-entry-works).

@@ -48,6 +48,41 @@ Per-leg SL/TP: `MeanReversionStrategy.calculateRiskConfig` + optional `tpOverrid
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `meanReversionEntry.js` → `evaluateMeanReversionEntry`  
+**ADX SSOT**: `adxRegimeGate.js` → `evaluateAdxRegimeGate`  
+**Confluence SSOT**: `orderBlockFvg.js` → `refineMdEntry`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreMeanReversion` via `MeanDriftUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–100 (`componentConfidence` on meta)
+- **Layer A base (fixed):** Scalping **65**, Intraday **60** when BB+RSI+VWAP trigger fires
+- **ADX regime mult:** balance **×1.0**, transition **×0.75** (`mdAdxTransitionConfidenceMult`), imbalance **blocks** entry (mult 0)
+- **OB/FVG mult:** confluence within `mdConfluenceAtrMult`×ATR → **×1.1** (`mdWithConfluenceConfidenceBoost`); miss → **×0.7** (`mdNoConfluenceConfidenceMult`) — fail-open
+- **Final:** `round(min(100, base × adxMult × obFvgMult))`
+- **Graded overlay (race):** deviation extremity, VWAP deviation, RSI extremity, regime suitability, room-to-mean
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none — only Layer A/B/C multipliers
+- **Formula / components:** BB **1.5σ** + RSI **28/72** + VWAP side
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** BB **2.0σ** + RSI **32/68** + VWAP side
+
+### Swing
+
+- **Floor:** none (MR entry module implements Scalping + Intraday components only; Swing leg uses umbrella routing if enabled)
+- **Formula / components:** same graded rubric when signal meta exported
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefers **structure target** (`tpOverride` from nearest FVG or BB middle via `resolveMdTakeProfit`) when distance ≥ 0.5× SL; else leg-specific RR multipliers. Entry BB/RSI gates: [How Entry Works](#how-entry-works).
