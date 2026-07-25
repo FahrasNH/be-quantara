@@ -103,10 +103,37 @@ test("live: max hold exceeded → market close + TIME_STOP bookkeeping", async (
   }
 });
 
-test("_resolveMaxHoldHours reads Intraday typeOverrides", () => {
+test("_resolveMaxHoldHours reads Intraday typeOverrides when set", () => {
   const bot = makeBot({
     dryRun: true,
     pos: basePos({ tradeType: "Intraday" }),
   });
   assert.equal(bot._resolveMaxHoldHours(bot.state.openPositions[0]), 6);
+});
+
+test("defaults: no maxHoldHours → TIME_STOP does not fire", async () => {
+  const bot = new BotEngine({
+    symbol: "BTCUSDT",
+    dryRun: true,
+    strategyKey: "ADAPTIVE_FUSION",
+    typeOverrides: {
+      Scalping: {},
+      Intraday: {},
+      Swing: {},
+    },
+  });
+  bot.sessionId = 1;
+  bot.config.slPlusEnabled = false;
+  bot.state.capital = 1000;
+  bot.state.openPositions = [basePos({ openTime: Date.now() - 100 * 3600 * 1000 })];
+  bot._resolveFee = async () => 0.01;
+  bot._syncSessionStats = () => {};
+  bot._releaseMarginIfFlat = () => {};
+  bot._notifyClose = () => {};
+  bot._notifyError = async () => {};
+  bot._updateRiskAfterClose = () => {};
+  await bot._checkOpenPositions(101, 1, 101, 101);
+  assert.equal(bot.state.openPositions.length, 1, "position stays open without TIME_STOP");
+  assert.equal(bot.state.trades.length, 0);
+  assert.equal(bot._resolveMaxHoldHours(bot.state.openPositions[0]) ?? null, null);
 });

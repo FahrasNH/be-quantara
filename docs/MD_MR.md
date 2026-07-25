@@ -42,9 +42,9 @@ Per-leg SL/TP: `MeanReversionStrategy.calculateRiskConfig` + optional `tpOverrid
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `mrSessionFilter: true`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `mrSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -94,7 +94,7 @@ SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefer
 - **TP method:** FVG/BB mid override **or** 2.5× SL (`tpMultiplierA`) **or** 3.0× ATR
 - **ATR mult / R:R:** 1.5 / up to 3.0 → **RR ≤ 2.0** planned
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `mrSessionFilter`; trailing stop 0.3×ATR; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; trailing stop 0.3×ATR
 
 ### Intraday
 
@@ -103,7 +103,7 @@ SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefer
 - **TP method:** FVG/BB override **or** 2.0× SL (`tpMultiplierB`)
 - **ATR mult / R:R:** ~1.4 / 2.8 → **RR ~2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -112,7 +112,7 @@ SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefer
 - **TP method:** Override **or** 2.0× SL dist
 - **ATR mult / R:R:** **RR 2.0** nominal
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 ### Execution limits (all legs)
 
@@ -147,8 +147,8 @@ SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefer
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
@@ -182,7 +182,7 @@ BB+RSI+VWAP extreme → volume floor → ADX regime gate → OB/FVG refine → s
 - **ADX imbalance (≥25):** hard block
 - **ADX balance / transition:** pass (transition reduces confidence)
 - **OB/FVG confluence:** confidence/TP boost; soft miss `OB/FVG~`
-- **Session filter:** Scalping only (`mrSessionFilter`)
+- **Session filter:** **off** (`mrSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

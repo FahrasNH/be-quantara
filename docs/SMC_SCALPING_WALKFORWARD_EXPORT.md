@@ -2,10 +2,10 @@
 
 Fresh SMC 5m Scalping backtest exports with current config:
 
-- Asia session block (Sydney/Tokyo)
+- Session filter OFF (no Asia block)
 - ATR% floor 0.287 (dual-gate atop relative)
 - Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR)
-- `maxHoldHours = 2` (120m TIME_STOP)
+- TIME_STOP OFF (no `maxHoldHours`)
 
 ## Walk-forward windows (8)
 

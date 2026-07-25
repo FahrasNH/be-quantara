@@ -32,9 +32,9 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `msSessionFilter: true`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `msSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -81,7 +81,7 @@ Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) �
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `msSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF
 
 ### Intraday
 
@@ -90,7 +90,7 @@ Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) �
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -99,7 +99,7 @@ Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) �
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 ### Execution limits (all legs)
 
@@ -134,8 +134,8 @@ Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) �
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
@@ -162,7 +162,7 @@ Awaiting states do not open trades.
 - **Structure classification:** hard gate
 - **Pullback to swing:** hard gate (no separate label)
 - **Bounce/reject bar:** entry trigger
-- **Session filter:** Scalping only (`msSessionFilter`)
+- **Session filter:** **off** (`msSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

@@ -3,7 +3,7 @@
  *
  * FOUNDRY Tier — 3 Trade Types, each on its own timeframe stack:
  *   Scalping  (type A) : Liquidity sweep + OB + CVD  | entry 1m, confirm 5m,  trend 15m
- *   Intraday  (type B) : CHoCH + OB + EMA trend      | entry 15m, confirm 30m, trend 1h
+ *   Intraday  (type B) : CHoCH structure (legacy; no EMA lag gate) | entry 15m, confirm 30m, trend 1h
  *   Swing     (type C) : FVG + Displacement + P/D     | entry 4h, confirm 1d,  trend 1W
  *
  * All three types use the SAME SMC indicators (Liquidity, BOS, CHoCH, OB, FVG,
@@ -232,7 +232,9 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   getConfidenceWeights() {
     return {
       A: { sweep: 30, cvdAlign: 25, obZone: 25, volSurge: 20 },
-      B: { choch: 30, trendAlign: 25, obStrength: 25, cvdAlign: 20 },
+      // trendAlign (EMA fast/slow) removed — CHoCH already sets direction; lagging
+      // EMA confirmation delayed early-reversal entries (Sprint 23 / rsi-ema audit).
+      B: { choch: 40, obStrength: 35, cvdAlign: 25 },
       C: { fvgQuality: 30, displacement: 25, obConfluence: 25, cvdAccum: 20 },
     };
   }
@@ -1220,20 +1222,21 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Component B — Intraday (CHoCH + OB + EMA trend)
+  // Component B — Intraday (CHoCH structure only)
+  // Legacy path (`smcUseSequenceEngine === false`). EMA fast/slow used to gate
+  // direction but lagged CHoCH (early reversal): only admitted setups after the
+  // move had already flipped the EMAs. CHoCH alone sets LONG/SHORT.
+  // emaFast/emaSlow kept in the signature for call-site compatibility; unused.
   // ─────────────────────────────────────────────────────────────────────────────
 
-  _detectSignalB(closes, highs, lows, volumes, volSMA, emaFast, emaSlow, lastIdx, config = {}) {
+  _detectSignalB(closes, highs, lows, volumes, volSMA, _emaFast, _emaSlow, lastIdx, config = {}) {
     if (lastIdx < 40) return null;
 
     const choch = this._detectCHoCH(closes, highs, lows, lastIdx, config);
     if (!choch) return null;
 
-    const fast = emaFast[lastIdx] ?? 0;
-    const slow = emaSlow[lastIdx] ?? 0;
-
-    if (choch.type === "bullish" && fast > slow) return "LONG";
-    if (choch.type === "bearish" && fast < slow) return "SHORT";
+    if (choch.type === "bullish") return "LONG";
+    if (choch.type === "bearish") return "SHORT";
 
     return null;
   }
@@ -1335,14 +1338,11 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         (dir === "LONG"  && choch.type === "bullish") ||
         (dir === "SHORT" && choch.type === "bearish")
       );
-      const { emaFast: fast, emaSlow: slow } = ctx;
-      const trendOk = (dir === "LONG" ? fast > slow : fast < slow);
       const ob = dir === "LONG" ? obLong : obShort;
       const chochScore = hasChoch ? W.choch : 0;
-      const trendScore = trendOk ? W.trendAlign : 0;
       const obScore    = ob ? W.obStrength * Math.min(ob.strength / 3, 1) : 0;
       const cvdScore   = (dir === "LONG" ? cvd > 0 : cvd < 0) ? W.cvdAlign * (0.5 + 0.5 * cvdNorm) : 0;
-      return Math.min(Math.round(chochScore + trendScore + obScore + cvdScore), 100);
+      return Math.min(Math.round(chochScore + obScore + cvdScore), 100);
     }
 
     if (key === "C") {

@@ -2,7 +2,7 @@
 // strategyDefaults.js — strategy engine presets (STRATEGIES SSOT)
 //
 // Per-strategy leg tuning lives in typeOverrides (Scalping / Intraday / Swing).
-// TIME_STOP maxHoldHours SSOT: Scalping 2h, Intraday 6h, Swing 120h (5d).
+// TIME_STOP OFF by default (no maxHoldHours) — opt-in via typeOverrides if needed.
 // Deprecated PDF preset keys (AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING)
 // and legacy A/B/C resolve via strategyKeyNormalizer ACL at ingress.
 //
@@ -41,30 +41,27 @@ const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
 
 /**
  * Shared Scalping geometry (Sprint 16 — all 4 umbrellas).
- * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR), maxHoldHours=2 (120m TIME_STOP).
- * Backtest + live read typeOverrides.Scalping via RealStrategyBacktestService /
- * BotEngine TIME_STOP and calculateRiskConfig slAtrMult/tpAtrMult chain.
+ * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR). TIME_STOP OFF (no maxHoldHours).
+ * Backtest + live read typeOverrides.Scalping via calculateRiskConfig slAtrMult/tpAtrMult chain.
  */
 const SCALP_GEOMETRY = Object.freeze({
   slAtrMult: 1.5,
   tpAtrMult: 3.0,
-  maxHoldHours: 2,
 });
 
-/** Intraday TIME_STOP — force-close unresolved 15m/30m/1h legs at 6h. */
-const INTRADAY_HOLD = Object.freeze({ maxHoldHours: 6 });
+/** Intraday hold knobs — TIME_STOP OFF (empty; re-enable with maxHoldHours). */
+const INTRADAY_HOLD = Object.freeze({});
 
-/** Swing TIME_STOP — force-close unresolved 4h/1d/1w legs at 120h (5 days). */
-const SWING_HOLD = Object.freeze({ maxHoldHours: 120 });
+/** Swing hold knobs — TIME_STOP OFF (empty; re-enable with maxHoldHours). */
+const SWING_HOLD = Object.freeze({});
 
-/** DEFAULT + per-leg geometry / hold limits — TS / MD / BS parents + AF Wyckoff/VSA components. */
+/** DEFAULT + per-leg geometry — TS / MD / BS parents + AF Wyckoff/VSA components. */
 const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
   ...DEFAULT_LEG_TYPE_OVERRIDES,
   Scalping: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
     ...SCALP_GEOMETRY,
-    // Sprint 23: Asia block default for all Scalping legs (each strategy enforces via own apply fn)
-    noTradeSessions: ["Sydney", "Tokyo"],
+    // Session filter OFF + TIME_STOP OFF globally
   },
   Intraday: { ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday, ...INTRADAY_HOLD },
   Swing:    { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, ...SWING_HOLD },
@@ -78,10 +75,7 @@ const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
  * Scalping geometry (Sprint 16 / 5m no-edge fix):
  *   - Planned RR 2.0 via slAtrMult/tpAtrMult (was hardcoded SUB_STRATEGIES 4.5R —
  *     a swing target on a 5m leg → multi-hour winners, fast SL losers, −EV).
- *   - maxHoldHours=2 (120m TIME_STOP) — trader note: force-close unresolved
- *     scalps at 90–120m; frees the single-slot bottleneck as a side effect.
- *   - Session / OB-retest / chop-LONG gates ON so the ablation funnel is not
- *     a row of 0%-firing dead knobs.
+ *   - TIME_STOP OFF (no maxHoldHours); Session filter OFF; OB-retest / chop-LONG gates ON.
  * Live remains blocked by liveTradeTypeGate.js until walk-forward clears.
  */
 const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
@@ -89,15 +83,14 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
     // Sprint 16 edge discovery: absolute ATR% floor (also enforced atop relative gate)
     atrMinMult: 0.287,
-    noTradeSessions: ["Sydney", "Tokyo"],
     smcMinConfidenceScalping: 40,
     smcMinConfidenceA: 40,
     smcSweepVolMult: 1.2,
     // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0
     slAtrMult: 1.5,
     tpAtrMult: 3.0,
-    maxHoldHours: 2,
-    smcSessionFilter: true,
+    // Session filter OFF — Asia block removed (re-enable via smcSessionFilter + noTradeSessions)
+    smcSessionFilter: false,
     smcBlockLongInChop: true,
     smcRequireObRetest: true,
   },
@@ -112,9 +105,8 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     // Explicit geometry — Planned RR ~2.0 (matches ~1.8 realized structure-SL on BNB)
     slAtrMult: 1.8,
     tpAtrMult: 3.6,
-    // Sprint 22: London session worst on BNB Intraday (PF 0.53/0.63) — do NOT copy Scalping Asia block
-    smcSessionFilter: true,
-    noTradeSessions: ["London"],
+    // Session filter OFF — London block removed (re-enable via smcSessionFilter + noTradeSessions)
+    smcSessionFilter: false,
     // Sprint 22: both sides lose in CHOP on Intraday — block all entries (not Scalping LONG-only)
     smcBlockAllInChop: true,
     // smcSweepVolMult intentionally unset — Scalping floor (1.2) hurts Intraday PF (Sprint 22 ablation)
@@ -130,13 +122,14 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
 
 /**
  * VSA per-leg overrides — Sprint 23 FOUNDRY fixes.
- * Scalping shelved (fee-bound); Swing Asia block + LONG-only + conf≥60 or Stopping-Volume.
+ * Scalping shelved (fee-bound); Swing LONG-only + conf≥60 or Stopping-Volume.
+ * Session filters OFF (no Asia/London blocks).
  */
 const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
   Scalping: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
     vsaScalpingShelved: true,
-    vsaSessionFilter: true,
+    vsaSessionFilter: false,
   },
   Intraday: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
@@ -145,16 +138,14 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     // Absolute 0.4% floor restored; pre-fix WF was mixed but survivable (+0.7/−38/−26%).
     vsaHtfAlignGate: true,
     vsaHtfCounterPenalty: 0.5,
-    // Fix #2: London bleed (NOT Asia — inverted session profile vs Scalping/Swing)
-    vsaSessionFilter: true,
-    noTradeSessions: ["London"],
+    // Session filter OFF — London block removed
+    vsaSessionFilter: false,
     // Fix #3: confirmation-bar detector v2 (alt: htf_proximity | sequence | hvsa | legacy)
     vsaIntradayDetectorMode: "confirmation",
   },
   Swing: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
-    noTradeSessions: ["Sydney", "Tokyo"],
-    vsaSessionFilter: true,
+    vsaSessionFilter: false,
     vsaSwingLongOnly: true,
     vsaMinConfidenceSwing: 60,
   },
@@ -396,7 +387,7 @@ const STRATEGIES = {
     // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
-      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, tsSessionFilter: true },
+      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, tsSessionFilter: false },
       Swing: { ...STANDARD_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
 
@@ -468,7 +459,7 @@ const STRATEGIES = {
     enabledComponents: ["Scalping", "Intraday", "Swing"],
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
-      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, mrSessionFilter: true },
+      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, mrSessionFilter: false },
     },
 
     bbPeriod:     20,
@@ -549,7 +540,7 @@ const STRATEGIES = {
     enabledComponents: ["Scalping", "Intraday", "Swing"],
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
-      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, brSessionFilter: true },
+      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, brSessionFilter: false },
     },
 
     lookbackBars:          20,
@@ -747,7 +738,7 @@ STRATEGIES.WYCKOFF = {
   eventScanBars: 80,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, wyckoffSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, wyckoffSessionFilter: false },
   },
 };
 STRATEGIES.VOLUME_SPREAD_ANALYSIS = {
@@ -783,7 +774,7 @@ STRATEGIES.MARKET_STRUCTURE = {
   entryAtrMult: 0.75,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, msSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, msSessionFilter: false },
   },
 };
 STRATEGIES.AUCTION_MARKET_THEORY = {
@@ -800,7 +791,7 @@ STRATEGIES.AUCTION_MARKET_THEORY = {
   minSessionBarsSwing: 6,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, amtSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, amtSessionFilter: false },
   },
 };
 STRATEGIES.SUPPLY_AND_DEMAND = {
@@ -821,7 +812,7 @@ STRATEGIES.SUPPLY_AND_DEMAND = {
   minReversalBodyPct: 0.35,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, sdSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, sdSessionFilter: false },
   },
 };
 STRATEGIES.STATISTICAL_ARBITRAGE = {
@@ -846,7 +837,7 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
   mdSaRequireTransitionRegime: true, // Sprint 20: SA Swing edge in daily TRANSITION band only
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, saSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, saSessionFilter: false },
   },
 };
 STRATEGIES.ICT_STYLE_TRADING = {
@@ -864,7 +855,7 @@ STRATEGIES.ICT_STYLE_TRADING = {
   bsIctMinWickBeyondPct: 0.0005,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, ictSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, ictSessionFilter: false },
   },
 };
 STRATEGIES.LIQUIDATION_SQUEEZE = {
@@ -887,7 +878,7 @@ STRATEGIES.LIQUIDATION_SQUEEZE = {
   bsLsMaxConfidence: 0.92,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, lsSessionFilter: true },
+    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, lsSessionFilter: false },
   },
 };
 

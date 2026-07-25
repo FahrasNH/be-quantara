@@ -11,8 +11,6 @@ const {
   MD_COMPONENT_BASE,
   BS_COMPONENT_BASE,
   SCALP_GEOMETRY,
-  INTRADAY_HOLD,
-  SWING_HOLD,
 } = require("../src/config/strategyDefaults");
 const { normalizeStrategyKey, normalizeTradeTypeKey } = require("../src/config/strategyKeyNormalizer");
 
@@ -99,11 +97,11 @@ for (const key of MULTI_LEG_KEYS) {
   const scalp = cfg.typeOverrides.Scalping;
   assert.equal(scalp.slAtrMult, SCALP_GEOMETRY.slAtrMult, `${key} Scalping slAtrMult`);
   assert.equal(scalp.tpAtrMult, SCALP_GEOMETRY.tpAtrMult, `${key} Scalping tpAtrMult`);
-  assert.equal(scalp.maxHoldHours, SCALP_GEOMETRY.maxHoldHours, `${key} Scalping maxHoldHours`);
+  assert.equal(scalp.maxHoldHours, undefined, `${key} Scalping TIME_STOP OFF`);
   const intraday = cfg.typeOverrides.Intraday;
-  assert.equal(intraday.maxHoldHours, INTRADAY_HOLD.maxHoldHours, `${key} Intraday maxHoldHours`);
+  assert.equal(intraday.maxHoldHours, undefined, `${key} Intraday TIME_STOP OFF`);
   const swing = cfg.typeOverrides.Swing;
-  assert.equal(swing.maxHoldHours, SWING_HOLD.maxHoldHours, `${key} Swing maxHoldHours`);
+  assert.equal(swing.maxHoldHours, undefined, `${key} Swing TIME_STOP OFF`);
 }
 
 for (const key of NON_SMC_KEYS) {
@@ -151,8 +149,10 @@ assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceB, 80);
 assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceIntraday, 80);
 assert.equal(smc.typeOverrides.Intraday.smcPivotStructure, true);
 assert.equal(smc.typeOverrides.Intraday.smcBlockAllInChop, true);
-assert.equal(smc.typeOverrides.Intraday.smcSessionFilter, true);
-assert.deepEqual(smc.typeOverrides.Intraday.noTradeSessions, ["London"]);
+assert.equal(smc.typeOverrides.Intraday.smcSessionFilter, false);
+assert.equal(smc.typeOverrides.Intraday.noTradeSessions, undefined);
+assert.equal(smc.typeOverrides.Scalping.smcSessionFilter, false);
+assert.equal(smc.typeOverrides.Scalping.noTradeSessions, undefined);
 assert.equal(smc.typeOverrides.Intraday.slAtrMult, 1.8);
 assert.equal(smc.typeOverrides.Intraday.tpAtrMult, 3.6);
 assert.equal(smc.typeOverrides.Swing.slAtrMult, 1.2);
@@ -180,8 +180,8 @@ assert.equal(normalizeTradeTypeKey("B"), "Intraday");
 assert.equal(normalizeTradeTypeKey("A"), "Scalping");
 
 console.log("  ✓ PDF presets removed; per-leg typeOverrides on all multi-leg strategies");
-console.log("  ✓ Scalping RR 2.0 + 120m time-stop on all 12 multi-leg strategies");
-console.log("  ✓ Intraday 6h + Swing 120h TIME_STOP on all 12 multi-leg strategies");
+console.log("  ✓ Scalping RR 2.0 on all 12 multi-leg strategies (TIME_STOP OFF)");
+console.log("  ✓ Intraday + Swing TIME_STOP OFF on all 12 multi-leg strategies");
 console.log("  ✓ smc* isolated to SMART_MONEY_CONCEPTS");
 console.log("  ✓ tier COMPONENT_BASE blocks; components exclude parent-only knobs");
 console.log("\nAll strategy-defaults-legs tests passed.\n");

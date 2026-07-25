@@ -122,7 +122,8 @@ test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intrad
   const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides;
   assert.equal(ov.Scalping.atrMinMult, 0.287, "Scalping atrMinMult must be 0.287 (Sprint 16 edge filter)");
   assert.equal(ov.Scalping.atrGateRelative, true, "Scalping must use adaptive ATR gate");
-  assert.deepEqual(ov.Scalping.noTradeSessions, ["Sydney", "Tokyo"], "Scalping blocks Asia sessions");
+  assert.equal(ov.Scalping.smcSessionFilter, false, "Scalping session filter OFF");
+  assert.equal(ov.Scalping.noTradeSessions, undefined, "Scalping has no noTradeSessions");
   // Defect A fix (2026-07-16): band widened 0.6–3.0 → 0.4–4.0 so clustered real-vol
   // SMC setups (rel<0.6 in calm legs / rel>3.0 on displacement spikes) are no longer
   // blanket-rejected. Shared SSOT → live/dry-run/backtest all move together.
@@ -132,7 +133,7 @@ test("CONFIG: SMART_MONEY_CONCEPTS carries the tuned per-leg atrMinMult + Intrad
   assert.equal(ov.Swing.atrMinMult, 0.8, "Swing atrMinMult must stay 0.8");
   assert.ok(!ov.Intraday.atrGateRelative, "Intraday stays absolute ATR gate");
   assert.equal(ov.Scalping.smcMinConfidenceA, 40, "Scalping confA must be 40");
-  assert.equal(ov.Intraday.smcMinConfidenceB, 45, "Intraday confB must be 45");
+  assert.equal(ov.Intraday.smcMinConfidenceB, 80, "Intraday confB must be 80 (Sprint 22 SSOT)");
   // Top-level floor (what LIVE gating reads) is untouched at 0.8 → live unchanged.
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.atrMinMult, 0.8, "top-level atrMinMult (live) must stay 0.8");
   assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.smcMinConfidenceB, 60, "top-level confB (live) must stay 60");
@@ -181,7 +182,7 @@ test("Sprint 16: relative pass still blocked below per-leg absolute atrMinMult f
   assert.equal(gate.mode, "relative+absolute");
 });
 
-test("SESSION-GATE: checkNoTradeSessionGate blocks SMC Scalping in Tokyo, not Intraday", () => {
+test("SESSION-GATE: helper blocks when enabled; SMC defaults have session filter OFF", () => {
   const tsAsia = Date.UTC(2026, 6, 13, 3, 0, 0);
   assert.ok(hourInMarketSession(3, "Tokyo"));
   const blocked = checkNoTradeSessionGate({
@@ -192,14 +193,17 @@ test("SESSION-GATE: checkNoTradeSessionGate blocks SMC Scalping in Tokyo, not In
     strategyKey: "SMART_MONEY_CONCEPTS",
   });
   assert.equal(blocked.ok, false);
-  const intraOk = checkNoTradeSessionGate({
+
+  // Defaults: smcSessionFilter false on Scalping + Intraday — gate is fail-open
+  const off = checkNoTradeSessionGate({
     timestamp: tsAsia,
-    noTradeSessions: ["Sydney", "Tokyo"],
-    enabled: true,
-    tradeTier: "Intraday",
+    noTradeSessions: STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Scalping.noTradeSessions,
+    enabled: STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Scalping.smcSessionFilter === true,
+    tradeTier: "Scalping",
     strategyKey: "SMART_MONEY_CONCEPTS",
   });
-  assert.equal(intraOk.ok, true);
+  assert.equal(off.ok, true);
+  assert.equal(STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Intraday.smcSessionFilter, false);
 });
 
 test("PARITY: relative branch does NOT fire on warmup/NaN baseline (no spurious rel rejection)", () => {

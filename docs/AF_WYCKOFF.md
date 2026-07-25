@@ -51,9 +51,9 @@ Backtest default: `runBacktestJob.js` forces `entryModel: "aggressive"` when uns
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `wyckoffSessionFilter: true`, Asia block, RR 2.0 / 2h hold
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `wyckoffSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -77,7 +77,7 @@ Backtest default: `runBacktestJob.js` forces `entryModel: "aggressive"` when uns
 ### Scalping
 
 - **Floor:** none
-- **Formula / components:** same checklist; session block (Asia) is hard gate, not confidence
+- **Formula / components:** same checklist; session filter OFF
 
 ### Intraday
 
@@ -102,7 +102,7 @@ Wyckoff embeds **structure SL/TP in signal meta** (`wyckoffEntry.js`): LONG spri
 - **TP method:** **Structure**: opposite range boundary
 - **ATR mult / R:R:** Meta RR ≥ `minRr` 2.0; fallback 1.5× / 3.0× ATR
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; Asia session block; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF; TIME_STOP OFF
 
 ### Intraday
 
@@ -111,7 +111,7 @@ Wyckoff embeds **structure SL/TP in signal meta** (`wyckoffEntry.js`): LONG spri
 - **TP method:** Opposite range edge (meta)
 - **ATR mult / R:R:** Planned RR from meta; fallback **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -120,7 +120,7 @@ Wyckoff embeds **structure SL/TP in signal meta** (`wyckoffEntry.js`): LONG spri
 - **TP method:** Opposite range edge (meta)
 - **ATR mult / R:R:** Planned RR from meta; fallback **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 ### Execution limits (all legs)
 
@@ -160,8 +160,8 @@ Wyckoff embeds **structure SL/TP in signal meta** (`wyckoffEntry.js`): LONG spri
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
@@ -187,7 +187,7 @@ Trading Range → Spring (LONG) or Upthrust (SHORT) → Entry Checklist → sign
 - **Trading range valid:** hard gate
 - **Spring / Upthrust:** entry trigger
 - **Checklist (model-dependent):** hard gate
-- **Session filter:** Scalping only (`wyckoffSessionFilter`)
+- **Session filter:** **off** (`wyckoffSessionFilter: false`)
 - **ATR gate:** per-leg `atrMinMult` / relative band
 - **Cooldown:** `cooldownBars` between signals
 - **Live money:** Scalping blocked; Intraday + Swing allowed

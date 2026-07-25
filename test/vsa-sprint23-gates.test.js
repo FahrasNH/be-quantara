@@ -32,13 +32,14 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(open.blocked, false);
   });
 
-  test("VSA defaults: Scalping shelved + Swing conf floor", () => {
+  test("VSA defaults: Scalping shelved + Swing conf floor; session filters OFF", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
     assert.equal(ov.Scalping.vsaScalpingShelved, true);
-    assert.equal(ov.Scalping.vsaSessionFilter, true);
+    assert.equal(ov.Scalping.vsaSessionFilter, false);
     assert.equal(ov.Swing.vsaSwingLongOnly, true);
     assert.equal(ov.Swing.vsaMinConfidenceSwing, 60);
-    assert.deepEqual(ov.Swing.noTradeSessions, ["Sydney", "Tokyo"]);
+    assert.equal(ov.Swing.vsaSessionFilter, false);
+    assert.equal(ov.Swing.noTradeSessions, undefined);
   });
 
   test("resolveVsaScalpingGateFlags reads typeOverrides", () => {
@@ -172,12 +173,12 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(gated.meta?.htfCounterPenalty, 0.5);
   });
 
-  test("Intraday defaults enable HTF align gate", () => {
+  test("Intraday defaults enable HTF align gate; session filter OFF", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
     assert.equal(ov.Intraday.vsaHtfAlignGate, true);
     assert.equal(ov.Intraday.vsaHtfCounterPenalty, 0.5);
-    assert.equal(ov.Intraday.vsaSessionFilter, true);
-    assert.deepEqual(ov.Intraday.noTradeSessions, ["London"]);
+    assert.equal(ov.Intraday.vsaSessionFilter, false);
+    assert.equal(ov.Intraday.noTradeSessions, undefined);
     assert.equal(ov.Intraday.vsaIntradayDetectorMode, "confirmation");
   });
 
@@ -200,15 +201,18 @@ describe("VSA Sprint 23 gates", () => {
     assert.ok(quietPct < 0.4);
   });
 
-  test("GUARD: Intraday does NOT inherit Scalping Asia block", () => {
+  test("GUARD: all VSA legs have session filter OFF (no Asia/London blocks)", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
-    assert.deepEqual(ov.Scalping.noTradeSessions, ["Sydney", "Tokyo"]);
-    assert.notDeepEqual(ov.Intraday.noTradeSessions, ov.Scalping.noTradeSessions);
+    assert.equal(ov.Scalping.vsaSessionFilter, false);
+    assert.equal(ov.Intraday.vsaSessionFilter, false);
+    assert.equal(ov.Swing.vsaSessionFilter, false);
+    assert.equal(ov.Scalping.noTradeSessions, undefined);
+    assert.equal(ov.Intraday.noTradeSessions, undefined);
+    assert.equal(ov.Swing.noTradeSessions, undefined);
     const intraSess = resolveVsaSessionGateFlags(
       { typeOverrides: ov },
       "Intraday",
     );
-    assert.equal(intraSess.noTradeSessions.includes("Tokyo"), false);
-    assert.equal(intraSess.noTradeSessions.includes("London"), true);
+    assert.equal(intraSess.vsaSessionFilter, false);
   });
 });

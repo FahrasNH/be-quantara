@@ -41,9 +41,9 @@ Per-leg SL/TP: `LiquidationSqueezeStrategy.calculateRiskConfig` (engine 1.6 / 2.
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `lsSessionFilter: true`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `lsSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -92,7 +92,7 @@ Pure **ATR-based** SL/TP (no structure override). Wick detection sets entry; OI/
 - **TP method:** ATR × 2.8 / 3.0
 - **ATR mult / R:R:** **RR ~1.75–2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `lsSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF
 
 ### Intraday
 
@@ -101,7 +101,7 @@ Pure **ATR-based** SL/TP (no structure override). Wick detection sets entry; OI/
 - **TP method:** ATR × 2.8
 - **ATR mult / R:R:** **RR ~1.75**
 - **Risk %:** **2%**
-- **Notes:** OI/funding fail-open; `maxHoldHours` **6**
+- **Notes:** OI/funding fail-open
 
 ### Swing
 
@@ -110,7 +110,7 @@ Pure **ATR-based** SL/TP (no structure override). Wick detection sets entry; OI/
 - **TP method:** ATR × 2.8
 - **ATR mult / R:R:** **RR ~1.75**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 Parent `riskReward` 3.0 is preset nominal; runtime uses engine ctor 1.6 / 2.8 unless Scalping typeOverride supplies 1.5 / 3.0.
 
@@ -147,8 +147,8 @@ Parent `riskReward` 3.0 is preset nominal; runtime uses engine ctor 1.6 / 2.8 un
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
@@ -174,7 +174,7 @@ Final `reason` prefixed with `ls_`.
 
 - **Wick detection:** primary trigger
 - **OI/funding:** boost or alt path; **fail-open** if missing
-- **Session filter:** Scalping only (`lsSessionFilter`)
+- **Session filter:** **off** (`lsSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 

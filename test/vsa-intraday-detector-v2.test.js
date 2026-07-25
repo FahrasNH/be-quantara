@@ -37,26 +37,24 @@ function makeCandles(n, opts = {}) {
 }
 
 describe("VSA Intraday detector v2", () => {
-  test("defaults: confirmation mode + London block (not Asia)", () => {
+  test("defaults: confirmation mode + session filter OFF", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
     assert.equal(ov.Intraday.vsaIntradayDetectorMode, "confirmation");
-    assert.equal(ov.Intraday.vsaSessionFilter, true);
-    assert.deepEqual(ov.Intraday.noTradeSessions, ["London"]);
-    assert.equal(ov.Intraday.noTradeSessions.includes("Tokyo"), false);
-    assert.equal(ov.Scalping.noTradeSessions.includes("Tokyo"), true);
+    assert.equal(ov.Intraday.vsaSessionFilter, false);
+    assert.equal(ov.Intraday.noTradeSessions, undefined);
+    assert.equal(ov.Scalping.vsaSessionFilter, false);
+    assert.equal(ov.Scalping.noTradeSessions, undefined);
   });
 
-  test("resolveVsaSessionGateFlags: Intraday gets London, Scalping gets Asia", () => {
+  test("resolveVsaSessionGateFlags: all tiers session OFF by default", () => {
     const cfg = STRATEGIES.VOLUME_SPREAD_ANALYSIS;
     const scalp = resolveVsaSessionGateFlags(cfg, "Scalping");
     const intra = resolveVsaSessionGateFlags(cfg, "Intraday");
-    assert.equal(scalp.vsaSessionFilter, true);
-    assert.deepEqual(scalp.noTradeSessions, ["Sydney", "Tokyo"]);
-    assert.equal(intra.vsaSessionFilter, true);
-    assert.deepEqual(intra.noTradeSessions, ["London"]);
+    assert.equal(scalp.vsaSessionFilter, false);
+    assert.equal(intra.vsaSessionFilter, false);
   });
 
-  test("Intraday London session gate blocks UTC 10:00", () => {
+  test("Intraday London hour NOT blocked when session filter OFF (defaults)", () => {
     const ablation = { rejBySession: 0 };
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.8, reason: "vsa_no_supply_confirmed" },
@@ -69,11 +67,34 @@ describe("VSA Intraday detector v2", () => {
         ablation,
       },
     );
+    assert.equal(gated.vote, "LONG");
+    assert.equal(ablation.rejBySession, 0);
+  });
+
+  test("Intraday London blocked only when filter explicitly enabled", () => {
+    const ablation = { rejBySession: 0 };
+    const gated = applyVsaEntryGates(
+      { vote: "LONG", confidence: 0.8, reason: "vsa_no_supply_confirmed" },
+      {
+        config: {
+          tradeType: "Intraday",
+          typeOverrides: {
+            Intraday: {
+              ...STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides.Intraday,
+              vsaSessionFilter: true,
+              noTradeSessions: ["London"],
+            },
+          },
+          candleTimestamp: Date.parse("2024-06-01T10:00:00.000Z"),
+        },
+        ablation,
+      },
+    );
     assert.equal(gated.vote, "NEUTRAL");
     assert.equal(ablation.rejBySession, 1);
   });
 
-  test("Intraday Tokyo session NOT blocked (Asia is best subset)", () => {
+  test("Intraday Tokyo session NOT blocked (session filter OFF)", () => {
     const ablation = { rejBySession: 0 };
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.8, reason: "vsa_no_supply_confirmed" },
@@ -120,12 +141,12 @@ describe("VSA Intraday detector v2", () => {
     assert.equal(ablation.rejPattern, 1);
   });
 
-  test("resolveVsaIntradayGateFlags exposes session + HTF flags", () => {
+  test("resolveVsaIntradayGateFlags exposes HTF flags; session OFF", () => {
     const flags = resolveVsaIntradayGateFlags({
       typeOverrides: STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides,
     });
     assert.equal(flags.vsaHtfAlignGate, true);
-    assert.equal(flags.vsaSessionFilter, true);
-    assert.deepEqual(flags.noTradeSessions, ["London"]);
+    assert.equal(flags.vsaSessionFilter, false);
+    assert.equal(flags.noTradeSessions, null);
   });
 });

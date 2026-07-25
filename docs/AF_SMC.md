@@ -57,9 +57,9 @@ Per-leg SL/TP geometry: [`SMC_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) a
 
 ### Per trade type overrides (`SMC_LEG_TYPE_OVERRIDES`)
 
-- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `maxHoldHours: 2`, `smcSessionFilter: true`, `noTradeSessions: ["Sydney","Tokyo"]`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
-- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `maxHoldHours: 6`, `smcSessionFilter: true`, `noTradeSessions: ["London"]`, `smcBlockAllInChop: true`
-- **Swing:** `slAtrMult/tpAtrMult: 1.2/3.6`, `maxHoldHours: 120`
+- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `smcSessionFilter: false`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
+- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `smcSessionFilter: false`, `smcBlockAllInChop: true`
+- **Swing:** `slAtrMult/tpAtrMult: 1.2/3.6`
 
 Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread confidence from `typeOverrides` into `detectSignalMulti`). Backtest merges per-leg overrides onto cfg.
 
@@ -77,7 +77,7 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 - **Range:** 0–100 (`sequenceMeta.score` / per-leg `confA|B|C`)
 - **Default path (sequence engine):** base **40** + sweep quality (sweet-spot vol ratio, up to ~14) + displacement (ATR-normalized by default via `smcScoreAtrNorm !== false`) + FVG size + mitigation depth (up to 18) + sweep freshness (+8 / +3 / −8) + OB confluence (+12) − weak displacement volume (−12) − breakout/slice-through (−15)
 - **HTF align (post-score):** soft **−15** when counter-HTF (Scalping); hard block when `smcHtfHardBlock` or pair `regimeFilterRequired`
-- **Legacy path:** weighted `_componentConfidence` per leg (sweep/CVD/OB for A; CHoCH/EMA/OB for B; FVG/displacement/OB for C) — capped at 100
+- **Legacy path:** weighted `_componentConfidence` per leg (sweep/CVD/OB for A; CHoCH/OB/CVD for B — **no EMA trendAlign**; FVG/displacement/OB for C) — capped at 100
 - **Race / CSV graded overlay:** `enrichMetaWithGradedScore` recomputes 0–100 from ML features (`sweepStrength`, `fvgSizeAtr`, `obDistanceAtr`, …) using Scalping vs Intraday/Swing rubric caps
 - **Aggregate:** `smcMinAggregateConfidence` default **0** (no aggregate gate)
 
@@ -87,7 +87,7 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 
 - **Floor:** ≥**40** backtest (`SMC_LEG_TYPE_OVERRIDES.Scalping.smcMinConfidenceA`); live top-level **60** (typeOverrides not merged into live `detectSignalMulti`)
 - **Formula / components:** same sequence `_scoreSequence`; optional side-specific overrides `smcMinConfidenceALong` / `AShort` (default = floor)
-- **Post-gates:** CHoCH validation, session, chop (LONG block), OB retest, ATR gate — see [How Entry Works](#how-entry-works)
+- **Post-gates:** CHoCH validation, chop (LONG block), OB retest, ATR gate — see [How Entry Works](#how-entry-works) (session filter OFF)
 
 ### Intraday
 
@@ -113,7 +113,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × `tpAtrMult` (3.0)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; Asia block; OB retest required; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; OB retest required
 
 ### Intraday
 
@@ -122,7 +122,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × 3.6
 - **ATR mult / R:R:** 1.8 / 3.6 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** London session block; conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6**
+- **Notes:** conf≥80; chop blocks all sides; pivot OB
 
 ### Swing
 
@@ -131,7 +131,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × 3.6
 - **ATR mult / R:R:** 1.2 / 3.6 → **RR 3.0**
 - **Risk %:** **2%**
-- **Notes:** Optional STRONG_TREND TP boost (`strongTrendTPMult`); `maxHoldHours` **120** (5d)
+- **Notes:** Optional STRONG_TREND TP boost (`strongTrendTPMult`)
 
 ### Execution limits (all legs)
 
@@ -166,8 +166,8 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 
 ---
 **Limit:** TIME_STOP
-**Value:** Force-close open leg at max hold
-**SSOT:** Scalping 2h · Intraday 6h · Swing 120h
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
@@ -200,8 +200,8 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 
 ### Session filter
 
-- **Scalping (5m):** Asia block (Sydney+Tokyo)
-- **Intraday (15m):** **London** block
+- **Scalping (5m):** **off** (`smcSessionFilter: false` — Asia block removed)
+- **Intraday (15m):** **off** (`smcSessionFilter: false` — London block removed)
 - **Swing (4h):** off (default)
 
 ### Chop / regime
@@ -243,6 +243,10 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 **Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 **Legacy path** (`smcUseSequenceEngine === false`): separate single-bar detectors per leg (A/B/C). No `sequenceMeta` → **signal labels usually empty**.
+
+- **A (Scalping):** liquidity sweep + CVD align
+- **B (Intraday):** **CHoCH structure only** — direction from `_detectCHoCH`; EMA fast/slow is **not** a hard gate (Sprint 23: lagging EMA delayed early-reversal entries). Legacy conf B weights: choch 40 / obStrength 35 / cvdAlign 25
+- **C (Swing):** FVG + displacement + discount/premium zone
 
 ---
 

@@ -38,7 +38,12 @@ test("SWING-FLAGS: resolveSwingGateFlags defaults + typeOverrides", () => {
   assert.equal(flags.smcMaxFundingRate, 0.0002);
   assert.equal(flags.smcHoldWarnHours, 168);
   assert.equal(flags.swingMarketingBlocked, true);
-  assert.equal(DEFAULT_SWING_MAX_HOLD_HOURS, 120);
+  assert.equal(DEFAULT_SWING_MAX_HOLD_HOURS, null, "TIME_STOP OFF by default");
+});
+
+test("SWING-FLAGS: resolveSwingGateFlags without maxHoldHours → TIME_STOP OFF", () => {
+  const flags = resolveSwingGateFlags({ typeOverrides: { Swing: {} } });
+  assert.equal(flags.maxHoldHours, null);
 });
 
 test("SWING-FUNDING: blocks LONG on extreme positive funding, SHORT on extreme negative", () => {
@@ -90,11 +95,9 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig hon
     ?? STRATEGIES.SMART_MONEY_CONCEPTS?.typeOverrides?.Swing
     ?? null;
   if (ov && ov.slAtrMult != null) {
-    assert.equal(ov.slAtrMult, 1.8);
-    assert.equal(ov.tpAtrMult, 4.5);
-    assert.equal(ov.maxHoldHours, 120);
-    assert.equal(ov.smcRequireObRetest, true);
-    assert.equal(ov.smcFundingGuard, true);
+    assert.equal(ov.slAtrMult, 1.2);
+    assert.equal(ov.tpAtrMult, 3.6);
+    assert.equal(ov.maxHoldHours, undefined, "TIME_STOP OFF");
   }
 });
 

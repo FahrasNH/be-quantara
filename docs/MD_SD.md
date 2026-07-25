@@ -35,9 +35,9 @@ Per-leg SL/TP: `SupplyDemandStrategy.calculateRiskConfig` + zone/FVG `tpOverride
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `sdSessionFilter: true`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `sdSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -86,7 +86,7 @@ Zone **retest radius** uses `mdSdConfluenceAtrMult` 0.75×ATR (entry) — not th
 - **TP method:** FVG/structure override **or** ATR × 2.5
 - **ATR mult / R:R:** 1.5 / 2.5 → **RR ~1.67**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; `sdSessionFilter`; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF
 
 ### Intraday
 
@@ -95,7 +95,7 @@ Zone **retest radius** uses `mdSdConfluenceAtrMult` 0.75×ATR (entry) — not th
 - **TP method:** Override **or** ATR × 2.5
 - **ATR mult / R:R:** 1.4 / 2.5 → **RR ~1.79**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -104,7 +104,7 @@ Zone **retest radius** uses `mdSdConfluenceAtrMult` 0.75×ATR (entry) — not th
 - **TP method:** Override **or** ATR × 2.5
 - **ATR mult / R:R:** **RR ~1.79**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 ### Execution limits (all legs)
 
@@ -139,8 +139,8 @@ Zone **retest radius** uses `mdSdConfluenceAtrMult` 0.75×ATR (entry) — not th
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
@@ -165,7 +165,7 @@ Scan OB/FVG Zones → Price Retest in Zone → Reversal Candle → signal
 - **Zone proximity:** hard gate
 - **Reversal candle:** hard gate
 - **Volume confirm:** confidence boost only
-- **Session filter:** Scalping only (`sdSessionFilter`)
+- **Session filter:** **off** (`sdSessionFilter: false`)
 - **ATR gate:** per-leg overrides
 - **Live money:** Scalping blocked; Intraday + Swing allowed
 
