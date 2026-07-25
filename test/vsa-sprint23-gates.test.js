@@ -11,6 +11,7 @@ const {
   evaluateVSAComponent,
   resolveVsaScalpingGateFlags,
   resolveVsaSwingGateFlags,
+  resolveVsaSessionGateFlags,
 } = require("../src/core/strategy-engine/af/vsaEntry");
 const { STRATEGIES } = require("../src/config/strategyDefaults");
 
@@ -174,5 +175,20 @@ describe("VSA Sprint 23 gates", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
     assert.equal(ov.Intraday.vsaHtfAlignGate, true);
     assert.equal(ov.Intraday.vsaHtfCounterPenalty, 0.5);
+    assert.equal(ov.Intraday.vsaSessionFilter, true);
+    assert.deepEqual(ov.Intraday.noTradeSessions, ["London"]);
+    assert.equal(ov.Intraday.vsaIntradayDetectorMode, "confirmation");
+  });
+
+  test("GUARD: Intraday does NOT inherit Scalping Asia block", () => {
+    const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
+    assert.deepEqual(ov.Scalping.noTradeSessions, ["Sydney", "Tokyo"]);
+    assert.notDeepEqual(ov.Intraday.noTradeSessions, ov.Scalping.noTradeSessions);
+    const intraSess = resolveVsaSessionGateFlags(
+      { typeOverrides: ov },
+      "Intraday",
+    );
+    assert.equal(intraSess.noTradeSessions.includes("Tokyo"), false);
+    assert.equal(intraSess.noTradeSessions.includes("London"), true);
   });
 });

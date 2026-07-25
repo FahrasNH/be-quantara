@@ -23,6 +23,10 @@ const {
 const {
   enrichMetaWithGradedScore,
 } = require("../scoring/ComponentScoringEngine");
+const {
+  detectIntradayVsaSignal,
+  resolveIntradayDetectorMode,
+} = require("./vsaIntradayDetector");
 
 const DEFAULTS = {
   minBars: 20,
@@ -69,6 +73,9 @@ function resolveVsaIntradayGateFlags(config = {}) {
     vsaHtfAlignGate: config.vsaHtfAlignGate ?? ov.vsaHtfAlignGate ?? false,
     /** Confidence multiplier removed on LONG×BEARISH (0.5 = halve confidence). */
     vsaHtfCounterPenalty: config.vsaHtfCounterPenalty ?? ov.vsaHtfCounterPenalty ?? 0.5,
+    /** Sprint 23 Fix #2: Intraday London block (NOT Asia — session profile inverted). */
+    vsaSessionFilter: config.vsaSessionFilter ?? ov.vsaSessionFilter ?? false,
+    noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
   };
 }
 
@@ -82,6 +89,13 @@ function isVsaCounterTrend(vote, htfTrend) {
 function resolveVsaSessionGateFlags(config = {}, tradeTier) {
   if (tradeTier === "Scalping") return resolveVsaScalpingGateFlags(config);
   if (tradeTier === "Swing") return resolveVsaSwingGateFlags(config);
+  if (tradeTier === "Intraday") {
+    const intraday = resolveVsaIntradayGateFlags(config);
+    return {
+      vsaSessionFilter: intraday.vsaSessionFilter,
+      noTradeSessions: intraday.noTradeSessions,
+    };
+  }
   return { vsaSessionFilter: false, noTradeSessions: null };
 }
 
@@ -119,7 +133,7 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
 
   const sessionFlags = resolveVsaSessionGateFlags(config, tradeTier);
   if (
-    (tradeTier === "Scalping" || tradeTier === "Swing")
+    (tradeTier === "Scalping" || tradeTier === "Swing" || tradeTier === "Intraday")
     && sessionFlags.vsaSessionFilter === true
   ) {
     const ts = timestampFromConfig(config, candles);
@@ -348,6 +362,30 @@ function evaluateVSAComponent(candles, swingPoints = null, config = {}) {
   if (lastIdx == null || !candles?.closes || lastIdx < cfg.minBars - 1) {
     _abl("rejMinBars");
     return { vote: "NEUTRAL", confidence: 0, reason: "insufficient_data" };
+  }
+
+  // Sprint 23 Fix #3: Intraday detector v2 (confirmation bar default).
+  if (tradeTier === "Intraday") {
+    const detectorMode = resolveIntradayDetectorMode(cfg);
+    if (detectorMode !== "legacy") {
+      const v2Signal = detectIntradayVsaSignal(candles, lastIdx, cfg, {
+        ...cfg,
+        indicators: config.indicators,
+      });
+      if (!v2Signal) {
+        _abl("rejPattern");
+        return { vote: "NEUTRAL", confidence: 0, reason: "no_pattern_v2" };
+      }
+      const raw = {
+        vote: v2Signal.vote,
+        confidence: v2Signal.confidence,
+        reason: v2Signal.reason,
+        meta: v2Signal.meta || {},
+      };
+      const gated = applyVsaEntryGates(raw, { config: cfg, candles, ablation });
+      if (gated.vote === "LONG" || gated.vote === "SHORT") _abl("passed");
+      return gated;
+    }
   }
 
   const vol = candles.volumes?.[lastIdx];

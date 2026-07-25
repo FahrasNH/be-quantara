@@ -94,7 +94,7 @@ class VsaStrategy extends StrategyBase {
     const result = evaluateVSAComponent(
       candles,
       null,
-      { ...DEFAULTS, ...config.vsa, ...config, ablation: this._ablation },
+      { ...DEFAULTS, ...config.vsa, ...config, indicators, ablation: this._ablation },
     );
     const nested = result.meta || {};
     const spreadType = nested.spreadType || {};
