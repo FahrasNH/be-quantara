@@ -496,6 +496,8 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
       // Diteruskan ke TIAP AdaptiveStrategyEngine → gate _checkAccountOpenCap aktif
       // utk jalur multi-strategi (semua engine berbagi user → cap dihitung dari DB).
       maxAccountOpenPositions: opts.maxAccountOpenPositions ?? 0,
+      // Delisted / outside allowlist: monitor SL/TP only.
+      legacyMonitorOnly: opts.legacyMonitorOnly === true,
       // tpMode + Grok Confirm dari bot DB — override strat.tpMode (mis. TM default partial
       // tapi user pilih TP Full di UI). Sebelumnya tidak diteruskan → UI "TP Full" tapi
       // engine tetap partial close (+1R/+2R).

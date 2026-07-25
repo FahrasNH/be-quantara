@@ -57,7 +57,7 @@ test("validateSymbolFormat rejects invalid format", () => {
   assert.strictEqual(r.body.message, "Invalid symbol format");
 });
 
-test("validateSymbolParam blocks disallowed symbols (create/start)", () => {
+test("validateSymbolParam blocks disallowed symbols (create only)", () => {
   const r = runMiddleware(validateSymbolParam, "AUCTIONUSDT");
   assert.strictEqual(r.calledNext, false);
   assert.strictEqual(r.statusCode, 400);
