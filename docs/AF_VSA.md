@@ -17,15 +17,18 @@
 
 Per-leg tuning hidup di `VSA_LEG_TYPE_OVERRIDES`. Risk/SL/TP dari **`AF_COMPONENT_BASE`** (inherits SMC geometry).
 
-### Risk & SL/TP (umbrella preset)
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined risk; engine ctor fallback 0.01 |
-| `atrMultiplier` | 1.5 | × ATR | Stop-loss dasar |
-| `riskReward` | 2.0 | × SL | Take-profit = 3.0×ATR nominal (RR 1:2) |
-| `maxTradesPerDay` | 8 | trade | Batas frekuensi harian |
-| `leverage` | 3 | × | Leverage default |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.03 | fraksi equity | Daily loss halt (realized + floating) |
+| `maxTradesPerDay` | 8 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 60 | menit | Cooldown after any loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 3 | × | Default bot leverage |
+
+Per-leg geometry: [`VSA_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type). No `calculateRiskConfig` on `VsaStrategy` — executor uses ATR fallback from `AF_COMPONENT_BASE`.
 
 ### Entry thresholds (VSA component)
 
@@ -55,6 +58,32 @@ Per-leg tuning hidup di `VSA_LEG_TYPE_OVERRIDES`. Risk/SL/TP dari **`AF_COMPONEN
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
 | `afCombinationMode` | `"race"` | SMC / Wyckoff / VSA race-to-confirm |
+
+---
+
+## Risk & SL/TP (per Trade Type)
+
+VSA has **no** `calculateRiskConfig` — `RealStrategyBacktestService` applies `atrMultiplier` (1.5×) SL and `riskReward` (2.0) TP distance fallback. Scalping inherits `STANDARD_LEG_TYPE_OVERRIDES` geometry when not shelved. Entry pattern gates: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | — | — | — | — | **`vsaScalpingShelved: true`** — hard block, no trades |
+| Intraday | 15m / 1h | ATR × 1.5 (fallback) | SL dist × 2.0 (`riskReward`) | 1.5 / 3.0 → **RR 2.0** | **2%** | London block; HTF align gate; confirmation-bar detector v2; `maxHoldHours` **6** |
+| Swing | 4h / 1w | ATR × 1.5 (fallback) | SL dist × 2.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | Asia block; **LONG-only**; conf≥60 (Stopping Volume bypasses); `maxHoldHours` **120** |
+
+`VsaStrategy.getRiskConfig` documents ctor hints (1.2 / 2.4) but backtest/live sizing path reads merged `strategyDefaults` + fallback chain above.
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 8 | `AF_COMPONENT_BASE` |
+| Cooldown after loss | 60 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 3% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: relative 0.4–4.0 (when not shelved); Intraday: abs ≥0.4%; Swing: abs ≥0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
 
 ---
 
@@ -102,7 +131,7 @@ Effort/result mismatch reduces confidence only — never blocks or adds labels.
 | ATR gate | relative 0.4–4.0 | abs 0.4% | abs 0.8% |
 | Live money | **blocked** | **blocked** | **blocked** |
 
-**SL/TP**: inherits `STANDARD_LEG_TYPE_OVERRIDES` geometry — Scalping RR 2.0 / 2h hold; Intraday 6h; Swing 120h.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 **Walk-forward**: Intraday 3-window gate **BLOCK 0/3** — all VSA legs remain dry-run only.
 

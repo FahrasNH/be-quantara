@@ -13,16 +13,19 @@
 
 ## Default Config (Factory Reset)
 
-### Risk & SL/TP
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | strategyDefaults; engine ctor fallback |
-| `atrMultiplier` / `slMultiplier` | 1.5 / 1.7 | × ATR | SL — ctor 1.7× if not overridden |
-| `riskReward` / `tpMultiplier` | 3.0 / 3.2 | × SL / × ATR | TP nominal; cap `maxPlannedRR` 2.5 |
-| `preferredTpMode` | `"full"` | enum | `full` or `partial` (≤33%) |
-| `maxTradesPerDay` | 5 | trade | strategyDefaults; engine ctor = 2 |
-| `leverage` | 1 | × | Tanpa leverage |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.08 | fraksi equity | Daily loss halt |
+| `maxTradesPerDay` | 5 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 1 | × | Spot-only default |
+| `preferredTpMode` | `"full"` | enum | Full TP default; partial ≤33% optional |
+
+Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ### Entry thresholds (4-phase sequence)
 
@@ -56,6 +59,32 @@
 
 ---
 
+## Risk & SL/TP (per Trade Type)
+
+**Hybrid structure + ATR** SL: tighter of ATR stop vs structure stop (retest extreme ± 0.2×ATR or breakout level ± 0.25×ATR), floored at `minSlAtrFloor` 1.5×ATR. TP: structural target when on correct side, else ATR × `tpMultiplier`, **capped** at `maxPlannedRR` 2.5× actual SL distance. Pre-entry RR room checked in phase 12 ablation. Entry phases: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | Structure **or** ATR × 1.7 (min 1.5× floor) | Structural target **or** ATR × 3.2, cap **2.5R** | Planned ≤ **2.5R** | **1%** | Relative ATR gate; `brSessionFilter`; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | Same hybrid SL | Same capped TP | Planned ≤ **2.5R** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
+| Swing | 4h / 1w | Same hybrid SL | Same capped TP | Planned ≤ **2.5R** | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+
+Parent `riskReward` 3.0 is **nominal** — engine enforces `maxPlannedRR: 2.5`.
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 5 | `BS_COMPONENT_BASE` |
+| Cooldown after loss | 5 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 8% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
+
+---
+
 ## How Entry Works
 
 Four-phase sequential breakout: consolidation → breakout → displacement wait → true retest entry.
@@ -84,7 +113,7 @@ S&R Levels → BB Squeeze / Vol Floor → Breakout + Volume → Displacement Wai
 | ATR gate | per-leg overrides |
 | Live money | Scalping blocked; Intraday + Swing allowed |
 
-**SL/TP**: parent `riskReward` 3.0 nominal; engine cap `maxPlannedRR: 2.5`. Per-leg TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ---
 

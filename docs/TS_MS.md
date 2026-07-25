@@ -11,15 +11,18 @@
 
 ## Default Config (Factory Reset)
 
-### Risk & SL/TP
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | preset; engine ctor 0.015 |
-| `atrMultiplier` | 1.5 | × ATR | Stop-loss |
-| `riskReward` | 2.0 | × SL | TP nominal |
-| `maxTradesPerDay` | 4 | trade | Cap harian |
-| `leverage` | 2 | × | Leverage default |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.06 | fraksi equity | Daily loss halt |
+| `maxTradesPerDay` | 4 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 2 | × | Default leverage |
+
+Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0).
 
 ### Entry thresholds (Dow structure)
 
@@ -38,6 +41,30 @@
 | Scalping | `atrGateRelative: true`, `msSessionFilter: true`, RR 2.0 / 2h |
 | Intraday | `atrMinMult: 0.4`, 6h hold |
 | Swing | `atrMinMult: 0.8`, 120h hold |
+
+---
+
+## Risk & SL/TP (per Trade Type)
+
+Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) — distinct from **stop-loss** distance in `calculateRiskConfig`. Entry structure gates: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **1%** | Relative ATR gate; `msSessionFilter`; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
+| Swing | 4h / 1w | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 4 | `TS_COMPONENT_BASE` |
+| Cooldown after loss | 5 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 6% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute floors 0.4% / 0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
 
 ---
 

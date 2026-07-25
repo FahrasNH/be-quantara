@@ -18,15 +18,18 @@
 Nilai di bawah dari **`strategyDefaults.js`** (SSOT); gate boolean default **OFF** kecuali disebut.  
 Per-leg tuning hidup di `SMC_LEG_TYPE_OVERRIDES` (bukan geometri seragam).
 
-### Risk & SL/TP
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined risk cap; engine ctor fallback 0.01 jika tidak di-merge |
-| `atrMultiplier` | 1.5 | × ATR | Stop-loss dasar |
-| `riskReward` | 2.0 | × SL | Take-profit nominal (per-leg `slAtrMult`/`tpAtrMult` override) |
-| `maxTradesPerDay` | 8 | trade | Batas frekuensi harian |
-| `leverage` | 3 | × | Leverage default bot |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg (`typeRiskLadder.js`) |
+| `maxDailyLossPct` | 0.03 | fraksi equity | Daily loss halt (realized + floating) |
+| `maxTradesPerDay` | 8 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 60 | menit | Cooldown after any loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 3 | × | Default bot leverage |
+
+Per-leg SL/TP geometry: [`SMC_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) and `SmartMoneyConceptsStrategy.calculateRiskConfig`.
 
 ### Entry thresholds (sequence engine)
 
@@ -72,6 +75,30 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 
 ---
 
+## Risk & SL/TP (per Trade Type)
+
+Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRiskConfig` using per-leg `typeOverrides.slAtrMult` / `tpAtrMult` (merged from `SMC_LEG_TYPE_OVERRIDES`). Entry funnel gates (session, chop, confidence) live in [How Entry Works](#how-entry-works) — not repeated here.
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | ATR × `slAtrMult` (1.5) | ATR × `tpAtrMult` (3.0) | 1.5 / 3.0 → **RR 2.0** | **1%** | Relative ATR gate 0.4–4.0 + abs floor 0.287%; Asia block; OB retest required; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | ATR × 1.8 | ATR × 3.6 | 1.8 / 3.6 → **RR 2.0** | **2%** | London session block; conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6** |
+| Swing | 4h / 1w | ATR × 1.2 | ATR × 3.6 | 1.2 / 3.6 → **RR 3.0** | **2%** | Optional STRONG_TREND TP boost (`strongTrendTPMult`); `maxHoldHours` **120** (5d) |
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 8 | `AF_COMPONENT_BASE` / `checkEntryRiskGates` |
+| Cooldown after loss | 60 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 3% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: **relative** 0.4–4.0 vs 100-bar SMA + abs 0.287%; Intraday: **absolute** ≥0.4%; Swing: **absolute** ≥0.8% | `entryRiskGates.evaluateAtrEntryGate` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` — legRiskPct from `riskShareForType` (1% / 2% / 2%) | `RealStrategyBacktestService`, `typeRiskLadder.js` |
+| TIME_STOP | Force-close open leg at max hold | Scalping 2h · Intraday 6h · Swing 120h |
+
+---
+
 ## How Entry Works
 
 Default path uses the **sequence engine** (`smcUseSequenceEngine !== false`). All trade types run the **same causal sequence** on their own entry-TF candles; per-leg gates and confidence floors decide which legs actually open.
@@ -104,7 +131,7 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 | ATR gate | relative 0.4–4.0 + abs 0.287% | abs 0.4% | abs 0.8% |
 | Live money | **blocked** | **blocked** | **blocked** |
 
-**SL/TP**: per-leg `slAtrMult`/`tpAtrMult` from `typeOverrides` → Planned RR Scalping/Intraday ~2.0, Swing ~3.0. TIME_STOP: Scalping 2h, Intraday 6h, Swing 120h.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 **Legacy path** (`smcUseSequenceEngine === false`): separate single-bar detectors per leg (A/B/C). No `sequenceMeta` → **signal labels usually empty**.
 

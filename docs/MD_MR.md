@@ -11,16 +11,18 @@
 
 ## Default Config (Factory Reset)
 
-### Risk & SL/TP
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | strategyDefaults; engine ctor 0.008 |
-| `atrMultiplier` / `atrMult` | 1.5 / 1.4 | × ATR | SL |
-| `riskReward` | 2.0 | × SL | TP nominal RR 1:2 |
-| `tpMultiplierA` / `B` | 2.5 / 2.0 | × ATR | Per-leg TP (Scalping / Intraday) |
-| `maxTradesPerDay` | 3 | trade | strategyDefaults; ctor = 5 |
-| `leverage` | 1.0 | × | Tanpa leverage |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.03 | fraksi equity | Daily loss halt |
+| `maxTradesPerDay` | 3 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 15 | menit | Cooldown after loss |
+| `maxConsecLoss` | 2 | loss | Consecutive-loss stop |
+| `leverage` | 1.0 | × | Spot-only default |
+
+Per-leg SL/TP: `MeanReversionStrategy.calculateRiskConfig` + optional `tpOverride` from OB/FVG/BB mid.
 
 ### Entry thresholds (Layer A — BB + RSI + VWAP)
 
@@ -54,6 +56,30 @@
 
 ---
 
+## Risk & SL/TP (per Trade Type)
+
+SL uses `atrMult` (1.4 ctor / 1.5 from Scalping `slAtrMult` override). TP prefers **structure target** (`tpOverride` from nearest FVG or BB middle via `resolveMdTakeProfit`) when distance ≥ 0.5× SL; else leg-specific RR multipliers. Entry BB/RSI gates: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | ATR × 1.5 (`slAtrMult`) | FVG/BB mid override **or** 2.5× SL (`tpMultiplierA`) **or** 3.0× ATR | 1.5 / up to 3.0 → **RR ≤ 2.0** planned | **1%** | Relative ATR gate; `mrSessionFilter`; trailing stop 0.3×ATR; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | ATR × 1.4 | FVG/BB override **or** 2.0× SL (`tpMultiplierB`) | ~1.4 / 2.8 → **RR ~2.0** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
+| Swing | 4h / 1w | ATR × 1.5 (parent) | Override **or** 2.0× SL dist | **RR 2.0** nominal | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 3 | `MD_COMPONENT_BASE` |
+| Cooldown after loss | 15 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 2 | `maxConsecLoss` |
+| Daily loss limit | 3% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
+
+---
+
 ## How Entry Works
 
 Three-layer pipeline: mean-reversion signal → ADX regime gate → optional OB/FVG refinement.
@@ -83,7 +109,7 @@ BB+RSI+VWAP extreme → volume floor → ADX regime gate → OB/FVG refine → s
 | ATR gate | per-leg overrides |
 | Live money | Scalping blocked; Intraday + Swing allowed |
 
-**SL/TP**: per-leg TP multipliers; TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ---
 

@@ -16,15 +16,19 @@
 
 Wyckoff-specific knobs on `STRATEGIES.WYCKOFF`; leg geometry from `STANDARD_LEG_TYPE_OVERRIDES`.
 
-### Risk & SL/TP (umbrella preset)
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | Combined risk; engine ctor fallback 0.01 |
-| `atrMultiplier` | 1.5 | × ATR | Stop-loss dasar |
-| `riskReward` | 2.0 | × SL | Take-profit = 3.0×ATR (RR 1:2) |
-| `maxTradesPerDay` | 8 | trade | Batas frekuensi harian |
-| `leverage` | 3 | × | Leverage default |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.03 | fraksi equity | Daily loss halt (realized + floating) |
+| `maxTradesPerDay` | 8 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 60 | menit | Cooldown after any loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 3 | × | Default bot leverage |
+| `minRr` | 2.0 | R | Minimum planned RR in entry checklist (moderate/conservative) |
+
+Signal meta carries **structure-based** SL/TP; see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ### Entry thresholds (Wyckoff component)
 
@@ -61,6 +65,31 @@ Backtest default: `runBacktestJob.js` forces `entryModel: "aggressive"` when uns
 
 ---
 
+## Risk & SL/TP (per Trade Type)
+
+Wyckoff embeds **structure SL/TP in signal meta** (`wyckoffEntry.js`): LONG spring → SL at invalidation (below spring) / TP at `rangeHigh`; SHORT upthrust → SL at invalidation / TP at `rangeLow`. LPS/LPSY continuation uses range boundary invalidation with opposite range target. `WyckoffStrategy` has **no** `calculateRiskConfig` — backtest executor falls back to ATR × 1.5 SL and `riskReward` 2.0 TP unless meta levels are wired by the umbrella winner path. Entry checklist gates: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | **Structure**: spring/upthrust invalidation level | **Structure**: opposite range boundary | Meta RR ≥ `minRr` 2.0; fallback 1.5× / 3.0× ATR | **1%** | Relative ATR gate; Asia session block; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | Structure invalidation (meta) | Opposite range edge (meta) | Planned RR from meta; fallback **RR 2.0** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
+| Swing | 4h / 1w | Structure invalidation (meta) | Opposite range edge (meta) | Planned RR from meta; fallback **RR 2.0** | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 8 | `AF_COMPONENT_BASE` |
+| Cooldown after loss | 60 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 3% equity (incl. floating) | `maxDailyLossPct` |
+| Signal cooldown | 5 bars between Wyckoff signals | `cooldownBars` |
+| ATR range gate | Scalping: relative 0.4–4.0; Intraday: abs ≥0.4%; Swing: abs ≥0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
+
+---
+
 ## How Entry Works
 
 Wyckoff scans for a **valid trading range**, then a schematic manipulation event and entry checklist pass.
@@ -90,7 +119,7 @@ Trading Range → Spring (LONG) or Upthrust (SHORT) → Entry Checklist → sign
 | Cooldown | `cooldownBars` between signals |
 | Live money | Scalping blocked; Intraday + Swing allowed |
 
-**SL/TP**: `STANDARD_LEG_TYPE_OVERRIDES` — Scalping 1.5/3.0 ATR, 2h TIME_STOP; Intraday/Swing default parent geometry.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ---
 

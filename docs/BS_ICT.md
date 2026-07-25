@@ -13,15 +13,18 @@
 
 ## Default Config (Factory Reset)
 
-### Risk & SL/TP
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | preset; engine ctor 0.015 |
-| `atrMultiplier` | 1.5 | × ATR | Stop-loss |
-| `riskReward` | 3.0 | × SL | TP nominal RR 1:3 |
-| `maxTradesPerDay` | 5 | trade | Cap harian |
-| `leverage` | 1 | × | Tanpa leverage |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.08 | fraksi equity | Daily loss halt |
+| `maxTradesPerDay` | 5 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 1 | × | Spot-only default |
+
+Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ### Entry thresholds (Kill Zone + Liquidity Raid)
 
@@ -49,6 +52,32 @@
 | Scalping | `atrGateRelative: true`, `ictSessionFilter: true`, RR 2.0 / 2h |
 | Intraday | `atrMinMult: 0.4`, 6h hold |
 | Swing | `atrMinMult: 0.8`, 120h hold |
+
+---
+
+## Risk & SL/TP (per Trade Type)
+
+SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buffer); otherwise ATR × 1.5. TP fixed ATR multiple. Kill-zone entry logic: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | Raid wick **or** ATR × 1.5 | ATR × 3.0 (typeOverride) / 2.5 (engine) | **RR ~1.67–2.0** | **1%** | Relative ATR gate; `ictSessionFilter`; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | Raid wick **or** ATR × 1.5 | ATR × 2.5 (engine) / 3.0 (merged) | **RR ~1.67–2.0** | **2%** | Abs ATR floor 0.4%; `maxHoldHours` **6** |
+| Swing | 4h / 1w | Raid wick **or** ATR × 1.5 | ATR × 2.5–3.0 | **RR ~1.67–2.0** | **2%** | Abs ATR floor 0.8%; `maxHoldHours` **120** |
+
+Parent `riskReward` 3.0 is preset nominal; engine ctor defaults 1.5 / 2.5 unless typeOverride scalping geometry applies.
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 5 | `BS_COMPONENT_BASE` |
+| Cooldown after loss | 5 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 8% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
 
 ---
 
@@ -81,7 +110,7 @@ Kill Zone Check (optional hard) → Liquidity Raid → confidence adjust → sig
 
 **Not implemented**: MSS, OTE — formatter vocabulary only.
 
-**SL/TP**: inherits BS geometry; per-leg TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ---
 
