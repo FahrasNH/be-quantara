@@ -29,6 +29,8 @@ const DEFAULT_LIVE_ELIGIBLE_TYPES = ["Intraday", "Swing"];
 const PER_STRATEGY_LIVE_ELIGIBLE_TYPES = {
   // Sprint 22: Intraday PF<1 on BNB pre-fix — all SMC legs dry-run until walk-forward re-validates
   SMART_MONEY_CONCEPTS: [],
+  // Sprint 23: VSA Intraday walk-forward BLOCK 0/3 (−89% NET post Fix #4) — dry-run only
+  VOLUME_SPREAD_ANALYSIS: [],
 };
 
 /**

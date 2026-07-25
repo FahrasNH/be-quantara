@@ -22,6 +22,12 @@ test("LIVE-GATE: SMART_MONEY_CONCEPTS dry-run only until walk-forward re-validat
   assert.equal(isTypeLiveEligible("SMART_MONEY_CONCEPTS", "Scalping"), false);
 });
 
+test("LIVE-GATE: VOLUME_SPREAD_ANALYSIS dry-run only — Sprint 23 walk-forward BLOCK 0/3", () => {
+  assert.equal(isTypeLiveEligible("VOLUME_SPREAD_ANALYSIS", "Intraday"), false);
+  assert.equal(isTypeLiveEligible("VOLUME_SPREAD_ANALYSIS", "Swing"), false);
+  assert.equal(isTypeLiveEligible("VOLUME_SPREAD_ANALYSIS", "Scalping"), false);
+});
+
 test("LIVE-GATE: other strategies keep Intraday + Swing live-eligible", () => {
   assert.equal(isTypeLiveEligible("TREND_FOLLOWING", "Intraday"), true);
   assert.equal(isTypeLiveEligible("TREND_FOLLOWING", "Swing"), true);
