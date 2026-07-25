@@ -39,6 +39,41 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `volumeProfileEntry.js` → `evaluateVolumeProfileEntry`  
+**Precision SSOT**: `volumeProfileEntry.js` → `evaluateVolumeProfilePrecision`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreAmt` via `VolumeProfileStrategy` / `TrendSurgeUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–1 on primary race triggers
+- **Edge triggers (fixed tiers):**
+  - VWAP reclaim / lose → **0.72**
+  - VAL bounce / VAH reject → **0.68**
+  - Above/below VWAP bias → **0.60**
+- **Precision overlay (`evaluateVolumeProfilePrecision`):** base **0.55** + near POC (+0.15) + near VWAP (+0.10) + in value area (+0.10); deep discount/premium without POC → −0.20 (floor 0.4)
+- **Graded overlay (race):** value-area edge distance, POC magnetism, VWAP relationship, trigger type quality, acceptance/rejection score — 0–100 via `enrichMetaWithGradedScore`
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none
+- **Formula / components:** UTC-day session VWAP + VA profile; `minSessionBars` **20**
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same trigger tiers on 15m session profile
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** UTC-week session; `minSessionBarsSwing` **6**
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 Session **VWAP proximity** for entries uses `vwapAtrMult` 0.5×ATR — separate from SL/TP distances below. Entry triggers: [How Entry Works](#how-entry-works).

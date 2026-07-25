@@ -65,6 +65,43 @@ Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread conf
 
 ---
 
+## Confidence Calculation
+
+**Sequence SSOT**: `SmartMoneyConceptsStrategy.js` → `_scoreSequence`  
+**Legacy SSOT**: `SmartMoneyConceptsStrategy.js` → `_componentConfidence` (when `smcUseSequenceEngine === false`)  
+**Graded rubric SSOT**: `ComponentScoringEngine.js` → `scoreSmc` / `SMC_RUBRIC_*`  
+**Floor SSOT**: `strategyDefaults.js` → `SMC_LEG_TYPE_OVERRIDES` + top-level `smcMinConfidence*`
+
+### How score is built
+
+- **Range:** 0–100 (`sequenceMeta.score` / per-leg `confA|B|C`)
+- **Default path (sequence engine):** base **40** + sweep quality (sweet-spot vol ratio, up to ~14) + displacement (ATR-normalized by default via `smcScoreAtrNorm !== false`) + FVG size + mitigation depth (up to 18) + sweep freshness (+8 / +3 / −8) + OB confluence (+12) − weak displacement volume (−12) − breakout/slice-through (−15)
+- **HTF align (post-score):** soft **−15** when counter-HTF (Scalping); hard block when `smcHtfHardBlock` or pair `regimeFilterRequired`
+- **Legacy path:** weighted `_componentConfidence` per leg (sweep/CVD/OB for A; CHoCH/EMA/OB for B; FVG/displacement/OB for C) — capped at 100
+- **Race / CSV graded overlay:** `enrichMetaWithGradedScore` recomputes 0–100 from ML features (`sweepStrength`, `fvgSizeAtr`, `obDistanceAtr`, …) using Scalping vs Intraday/Swing rubric caps
+- **Aggregate:** `smcMinAggregateConfidence` default **0** (no aggregate gate)
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** ≥**40** backtest (`SMC_LEG_TYPE_OVERRIDES.Scalping.smcMinConfidenceA`); live top-level **60** (typeOverrides not merged into live `detectSignalMulti`)
+- **Formula / components:** same sequence `_scoreSequence`; optional side-specific overrides `smcMinConfidenceALong` / `AShort` (default = floor)
+- **Post-gates:** CHoCH validation, session, chop (LONG block), OB retest, ATR gate — see [How Entry Works](#how-entry-works)
+
+### Intraday
+
+- **Floor:** ≥**80** (`SMC_LEG_TYPE_OVERRIDES.Intraday.smcMinConfidenceB`; top-level alias **60** for live only)
+- **Formula / components:** sequence score + pivot OB confluence; tier `votingThresholdOverride` can raise B/C floor (not Scalping A)
+
+### Swing
+
+- **Floor:** ≥**60** (top-level `smcMinConfidenceC` / `smcMinConfidenceSwing`; no override in `SMC_LEG_TYPE_OVERRIDES.Swing`)
+- **Formula / components:** sequence score; optional **V3** size tier (`smcSwingV3Gate`): block below **60**, half size **60–70**, full above **70**
+- **Graded rubric:** Intraday/Swing rubric (`SMC_RUBRIC_DEFAULT`) — HTF/liquidity weighted vs Scalping rubric
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRiskConfig` using per-leg `typeOverrides.slAtrMult` / `tpAtrMult` (merged from `SMC_LEG_TYPE_OVERRIDES`). Entry funnel gates (session, chop, confidence) live in [How Entry Works](#how-entry-works) — not repeated here.

@@ -42,6 +42,42 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `TrendFollowingStrategy.js` → `getLastSignalMeta` (post-checklist)  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreTrendFollowing` via `TrendSurgeUmbrella.js`
+
+### How score is built
+
+- **Range:** 40–95 (`componentConfidence`; stored as 0–1 on meta)
+- **Base:** **50** + tiered bonuses when 3-layer checklist passes:
+  - HTF ADX vs `adxMinStrength` (+8 / +12 / +18)
+  - Donchian broken (+8)
+  - HTF trend confirmed (+6)
+  - Entry-TF volume ratio (+5 / +10)
+  - Bars in trend maturity (+6 sweet spot 8–40, +2 extended)
+- **Clamp:** `max(40, min(95, round(score)))`
+- **Graded overlay (race):** ADX strength, HTF confirm, trend maturity, EMA structure, volume, Donchian breakout — may differ slightly from inline checklist score
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none — checklist gates must pass before score is computed
+- **Formula / components:** same bonus stack
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same; `minVolRatio` 1.0 on entry TF
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same; `adxMinStrength` override **20** (lower ADX bar vs 25 default)
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 `normalizeTfGeometryKeys` maps legacy `atrMultiplier` / `riskReward` → `slAtrMult` / `tpAtrMult` for TF only. Per-leg overrides from `STANDARD_LEG_TYPE_OVERRIDES` (Scalping gets explicit 1.5/3.0). Entry checklist: [How Entry Works](#how-entry-works).

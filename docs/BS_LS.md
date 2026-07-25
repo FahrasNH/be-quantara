@@ -47,6 +47,40 @@ Per-leg SL/TP: `LiquidationSqueezeStrategy.calculateRiskConfig` (engine 1.6 / 2.
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `liquidationSqueezeEntry.js` → `evaluateLiquidationSqueezeEntry`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreLiquidationSqueeze` via `BreakoutStormUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–1, capped at `bsLsMaxConfidence` (**0.92**)
+- **Wick path (primary):** base `bsLsBaseConfidence` (**0.55**) when OI/funding available; **`bsLsDisplacementOnlyConfidence` 0.5** when data unavailable (fail-open)
+- **Wick soft volume:** ×**0.9**
+- **Funding alignment:** +`bsLsFundingBoost` (**0.2**) when extreme funding supports squeeze direction
+- **OI confirm:** +`bsLsOiBoost` (**0.15**) when |OI change| ≥ `bsLsOiChangeConfirmPct`
+- **Funding-only path (no wick):** `baseConf × 0.85` when extreme funding + OI rising
+- **Graded overlay (race):** OI percentile, liq cluster proximity, wick reclaim depth, BB width percentile, OI forecast, squeeze confirmation
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none
+- **Formula / components:** wick-first; OI/funding boosts confidence only (never hard-required)
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 Pure **ATR-based** SL/TP (no structure override). Wick detection sets entry; OI/funding affects confidence only. Entry path: [How Entry Works](#how-entry-works).

@@ -38,6 +38,38 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 
 ---
 
+## Confidence Calculation
+
+**Structure SSOT**: `marketStructureEntry.js` → `classifyMarketStructure`  
+**Entry SSOT**: `marketStructureEntry.js` → `evaluateMarketStructureEntry`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreMarketStructure` via `TrendSurgeUmbrella.js`
+
+### How score is built
+
+- **Structure clarity (0–1):** vote share from HH/HL vs LH/LL counts — `upVotes/total` or `downVotes/total`
+- **Entry confidence (0–1):** `min(1, 0.55 + structureConfidence × 0.4)` on edge-triggered pullback bounce/reject
+- **Typical fill range:** ~**0.55–0.95** depending on structure vote strength
+- **Graded overlay (race):** structure clarity, pullback depth fit, swing strength, pullback confirm, HTF alignment
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none
+- **Formula / components:** HTF structure classify → pullback within `entryAtrMult`×ATR → same-bar bounce/reject
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same Dow HH/HL / LH/LL path
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same; wider session/week context only affects gates
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) — distinct from **stop-loss** distance in `calculateRiskConfig`. Entry structure gates: [How Entry Works](#how-entry-works).

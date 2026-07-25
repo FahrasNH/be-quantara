@@ -47,6 +47,38 @@ Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `ictKillZoneRaidEntry.js` → `evaluateIctStyleEntry`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreIct` via `BreakoutStormUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–1 (`confidence` on fill)
+- **Kill zone active:** start at `bsIctBaseConfidence` (**0.7**)
+- **Outside kill zone:** start at `bsIctOutsideKzConfidence` (**0.45**) unless `bsIctRequireKillZone` hard-blocks
+- **Adjustments:** soft volume miss → ×**0.85**; inside kill zone → +**0.1** (cap 1.0)
+- **Graded overlay (race):** 0–100 from kill-zone timing, raid depth, MSS proxy, volume confirm, reversal quality, displacement — via `gradedConfidenceFromMeta`
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none — confidence ranks BS racers (BR / ICT / LS)
+- **Formula / components:** same kill-zone + raid stack; `ictSessionFilter` is session hard gate
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same; London/NY kill windows on entry TF timestamps
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same scoring path
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buffer); otherwise ATR × 1.5. TP fixed ATR multiple. Kill-zone entry logic: [How Entry Works](#how-entry-works).

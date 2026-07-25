@@ -50,6 +50,38 @@ Per-leg SL/TP + z-score exit: [`STATISTICAL_ARBITRAGE`](#risk--sltp-per-trade-ty
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `statisticalArbitrageEntry.js` → `evaluateStatisticalArbitrageEntry`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreStatArb` via `MeanDriftUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–1 (`confidence` on fill)
+- **Formula:** `min(mdSaMaxConfidence, mdSaBaseConfidence + excess × mdSaZBoostPerUnit)` where `excess = |z| − mdSaEntryZ`
+- **Defaults:** base **0.58**, max **0.95**, `mdSaZBoostPerUnit` **0** (flat — z-boost disabled after swing analysis)
+- **Note:** `mdSaBaseConfidence` is the **starting score**, not a post-hoc floor gate
+- **Graded overlay (race):** z extremity, band touch, revert speed, regime stationarity, std-dev stability
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none — must pass z-band **2.0–2.5σ** entry gate first
+- **Formula / components:** same flat base + excess (currently zero boost)
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** same; HTF align gate blocks counter-trend fades
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** same; `mdSaRequireTransitionRegime: true` is a **regime hard gate**, not confidence
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 **Primary exit** for mean-revert trades: optional early close when `|z| ≤ mdSaExitZ` (0.4σ) with `mdSaExitAtMean: true` — distinct from fixed TP distance. Entry z-band gates: [How Entry Works](#how-entry-works).

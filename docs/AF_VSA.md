@@ -53,6 +53,40 @@ Per-leg geometry: [`VSA_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type). No `ca
 
 ---
 
+## Confidence Calculation
+
+**Entry SSOT**: `vsaEntry.js` → `evaluateVSAComponent` / `detectVSAPattern`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreVsa` via `enrichMetaWithGradedScore`  
+**Floor SSOT**: `strategyDefaults.js` → `VSA_LEG_TYPE_OVERRIDES.Swing.vsaMinConfidenceSwing`
+
+### How score is built
+
+- **Raw range:** 0–1 on pattern bar (`signal.confidence` from volume/spread math)
+- **Pattern base:** Stopping Volume → `min(1, relVol/2)`; No-Demand / No-Supply → `min(1, (lowRelVol−relVol)/lowRelVol + 0.4)`
+- **Penalties (soft):** effort/result mismatch subtracts `mismatchConfidencePenalty` (**0.25** default) — never blocks entry
+- **Intraday HTF gate:** LONG vs BEARISH halves confidence (`vsaHtfCounterPenalty` **0.5**); hard blocks on SHORT×BULLISH and stopping×counter
+- **Graded overlay:** 0–100 from `ComponentScoringEngine` — effort vs result, volume/spread anomaly, pattern type, swing proximity, reversal context (max ~100, clamped)
+- **Export field:** `meta.gradedScore` / `componentConfidence`; race uses `gradedConfidenceFromMeta` in `AdaptiveFusionUmbrella.js`
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none (hard block via `vsaScalpingShelved: true`)
+- **Formula / components:** legacy single-bar path only if unshelved; graded score computed when signal fires
+
+### Intraday
+
+- **Floor:** none — graded score used for AF race ranking only
+- **Formula / components:** confirmation-bar detector v2 may boost pattern confidence (~×1.05 on confirm); then graded overlay
+
+### Swing
+
+- **Floor:** graded ≥**60** (`vsaMinConfidenceSwing`); **Stopping Volume** reasons bypass floor (`vsa_stopping_volume_*`)
+- **Formula / components:** raw pattern → HTF/session/long-only gates → `enrichMetaWithGradedScore` → floor check in `vsaEntry.js`
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 VSA has **no** `calculateRiskConfig` — `RealStrategyBacktestService` applies `atrMultiplier` (1.5×) SL and `riskReward` (2.0) TP distance fallback. Scalping inherits `STANDARD_LEG_TYPE_OVERRIDES` geometry when not shelved. Entry pattern gates: [How Entry Works](#how-entry-works).

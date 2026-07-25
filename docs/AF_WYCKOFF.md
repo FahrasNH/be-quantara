@@ -57,6 +57,40 @@ Backtest default: `runBacktestJob.js` forces `entryModel: "aggressive"` when uns
 
 ---
 
+## Confidence Calculation
+
+**Checklist SSOT**: `wyckoffEntry.js` → `evaluateEntryChecklist`  
+**Pattern SSOT**: `wyckoffEntry.js` → `detectSpring` / `detectUpthrust`  
+**Graded SSOT**: `ComponentScoringEngine.js` → `scoreWyckoff` via `AdaptiveFusionUmbrella.js`
+
+### How score is built
+
+- **Range:** 0–1 (`result.confidence` on fill)
+- **Spring / upthrust path:** pattern confidence = `min(1, volRatio / 1.5)` on manipulation bar
+- **Checklist blend:** `min(1, patternConf × (0.5 + 0.5 × fill))` where `fill` = fraction of checklist keys passed (`evaluateEntryChecklist`)
+- **Continuation path (LPS / LPSY):** fixed **0.72** when SOS→LPS or SOW→LPSY schematic fires (`evaluateSchematicContinuation`)
+- **Graded overlay (race):** 0–100 from phase type, spring/UT depth, SOS/SOW volume, LPS quality, accumulation duration, effort vs result — attached post-signal for CSV / AF winner tie-break
+- **No per-leg confidence floor** — checklist failure returns NEUTRAL before score matters
+
+### Per leg thresholds
+
+### Scalping
+
+- **Floor:** none
+- **Formula / components:** same checklist; session block (Asia) is hard gate, not confidence
+
+### Intraday
+
+- **Floor:** none
+- **Formula / components:** moderate/conservative models add required checklist layers (`priorTrend`, `choch`, `rrOk`, …)
+
+### Swing
+
+- **Floor:** none
+- **Formula / components:** identical scoring; longer hold / wider ATR gate only affects execution limits
+
+---
+
 ## Risk & SL/TP (per Trade Type)
 
 Wyckoff embeds **structure SL/TP in signal meta** (`wyckoffEntry.js`): LONG spring → SL at invalidation (below spring) / TP at `rangeHigh`; SHORT upthrust → SL at invalidation / TP at `rangeLow`. LPS/LPSY continuation uses range boundary invalidation with opposite range target. `WyckoffStrategy` has **no** `calculateRiskConfig` — backtest executor falls back to ATR × 1.5 SL and `riskReward` 2.0 TP unless meta levels are wired by the umbrella winner path. Entry checklist gates: [How Entry Works](#how-entry-works).
