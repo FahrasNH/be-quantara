@@ -1,172 +1,115 @@
 # MARKET_STRUCTURE — Entry Triggers (AS-IS)
 
 **Scope**: What triggers a MARKET_STRUCTURE entry and the signal labels emitted on fill.  
-**Strategy key**: `MARKET_STRUCTURE` (`MarketStructureStrategy`, v2.0)  
-**Engine SSOT**: `marketStructureComponent.js` → `evaluateMarketStructureEntry`  
-**Config SSOT**: `strategyDefaults.js` → `MARKET_STRUCTURE` (inherits `TREND_FOLLOWING`) + component DEFAULTS  
-**FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
-**Doc date**: 2026-07-15
-
-> Describes **what the code emits today**, not aspirational PRD copy.
+**Strategy key**: `MARKET_STRUCTURE` (`MarketStructureStrategy`, v2.0) — label: **Dow Theory**  
+**Engine SSOT**: `marketStructureEntry.js` → `evaluateMarketStructureEntry`  
+**Config SSOT**: `strategyDefaults.js` → `MARKET_STRUCTURE` (inherits `TS_COMPONENT_BASE`)  
+**Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
+**Doc date**: 2026-07-25
 
 ---
 
 ## Default Config (Factory Reset)
 
-Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below). Risk/SL/TP dari **`MARKET_STRUCTURE`** preset (= Trend Following geometry); Dow-specific knobs dari **component DEFAULTS**.
-
-### Risk & SL/TP (umbrella preset)
+### Risk & SL/TP
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.01 | fraksi equity | 1% risk per trade |
+| `riskPerTrade` | 0.05 | fraksi equity | preset; engine ctor 0.015 |
 | `atrMultiplier` | 1.5 | × ATR | Stop-loss |
-| `riskReward` | 2.0 | × SL | Take-profit = 3.0×ATR (RR 1:2) |
+| `riskReward` | 2.0 | × SL | TP nominal |
 | `maxTradesPerDay` | 4 | trade | Cap harian |
 | `leverage` | 2 | × | Leverage default |
 
-### Entry thresholds (Dow structure component)
+### Entry thresholds (Dow structure)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `leftLook` / `rightLook` | 2 / 2 | bar | Fractal swing confirmation (anti-repaint) |
+| `leftLook` / `rightLook` | 2 / 2 | bar | Fractal swing confirmation |
 | `scanBars` | 80 | bar | Swing scan window |
 | `minSwingPairs` | 2 | pair | Minimum HH/HL or LH/LL pairs |
-| `entryPullbackPct` | 0.35 | fraksi range | Pullback tolerance vs last swing span |
-| `entryAtrMult` | 0.75 | × ATR | Pullback tolerance (prefer ATR when available) |
-
-### FORGE umbrella (race)
-
-| Parameter | Default | Kegunaan |
-| --- | --- | --- |
-| `tsCombinationMode` | `"race"` | TREND_FOLLOWING / MARKET_STRUCTURE / AUCTION_MARKET_THEORY race independently |
+| `entryPullbackPct` | 0.35 | fraksi | Pullback vs last swing span |
+| `entryAtrMult` | 0.75 | × ATR | Pullback tolerance (ATR preferred) |
 
 ### Per trade type overrides
 
-| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| Leg | Overrides |
 | --- | --- |
-| Scalping | 0.15 |
-| Intraday | 0.4 |
-| Swing | 0.8 |
-
-Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
-
+| Scalping | `atrGateRelative: true`, `msSessionFilter: true`, RR 2.0 / 2h |
+| Intraday | `atrMinMult: 0.4`, 6h hold |
+| Swing | `atrMinMult: 0.8`, 120h hold |
 
 ---
 
-## What triggers an entry
+## How Entry Works
 
-MARKET_STRUCTURE (Dow Theory) trades **pullbacks to established swing structure** on the HTF series.
+Trades **pullbacks to established swing structure** on the HTF series.
+
+### Entry sequence
 
 ```
 Classify Structure (uptrend/downtrend) → Pullback to HL/LH zone → Bounce/Reject confirm → signal
 ```
 
-**Entry sequence** (`evaluateMarketStructureEntry`):
-
-1. **Swing structure** — detect HH/HL (uptrend) or LH/LL (downtrend) from pivot swings
-2. **Pullback tolerance** — price within `entryPullbackPct` / ATR distance of last swing low (LONG) or swing high (SHORT)
+1. **Swing structure** — HH/HL (uptrend) or LH/LL (downtrend) from pivot swings
+2. **Pullback tolerance** — price within `entryPullbackPct` / ATR of last swing low (LONG) or high (SHORT)
 3. **Entry confirm** on current bar:
-   - LONG: `dow_hl_pullback_bounce` — HL held + bullish close
-   - SHORT: `dow_lh_rally_reject` — LH held + bearish close
+   - LONG: `dow_hl_pullback_bounce`
+   - SHORT: `dow_lh_rally_reject`
 
-Awaiting states (`awaiting_hl_pullback`, `awaiting_lh_rally`, etc.) do not open trades.
+Awaiting states do not open trades.
+
+### Gate funnel
+
+| Stage | Effect |
+| --- | --- |
+| Structure classification | hard gate |
+| Pullback to swing | hard gate (no separate label) |
+| Bounce/reject bar | entry trigger |
+| Session filter | Scalping only (`msSessionFilter`) |
+| ATR gate | per-leg overrides |
+| Live money | Scalping blocked; Intraday + Swing allowed |
+
+Race mode uses HTF arrays (`highsHTF`, `lowsHTF`, `closesHTF`).
 
 ---
 
-## Trade types (brief)
+## Trade types
 
-| Type | Entry / Confirm / Trend TF | Live eligible |
-| --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
-| Intraday | 15m / 1h / 4h | Yes |
-| Swing | 4h / 1d / 1w | Yes |
-
-Race mode uses HTF arrays (`highsHTF`, `lowsHTF`, `closesHTF`). Signal labels are the same across trade types.
+| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
+| --- | --- | --- | --- | --- |
+| Scalping | 5m | 1h | Blocked | Allowed |
+| Intraday | 15m | 1h | Allowed | Allowed |
+| Swing | 4h | 1w | Allowed | Allowed |
 
 ---
 
 ## Tick open trade
 
-**Production path (default):** `MULTI_STRATEGY_ENABLED=true` → `MultiStrategyCoordinator` → `AdaptiveStrategyEngine._tick()`. Signal on the **confirmed** candle (`lastIdx = length−2`); **entry fill** at exchange ticker `last`. Fail-closed if ticker unavailable; skip when |ticker − signal close| > 1×ATR (stale guard). ATR gate uses **per-leg** overrides via `resolveAtrLegOverride`.
-
-**Legacy path:** `MULTI_STRATEGY_ENABLED=false` or explicit single `strategyKey` → `BotEngine._tick()` only. Signal and entry both at **confirmed candle close** (no ticker entry). **Generic** config-level ATR gate (`atrMinMult` / `atrMaxMult`, no per-leg `atrGateRelative` baseline unless interval maps to a leg).
-
-Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestService`).
-
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `interval` | `5m` | TF | Signal / indicator candle polled each tick |
-| `checkInterval` | `60_000` | ms | Minimum spacing between live ticks (~60 s) |
-| `higherTf` | `1h` | TF | HTF trend filter (`BotEngine` HTF cache) |
-
-**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
-
-| Leg | Real money | Dry-run / backtest |
+| Parameter | Default | Unit |
 | --- | --- | --- |
-| Scalping | Blocked | Allowed |
-| Intraday | Allowed | Allowed |
-| Swing | Allowed | Allowed |
-
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
-
-Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
+| `interval` | `5m` | TF |
+| `checkInterval` | `60_000` | ms |
+| `higherTf` | `1h` | HTF |
 
 ---
 
 ## Entry signal labels
 
-Labels come from `entryMeta.reason` + `entryMeta.meta.structure`.
-
-### Label vocabulary
-
-| Label | Emitted when | Code condition |
-| --- | --- | --- |
-| **Swing Structure** | Confirmed trend structure | `reason` starts with `dow_`, includes `structure_confirmed/uptrend/downtrend`, or `structure` is uptrend/downtrend |
-| **HH/HL Pattern** | Uptrend or downtrend structure | `/hl\|hh\|lh\|ll/i` in reason, or `structure` is uptrend/downtrend |
-| **Pullback Bounce** | LONG entry confirm | `/bounce/i` in reason |
-| **Pullback Reject** | SHORT entry confirm | `/reject/i` in reason |
-| **Same-Bar Confirm** | Dow entry reason prefix | `reason.startsWith("dow_")` |
-
-### When each label actually appears
-
-**LONG fills** (`dow_hl_pullback_bounce`) typically show:
-
-`Swing Structure, HH/HL Pattern, Pullback Bounce, Same-Bar Confirm`
-
-**SHORT fills** (`dow_lh_rally_reject`) typically show:
-
-`Swing Structure, HH/HL Pattern, Pullback Reject, Same-Bar Confirm`
-
-**Variance**: LONG vs SHORT swaps Bounce/Reject. Structure labels repeat across fills (hard-gate style).
-
-### Typical examples
-
-| Side | Example labels |
+| Side | Typical labels |
 | --- | --- |
 | LONG | `Swing Structure, HH/HL Pattern, Pullback Bounce, Same-Bar Confirm` |
 | SHORT | `Swing Structure, HH/HL Pattern, Pullback Reject, Same-Bar Confirm` |
-| Gate-only / no fill | *(empty)* |
+
+Pullback step has no separate label.
 
 ---
 
 ## AS-IS quirks
 
-- **FORGE umbrella**: MARKET_STRUCTURE wins stamp `winningComponent: "MARKET_STRUCTURE"`.
-- **Pullback step has no label**: pullback to swing is a gate but not a separate signal label.
-- **HH/HL Pattern label**: same text used for both uptrend and downtrend structure.
+- **Trend Surge umbrella**: MS wins stamp `winningComponent: "MARKET_STRUCTURE"`.
+- **HH/HL Pattern label** same text for uptrend and downtrend structure.
 
 ---
 
-## Quick reference — sequence vs labels
-
-| Sequence step | Drives entry? | Signal label? |
-| --- | --- | --- |
-| HH/HL or LH/LL structure | Yes | Yes — `Swing Structure`, `HH/HL Pattern` |
-| Pullback to swing | Yes | Implicit (no separate label) |
-| Bounce / reject bar | Yes (trigger) | Yes — `Pullback Bounce` / `Pullback Reject` |
-| `dow_*` reason code | Yes | Yes — `Same-Bar Confirm` |
-
----
-
-*Update this file when `evaluateMarketStructureEntry` reason codes or signal label mapping change.*
+*Update when reason codes or label mapping change.*

@@ -2,10 +2,10 @@
 
 **Scope**: What triggers a BREAKOUT_RETEST entry and the signal labels emitted on fill.  
 **Strategy key**: `BREAKOUT_RETEST` (`BreakoutTradingStrategy`) — Breakout Storm racer #0  
-**Engine SSOT**: `BreakoutTradingStrategy.js` → `detectSignal`  
-**Config SSOT**: `strategyDefaults.js` → `BREAKOUT_RETEST` / `BREAKOUT_RETEST` (+ ctor `BreakoutTradingStrategy.js`)  
-**FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
-**Doc date**: 2026-07-15
+**Engine SSOT**: `breakoutTradingEntry.js` / `BreakoutTradingStrategy.js` → `detectSignal`  
+**Config SSOT**: `strategyDefaults.js` → `BREAKOUT_RETEST` + `STANDARD_LEG_TYPE_OVERRIDES`  
+**Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
+**Doc date**: 2026-07-25
 
 > Describes **what the code emits today**, not aspirational PRD copy.
 
@@ -13,175 +13,124 @@
 
 ## Default Config (Factory Reset)
 
-Sprint 14+ baseline — per-leg `typeOverrides` carry `atrMinMult` (see below).  
-Risk/SL/TP dari **`strategyDefaults.js`**; threshold fase retest & vol floor dari **engine ctor** (merge saat runtime).
-
 ### Risk & SL/TP
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.01 | fraksi equity | 1% risk per trade (strategyDefaults) |
-| `atrMultiplier` / `slMultiplier` | 1.5 / 1.7 | × ATR | SL — ctor engine 1.7× jika key tidak di-override |
-| `riskReward` / `tpMultiplier` | 3.0 / 3.2 | × SL / × ATR | TP ≈ 4.5×ATR nominal (RR 1:3); engine cap `maxPlannedRR` 2.5 |
-| `preferredTpMode` | `"full"` | enum | `full` = full TP; `partial` = take pertama ≤33% |
-| `maxTradesPerDay` | 2 | trade | Cap harian (engine); strategyDefaults = 5 |
+| `riskPerTrade` | 0.05 | fraksi equity | strategyDefaults; engine ctor fallback |
+| `atrMultiplier` / `slMultiplier` | 1.5 / 1.7 | × ATR | SL — ctor 1.7× if not overridden |
+| `riskReward` / `tpMultiplier` | 3.0 / 3.2 | × SL / × ATR | TP nominal; cap `maxPlannedRR` 2.5 |
+| `preferredTpMode` | `"full"` | enum | `full` or `partial` (≤33%) |
+| `maxTradesPerDay` | 5 | trade | strategyDefaults; engine ctor = 2 |
 | `leverage` | 1 | × | Tanpa leverage |
 
 ### Entry thresholds (4-phase sequence)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `rangeLookback` / `lookbackBars` | 20 | bar | High/low S&R untuk breakout |
+| `lookbackBars` | 20 | bar | High/low S&R untuk breakout |
 | `volumeMultiplier` | 1.5 | × vol SMA | Volume minimum saat breakout |
-| `maxVolumeRatio` | 3.55 | × vol SMA | Tolak exhaustion volume (>3.55×) |
-| `minBbWidthPct` | 0.0076 | fraksi harga | Volatility floor — BB width minimum |
-| `minAtrPct` | 0.25 | % harga | Volatility floor — ATR% minimum |
-| `minRetestBars` | 16 | bar @15m | Tunggu retest ≥4 jam sebelum entry valid |
-| `retestWindow` | 96 | bar @15m | Retest harus terjadi ≤24 jam pasca-breakout |
-| `minDisplacementAtr` | 0.30 | × ATR | Harga harus menjauh dari level dulu |
-| `minRejectionWickRatio` | 0.5 | fraksi range | Wick rejection minimum di bar retest |
-| `minRetestDepthAtr` / `maxRetestDepthAtr` | 0.17 / 0.72 | × ATR | Band kedalaman pullback ke level |
+| `maxVolumeRatio` | 3.55 | × vol SMA | Tolak exhaustion volume |
+| `minBbWidthPct` | 0.0076 | fraksi | BB width floor |
+| `minAtrPct` | 0.25 | % harga | ATR% floor |
+| `minRetestBars` | 16 | bar @15m | Tunggu retest ≥4 jam |
+| `retestWindow` | 96 | bar @15m | Retest ≤24 jam pasca-breakout |
+| `minDisplacementAtr` | 0.30 | × ATR | Displacement post-breakout |
+| `minRejectionWickRatio` | 0.5 | fraksi | Wick rejection di bar retest |
+| `minRetestDepthAtr` / `maxRetestDepthAtr` | 0.17 / 0.72 | × ATR | Band kedalaman pullback |
 
 ### Gates & regime blocks
 
 | Parameter | Default | Kegunaan |
 | --- | --- | --- |
 | `requireConsolidation` | `true` | Wajib lolos vol floor sebelum arm breakout |
-| `blockedMarketConds` | `COILED_BREAKOUT`, `SQUEEZE_BREAKOUT`, `DRY_SQUEEZE` | Regime yang diblok sebelum fill |
+| `blockedMarketConds` | `COILED_BREAKOUT`, `SQUEEZE_BREAKOUT`, `DRY_SQUEEZE` | Regime diblok |
 
 ### Per trade type overrides
 
-| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| Leg | Overrides |
 | --- | --- |
-| Scalping | 0.15 |
-| Intraday | 0.4 |
-| Swing | 0.8 |
-
-Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
-
-
-### Yang bisa di-tune di FE Advance
-
-`paramMeta`: `rangeLookback`, `volumeMultiplier`, `maxVolumeRatio`, `retestWindow`, `minRetestBars`, `minBbWidthPct`, `minAtrPct`, `preferredTpMode`, `atrMult`, `riskReward`, `riskPerTrade`, `capital`.
-
-> **Catatan drift**: FE hint `minRetestBars` = 16 tapi form default masih 8; BE engine ctor = **16** (SSOT). `maxVolumeRatio` FE = 5.0 vs engine = 3.55.
+| Scalping | `atrGateRelative: true`, `brSessionFilter: true`, RR 2.0 / 2h |
+| Intraday | `atrMinMult: 0.4`, 6h hold |
+| Swing | `atrMinMult: 0.8`, 120h hold |
 
 ---
 
-## What triggers an entry
+## How Entry Works
 
-BREAKOUT_RETEST is a **four-phase sequential** breakout system: consolidation → breakout → displacement wait → true retest entry.
+Four-phase sequential breakout: consolidation → breakout → displacement wait → true retest entry.
+
+### Phase sequence
 
 ```
 S&R Levels → BB Squeeze / Vol Floor → Breakout + Volume → Displacement Wait → Retest Confirm → signal
 ```
 
-**Phase sequence** (`detectSignal`):
+1. **Levels** — 20-bar resistance/support
+2. **Volatility floor** — BB squeeze / ATR% consolidation
+3. **Breakout arm** — close breaks level with volume; state stored
+4. **Wait** — ≥ `minRetestBars`, ≤ `retestWindow`, displacement ≥ `minDisplacementAtr`
+5. **Retest entry** — pullback to level + rejection wick + depth band
+6. Meta flags: `bbSqueeze`, `rangeBreakout`, `retestConfirmation`, etc.
 
-1. **Levels** — 20-bar resistance/support (`detectLevels`)
-2. **Volatility floor** — BB squeeze / ATR% consolidation check (`checkConsolidation`)
-3. **Breakout arm** — close breaks level with volume (`checkLongBreakout` / `checkShortBreakout`); state stored
-4. **Wait** — ≥ `minRetestBars` (default 16 ≈ 4h on 15m), ≤ `retestWindow`, post-breakout displacement ≥ `minDisplacementAtr`
-5. **Retest entry** — pullback to level + rejection wick + depth band (`checkRetestEntry`)
-6. On fill: `_lastSignalMeta` flags set (`bbSqueeze`, `rangeBreakout`, `retestConfirmation`, etc.)
+### Gate funnel
 
-Blocked regimes (`COILED`/`SQUEEZE` in `blockedMarketConds`) and unreachable structural TP abort before fill.
+| Stage | Effect |
+| --- | --- |
+| Consolidation / vol floor | hard gate |
+| Blocked regimes (`COILED`/`SQUEEZE`/`DRY_SQUEEZE`) | hard block |
+| Breakout volume cap (`maxVolumeRatio`) | hard block |
+| Session filter | Scalping only (`brSessionFilter`) |
+| ATR gate | per-leg overrides |
+| Live money | Scalping blocked; Intraday + Swing allowed |
+
+**SL/TP**: parent `riskReward` 3.0 nominal; engine cap `maxPlannedRR: 2.5`. Per-leg TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
 
 ---
 
-## Trade types (brief)
+## Trade types
 
-| Type | Entry / Confirm / Trend TF | Live eligible |
-| --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
-| Intraday | 15m / 1h / 4h | Yes |
-| Swing | 4h / 1d / 1w | Yes |
+| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
+| --- | --- | --- | --- | --- |
+| Scalping | 5m | 1h | Blocked | Allowed |
+| Intraday | 15m | 1h | Allowed | Allowed |
+| Swing | 4h | 1w | Allowed | Allowed |
 
-Strategy default interval is 15m. Signal labels are **nearly identical across fills and trade types**.
+Default live interval: `15m`. Backtest ladder: `runBacktestJob.TYPE_TF`.
 
 ---
 
 ## Tick open trade
 
-**Production path (default):** `MULTI_STRATEGY_ENABLED=true` → `MultiStrategyCoordinator` → `AdaptiveStrategyEngine._tick()`. Signal on the **confirmed** candle (`lastIdx = length−2`); **entry fill** at exchange ticker `last`. Fail-closed if ticker unavailable; skip when |ticker − signal close| > 1×ATR (stale guard). ATR gate uses **per-leg** overrides via `resolveAtrLegOverride`.
-
-**Legacy path:** `MULTI_STRATEGY_ENABLED=false` or explicit single `strategyKey` → `BotEngine._tick()` only. Signal and entry both at **confirmed candle close** (no ticker entry). **Generic** config-level ATR gate (`atrMinMult` / `atrMaxMult`, no per-leg `atrGateRelative` baseline unless interval maps to a leg).
-
-Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestService`).
-
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `interval` | `15m` | TF | Signal / indicator candle polled each tick |
-| `checkInterval` | `900_000` | ms | Minimum spacing between live ticks (~15 min) |
-| `higherTf` | `4h` | TF | HTF trend filter (`BotEngine` HTF cache) |
-
-**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
-
-| Leg | Real money | Dry-run / backtest |
+| Parameter | Default | Unit |
 | --- | --- | --- |
-| Scalping | Blocked | Allowed |
-| Intraday | Allowed | Allowed |
-| Swing | Allowed | Allowed |
+| `interval` | `15m` | TF |
+| `checkInterval` | `900_000` | ms (~15 min) |
+| `higherTf` | `4h` | HTF trend filter |
 
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
-
-Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
+Production: confirmed candle signal → ticker `last` entry with stale guard.
 
 ---
 
 ## Entry signal labels
 
-Labels come from boolean phase flags on `_lastSignalMeta` / `getLastSignalMeta()`.
-
-### Label vocabulary
-
-| Label | Emitted when | Code condition |
-| --- | --- | --- |
-| **BB Squeeze** | Consolidation squeeze detected | `bbSqueeze`, `consolidationConfirmed`, or `squeeze` |
-| **Range Break** | Breakout from range | `rangeBreakout` or `breakoutConfirmed` |
-| **Volume Spike** | Breakout volume elevated | `volumeSpike`, `breakoutVolumeConfirmed`, or `breakoutVolumeRatio > 1` |
-| **Retest Confirm** | True retest entry bar | `retestConfirmation` or `retestConfirmed` |
-
-### When each label actually appears
-
-Normal fills set `bbSqueeze`, `rangeBreakout`, `retestConfirmation` on `_lastSignalMeta`.  
-`breakoutVolumeRatio` is stored on breakout arm → **Volume Spike** appears when ratio > 1.
-
-**Typical fill**:
-
-`BB Squeeze, Range Break, Volume Spike, Retest Confirm`
-
-**Variance is very low** — all four phases are hard prerequisites. Direction is not in signal labels.
-
-**Formatter fallback**: If flags missing but `winningComponent === "BREAKOUT_RETEST"`, returns all four labels anyway.
-
-### Typical examples
-
-| Scenario | Example labels |
+| Label | Condition |
 | --- | --- |
-| Standard retest fill | `BB Squeeze, Range Break, Volume Spike, Retest Confirm` |
-| Low breakout volume (ratio ≤ 1) | `BB Squeeze, Range Break, Retest Confirm` *(Volume Spike absent)* |
-| No fill / missing meta | *(empty)* |
+| **BB Squeeze** | `bbSqueeze` / `consolidationConfirmed` |
+| **Range Break** | `rangeBreakout` / `breakoutConfirmed` |
+| **Volume Spike** | breakout volume ratio > 1 |
+| **Retest Confirm** | `retestConfirmation` |
+
+Typical fill: `BB Squeeze, Range Break, Volume Spike, Retest Confirm`
 
 ---
 
 ## AS-IS quirks
 
-- **VAULT umbrella**: BREAKOUT_RETEST wins stamp `winningComponent: "BREAKOUT_RETEST"`. ICT_STYLE_TRADING / LIQUIDATION_SQUEEZE use their own label vocabularies.
-- **strategyDefaults vs ctor drift**: `maxTradesPerDay` 5 (defaults) vs 2 (engine); SL/TP multipliers differ unless explicitly overridden.
-- **Direction omitted**: LONG vs SHORT is not reflected in signal labels.
+- **Breakout Storm umbrella**: wins stamp `winningComponent: "BREAKOUT_RETEST"`.
+- **strategyDefaults vs ctor drift**: `maxTradesPerDay`, SL/TP multipliers differ unless overridden.
+- **Direction omitted** from signal labels.
 
 ---
 
-## Quick reference — phase vs labels
-
-| Phase | Drives entry? | Signal label? |
-| --- | --- | --- |
-| BB squeeze / vol floor | Yes | Yes — `BB Squeeze` |
-| Range breakout | Yes | Yes — `Range Break` |
-| Breakout volume | Yes | Yes — `Volume Spike` (when ratio > 1) |
-| True retest | Yes (trigger) | Yes — `Retest Confirm` |
-
----
-
-*Update this file when `detectSignal` meta flags or phase prerequisites change.*
+*Update when `detectSignal` meta flags or phase prerequisites change.*

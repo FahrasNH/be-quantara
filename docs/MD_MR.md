@@ -1,39 +1,35 @@
 # MEAN_REVERSION — Entry Triggers (AS-IS)
 
-**Scope**: What triggers an MEAN_REVERSION entry and the signal labels emitted on fill.  
+**Scope**: What triggers a MEAN_REVERSION entry and the signal labels emitted on fill.  
 **Strategy key**: `MEAN_REVERSION` (`MeanReversionStrategy`, v3.0) — Mean Drift racer A  
-**Engine SSOT**: `MeanReversionStrategy.js` → `detectSignal`  
-**Config SSOT**: `strategyDefaults.js` → `MEAN_REVERSION` / `MEAN_REVERSION` (+ ctor `MeanReversionStrategy.js`)  
-**FE Advance UI**: `fe-bot-trading/.../backtestStrategies.js` → `paramMeta` (subset)  
-**Doc date**: 2026-07-15
-
-> Describes **what the code emits today**, not aspirational PRD copy.
+**Engine SSOT**: `meanReversionEntry.js` / `MeanReversionStrategy.js` → `detectSignal`  
+**Config SSOT**: `strategyDefaults.js` → `MEAN_REVERSION` + `STANDARD_LEG_TYPE_OVERRIDES`  
+**Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
+**Doc date**: 2026-07-25
 
 ---
 
 ## Default Config (Factory Reset)
 
-Sprint 14+ baseline — MEAN_REVERSION uses `DEFAULT_LEG_TYPE_OVERRIDES` for `atrMinMult`. Risk/SL/TP dari **`strategyDefaults.js`**; layer thresholds dari **engine ctor** (merge saat runtime).
-
-### Risk & SL/TP (umbrella preset)
+### Risk & SL/TP
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.01 | fraksi equity | 1% risk (strategyDefaults); ctor = 0.008 |
-| `atrMultiplier` / `atrMult` | 1.5 / 1.4 | × ATR | SL — ctor 1.4× jika tidak di-override |
-| `riskReward` | 2.0 | × SL | TP = 3.0×ATR nominal (RR 1:2) |
+| `riskPerTrade` | 0.05 | fraksi equity | strategyDefaults; engine ctor 0.008 |
+| `atrMultiplier` / `atrMult` | 1.5 / 1.4 | × ATR | SL |
+| `riskReward` | 2.0 | × SL | TP nominal RR 1:2 |
 | `tpMultiplierA` / `B` | 2.5 / 2.0 | × ATR | Per-leg TP (Scalping / Intraday) |
-| `maxTradesPerDay` | 3 / 5 | trade | strategyDefaults = 3; ctor = 5 |
+| `maxTradesPerDay` | 3 | trade | strategyDefaults; ctor = 5 |
 | `leverage` | 1.0 | × | Tanpa leverage |
 
 ### Entry thresholds (Layer A — BB + RSI + VWAP)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `bbStdDevA` / `bbStdDevB` | 1.5 / 2.0 | σ | Bollinger band (Scalping 5m / Intraday 15m) |
-| `rsiOversoldA` / `OverboughtA` | 28 / 72 | RSI | Scalping extreme bands |
-| `rsiOversoldB` / `OverboughtB` | 32 / 68 | RSI | Intraday extreme bands |
-| `minVolRatio` | 0.7 / 0.8 | × vol SMA | ctor / strategyDefaults |
+| `bbStdDevA` / `bbStdDevB` | 1.5 / 2.0 | σ | Bollinger (Scalping / Intraday) |
+| `rsiOversoldA` / `OverboughtA` | 28 / 72 | RSI | Scalping extremes |
+| `rsiOversoldB` / `OverboughtB` | 32 / 68 | RSI | Intraday extremes |
+| `minVolRatio` | 0.8 | × vol SMA | Volume floor |
 | `bbPeriod` / `rsiPeriod` | 20 / 14 | bar | Indicator windows |
 
 ### Gates (Layer B & C)
@@ -48,143 +44,90 @@ Sprint 14+ baseline — MEAN_REVERSION uses `DEFAULT_LEG_TYPE_OVERRIDES` for `at
 | `mdConfluenceAtrMult` | 0.5 | × ATR | Hard confluence radius |
 | `mdNoConfluenceConfidenceMult` | 0.7 | fraksi | Soft miss penalty |
 
-### MINT umbrella (race)
-
-| Parameter | Default | Kegunaan |
-| --- | --- | --- |
-| *(implicit)* | race | MEAN_REVERSION / SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE race independently |
-
 ### Per trade type overrides
 
-| Leg | `atrMinMult` (from `DEFAULT_LEG_TYPE_OVERRIDES`) |
+| Leg | Overrides |
 | --- | --- |
-| Scalping | 0.15 |
-| Intraday | 0.4 |
-| Swing | 0.8 |
-
-Backtest merges these onto per-leg cfg; top-level `atrMinMult` remains the live fallback.
-
+| Scalping | `atrGateRelative: true`, `mrSessionFilter: true`, RR 2.0 / 2h |
+| Intraday | `atrMinMult: 0.4`, 6h hold |
+| Swing | `atrMinMult: 0.8`, 120h hold |
 
 ---
 
-## What triggers an entry
+## How Entry Works
 
-MEAN_REVERSION is a **three-layer pipeline**: mean-reversion signal → ADX regime gate → optional OB/FVG refinement.
+Three-layer pipeline: mean-reversion signal → ADX regime gate → optional OB/FVG refinement.
 
-```
-BB + RSI + VWAP extreme → ADX Regime Gate → OB/FVG Confluence (optional) → signal
-```
+### Layer A — entry signal (`detectSignal`)
 
-**Layer A — entry signal** (`detectSignal`):
-
-| Leg | Timeframe | LONG | SHORT |
+| Leg | Entry TF | LONG | SHORT |
 | --- | --- | --- | --- |
-| Scalping | 5m | RSI < 28, close < BB(1.5σ) lower, below VWAP | RSI > 72, close > BB(1.5σ) upper, above VWAP |
-| Intraday | 15m | RSI < 32, close < BB(2.0σ) lower, below VWAP | RSI > 68, close > BB(2.0σ) upper, above VWAP |
+| Scalping | 5m | RSI < 28, close < BB(1.5σ) lower, below VWAP | RSI > 72, close > BB upper, above VWAP |
+| Intraday | 15m | RSI < 32, close < BB(2.0σ) lower, below VWAP | RSI > 68, close > BB upper, above VWAP |
 
-Scalping leg checked first; Intraday only if Scalping did not fire.
+Scalping checked first; Intraday only if Scalping did not fire.
 
-**Layer B — ADX gate** (`evaluateAdxRegimeGate`): blocks `imbalance` regime; `balance` / `transition` pass (transition reduces confidence).
+### Gate funnel
 
-**Layer C — OB/FVG** (`refineMdEntry`): sets `hasObFvgConfluence` and appends `OB/FVG✓` or `OB/FVG~` to `reason` string.
+```
+BB+RSI+VWAP extreme → volume floor → ADX regime gate → OB/FVG refine → signal
+```
 
-Volume below `minVolRatio` blocks before any layer runs.
+| Stage | Effect |
+| --- | --- |
+| Volume < `minVolRatio` | hard block |
+| ADX imbalance (≥25) | hard block |
+| ADX balance / transition | pass (transition reduces confidence) |
+| OB/FVG confluence | confidence/TP boost; soft miss `OB/FVG~` |
+| Session filter | Scalping only (`mrSessionFilter`) |
+| ATR gate | per-leg overrides |
+| Live money | Scalping blocked; Intraday + Swing allowed |
+
+**SL/TP**: per-leg TP multipliers; TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
 
 ---
 
-## Trade types (brief)
+## Trade types
 
-| Type | Entry / Confirm / Trend TF | Live eligible |
-| --- | --- | --- |
-| Scalping | 5m / 15m / 1h | Backtest & dry-run only |
-| Intraday | 15m / 1h / 4h | Yes |
-| Swing | 4h / 1d / 1w | Yes |
+| Type | Entry TF | Trend / HTF TF | Real money | Dry-run / backtest |
+| --- | --- | --- | --- | --- |
+| Scalping | 5m | 1h | Blocked | Allowed |
+| Intraday | 15m | 1h | Allowed | Allowed |
+| Swing | 4h | 1w | Allowed | Allowed |
 
-`getLastSignalMeta().component` is `"Scalping"` or `"Intraday"` for the firing leg — this affects TP/hold, not the label set.
+`getLastSignalMeta().component` stamps firing leg (Scalping/Intraday).
 
 ---
 
 ## Tick open trade
 
-**Production path (default):** `MULTI_STRATEGY_ENABLED=true` → `MultiStrategyCoordinator` → `AdaptiveStrategyEngine._tick()`. Signal on the **confirmed** candle (`lastIdx = length−2`); **entry fill** at exchange ticker `last`. Fail-closed if ticker unavailable; skip when |ticker − signal close| > 1×ATR (stale guard). ATR gate uses **per-leg** overrides via `resolveAtrLegOverride`.
-
-**Legacy path:** `MULTI_STRATEGY_ENABLED=false` or explicit single `strategyKey` → `BotEngine._tick()` only. Signal and entry both at **confirmed candle close** (no ticker entry). **Generic** config-level ATR gate (`atrMinMult` / `atrMaxMult`, no per-leg `atrGateRelative` baseline unless interval maps to a leg).
-
-Backtest (both paths): fill at the signal bar **close** (`RealStrategyBacktestService`).
-
-| Parameter | Default | Unit | Kegunaan |
-| --- | --- | --- | --- |
-| `interval` | `15m` | TF | Signal / indicator candle polled each tick |
-| `checkInterval` | `60_000` | ms | Minimum spacing between live ticks (~60 s) |
-| `higherTf` | `15m` | TF | HTF trend filter (`BotEngine` HTF cache) |
-
-**Legs that may open on live tick** (`liveTradeTypeGate.js`, real money only):
-
-| Leg | Real money | Dry-run / backtest |
+| Parameter | Default | Unit |
 | --- | --- | --- |
-| Scalping | Blocked | Allowed |
-| Intraday | Allowed | Allowed |
-| Swing | Allowed | Allowed |
-
-Backtest multi-TF ladder (`runBacktestJob.TYPE_TF`): Scalping **5m/1h**, Intraday **15m/4h**, Swing **4h/1w** (global). Live tick still runs all `enabledComponents`; the gate only blocks Scalping on real money.
-
-Production ticker guards: `AdaptiveStrategyEngine` §11b–11c.
+| `interval` | `15m` | TF |
+| `checkInterval` | `60_000` | ms |
+| `higherTf` | `15m` | HTF |
 
 ---
 
 ## Entry signal labels
 
-Labels come from pipe-delimited `entryMeta.reason` + `adxRegime` + `hasObFvgConfluence`.
-
-### Label vocabulary
-
-| Label | Emitted when | Code condition |
-| --- | --- | --- |
-| **RSI Extreme** | RSI past oversold/overbought | `/RSI\s+[\d.]+\s*[<>]/i`, `/oversold/i`, or `/overbought/i` in `reason` |
-| **BB Touch** | Bollinger band touch | `/\bBB\b/i` or `/bollinger/i` in `reason` |
-| **VWAP Dev** | Price vs VWAP side | `/VWAP/i` in `reason` |
-| **ADX Balance** | Regime balance/transition/imbalance | `adxRegime` is `balance`, `transition`, or `imbalance` (imbalance blocked pre-fill) |
-| **OB/FVG Confluence** | Hard OB/FVG align | `hasObFvgConfluence === true` or `OB/FVG✓` in reason |
-| *(no label)* | Soft OB/FVG miss | `OB/FVG~` in reason — confluence label **omitted** |
-
-### When each label actually appears
-
-**Most fills** include at least `RSI Extreme`, `BB Touch`, `VWAP Dev`, `ADX Balance` — all are baked into the `reason` string on signal.
-
-**Variance between trades**:
-
-| Factor | Effect on labels |
+| Label | Condition |
 | --- | --- |
-| ADX regime | Always `ADX Balance` label for balance/transition |
-| OB/FVG | `OB/FVG Confluence` only when `hasObFvgConfluence === true` |
-| Scalping vs Intraday | Same labels; raw `reason` text differs (RSI thresholds, σ band) |
+| **RSI Extreme** | RSI past band in `reason` |
+| **BB Touch** | BB reference in `reason` |
+| **VWAP Dev** | VWAP side in `reason` |
+| **ADX Balance** | `adxRegime` balance/transition |
+| **OB/FVG Confluence** | `hasObFvgConfluence === true` or `OB/FVG✓` |
 
-### Typical examples
-
-| Scenario | Example labels |
-| --- | --- |
-| Scalping + balance + OB/FVG hit | `RSI Extreme, BB Touch, VWAP Dev, ADX Balance, OB/FVG Confluence` |
-| Intraday + transition + soft OB/FVG | `RSI Extreme, BB Touch, VWAP Dev, ADX Balance` |
-| ADX gate block | *(no trade — empty)* |
+Typical: `RSI Extreme, BB Touch, VWAP Dev, ADX Balance` (+ optional OB/FVG).
 
 ---
 
 ## AS-IS quirks
 
-- **MINT umbrella**: MEAN_REVERSION wins stamp `winningComponent: "MEAN_REVERSION"`. SUPPLY_AND_DEMAND / STATISTICAL_ARBITRAGE use their own label vocabularies.
-- **Soft OB/FVG miss**: `OB/FVG~` in reason does not produce the confluence label.
-- **strategyDefaults vs ctor drift**: `riskPerTrade`, `minVolRatio`, `maxTradesPerDay` differ between preset and engine ctor.
+- **Mean Drift umbrella**: wins stamp `winningComponent: "MEAN_REVERSION"`.
+- **Soft OB/FVG miss** (`OB/FVG~`) does not produce confluence label.
 
 ---
 
-## Quick reference — pipeline vs labels
-
-| Layer | Drives entry? | Signal label? |
-| --- | --- | --- |
-| RSI + BB + VWAP | Yes (trigger) | Yes — `RSI Extreme`, `BB Touch`, `VWAP Dev` |
-| ADX regime gate | Yes (gate) | Yes — `ADX Balance` |
-| OB/FVG confluence | No (confidence/TP) | Yes — `OB/FVG Confluence` when hard hit |
-
----
-
-*Update this file when `detectSignal` reason format or signal label mapping change.*
+*Update when `detectSignal` reason format or gates change.*
