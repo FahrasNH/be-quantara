@@ -140,6 +140,12 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
   },
   Intraday: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+    // Fix #4: adaptive ATR gate — absolute 0.4% floor blocked 83% of PASSED signals
+    // on BTC 15m (ATR% ~0.15–0.35); VSA patterns form in quiet legs like SMC sweeps.
+    atrMinMult: 0.15,
+    atrGateRelative: true,
+    atrRelMin: 0.4,
+    atrRelMax: 4.0,
     vsaHtfAlignGate: true,
     vsaHtfCounterPenalty: 0.5,
     // Fix #2: London bleed (NOT Asia — inverted session profile vs Scalping/Swing)
