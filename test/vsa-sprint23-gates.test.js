@@ -181,36 +181,22 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ov.Intraday.vsaIntradayDetectorMode, "confirmation");
   });
 
-  test("Intraday adaptive ATR gate unblocks quiet 15m legs (Fix #4)", () => {
+  test("Intraday absolute ATR gate restored (Fix #4 reverted post-WF BLOCK)", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides.Intraday;
-    assert.equal(ov.atrGateRelative, true);
-    assert.equal(ov.atrMinMult, 0.15);
-    assert.equal(ov.atrRelMin, 0.4);
-    assert.equal(ov.atrRelMax, 4.0);
+    assert.equal(ov.atrMinMult, 0.4);
+    assert.notEqual(ov.atrGateRelative, true, "relative gate reverted — caused fee-bound overtrading");
 
     const price = 100_000;
-    const baseline = 350;
     const quietAtr = 250;
     const quietPct = (quietAtr / price) * 100;
 
-    const absoluteOnly = evaluateAtrEntryGate({
+    const gate = evaluateAtrEntryGate({
       atr: quietAtr,
       price,
-      atrMinMult: 0.4,
+      atrMinMult: ov.atrMinMult,
       atrGateRelative: false,
     });
-    assert.equal(absoluteOnly.ok, false, "old absolute 0.4% floor blocks typical BTC 15m ATR");
-
-    const adaptive = evaluateAtrEntryGate({
-      atr: quietAtr,
-      price,
-      atrBaseline: baseline,
-      atrMinMult: ov.atrMinMult,
-      atrGateRelative: ov.atrGateRelative,
-      atrRelMin: ov.atrRelMin,
-      atrRelMax: ov.atrRelMax,
-    });
-    assert.equal(adaptive.ok, true, "relative gate allows quiet-but-tradeable leg");
+    assert.equal(gate.ok, false, "absolute 0.4% floor blocks typical BTC 15m quiet leg");
     assert.ok(quietPct < 0.4);
   });
 
