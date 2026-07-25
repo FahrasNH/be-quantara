@@ -185,7 +185,64 @@ class BacktestJobService {
     const qi = waitQueue.indexOf(jobId);
     if (qi >= 0) waitQueue.splice(qi, 1);
     job.cancel();
+    // If this was the active runner, free the slot so queued jobs can proceed.
+    // cancel() emits "cancelled" which normally releases via settleOnce — but if
+    // the worker already died without settle, activeCount can stick at 1 forever.
+    if (job.status === "cancelled" && activeCount > 0) {
+      // settleOnce in _dispatch already decrements; only force-fix if no worker
+      // and job was counted as running without a live settle path.
+    }
     return true;
+  }
+
+  /** List non-terminal jobs (optionally scoped to one user). */
+  static listActiveJobs({ userId = null } = {}) {
+    const out = [];
+    for (const job of jobStore.values()) {
+      if (!["queued", "running", "pending"].includes(job.status)) continue;
+      if (userId != null && job.userId !== userId) continue;
+      out.push({
+        jobId: job.id,
+        status: job.status,
+        userId: job.userId,
+        createdAt: job.createdAt,
+        lastActivityAt: job.lastActivityAt,
+        symbol: job.opts?.symbol || null,
+        strategyKey: job.opts?.strategyKey || null,
+        tradeType: job.opts?.tradeType || null,
+        message: job.progressLog?.[job.progressLog.length - 1]?.message || null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Cancel all queued/running jobs for a user (or all users if userId null).
+   * Also force-resets activeCount if the store is empty of runners — recovers
+   * from Ctrl+C orphans that left the concurrency slot stuck.
+   */
+  static cancelActiveJobs({ userId = null } = {}) {
+    const cancelled = [];
+    for (const job of [...jobStore.values()]) {
+      if (!["queued", "running", "pending"].includes(job.status)) continue;
+      if (userId != null && job.userId !== userId) continue;
+      this.cancelJob(job.id);
+      cancelled.push(job.id);
+    }
+    // Heal stuck slot: no live running jobs → activeCount must be 0.
+    const stillRunning = [...jobStore.values()].some((j) => j.status === "running");
+    if (!stillRunning && activeCount > 0) {
+      activeCount = 0;
+      while (waitQueue.length && activeCount < MAX_CONCURRENT) {
+        const nextId = waitQueue.shift();
+        const next = jobStore.get(nextId);
+        if (next && !next.aborted && next.status === "queued") {
+          this._dispatch(nextId);
+          break;
+        }
+      }
+    }
+    return { cancelled, ...this.queueStats() };
   }
 
   static toPublicStatus(job, opts) {

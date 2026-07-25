@@ -988,6 +988,47 @@ module.exports = function createBacktestRouter(context) {
     return res.json({ ok: true, message: "Backtest cancelled" });
   }));
 
+  /**
+   * GET /api/v1/backtest/queue
+   * List this user's queued/running jobs (+ global queue stats).
+   */
+  router.get("/queue", asyncHandler(async (req, res) => {
+    const jobs = BacktestJobService.listActiveJobs({ userId: req.userId });
+    return res.json({ ok: true, ...BacktestJobService.queueStats(), jobs });
+  }));
+
+  /**
+   * DELETE /api/v1/backtest/queue
+   * Cancel all of this user's queued/running jobs and heal a stuck concurrency slot.
+   * Query ?all=1 (ADMIN/SUPER_ADMIN) cancels every user's jobs.
+   */
+  router.delete("/queue", asyncHandler(async (req, res) => {
+    const wantAll = req.query.all === "1" || req.query.all === "true";
+    if (wantAll) {
+      const prisma = require("../../../infrastructure/db/prismaClient");
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId },
+        select: { role: true },
+      });
+      if (!user || !["ADMIN", "SUPER_ADMIN"].includes(user.role)) {
+        return res.status(403).json({
+          ok: false,
+          error: "all=1 requires ADMIN/SUPER_ADMIN",
+        });
+      }
+    }
+    const result = BacktestJobService.cancelActiveJobs({
+      userId: wantAll ? null : req.userId,
+    });
+    return res.json({
+      ok: true,
+      message: wantAll
+        ? `Cancelled ${result.cancelled.length} job(s) (all users)`
+        : `Cancelled ${result.cancelled.length} job(s)`,
+      ...result,
+    });
+  }));
+
   return router;
 };
 

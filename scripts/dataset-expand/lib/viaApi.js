@@ -138,49 +138,73 @@ async function runViaApi({
   }
   log(`[via-api] job ${jobId} — polling (same path as UI)…`);
 
+  // Ctrl+C / kill must cancel the *server* job — otherwise BACKTEST_MAX_CONCURRENT=1
+  // stays occupied and every later walkforward cell sits in "Queued — 1 already running".
+  let interruptCancel = null;
+  const cancelOnInterrupt = () => {
+    if (interruptCancel) return;
+    interruptCancel = apiFetch(apiBase, token, `/api/v1/backtest/cancel/${encodeURIComponent(jobId)}`, {
+      method: "DELETE",
+    }).catch((err) => {
+      log(`[via-api] cancel on interrupt failed: ${err.message || err}`);
+    });
+  };
+  const onSigInt = () => {
+    log(`[via-api] interrupt — cancelling job ${jobId} on server…`);
+    cancelOnInterrupt();
+  };
+  process.once("SIGINT", onSigInt);
+  process.once("SIGTERM", onSigInt);
+
   let since = 0;
   const started = Date.now();
   const MAX_MS = 45 * 60 * 1000;
 
-  while (Date.now() - started < MAX_MS) {
-    const status = await apiFetch(
-      apiBase,
-      token,
-      `/api/v1/backtest/job-status/${encodeURIComponent(jobId)}?since=${since}`,
-    );
-
-    const progress = status.progress || status.progressLog || [];
-    if (Array.isArray(progress) && progress.length) {
-      since += progress.length;
-      const last = progress[progress.length - 1];
-      // Skip the server's funnel dump — printed once locally with richer formatting.
-      if ((last?.message || last?.phase) && !isFunnelMessage(last.message)) {
-        log(`[via-api] ${last.phase || "progress"}: ${last.message || `${last.pct ?? ""}%`}`);
-      }
-    } else if ((status.message || status.phase) && !isFunnelMessage(status.message)) {
-      log(`[via-api] ${status.phase || "status"}: ${status.message || status.status}`);
-    }
-
-    if (status.status === "error") {
-      throw new Error(status.error || "Backtest job failed");
-    }
-    if (status.status === "cancelled") {
-      throw new Error("Backtest job cancelled");
-    }
-    if (status.status === "done") {
-      const result = await apiFetch(
+  try {
+    while (Date.now() - started < MAX_MS) {
+      const status = await apiFetch(
         apiBase,
         token,
-        `/api/v1/backtest/job-result/${encodeURIComponent(jobId)}`,
+        `/api/v1/backtest/job-status/${encodeURIComponent(jobId)}?since=${since}`,
       );
-      log("[via-api] job done — fetching result");
-      return normalizeResult(result, tradeType);
+
+      const progress = status.progress || status.progressLog || [];
+      if (Array.isArray(progress) && progress.length) {
+        since += progress.length;
+        const last = progress[progress.length - 1];
+        // Skip the server's funnel dump — printed once locally with richer formatting.
+        if ((last?.message || last?.phase) && !isFunnelMessage(last.message)) {
+          log(`[via-api] ${last.phase || "progress"}: ${last.message || `${last.pct ?? ""}%`}`);
+        }
+      } else if ((status.message || status.phase) && !isFunnelMessage(status.message)) {
+        log(`[via-api] ${status.phase || "status"}: ${status.message || status.status}`);
+      }
+
+      if (status.status === "error") {
+        throw new Error(status.error || "Backtest job failed");
+      }
+      if (status.status === "cancelled") {
+        throw new Error("Backtest job cancelled");
+      }
+      if (status.status === "done") {
+        const result = await apiFetch(
+          apiBase,
+          token,
+          `/api/v1/backtest/job-result/${encodeURIComponent(jobId)}`,
+        );
+        log("[via-api] job done — fetching result");
+        return normalizeResult(result, tradeType);
+      }
+
+      await sleep(2000);
     }
 
-    await sleep(2000);
+    throw new Error(`Backtest job timed out after ${MAX_MS / 60000} minutes (jobId=${jobId})`);
+  } finally {
+    process.off("SIGINT", onSigInt);
+    process.off("SIGTERM", onSigInt);
+    if (interruptCancel) await interruptCancel;
   }
-
-  throw new Error(`Backtest job timed out after ${MAX_MS / 60000} minutes (jobId=${jobId})`);
 }
 
 /**
