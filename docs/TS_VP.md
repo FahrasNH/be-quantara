@@ -11,15 +11,18 @@
 
 ## Default Config (Factory Reset)
 
-### Risk & SL/TP
+### Global risk preset (combined cap)
 
 | Parameter | Default | Unit | Kegunaan |
 | --- | --- | --- | --- |
-| `riskPerTrade` | 0.05 | fraksi equity | preset; engine ctor 0.015 |
-| `atrMultiplier` | 1.5 | × ATR | Stop-loss |
-| `riskReward` | 2.0 | × SL | TP nominal |
-| `maxTradesPerDay` | 4 | trade | Cap harian |
-| `leverage` | 2 | × | Leverage default |
+| `riskPerTrade` | 0.05 | fraksi equity | Combined cap → split 1% / 2% / 2% per leg |
+| `maxDailyLossPct` | 0.06 | fraksi equity | Daily loss halt |
+| `maxTradesPerDay` | 4 | trade | Per-bot daily count |
+| `cooldownAfterLoss` | 5 | menit | Cooldown after loss |
+| `maxConsecLoss` | 3 | loss | Consecutive-loss stop |
+| `leverage` | 2 | × | Default leverage |
+
+Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 ### Entry thresholds (Auction Market Theory)
 
@@ -39,6 +42,30 @@
 | Scalping | `atrGateRelative: true`, `amtSessionFilter: true`, RR 2.0 / 2h |
 | Intraday | `atrMinMult: 0.4`, 6h hold |
 | Swing | `atrMinMult: 0.8`, 120h hold |
+
+---
+
+## Risk & SL/TP (per Trade Type)
+
+Session **VWAP proximity** for entries uses `vwapAtrMult` 0.5×ATR — separate from SL/TP distances below. Entry triggers: [How Entry Works](#how-entry-works).
+
+| Leg | Entry TF / HTF | SL method | TP method | ATR mult / R:R | Risk % | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Scalping | 5m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **1%** | Relative ATR gate; `amtSessionFilter`; UTC-day session; `maxHoldHours` **2** |
+| Intraday | 15m / 1h | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | `minSessionBars` 20; `maxHoldHours` **6** |
+| Swing | 4h / 1w | ATR × 1.5 | ATR × 3.0 | 1.5 / 3.0 → **RR 2.0** | **2%** | UTC-**week** session (`minSessionBarsSwing` 6); `maxHoldHours` **120** |
+
+### Execution limits (all legs)
+
+| Limit | Value | SSOT |
+| --- | --- | --- |
+| Max trades/day | 4 | `TS_COMPONENT_BASE` |
+| Cooldown after loss | 5 min | `cooldownAfterLoss` |
+| Consecutive loss stop | 3 | `maxConsecLoss` |
+| Daily loss limit | 6% equity (incl. floating) | `maxDailyLossPct` |
+| ATR range gate | Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8% | `entryRiskGates.js` |
+| Position sizing | `size = (equity × legRiskPct) / slDistance` | `typeRiskLadder.js` |
+| TIME_STOP | Scalping 2h · Intraday 6h · Swing 120h | `STANDARD_LEG_TYPE_OVERRIDES` |
 
 ---
 
@@ -73,7 +100,7 @@ Precision helpers (`vwap_retest`, `poc_retest`) exist for rollback mode; race-mo
 
 Swing uses UTC-week session (`minSessionBarsSwing: 6`) because 4h bars have ≤6 per UTC-day.
 
-**SL/TP**: TS parent geometry; per-leg TIME_STOP from `STANDARD_LEG_TYPE_OVERRIDES`.
+**Risk / SL/TP**: see [Risk & SL/TP (per Trade Type)](#risk--sltp-per-trade-type).
 
 ---
 
