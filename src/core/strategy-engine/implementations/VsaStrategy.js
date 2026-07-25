@@ -40,7 +40,7 @@ class VsaStrategy extends StrategyBase {
       { key: "rejSwingProximity", label: "7. - Swing proximity gate" },
       { key: "rejClassify", label: "8. - Spread/CLV classify fail" },
       { key: "rejPattern", label: "9. - No VSA pattern" },
-      { key: "rejBySession", label: "10. - Session filter (Asia)" },
+      { key: "rejBySession", label: "10. - Session filter (no-trade window)" },
       { key: "rejHtfShortBullish", label: "11. - Intraday HTF SHORT×BULLISH block" },
       { key: "rejHtfStoppingCounter", label: "12. - Intraday HTF stopping-volume counter" },
       { key: "rejHtfLongBearishPenalty", label: "13. - Intraday HTF LONG×BEARISH penalty" },

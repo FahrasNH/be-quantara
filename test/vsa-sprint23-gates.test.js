@@ -14,6 +14,7 @@ const {
   resolveVsaSessionGateFlags,
 } = require("../src/core/strategy-engine/af/vsaEntry");
 const { STRATEGIES } = require("../src/config/strategyDefaults");
+const { evaluateAtrEntryGate } = require("../src/core/risk-engine/entryRiskGates");
 
 describe("VSA Sprint 23 gates", () => {
   test("applyVsaSessionFilter blocks Tokyo hour", () => {
@@ -178,6 +179,39 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ov.Intraday.vsaSessionFilter, true);
     assert.deepEqual(ov.Intraday.noTradeSessions, ["London"]);
     assert.equal(ov.Intraday.vsaIntradayDetectorMode, "confirmation");
+  });
+
+  test("Intraday adaptive ATR gate unblocks quiet 15m legs (Fix #4)", () => {
+    const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides.Intraday;
+    assert.equal(ov.atrGateRelative, true);
+    assert.equal(ov.atrMinMult, 0.15);
+    assert.equal(ov.atrRelMin, 0.4);
+    assert.equal(ov.atrRelMax, 4.0);
+
+    const price = 100_000;
+    const baseline = 350;
+    const quietAtr = 250;
+    const quietPct = (quietAtr / price) * 100;
+
+    const absoluteOnly = evaluateAtrEntryGate({
+      atr: quietAtr,
+      price,
+      atrMinMult: 0.4,
+      atrGateRelative: false,
+    });
+    assert.equal(absoluteOnly.ok, false, "old absolute 0.4% floor blocks typical BTC 15m ATR");
+
+    const adaptive = evaluateAtrEntryGate({
+      atr: quietAtr,
+      price,
+      atrBaseline: baseline,
+      atrMinMult: ov.atrMinMult,
+      atrGateRelative: ov.atrGateRelative,
+      atrRelMin: ov.atrRelMin,
+      atrRelMax: ov.atrRelMax,
+    });
+    assert.equal(adaptive.ok, true, "relative gate allows quiet-but-tradeable leg");
+    assert.ok(quietPct < 0.4);
   });
 
   test("GUARD: Intraday does NOT inherit Scalping Asia block", () => {
