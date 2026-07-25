@@ -142,6 +142,11 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
     vsaHtfAlignGate: true,
     vsaHtfCounterPenalty: 0.5,
+    // Fix #2: London bleed (NOT Asia — inverted session profile vs Scalping/Swing)
+    vsaSessionFilter: true,
+    noTradeSessions: ["London"],
+    // Fix #3: confirmation-bar detector v2 (alt: htf_proximity | sequence | hvsa | legacy)
+    vsaIntradayDetectorMode: "confirmation",
   },
   Swing: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Swing,

@@ -49,10 +49,13 @@ function buildManifest({ win, symbol }) {
       vsaHtfAlignGate: true,
       vsaHtfCounterPenalty: 0.5,
       vsaScalpingShelved: true,
+      vsaSessionFilter: true,
+      noTradeSessions: ["London"],
+      vsaIntradayDetectorMode: "confirmation",
       entryTf: "15m",
       htfTf: "1h",
       goNoGo: "gross PF > 1.0 in all 3 windows (Sprint 23 root-cause gate)",
-      note: "Intraday SSOT from strategyDefaults.js VSA_LEG_TYPE_OVERRIDES",
+      note: "Intraday SSOT from strategyDefaults.js VSA_LEG_TYPE_OVERRIDES (Fix #2+#3)",
     },
     exportVariant: "full",
   };
@@ -73,7 +76,7 @@ async function main() {
   console.log("VSA Intraday walk-forward re-validation (Sprint 23)");
   console.log(`Output: ${OUT_ROOT}`);
   console.log(`Windows: ${windows.map((w) => `${w.id}(${w.label})`).join(", ")} · Symbols: ${symbols.join(", ")}`);
-  console.log("Config: HTF-align gate (block SHORT×BULLISH, stopping counter; LONG×BEARISH penalty)");
+  console.log("Config: HTF-align gate + London session block + confirmation-bar detector v2");
 
   if (summaryOnly) {
     const summary = collectSummary(OUT_ROOT, windows, symbols, MIN_PASSES_PER_SYMBOL, PROMOTE_HINT);
