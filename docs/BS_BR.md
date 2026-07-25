@@ -45,9 +45,9 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `brSessionFilter: false`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `brSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -83,7 +83,7 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 ### Swing
 
 - **Floor:** none
-- **Formula / components:** same sequence; longer `maxHoldHours` only
+- **Formula / components:** same sequence across legs
 
 ---
 
@@ -98,7 +98,7 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 - **TP method:** Structural target **or** ATR × 3.2, cap **2.5R**
 - **ATR mult / R:R:** Planned ≤ **2.5R**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF
 
 ### Intraday
 
@@ -107,7 +107,7 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 - **TP method:** Same capped TP
 - **ATR mult / R:R:** Planned ≤ **2.5R**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -116,7 +116,7 @@ Structure-aware SL/TP: `BreakoutTradingStrategy.calculateRiskConfig` — see [Ri
 - **TP method:** Same capped TP
 - **ATR mult / R:R:** Planned ≤ **2.5R**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 Parent `riskReward` 3.0 is **nominal** — engine enforces `maxPlannedRR: 2.5`.
 
@@ -153,8 +153,8 @@ Parent `riskReward` 3.0 is **nominal** — engine enforces `maxPlannedRR: 2.5`.
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 

@@ -107,7 +107,7 @@ VSA has **no** `calculateRiskConfig` — `RealStrategyBacktestService` applies `
 - **TP method:** SL dist × 2.0 (`riskReward`)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** session filter OFF; HTF align gate; confirmation-bar detector v2; `maxHoldHours` **6**
+- **Notes:** session filter OFF; HTF align gate; confirmation-bar detector v2
 
 ### Swing
 
@@ -116,7 +116,7 @@ VSA has **no** `calculateRiskConfig` — `RealStrategyBacktestService` applies `
 - **TP method:** SL dist × 2.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** session filter OFF; **LONG-only**; conf≥60 (Stopping Volume bypasses); `maxHoldHours` **120**
+- **Notes:** session filter OFF; **LONG-only**; conf≥60 (Stopping Volume bypasses)
 
 `VsaStrategy.getRiskConfig` documents ctor hints (1.2 / 2.4) but backtest/live sizing path reads merged `strategyDefaults` + fallback chain above.
 
@@ -153,8 +153,8 @@ VSA has **no** `calculateRiskConfig` — `RealStrategyBacktestService` applies `
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 

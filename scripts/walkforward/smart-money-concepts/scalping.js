@@ -39,10 +39,10 @@ function buildManifest({ win }) {
     strategy: "SMART_MONEY_CONCEPTS",
     tradeType: "Scalping",
     config: {
-      asiaSessionBlock: true,
+      asiaSessionBlock: false,
       atrPctFloor: 0.287,
       plannedRR: 2.0,
-      maxHoldHours: 2,
+      // TIME_STOP OFF — no maxHoldHours
     },
     exportVariant: "full",
     note: "Gap 2021-12 → 2022-10 (bear crash) intentionally excluded from walk-forward set",

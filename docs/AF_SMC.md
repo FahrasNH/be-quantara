@@ -57,9 +57,9 @@ Per-leg SL/TP geometry: [`SMC_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) a
 
 ### Per trade type overrides (`SMC_LEG_TYPE_OVERRIDES`)
 
-- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `maxHoldHours: 2`, `smcSessionFilter: false`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
-- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `maxHoldHours: 6`, `smcSessionFilter: false`, `smcBlockAllInChop: true`
-- **Swing:** `slAtrMult/tpAtrMult: 1.2/3.6`, `maxHoldHours: 120`
+- **Scalping:** `atrMinMult: 0.287`, `atrGateRelative: true`, conf≥**40**, `smcSweepVolMult: 1.2`, `slAtrMult/tpAtrMult: 1.5/3.0`, `smcSessionFilter: false`, `smcBlockLongInChop: true`, `smcRequireObRetest: true`
+- **Intraday:** conf≥**80**, `smcPivotStructure: true`, `slAtrMult/tpAtrMult: 1.8/3.6`, `smcSessionFilter: false`, `smcBlockAllInChop: true`
+- **Swing:** `slAtrMult/tpAtrMult: 1.2/3.6`
 
 Top-level `smcMinConfidence*` stay at 60 for **live** (live does not spread confidence from `typeOverrides` into `detectSignalMulti`). Backtest merges per-leg overrides onto cfg.
 
@@ -113,7 +113,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × `tpAtrMult` (3.0)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; OB retest required; `maxHoldHours` **2** (session filter OFF)
+- **Notes:** Relative ATR gate 0.4–4.0 + abs floor 0.287%; OB retest required
 
 ### Intraday
 
@@ -122,7 +122,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × 3.6
 - **ATR mult / R:R:** 1.8 / 3.6 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** conf≥80; chop blocks all sides; pivot OB; `maxHoldHours` **6** (session filter OFF)
+- **Notes:** conf≥80; chop blocks all sides; pivot OB
 
 ### Swing
 
@@ -131,7 +131,7 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 - **TP method:** ATR × 3.6
 - **ATR mult / R:R:** 1.2 / 3.6 → **RR 3.0**
 - **Risk %:** **2%**
-- **Notes:** Optional STRONG_TREND TP boost (`strongTrendTPMult`); `maxHoldHours` **120** (5d)
+- **Notes:** Optional STRONG_TREND TP boost (`strongTrendTPMult`)
 
 ### Execution limits (all legs)
 
@@ -166,8 +166,8 @@ Backtest ladder SSOT: `runBacktestJob.TYPE_TF`. SL/TP resolved in `calculateRisk
 
 ---
 **Limit:** TIME_STOP
-**Value:** Force-close open leg at max hold
-**SSOT:** Scalping 2h · Intraday 6h · Swing 120h
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 

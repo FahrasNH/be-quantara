@@ -36,9 +36,9 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `tsSessionFilter: false`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, `adxMinStrength: 20`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `tsSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`, `adxMinStrength: 20`
 
 ---
 
@@ -89,7 +89,7 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 - **TP method:** ATR × 3.0 (`tpAtrMult`)
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF
 
 ### Intraday
 
@@ -98,7 +98,7 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -107,7 +107,7 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** `adxMinStrength` 20 on leg; `maxHoldHours` **120**
+- **Notes:** `adxMinStrength` 20 on leg
 
 Optional **partial TP** (`tpMode: "partial"`): milestones at 1R/2R with SL+ ladder (`slPlusM1R` / `slPlusM2R` per leg).
 
@@ -144,8 +144,8 @@ Optional **partial TP** (`tpMode: "partial"`): milestones at 1R/2R with SL+ ladd
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 

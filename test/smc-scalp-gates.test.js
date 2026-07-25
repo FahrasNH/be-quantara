@@ -212,12 +212,12 @@ test("GATE-FLAGS: resolveScalpingGateFlags reads typeOverrides", () => {
   assert.equal(flags.maxHoldHours, 6);
 });
 
-test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + 120m time-stop + gates on", () => {
+test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + gates on (TIME_STOP OFF)", () => {
   const { STRATEGIES } = require("#config/strategyDefaults.js");
   const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Scalping;
   assert.equal(ov.slAtrMult, 1.5);
   assert.equal(ov.tpAtrMult, 3.0);
-  assert.equal(ov.maxHoldHours, 2);
+  assert.equal(ov.maxHoldHours, undefined);
   assert.equal(ov.smcSessionFilter, false);
   assert.equal(ov.smcBlockLongInChop, true);
   assert.equal(ov.smcRequireObRetest, true);

@@ -2,7 +2,7 @@
 // strategyDefaults.js — strategy engine presets (STRATEGIES SSOT)
 //
 // Per-strategy leg tuning lives in typeOverrides (Scalping / Intraday / Swing).
-// TIME_STOP maxHoldHours SSOT: Scalping 2h, Intraday 6h, Swing 120h (5d).
+// TIME_STOP OFF by default (no maxHoldHours) — opt-in via typeOverrides if needed.
 // Deprecated PDF preset keys (AGGRESSIVE_SCALPING / DAY_TRADING / SWING_TRADING)
 // and legacy A/B/C resolve via strategyKeyNormalizer ACL at ingress.
 //
@@ -41,29 +41,27 @@ const DEFAULT_LEG_TYPE_OVERRIDES = Object.freeze({
 
 /**
  * Shared Scalping geometry (Sprint 16 — all 4 umbrellas).
- * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR), maxHoldHours=2 (120m TIME_STOP).
- * Backtest + live read typeOverrides.Scalping via RealStrategyBacktestService /
- * BotEngine TIME_STOP and calculateRiskConfig slAtrMult/tpAtrMult chain.
+ * Planned RR 2.0 (SL 1.5×ATR / TP 3.0×ATR). TIME_STOP OFF (no maxHoldHours).
+ * Backtest + live read typeOverrides.Scalping via calculateRiskConfig slAtrMult/tpAtrMult chain.
  */
 const SCALP_GEOMETRY = Object.freeze({
   slAtrMult: 1.5,
   tpAtrMult: 3.0,
-  maxHoldHours: 2,
 });
 
-/** Intraday TIME_STOP — force-close unresolved 15m/30m/1h legs at 6h. */
-const INTRADAY_HOLD = Object.freeze({ maxHoldHours: 6 });
+/** Intraday hold knobs — TIME_STOP OFF (empty; re-enable with maxHoldHours). */
+const INTRADAY_HOLD = Object.freeze({});
 
-/** Swing TIME_STOP — force-close unresolved 4h/1d/1w legs at 120h (5 days). */
-const SWING_HOLD = Object.freeze({ maxHoldHours: 120 });
+/** Swing hold knobs — TIME_STOP OFF (empty; re-enable with maxHoldHours). */
+const SWING_HOLD = Object.freeze({});
 
-/** DEFAULT + per-leg geometry / hold limits — TS / MD / BS parents + AF Wyckoff/VSA components. */
+/** DEFAULT + per-leg geometry — TS / MD / BS parents + AF Wyckoff/VSA components. */
 const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
   ...DEFAULT_LEG_TYPE_OVERRIDES,
   Scalping: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
     ...SCALP_GEOMETRY,
-    // Session filter OFF globally — no Asia/London noTradeSessions by default
+    // Session filter OFF + TIME_STOP OFF globally
   },
   Intraday: { ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday, ...INTRADAY_HOLD },
   Swing:    { ...DEFAULT_LEG_TYPE_OVERRIDES.Swing, ...SWING_HOLD },
@@ -77,10 +75,7 @@ const STANDARD_LEG_TYPE_OVERRIDES = Object.freeze({
  * Scalping geometry (Sprint 16 / 5m no-edge fix):
  *   - Planned RR 2.0 via slAtrMult/tpAtrMult (was hardcoded SUB_STRATEGIES 4.5R —
  *     a swing target on a 5m leg → multi-hour winners, fast SL losers, −EV).
- *   - maxHoldHours=2 (120m TIME_STOP) — trader note: force-close unresolved
- *     scalps at 90–120m; frees the single-slot bottleneck as a side effect.
- *   - Session filter OFF (Asia/London blocks removed); OB-retest / chop-LONG gates ON
- *     so the ablation funnel still surfaces live knobs.
+ *   - TIME_STOP OFF (no maxHoldHours); Session filter OFF; OB-retest / chop-LONG gates ON.
  * Live remains blocked by liveTradeTypeGate.js until walk-forward clears.
  */
 const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
@@ -94,7 +89,6 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0
     slAtrMult: 1.5,
     tpAtrMult: 3.0,
-    maxHoldHours: 2,
     // Session filter OFF — Asia block removed (re-enable via smcSessionFilter + noTradeSessions)
     smcSessionFilter: false,
     smcBlockLongInChop: true,

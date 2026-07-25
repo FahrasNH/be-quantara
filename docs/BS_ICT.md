@@ -41,9 +41,9 @@ Raid-aware SL/TP: `IctStyleStrategy.calculateRiskConfig` — see [Risk & SL/TP (
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `ictSessionFilter: false`, RR 2.0 / 2h
-- **Intraday:** `atrMinMult: 0.4`, 6h hold
-- **Swing:** `atrMinMult: 0.8`, 120h hold
+- **Scalping:** `atrGateRelative: true`, `ictSessionFilter: false`, RR 2.0
+- **Intraday:** `atrMinMult: 0.4`
+- **Swing:** `atrMinMult: 0.8`
 
 ---
 
@@ -90,7 +90,7 @@ SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buff
 - **TP method:** ATR × 3.0 (typeOverride) / 2.5 (engine)
 - **ATR mult / R:R:** **RR ~1.67–2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; session filter OFF; `maxHoldHours` **2**
+- **Notes:** Relative ATR gate; session filter OFF
 
 ### Intraday
 
@@ -99,7 +99,7 @@ SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buff
 - **TP method:** ATR × 2.5 (engine) / 3.0 (merged)
 - **ATR mult / R:R:** **RR ~1.67–2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%; `maxHoldHours` **6**
+- **Notes:** Abs ATR floor 0.4%
 
 ### Swing
 
@@ -108,7 +108,7 @@ SL prefers **beyond raid wick** when `raid.level` is available (± 0.2×ATR buff
 - **TP method:** ATR × 2.5–3.0
 - **ATR mult / R:R:** **RR ~1.67–2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.8%; `maxHoldHours` **120**
+- **Notes:** Abs ATR floor 0.8%
 
 Parent `riskReward` 3.0 is preset nominal; engine ctor defaults 1.5 / 2.5 unless typeOverride scalping geometry applies.
 
@@ -145,8 +145,8 @@ Parent `riskReward` 3.0 is preset nominal; engine ctor defaults 1.5 / 2.5 unless
 
 ---
 **Limit:** TIME_STOP
-**Value:** Scalping 2h · Intraday 6h · Swing 120h
-**SSOT:** `STANDARD_LEG_TYPE_OVERRIDES`
+**Value:** **OFF** (no `maxHoldHours` — positions exit on SL/TP only)
+**SSOT:** opt-in via `typeOverrides.*.maxHoldHours`
 
 ---
 
