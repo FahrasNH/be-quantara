@@ -14,6 +14,8 @@
  *     --dir=tmp/smc-intraday-walkforward \
  *     --dir=tmp/smc-swing-walkforward
  *   node scripts/ml/bootstrap-from-walkforward-csv.js --smc-all
+ *   node scripts/ml/bootstrap-from-walkforward-csv.js --wyckoff-all
+ *   node scripts/ml/bootstrap-from-walkforward-csv.js --smc-wyckoff
  * npm: ml:bootstrap-walkforward
  */
 
@@ -28,19 +30,31 @@ const SMC_ALL_DIRS = [
   "tmp/smc-swing-walkforward",
 ];
 
+const WYCKOFF_ALL_DIRS = [
+  "tmp/wyckoff-scalping-walkforward",
+  "tmp/wyckoff-intraday-walkforward",
+  "tmp/wyckoff-swing-walkforward",
+];
+
 function parseArgs() {
   const out = {
     dirs: [],
     min: 20,
-    smcAll: false,
+    preset: null,
   };
   for (const arg of process.argv.slice(2)) {
-    if (arg === "--smc-all") out.smcAll = true;
+    if (arg === "--smc-all") out.preset = "smc";
+    else if (arg === "--wyckoff-all") out.preset = "wyckoff";
+    else if (arg === "--smc-wyckoff") out.preset = "smc-wyckoff";
     else if (arg.startsWith("--dir=")) out.dirs.push(path.resolve(REPO_ROOT, arg.slice(6)));
     else if (arg.startsWith("--min=")) out.min = parseInt(arg.slice(6), 10);
   }
-  if (out.smcAll) {
+  if (out.preset === "smc") {
     out.dirs = SMC_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
+  } else if (out.preset === "wyckoff") {
+    out.dirs = WYCKOFF_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
+  } else if (out.preset === "smc-wyckoff") {
+    out.dirs = [...SMC_ALL_DIRS, ...WYCKOFF_ALL_DIRS].map((d) => path.join(REPO_ROOT, d));
   } else if (out.dirs.length === 0) {
     out.dirs = [path.join(REPO_ROOT, "tmp/smc-scalping-walkforward")];
   }

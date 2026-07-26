@@ -291,5 +291,4 @@ chmod +x scripts/pre_sprint18_ml_validation.sh
 ./scripts/pre_sprint18_ml_validation.sh
 ```
 
-See also `docs/ML_READINESS.md`, `docs/ML_MODEL_CARD.md`, and
-`docs/SMC_SCALPING_WALKFORWARD_EXPORT.md`.
+See also `docs/RAG.md` (Retrieval-Augmented Gate — WinPredictor + embeddings).
