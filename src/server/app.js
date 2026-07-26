@@ -821,6 +821,12 @@ async function resumeOneBot(bot, { source = "startup" } = {}) {
 async function _resumeOneBotAttempt(bot, prisma) {
   const { getExchangeCredentials } = require("../services/userExchange");
   const { getConnectedExchange } = require("../services/ExchangeService");
+  const { isAllowedSymbol } = require("../shared/constants/allowedSymbols");
+
+  // Simbol di luar allowlist (delisted, mis. GRASSUSDT) resume dalam mode
+  // monitor-only — TANPA flag ini bot ter-resume bisa buka posisi BARU pada
+  // simbol delisted (jalur start manual sudah meneruskannya, resume belum).
+  const legacyMonitorOnly = !isAllowedSymbol(bot.symbol);
 
   const connectedExchange = await getConnectedExchange(bot.userId);
   const creds = await getExchangeCredentials(bot.userId, connectedExchange || "bitget");
@@ -906,12 +912,13 @@ async function _resumeOneBotAttempt(bot, prisma) {
       exchangeType,
       apiKey, apiSecret, passphrase,
       maxAccountOpenPositions: accountOpenCap,
+      legacyMonitorOnly,
       grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
       grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
       grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
       grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
     });
-    console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})`);
+    console.log(`[Startup] Resume bot ${bot.symbol} multi-strategy [${strategies.join(",")}] tpMode:${bot.tpMode ?? "full"} (${bot.dryRun ? "dry-run" : "LIVE"})${legacyMonitorOnly ? " [monitor-only]" : ""}`);
   } else {
     instance = createBotInstance(bot.userId, bot.symbol, mergeBotStartOverrides({
       dbConfigOverrides: bot.configOverrides,
@@ -929,13 +936,14 @@ async function _resumeOneBotAttempt(bot, prisma) {
         exchangeType,
         apiKey, apiSecret, passphrase,
         maxAccountOpenPositions: accountOpenCap,
+        legacyMonitorOnly,
         grokConfirmEnabled:        bot.grokConfirmEnabled ?? false,
         grokConfirmTpAdjust:       bot.grokConfirmTpAdjust ?? true,
         grokConfirmTpBandPct:      bot.grokConfirmTpBandPct ?? undefined,
         grokConfirmTpRejectAction: bot.grokConfirmTpRejectAction ?? undefined,
       },
     }));
-    console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})`);
+    console.log(`[Startup] Resume bot ${bot.symbol} single-strategy [${bot.strategyKey}] (${bot.dryRun ? "dry-run" : "LIVE"})${legacyMonitorOnly ? " [monitor-only]" : ""}`);
   }
 
   const fresh = await prisma.bot.findUnique({ where: { id: bot.id }, select: { running: true } });
