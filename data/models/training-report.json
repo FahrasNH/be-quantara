@@ -1,14 +1,14 @@
 {
-  "auc": 0.5046519096569269,
-  "accuracy": 0.6505786752031519,
+  "auc": 0.506105787609639,
+  "accuracy": 0.6512338425381904,
   "precision": 0,
   "recall": 0,
   "splits": [
     {
-      "auc": 0.5916672937517249,
-      "accuracy": 0.6799065420560748,
-      "trainSize": 1197,
-      "testSize": 428
+      "auc": 0.5915388302972198,
+      "accuracy": 0.680365296803653,
+      "trainSize": 1223,
+      "testSize": 438
     },
     {
       "auc": 0.5,
@@ -17,60 +17,60 @@
       "testSize": 0
     },
     {
-      "auc": 0.4789589318911612,
-      "accuracy": 0.6139240506329114,
-      "trainSize": 1402,
-      "testSize": 158
+      "auc": 0.4690533980582523,
+      "accuracy": 0.6167664670658682,
+      "trainSize": 1407,
+      "testSize": 167
     },
     {
-      "auc": 0.4936804853387261,
+      "auc": 0.4916582406471184,
       "accuracy": 0.6515151515151515,
       "trainSize": 338,
       "testSize": 132
     }
   ],
-  "avgAuc": 0.516076677745403,
-  "avgAccuracy": 0.6113364360510344,
+  "avgAuc": 0.5130626172506476,
+  "avgAccuracy": 0.6121617288461682,
   "featureImportance": [
     {
       "name": "market_atrPct",
-      "importance": 0.28205637279269463
+      "importance": 0.3657348477773464
     },
     {
       "name": "market_atr",
-      "importance": 0.2500083330715505
-    },
-    {
-      "name": "time_hour_of_day",
-      "importance": 0.10747558723463362
-    },
-    {
-      "name": "signal_bosScore",
-      "importance": 0.07792248716200816
-    },
-    {
-      "name": "signal_entryConfidence",
-      "importance": 0.0439987106961632
-    },
-    {
-      "name": "signal_liquidityScore",
-      "importance": 0.043923768463484725
+      "importance": 0.27186673124508276
     },
     {
       "name": "signal_votingScore",
-      "importance": 0.04263986290258565
+      "importance": 0.09777940362690352
     },
     {
-      "name": "signal_fvgScore",
-      "importance": 0.03662172183324727
+      "name": "time_hour_of_day",
+      "importance": 0.08956383575394496
+    },
+    {
+      "name": "signal_liquidityScore",
+      "importance": 0.0554775732413988
+    },
+    {
+      "name": "signal_bosScore",
+      "importance": 0.03719523434225444
+    },
+    {
+      "name": "signal_entryConfidence",
+      "importance": 0.025075823055166858
     },
     {
       "name": "signal_signalQuality",
-      "importance": 0.03489541273279932
+      "importance": 0.016868245966780406
     },
     {
-      "name": "signal_chochScore",
-      "importance": 0.030492539614860478
+      "name": "signal_fvgScore",
+      "importance": 0.012048656859808132
+    },
+    {
+      "name": "regime_ranging",
+      "importance": 0.009251951739997828
     }
   ],
   "hyperparams": {
@@ -80,8 +80,8 @@
     "subsample": 0.8,
     "minSamplesLeaf": 2
   },
-  "trainedAt": "2026-07-26T02:37:36.207Z",
-  "tradeCount": 20305,
-  "winRate": 0.34892883526225066,
+  "trainedAt": "2026-07-27T07:13:59.091Z",
+  "tradeCount": 21273,
+  "winRate": 0.3479057960795374,
   "source": "ml-engine-dataset.json"
 }
