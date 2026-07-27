@@ -15,6 +15,7 @@
 const {
   normalizeStrategyKey,
 } = require("./strategyKeyNormalizer");
+const { getHtfMode } = require("./htfMode");
 
 /**
  * Per-leg ATR gate — absolute floors + Scalping adaptive (atrGateRelative).
@@ -136,6 +137,7 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     // Fix #4 REVERTED (Sprint 23 post-WF): relative gate unlocked 4–7× trades on
     // sub-0.4% ATR quiet legs with no gross edge — fees drove −89% NET (0/3 BLOCK).
     // Absolute 0.4% floor restored; pre-fix WF was mixed but survivable (+0.7/−38/−26%).
+    // CONTEXT_ONLY overlay — flags counter-HTF in meta; no hard directional block (HTF_Mode).
     vsaHtfAlignGate: true,
     vsaHtfCounterPenalty: 0.5,
     // Session filter OFF — London block removed
@@ -830,8 +832,11 @@ STRATEGIES.STATISTICAL_ARBITRAGE = {
   mdSaZBoostPerUnit: 0, // Gelombang 1: flat confidence — zBoost anti-predictive on swing
   mdSaMaxConfidence: 0.95,
   mdSaUseVwapBlend: true,
-  mdSaSkipHtfSideways: true, // Gelombang 2 #3: skip HTF 1w SIDEWAYS whipsaw
-  mdSaHtfAlignGate: true, // Gelombang 2 #3: no fade against HTF trend
+  mdSaSkipHtfSideways: true, // REGIME_GATE: skip HTF 1w SIDEWAYS whipsaw
+  // Legacy name mdSaHtfAlignGate — REGIME_GATE sideways skip (NOT directional align).
+  // Prefer mdSaHtfRegimeGate; both alias the same behaviour in statisticalArbitrageEntry.
+  mdSaHtfAlignGate: true,
+  mdSaHtfRegimeGate: true,
   mdSaUseBenchmarkResidual: true, // Gelombang 2 #4: BTC-residual z when btcCloses wired
   mdSaExitAtMean: true, // Gelombang 2 #5: exit when |z| <= mdSaExitZ
   mdSaRequireTransitionRegime: true, // Sprint 20: SA Swing edge in daily TRANSITION band only
@@ -889,10 +894,11 @@ function resolveStrategyDefaults(strategyKey) {
   const raw = String(strategyKey || DEFAULT_STRATEGY_KEY).toUpperCase();
   const canonical = normalizeStrategyKey(raw);
   const engine = STRATEGIES[canonical] || STRATEGIES[DEFAULT_STRATEGY_KEY];
+  const htfMode = getHtfMode(canonical);
   if (raw !== canonical && STRATEGIES[raw]) {
-    return { ...engine, ...STRATEGIES[raw] };
+    return { ...engine, ...STRATEGIES[raw], htfMode };
   }
-  return engine;
+  return { ...engine, htfMode };
 }
 
 function getStrategy(overrideKey = null) {

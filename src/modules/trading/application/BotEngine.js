@@ -15,6 +15,10 @@ const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency")
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { computeDailyTrendStrength, getRegimeForDate } = require("../../../core/signal-engine/dailyRegimeGate");
 const { getStrategy } = require("#config/strategyDefaults.js");
+const {
+  requiresHtfFailClosed,
+  shouldBlockHtfDirectional,
+} = require("../../../config/htfMode");
 const { buildTradeAttribution } = require("../../analytics/domain/tradeAttribution"); // TASK 2.3
 const db       = require("../../../infrastructure/db/database");
 const { persistBotLog } = require("../../../infrastructure/db/botLogRepository");
@@ -1433,24 +1437,25 @@ class BotEngine extends EventEmitter {
               }
             }
 
-            // ── STEP 3: Saring sinyal berdasarkan HTF trend ───────────────────
-            // BREAKOUT_RETEST: skip filter HTF — breakout/retest valid di konsolidasi
+            // ── STEP 3: HTF trend filter (HTF_Mode SSOT) ───────────────────────
+            // REQUIRED_ALIGN: hard directional block. CONTEXT_ONLY / SOFT_BIAS /
+            // REGIME_GATE: no engine 7a — strategy-internal scoring/gates apply.
+            const htfModeKey = normalizeStrategyKey(this.config.signalType)
+              || normalizeStrategyKey(this.config.strategyKey);
             let filteredSignal = mrSignal;
-            if (mrSignal && normalizeStrategyKey(this.config.signalType) !== "BREAKOUT_RETEST") {
-              if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
-                // FAIL-CLOSED: HTF dikonfigurasi tapi trend tak bisa ditentukan
-                // (fetch gagal). Sebelumnya fail-open → 10/14 loss dry-run 11-12 Jun
-                // masuk tanpa konfirmasi regime. Tanpa data regime = tanpa entry.
+            if (mrSignal) {
+              if (
+                this.config.higherTf
+                && this.state.htfTrend === "UNKNOWN"
+                && requiresHtfFailClosed(htfModeKey)
+              ) {
                 filteredSignal = null;
                 if (this._shouldLogDecision()) {
                   this._log("info", `⛔ Sinyal dibatalkan — data tren ${this.config.higherTf} tidak tersedia (fail-closed demi keamanan)`);
                 }
-              } else if (signal === "LONG"  && this.state.htfTrend === "BEARISH") {
+              } else if (shouldBlockHtfDirectional(htfModeKey, mrSignal, this.state.htfTrend)) {
                 filteredSignal = null;
-                this._log("info", `[HTF] LONG diblok — ${this.config.higherTf} BEARISH`);
-              } else if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
-                filteredSignal = null;
-                this._log("info", `[HTF] SHORT diblok — ${this.config.higherTf} BULLISH`);
+                this._log("info", `[HTF] ${mrSignal} diblok — ${this.config.higherTf} ${this.state.htfTrend} (REQUIRED_ALIGN)`);
               }
             }
 

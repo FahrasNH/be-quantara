@@ -222,11 +222,11 @@ Liquidity Sweep → CHoCH → Displacement (FVG) → Mitigation (entry bar) → 
 - **Intraday (15m):** **on** (`smcPivotStructure`)
 - **Swing (4h):** off
 
-### HTF align
+### HTF align (HTF_Mode: CONTEXT_ONLY)
 
-- **Scalping (5m):** soft −15 pts (hard if `smcHtfHardBlock` or tier)
-- **Intraday (15m):** soft −15 pts
-- **Swing (4h):** soft −15 pts; optional funding guard
+- Engine step **7a does not** hard-block SMC counter-HTF — HTF is scoring/context only.
+- **Scalping / Intraday / Swing:** soft **−15** pts when counter-HTF inside `detectSignalMulti`.
+- Hard block only when `smcHtfHardBlock` or pair `regimeFilterRequired` (tier override).
 
 ### ATR gate
 

@@ -31,8 +31,10 @@ const DEFAULTS = {
   zBoostPerUnit: 0, // Gelombang 1: flat confidence — zBoost was anti-predictive on swing
   maxConfidence: 0.95,
   useVwapBlend: true,
-  skipHtfSideways: true, // Gelombang 2: HTF 1w SIDEWAYS whipsaw (−702 NET in analysis)
-  htfAlignGate: true, // Gelombang 2: block fade against HTF trend (LONG/BEARISH, SHORT/BULLISH)
+  skipHtfSideways: true, // REGIME_GATE: HTF 1w SIDEWAYS whipsaw skip
+  htfRegimeGate: true, // REGIME_GATE sideways skip (NOT directional align)
+  /** @deprecated legacy name — use mdSaHtfRegimeGate; same as htfRegimeGate */
+  htfAlignGate: true,
   useBenchmarkResidual: true,
   requireTransitionRegime: false, // production SSOT: strategyDefaults.mdSaRequireTransitionRegime=true
 };
@@ -123,23 +125,15 @@ function _computeZScore({
   return { z, mode, stats };
 }
 
-function _checkSaHtfGate(signal, htfTrend, skipSideways, htfAlignGate, ablation) {
+function _checkSaHtfRegimeGate(htfTrend, htfRegimeGate, ablation) {
   const _abl = (k) => {
     if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1;
   };
-  if (htfTrend && skipSideways && htfTrend === "SIDEWAYS") {
+  // REGIME_GATE only — sideways/whipsaw skip. Directional align is NOT applied here
+  // (HTF_Mode REGIME_GATE; engine 7a does not block SA counter-trend).
+  if (htfTrend && htfRegimeGate && htfTrend === "SIDEWAYS") {
     _abl("rejHtfSideways");
     return { ok: false, reason: "htf_sideways" };
-  }
-  if (signal && htfTrend && htfAlignGate) {
-    if (signal === "LONG" && htfTrend === "BEARISH") {
-      _abl("rejHtfAlign");
-      return { ok: false, reason: "htf_align_long_bearish" };
-    }
-    if (signal === "SHORT" && htfTrend === "BULLISH") {
-      _abl("rejHtfAlign");
-      return { ok: false, reason: "htf_align_short_bullish" };
-    }
   }
   return { ok: true, reason: "ok" };
 }
@@ -221,7 +215,10 @@ function evaluateStatisticalArbitrageEntry({
   const useVwap = config.mdSaUseVwapBlend ?? DEFAULTS.useVwapBlend;
   const minBars = config.mdSaMinBars ?? DEFAULTS.minBars;
   const skipSideways = config.mdSaSkipHtfSideways ?? DEFAULTS.skipHtfSideways;
-  const htfAlignGate = config.mdSaHtfAlignGate ?? DEFAULTS.htfAlignGate;
+  // mdSaHtfRegimeGate (preferred) / mdSaHtfAlignGate (legacy) — REGIME_GATE only.
+  const htfRegimeGate = config.mdSaHtfRegimeGate
+    ?? config.mdSaHtfAlignGate
+    ?? DEFAULTS.htfRegimeGate;
   const useBenchmark = config.mdSaUseBenchmarkResidual ?? DEFAULTS.useBenchmarkResidual;
   const htfTrend = config.htfTrend ?? null;
   const requireTransition = config.mdSaRequireTransitionRegime ?? DEFAULTS.requireTransitionRegime;
@@ -244,7 +241,7 @@ function evaluateStatisticalArbitrageEntry({
     return { signal: null, confidence: 0, reason: "warmup", zScore: null, mode: null };
   }
 
-  if (htfTrend && skipSideways && htfTrend === "SIDEWAYS") {
+  if (htfTrend && (skipSideways || htfRegimeGate) && htfTrend === "SIDEWAYS") {
     _abl("rejHtfSideways");
     return { signal: null, confidence: 0, reason: "htf_sideways", zScore: null, mode: null };
   }
@@ -278,7 +275,7 @@ function evaluateStatisticalArbitrageEntry({
     };
   }
 
-  const htfCheck = _checkSaHtfGate(signal, htfTrend, false, htfAlignGate, ablation);
+  const htfCheck = _checkSaHtfRegimeGate(htfTrend, htfRegimeGate, ablation);
   if (!htfCheck.ok) {
     return {
       signal: null, confidence: 0, reason: htfCheck.reason, zScore: z, mode,

@@ -19,6 +19,10 @@ const {
   resolveAtrLegOverride,
 } = require("../../../core/risk-engine/entryRiskGates");
 const log = require("#shared/logger").child({ component: "AdaptiveStrategyEngine" });
+const {
+  requiresHtfFailClosed,
+  shouldBlockHtfDirectional,
+} = require("../../../config/htfMode");
 
 class AdaptiveStrategyEngine extends BotEngine {
   constructor(config = {}) {
@@ -230,8 +234,12 @@ class AdaptiveStrategyEngine extends BotEngine {
       await this._refreshDailyRegime(candles[lastIdx]?.timestamp ?? Date.now());
 
       // 6c. FAIL-CLOSED — HTF dikonfigurasi tapi trend tak bisa ditentukan →
-      //     blok entry baru (mirror BotEngine._tick() STEP 3).
-      if (this.config.higherTf && this.state.htfTrend === "UNKNOWN") {
+      //     blok entry baru (all HTF_Mode except OFF; mirror BotEngine STEP 3).
+      if (
+        this.config.higherTf
+        && this.state.htfTrend === "UNKNOWN"
+        && requiresHtfFailClosed(this.strategyKey)
+      ) {
         if (this.state.checkCount % 10 === 1) {
           log.info(`[${this.config.symbol}] 🚫 [BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed) — ${this.strategyKey}`);
         }
@@ -266,16 +274,13 @@ class AdaptiveStrategyEngine extends BotEngine {
       // Expose for MultiStrategyCoordinator.evaluate() / getPendingSignal()
       this._pendingSignal = { direction: signal };
 
-      // 7a. FILTER HTF DIRECTIONAL — jangan lawan tren timeframe besar (mirror
-      //     BotEngine._tick() STEP 3). Post-mortem 11–12 Jun: SHORT ETHUSDT saat
-      //     HTF BULLISH → SL. Override _tick() ini sebelumnya tidak punya blok ini.
-      if (signal === "LONG" && this.state.htfTrend === "BEARISH") {
-        log.info(`[${this.config.symbol}] [HTF] LONG diblok — ${this.config.higherTf} BEARISH (${this.strategyKey})`);
-        this._pendingSignal = null;
-        return;
-      }
-      if (signal === "SHORT" && this.state.htfTrend === "BULLISH") {
-        log.info(`[${this.config.symbol}] [HTF] SHORT diblok — ${this.config.higherTf} BULLISH (${this.strategyKey})`);
+      // 7a. HTF directional block — REQUIRED_ALIGN only (TF, MS). SOFT_BIAS /
+      //     CONTEXT_ONLY / REGIME_GATE pass htfTrend to strategy for scoring/gates.
+      if (shouldBlockHtfDirectional(this.strategyKey, signal, this.state.htfTrend)) {
+        log.info(
+          `[${this.config.symbol}] [HTF] ${signal} diblok — ${this.config.higherTf} `
+          + `${this.state.htfTrend} (${this.strategyKey}, REQUIRED_ALIGN)`,
+        );
         this._pendingSignal = null;
         return;
       }

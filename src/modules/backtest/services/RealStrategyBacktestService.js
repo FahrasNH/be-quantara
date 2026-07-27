@@ -78,6 +78,10 @@ const { buildBacktestEntryContext } = require("../../analytics/domain/engineTrad
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const {
+  requiresHtfDirectionalBlock,
+  requiresHtfFailClosed,
+} = require("../../../config/htfMode");
 
 const TRADE_LEG_NAMES = new Set(["Scalping", "Intraday", "Swing", "A", "B", "C"]);
 const LEG_ABC = Object.freeze({ A: "Scalping", B: "Intraday", C: "Swing" });
@@ -3035,7 +3039,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 3. HTF trend + fail-closed (mirror step 6b/6c) ──────────────────────
     const htfTrend = htfTrendAt(i);
-    if (higherTf && htfTrend === "UNKNOWN") {
+    if (higherTf && htfTrend === "UNKNOWN" && requiresHtfFailClosed(strategyKey)) {
       diag.htfUnknownSkip += 1;
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -3155,20 +3159,14 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
     const adjustedRiskPerTrade = regimeResult.riskPerTrade;
 
-    // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
-    // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
-    // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
-    // reversal valid). Other trend-following strategies require HTF alignment.
-    const isMR = isMRKey(strategyKey);
-    const isBR = isBRKey(strategyKey);
-    if (!isMR && !isBR) {
+    // ── 5. HTF directional block (mirror step 7a) — REQUIRED_ALIGN only ───
+    if (requiresHtfDirectionalBlock(strategyKey)) {
       if (signal === "LONG" && htfTrend === "BEARISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
       if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     }
 
-    // ── 5b. MEAN_REVERSION regime gate (mirror step 2c in live BotEngine) ──
-    // MR counter-trend entries need regime check: block SHORT in strong bull,
-    // LONG in strong bear, and all entries during ATR spike (wide spreads).
+    // ── 5b. MEAN_REVERSION regime gate (REGIME_GATE — mirror BotEngine MR filter)
+    const isMR = isMRKey(strategyKey);
     if (isMR && htfIndicators && htfPtr) {
       const j = htfPtr[i];
       if (j >= 0 && j < htfIndicators.emaFast.length) {

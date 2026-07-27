@@ -7,6 +7,7 @@
 
 const StrategyBase = require("../base/StrategyBase");
 const { evaluateSupplyDemandEntry, DEFAULTS } = require("../md/supplyDemandEntry");
+const { applySoftBiasConfidencePenalty } = require("../../../config/htfMode");
 
 class SupplyDemandStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -108,12 +109,25 @@ class SupplyDemandStrategy extends StrategyBase {
         zone.zoneKind && (String(zone.zoneKind).includes("ob") || String(zone.zoneKind).includes("fvg"))
       ),
     };
+    const htfTrend = config.htfTrend ?? null;
+    let confidence = result.confidence;
+    let htfPenaltyMeta = {};
+    if (result.signal) {
+      const penalized = applySoftBiasConfidencePenalty(confidence, result.signal, htfTrend);
+      confidence = penalized.confidence;
+      if (penalized.counterHtf) {
+        htfPenaltyMeta = {
+          htfCounterTrend: true,
+          htfPenaltyApplied: penalized.penaltyApplied,
+        };
+      }
+    }
     this._lastSignalMeta = {
       component: "SUPPLY_AND_DEMAND",
       winningComponent: result.signal ? "SUPPLY_AND_DEMAND" : null,
       strategyLabel: "Supply and Demand",
-      componentConfidence: result.signal ? Math.round(result.confidence * 100) : 0,
-      confidence: result.confidence,
+      componentConfidence: result.signal ? Math.round(confidence * 100) : 0,
+      confidence,
       reason: result.reason,
       zoneType: result.zoneType,
       nearestZone: result.nearestZone,
@@ -123,6 +137,7 @@ class SupplyDemandStrategy extends StrategyBase {
       atr,
       price,
       ...sdFields,
+      ...htfPenaltyMeta,
     };
     return result.signal || null;
   }
