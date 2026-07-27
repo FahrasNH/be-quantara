@@ -12,7 +12,8 @@
 const BotEngine = require("./BotEngine");
 const PositionManager = require("../../../core/position-engine/PositionManager");
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
-const { calcIndicators, detectHTFTrend } = require("../../../core/analytics-engine/indicators");
+const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcADX } = require("../../../core/analytics-engine/indicators");
+const { isMeanReversionKey } = require("../../../core/execution-engine");
 const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency");
 const {
   buildAtrBaseline,
@@ -211,10 +212,12 @@ class AdaptiveStrategyEngine extends BotEngine {
       //     TrendMomentum (butuh htfTrend LONG/SHORT) dan MeanReversion
       //     (gate: htfTrend !== UNKNOWN) bekerja dengan benar.
       //     Override _tick() sebelumnya melewati blok ini → htfTrend selalu UNKNOWN.
+      let htfCandlesCache = null;
       if (this.config.higherTf) {
         try {
           const htfCandles = await this._fetchHtfCandles();
           if (htfCandles?.length) {
+            htfCandlesCache = htfCandles;
             this.state.htfTrend = detectHTFTrend(htfCandles, {
               htfEmaFast:           this.config.htfEmaFast,
               htfEmaSlow:           this.config.htfEmaSlow,
@@ -243,9 +246,35 @@ class AdaptiveStrategyEngine extends BotEngine {
         && requiresHtfFailClosed(this.strategyKey)
       ) {
         if (this.state.checkCount % 10 === 1) {
-          log.info(`[${this.config.symbol}] 🚫 [BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed) — ${this.strategyKey}`);
+          this._log("info", `🚫 [BLOK] HTF ${this.config.higherTf} tidak tersedia (fail-closed) — ${this.strategyKey}`);
         }
         return;
+      }
+
+      // 6d. PARITY BotEngine._tick(): lampirkan data HTF mentah ke indicators +
+      //     htfTrendStrength. Tanpa ini TS structure gate (highsHTF/lowsHTF/htfIdx)
+      //     dan filter kekuatan tren HTF tidak pernah aktif di mode multi-strategi →
+      //     TF/MS membentuk sinyal tanpa konteks HTF lalu ditolak step 7a
+      //     (REQUIRED_ALIGN) karena bentrok dengan htfTrend versi engine.
+      let htfTrendStrength = null;
+      if (htfCandlesCache?.length >= 30) {
+        const hLast   = htfCandlesCache.length - 1;
+        const hCloses = htfCandlesCache.map(c => c.close);
+        const hHighs  = htfCandlesCache.map(c => c.high);
+        const hLows   = htfCandlesCache.map(c => c.low);
+        const hEmaF = calcEMA(hCloses, this.config.htfEmaFast)[hLast];
+        const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
+        const hAtr  = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
+        if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+        indicators.highsHTF  = hHighs;
+        indicators.lowsHTF   = hLows;
+        indicators.closesHTF = hCloses;
+      }
+
+      // 6e. PARITY BotEngine._tick(): MEAN_REVERSION ADX regime gate (MD-SUB-01)
+      //     membaca indicators.adx pada entry TF — tanpa ini gate regime MR mati.
+      if (isMeanReversionKey(this.strategyKey) || isMeanReversionKey(this.config.signalType)) {
+        indicators.adx = calcADX(indicators.highs, indicators.lows, indicators.closes, 14).adx;
       }
 
       // 7. Deteksi sinyal — kirim htfTrend dari state (bukan hardcoded "NEUTRAL")
@@ -255,6 +284,8 @@ class AdaptiveStrategyEngine extends BotEngine {
         volatility:     this.lastVolatility,
         trend_strength: this.lastTrendStrength,
         htfTrend:       this.state.htfTrend,
+        htfTrendStrength,
+        htfIdx:         htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 1 : undefined,
         dailyRegime:    this.state.dailyRegime,
         // FEE-01/01b: knob entry-quality AF — diteruskan dari config bot/strategi
         // agar anti-chase & conviction-veto bisa di-tune live tanpa ubah kode.
@@ -279,8 +310,10 @@ class AdaptiveStrategyEngine extends BotEngine {
       // 7a. HTF directional block — REQUIRED_ALIGN only (TF, MS). SOFT_BIAS /
       //     CONTEXT_ONLY / REGIME_GATE pass htfTrend to strategy for scoring/gates.
       if (shouldBlockHtfDirectional(this.strategyKey, signal, this.state.htfTrend)) {
-        log.info(
-          `[${this.config.symbol}] [HTF] ${signal} diblok — ${this.config.higherTf} `
+        // this._log → persist ke BotLog agar rejection terlihat di FE/DB (bukan console-only)
+        this._log(
+          "info",
+          `[HTF] ${signal} diblok — ${this.config.higherTf} `
           + `${this.state.htfTrend} (${this.strategyKey}, REQUIRED_ALIGN)`,
         );
         this._pendingSignal = null;
@@ -309,9 +342,9 @@ class AdaptiveStrategyEngine extends BotEngine {
       };
       const riskGate = this._checkRiskGates(atr, price, atrGateCfg);
       if (!riskGate.ok) {
-        // Diagnostic: log lebih frequent (tiap 2 tick ~2 menit) agar terlihat breakdown gate rejection
+        // this._log → persist ke BotLog; throttle tiap 2 tick agar tidak membanjiri DB
         if (this.state.checkCount % 2 === 1) {
-          log.info(`[${this.config.symbol}] [RISK-GATE] ${this.strategyKey}: ${riskGate.reason}`);
+          this._log("info", `[RISK-GATE] ${this.strategyKey}: ${riskGate.reason}`);
         }
         return;
       }
@@ -326,9 +359,9 @@ class AdaptiveStrategyEngine extends BotEngine {
         candleOpenTime,
         direction:      signal,
       })) {
-        // Diagnostic: log lebih frequent (tiap 2 tick ~2 menit) agar terlihat breakdown gate rejection
+        // this._log → persist ke BotLog; throttle tiap 2 tick agar tidak membanjiri DB
         if (this.state.checkCount % 2 === 1) {
-          log.info(`[${this.config.symbol}] [DUPLICATE] ${this.strategyKey}: ${signal} @candle ${candleOpenTime}`);
+          this._log("info", `[DUPLICATE] ${this.strategyKey}: ${signal} @candle ${candleOpenTime}`);
         }
         return;
       }
@@ -336,7 +369,7 @@ class AdaptiveStrategyEngine extends BotEngine {
       // 8. Cek konflik posisi — gunakan this.config.symbol
       const conflict = this.positionManager.checkEntryConflict(this.config.symbol);
       if (!conflict.allowed) {
-        log.info(`[${this.config.symbol}] Position conflict: ${conflict.reason}`);
+        this._log("info", `[CONFLICT] ${this.strategyKey}: ${conflict.reason}`);
         return;
       }
 
@@ -366,7 +399,7 @@ class AdaptiveStrategyEngine extends BotEngine {
       }
 
       if (!validation.valid) {
-        log.info(`[${this.config.symbol}] Entry validation failed: ${validation.reason}`);
+        this._log("info", `[VALIDATE] ${this.strategyKey}: entry ditolak — ${validation.reason}`);
         return;
       }
 
@@ -377,7 +410,7 @@ class AdaptiveStrategyEngine extends BotEngine {
         const gate = await groupCoord.canEnter(this.strategyKey, signal);
         if (!gate.allowed) {
           if (this.state.checkCount % 5 === 1) {
-            log.info(`[${this.config.symbol}] Entry ditolak grup (${this.strategyKey}): ${gate.reason}`);
+            this._log("info", `[GROUP-GATE] ${this.strategyKey}: ${gate.reason}`);
           }
           return;
         }
