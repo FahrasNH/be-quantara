@@ -1514,6 +1514,44 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   };
 }
 
+const KNOWN_TRADE_TYPE_LEGS = new Set(["Scalping", "Intraday", "Swing"]);
+
+/**
+ * Reconcile perTypeStats trade counts (and per-leg NET%) with the post-gate trades
+ * array that drives stats/equity. Without this, BacktestEngineBanner shows pre-RAG
+ * leg counts (e.g. 30+3+7=40) while stats.totalTrades reflects post-RAG survivors (38).
+ */
+function _refreshPerTypeStatsFromTrades(perTypeStats, trades, startCapital) {
+  const base = perTypeStats && typeof perTypeStats === "object" ? { ...perTypeStats } : {};
+  const byType = new Map();
+
+  for (const t of trades || []) {
+    const leg = t.component || t.tradeType;
+    if (!leg || !KNOWN_TRADE_TYPE_LEGS.has(leg)) continue;
+    if (!byType.has(leg)) byType.set(leg, []);
+    byType.get(leg).push(t);
+  }
+
+  for (const leg of KNOWN_TRADE_TYPE_LEGS) {
+    const legTrades = byType.get(leg) || [];
+    const prev = base[leg];
+    if (!prev && legTrades.length === 0) continue;
+
+    const totalPnl = legTrades.reduce((s, tr) => s + (tr.pnl ?? tr.pnlNet ?? 0), 0);
+    const wins = legTrades.filter((tr) => tr.result === "win" || (tr.pnl ?? tr.pnlNet ?? 0) > 0).length;
+
+    base[leg] = {
+      ...(prev || {}),
+      trades: legTrades.length,
+      wins,
+      totalReturn: startCapital > 0 ? ((totalPnl / startCapital) * 100).toFixed(2) : "0.00",
+      postGate: true,
+    };
+  }
+
+  return base;
+}
+
 /**
  * Compute equity curve + summary stats purely from a (chronological) trades array.
  * Extracted so the Grok Confirm Gate can filter trades and recompute stats identically.
@@ -2356,6 +2394,10 @@ async function runTripleTypeBacktest(opts = {}) {
     workingTrades = ragResult.trades;
   }
   const finalTrades = workingTrades;
+  const gateApplied = !!(opts.grokGate || opts.ragGate);
+  const reconciledPerTypeStats = gateApplied
+    ? _refreshPerTypeStatsFromTrades(perTypeStats, finalTrades, startCapital)
+    : perTypeStats;
 
   const { equity, stats } = _computeTripleStats(finalTrades, startCapital);
 
@@ -2363,7 +2405,7 @@ async function runTripleTypeBacktest(opts = {}) {
     ok: true,
     trades: finalTrades,
     equity,
-    perTypeStats,
+    perTypeStats: reconciledPerTypeStats,
     stats,
     grokGate: !!opts.grokGate,
     grokStats: grokResult?.stats ?? null,
@@ -2374,7 +2416,7 @@ async function runTripleTypeBacktest(opts = {}) {
     meta: {
       strategyKey,
       mode: "triple-timeframe",
-      perTypeStats,
+      perTypeStats: reconciledPerTypeStats,
       grokGate: !!opts.grokGate,
       grokStats: grokResult?.stats ?? null,
       ragGate: !!opts.ragGate,
@@ -3514,6 +3556,10 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     workingTrades = ragResult.trades;
   }
   const finalTrades = workingTrades;
+  const gateApplied = !!(opts.grokGate || opts.ragGate);
+  const reconciledPerTypeStats = gateApplied
+    ? _refreshPerTypeStatsFromTrades(perTypeStats, finalTrades, startCapital)
+    : perTypeStats;
 
   const { equity, stats } = _computeTripleStats(finalTrades, startCapital);
 
@@ -3521,7 +3567,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     ok: true,
     trades: finalTrades,
     equity,
-    perTypeStats,
+    perTypeStats: reconciledPerTypeStats,
     stats,
     grokGate: !!opts.grokGate,
     grokStats: grokResult?.stats ?? null,
@@ -3532,7 +3578,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     meta: {
       strategyKey,
       mode: `multi-tf (${typeOrder.join("+")})`,
-      perTypeStats,
+      perTypeStats: reconciledPerTypeStats,
       grokGate: !!opts.grokGate,
       grokStats: grokResult?.stats ?? null,
       ragGate: !!opts.ragGate,
@@ -3608,6 +3654,7 @@ module.exports = {
   resolveFeeModel,
   estimateFundingCost,
   _computeTripleStats,
+  _refreshPerTypeStatsFromTrades,
   _applyGrokGate,
   _applyRagGate,
   resolveTsCombination,
