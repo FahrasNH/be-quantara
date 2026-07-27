@@ -85,6 +85,10 @@ class VectorStore {
       params.push(filters.outcome);
       conditions.push(`metadata->>'outcome' = $${idx++}`);
     }
+    if (filters.beforeDate) {
+      params.push(filters.beforeDate);
+      conditions.push(`(metadata->>'timestamp')::timestamptz < $${idx++}::timestamptz`);
+    }
 
     return { conditions, params };
   }
@@ -117,7 +121,7 @@ class VectorStore {
    * Find k most similar trades by cosine similarity.
    * @param {Float32Array|number[]} vector60d — query vector
    * @param {number} k — number of results (default 20)
-   * @param {object} filters — { regime?, strategyKey?, symbol?, outcome? }
+   * @param {object} filters — { regime?, strategyKey?, symbol?, outcome?, beforeDate? }
    * @returns {Array<{tradeId, similarity, metadata}>}
    */
   async findSimilar(vector60d, k = 20, filters = {}) {

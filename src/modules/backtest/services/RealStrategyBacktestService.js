@@ -1661,6 +1661,8 @@ async function _applyGrokGate(trades, ctx = {}) {
 
 const RAG_CONSERVATIVE_DISCOUNT = 0.9;
 const RAG_APPROVE_THRESHOLD = parseFloat(process.env.RAG_APPROVE_THRESHOLD || "0.4");
+/** When true, persist backtest trade embeddings after RAG gate (can leak future outcomes into reruns). Default off. */
+const RAG_SEED_AFTER_BACKTEST = process.env.RAG_SEED_AFTER_BACKTEST === "true";
 
 /** Resolve win/loss from TradeEmbedding metadata (outcome field or pnlPct fallback). */
 function _resolveSimilarOutcome(metadata) {
@@ -1836,6 +1838,7 @@ async function _applyRagGate(trades, ctx = {}) {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
       const similar = await vs.findSimilar(features, 20, {
         symbol: tradeMetadata.symbol,
+        strategyKey: ctx.strategyKey,
         beforeDate: tradeTime.toISOString(),
       });
       if (similar.length > 0) {
@@ -1927,9 +1930,11 @@ async function _applyRagGate(trades, ctx = {}) {
       : "All entries had no ML signal (kept) — RAG ON matches baseline; train a model or seed embeddings";
   }
 
-  // Seed embeddings from backtest trades (outcome metadata) for future RAG runs.
-  const seeded = await _seedBacktestTradeEmbeddings(trades, ctx, deps).catch(() => 0);
-  if (seeded > 0) stats.embeddingsSeeded = seeded;
+  // Optional: seed embeddings from backtest trades (disabled by default to avoid look-ahead on reruns).
+  if (RAG_SEED_AFTER_BACKTEST) {
+    const seeded = await _seedBacktestTradeEmbeddings(trades, ctx, deps).catch(() => 0);
+    if (seeded > 0) stats.embeddingsSeeded = seeded;
+  }
 
   return {
     trades: kept,

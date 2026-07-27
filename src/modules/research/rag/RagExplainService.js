@@ -88,7 +88,7 @@ class RagExplainService {
 
     if (!skipLlm && xai.isConfigured) {
       try {
-        const content = await xai.chat(prompt.messages, { jsonMode: true, maxTokens: 2048 });
+        const content = await xai.chat(prompt.messages, { jsonMode: true, maxTokens: 2048, temperature: 0 });
         rawResponse = JSON.parse(content);
         source = "xai";
       } catch (err) {

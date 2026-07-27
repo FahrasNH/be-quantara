@@ -194,6 +194,12 @@ RAG di Quantara **bukan magic** — butuh tiga fondasi yang sudah ada di stack.
 
 ---
 
+**Env:** `RAG_SEED_AFTER_BACKTEST`  
+**Nilai default:** `false` (harus `"true"` eksplisit untuk aktif)  
+**Efek:** Setelah backtest RAG gate, upsert trade ke `TradeEmbedding`. Matikan (default) agar rerun backtest tidak terkontaminasi outcome masa depan.
+
+---
+
 **Env:** `RAG_MODE`  
 **Nilai:** `shadow` · `advisory`  
 **Efek:** Mode dashboard / promote admin (beda channel dari `ML_GATE_MODE`)
@@ -378,7 +384,13 @@ RAG di Quantara **bukan magic** — butuh tiga fondasi yang sudah ada di stack.
 
 **Concern:** Filter hasil backtest  
 **Kontrol:** request `ragGate: true`  
-**Perilaku:** Post-hoc filter; fail-open jika deps kurang
+**Perilaku:** Post-hoc filter; fail-open jika deps kurang. Similarity search memakai filter `beforeDate` + `strategyKey` agar tidak look-ahead.
+
+---
+
+**Concern:** Explain Why (evidence RAG)  
+**API:** `POST /api/v1/ai/explain`  
+**Perilaku:** LLM xAI dipanggil dengan `temperature: 0` untuk respons deterministik berbasis bukti.
 
 ---
 
