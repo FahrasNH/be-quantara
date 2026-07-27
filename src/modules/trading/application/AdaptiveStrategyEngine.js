@@ -222,12 +222,14 @@ class AdaptiveStrategyEngine extends BotEngine {
             });
           } else {
             this.state.htfTrend = "UNKNOWN";
+            this._log("warn", `[HTF] Candles kosong untuk ${this.config.higherTf} — trend=UNKNOWN`);
           }
-        } catch {
+        } catch (err) {
           // FAIL-CLOSED: tanpa data regime HTF, jangan buka posisi baru (diblok
           // di 6c). Sebelumnya fail-open → 10/18 trade loss dry-run 11–12 Jun
           // masuk saat htfTrend=UNKNOWN. Posisi terbuka tetap dikelola normal.
           this.state.htfTrend = "UNKNOWN";
+          this._log("warn", `[HTF] Fetch ${this.config.higherTf} gagal — trend=UNKNOWN: ${err.message}`);
         }
       }
 
@@ -307,8 +309,9 @@ class AdaptiveStrategyEngine extends BotEngine {
       };
       const riskGate = this._checkRiskGates(atr, price, atrGateCfg);
       if (!riskGate.ok) {
-        if (this.state.checkCount % 10 === 1) {
-          log.info(`[${this.config.symbol}] 🚫 Skip entry (${this.strategyKey}): ${riskGate.reason}`);
+        // Diagnostic: log lebih frequent (tiap 2 tick ~2 menit) agar terlihat breakdown gate rejection
+        if (this.state.checkCount % 2 === 1) {
+          log.info(`[${this.config.symbol}] [RISK-GATE] ${this.strategyKey}: ${riskGate.reason}`);
         }
         return;
       }
@@ -323,8 +326,9 @@ class AdaptiveStrategyEngine extends BotEngine {
         candleOpenTime,
         direction:      signal,
       })) {
-        if (this.state.checkCount % 10 === 1) {
-          log.info(`[${this.config.symbol}] Duplicate signal dibuang (${this.strategyKey}) — ${signal} @candle ${candleOpenTime}`);
+        // Diagnostic: log lebih frequent (tiap 2 tick ~2 menit) agar terlihat breakdown gate rejection
+        if (this.state.checkCount % 2 === 1) {
+          log.info(`[${this.config.symbol}] [DUPLICATE] ${this.strategyKey}: ${signal} @candle ${candleOpenTime}`);
         }
         return;
       }
