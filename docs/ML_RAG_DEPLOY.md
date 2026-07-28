@@ -12,9 +12,11 @@ Run these from the **laptop** at the repo root (`be-bot-trading/`).
 
 | Goal | Command |
 |------|---------|
+| **Full refresh** (export → train → deploy) | See [End-to-end training data refresh](#end-to-end-training-data-refresh) — steps 1–6 |
 | Deploy to **staging** VPS | `npm run ml:deploy:staging` |
 | Deploy to **dev** VPS | `npm run ml:deploy:dev` |
-| Refresh model locally, then deploy | `npm run ml:refresh` → commit model → `npm run ml:deploy:staging` |
+| Refresh model locally, then deploy | Steps 1–4 → `npm run ml:deploy:staging` |
+| TS embeddings only | Export tf/ms/amt → `npm run ml:seed:ts` (on VPS) or deploy with `--ts-all` |
 | Check embedding counts (no DB write) | `npm run ml:seed:dry-run` |
 | Verify RAG gate on VPS | `npm run ml:diag -- --strategy TREND_SURGE --symbol BTCUSDT` |
 
@@ -68,46 +70,256 @@ Also required on VPS:
 
 ---
 
-## Local refresh (before deploy)
+## End-to-end training data refresh
 
-Use this when strategy logic changed or you need a new WinPredictor model.
+Run these **on your laptop** from `be-bot-trading/`, then deploy to VPS. Each step has a success check — do not skip ahead if a step fails.
 
-### 1. Export walkforward CSVs
+### Quick path vs full path
 
-Run exports from `scripts/walkforward/` — one per strategy × trade type. Example:
+| Goal | Steps to run |
+|------|--------------|
+| **Full refresh** (new CSVs + new model + new embeddings) | 1 → 2 → 3 → 4 → 5 → 6 |
+| **Embeddings only** (model in git unchanged, new walkforward CSVs) | 1 → 5 → 6 — skip 2, 3, 4 |
+| **Redeploy only** (CSVs + model already committed) | 5 → 6 — skip 1–4 |
+| **Local model only** (no VPS deploy yet) | 1 → 2 → 3 → 4 |
+
+`npm run ml:refresh` covers steps 2–3 partially (dry-run count + train) but **does not bootstrap** — run step 2 explicitly first.
+
+---
+
+### Step 1 — Export walkforward CSVs
+
+Walkforward hits the BE API (`--via-api` default). Set `DATASET_EXPAND_API_URL` in `.env` to the engine you want data from (dev or staging). See [`scripts/walkforward/README.md`](../scripts/walkforward/README.md).
+
+**All 12 strategies** — run each strategy folder × 3 trade types (36 exports total):
 
 ```bash
+# Example: one cell smoke test first
+node scripts/walkforward/trend-following/intraday.js --window 1 --symbol BTCUSDT
+
+# Full grid per strategy × type (repeat for all 12 strategy folders)
+node scripts/walkforward/smart-money-concepts/scalping.js
 node scripts/walkforward/smart-money-concepts/intraday.js
+node scripts/walkforward/smart-money-concepts/swing.js
+# … wyckoff, volume-spread-analysis, trend-following, market-structure,
+#   auction-market-theory, mean-reversion, supply-and-demand,
+#   statistical-arbitrage, breakout-retest, ict-style-trading, liquidation-squeeze
 ```
 
-Repeat for each strategy you need, or export all 12. Output goes to `tmp/<prefix>-{scalping|intraday|swing}-walkforward/`.
+**Per-umbrella shortcut** — export only the 3 strategies you need:
 
-### 2. Train model (optional)
+| Umbrella | Strategies | tmp prefixes |
+|----------|------------|--------------|
+| **AF** | SMC, Wyckoff, VSA | `smc`, `wyckoff`, `vsa` |
+| **TS** | Trend Following, Market Structure, AMT | `tf`, `ms`, `amt` |
+| **MD** | Mean Reversion, Supply/Demand, Stat Arb | `mr`, `snd`, `sa` |
+| **BS** | Breakout Retest, ICT, Liquidation Squeeze | `br`, `ict`, `ls` |
 
 ```bash
-npm run ml:refresh          # dry-run count + train + prints next steps
-# or just train:
-npm run ml:train
+# TS only — 9 exports (3 strategies × 3 trade types)
+node scripts/walkforward/trend-following/scalping.js
+node scripts/walkforward/trend-following/intraday.js
+node scripts/walkforward/trend-following/swing.js
+node scripts/walkforward/market-structure/scalping.js
+node scripts/walkforward/market-structure/intraday.js
+node scripts/walkforward/market-structure/swing.js
+node scripts/walkforward/auction-market-theory/scalping.js
+node scripts/walkforward/auction-market-theory/intraday.js
+node scripts/walkforward/auction-market-theory/swing.js
 ```
 
-### 3. Commit model to git
+**Success criteria**
+
+- Directories exist: `tmp/<prefix>-{scalping|intraday|swing}-walkforward/`
+- Each window has `trades.csv` with `Result` column = `win` or `loss`
+- Dry-run count (no DB): `npm run ml:seed:dry-run` prints non-zero embeddings per strategy
+
+```bash
+ls tmp/tf-intraday-walkforward/window-01/BTCUSDT/trades.csv
+head -3 tmp/tf-scalping-walkforward/window-01/BTCUSDT/trades.csv
+```
+
+---
+
+### Step 2 — Bootstrap dataset → `data/ml-engine-dataset.json`
+
+Converts walkforward CSVs into the offline training cache WinPredictor reads.
+
+**All 12 strategies (36 dirs):**
+
+```bash
+npm run ml:bootstrap:walkforward -- $(node -e "
+const { presetToDirs } = require('./scripts/ml/walkforward-dir-presets.js');
+for (const d of presetToDirs('all-live')) process.stdout.write('--dir='+d+' ');
+")
+```
+
+**Per-umbrella** — swap preset key (`af`, `ts`, `md`, `bs`):
+
+```bash
+npm run ml:bootstrap:walkforward -- $(node -e "
+const { presetToDirs } = require('./scripts/ml/walkforward-dir-presets.js');
+for (const d of presetToDirs('ts')) process.stdout.write('--dir='+d+' ');
+")
+```
+
+**AF-only presets** (SMC + Wyckoff built-in; add VSA dirs manually):
+
+```bash
+npm run ml:bootstrap:walkforward -- --smc-wyckoff \
+  --dir=tmp/vsa-scalping-walkforward \
+  --dir=tmp/vsa-intraday-walkforward \
+  --dir=tmp/vsa-swing-walkforward
+```
+
+**Success criteria**
+
+- Console: `[bootstrap-walkforward] samples: N` with N ≥ 20
+- File written: `data/ml-engine-dataset.json` with `tradeCount` matching sample count
+- No `No trades.csv under` fatal error
+
+---
+
+### Step 3 — Train WinPredictor → `data/models/win-predictor.json`
+
+```bash
+npm run ml:train
+# or combined dry-run + train + next-step hints:
+npm run ml:refresh
+npm run ml:refresh -- --skip-train    # bootstrap check only (still skips bootstrap — run step 2 first)
+```
+
+Reads `data/ml-engine-dataset.json` first (no Postgres required on laptop).
+
+**Success criteria**
+
+- Console: `[train-win-predictor] Model saved: data/models/win-predictor.json`
+- Report: `data/models/win-predictor-training-report.json` (AUC, walk-forward splits)
+- AUC ≥ 0.50 preferred; script saves anyway with a warning if lower
+
+**When to skip train**
+
+- Walkforward CSVs refreshed but model hyperparams / feature set unchanged → skip step 3, go straight to step 5 (re-seed embeddings only)
+- Model already in git and you only fixed a deploy/seed bug → skip steps 1–4, run step 5
+
+---
+
+### Step 4 — Commit model artifacts to git
 
 ```bash
 git add data/models/win-predictor.json data/ml-engine-dataset.json
-git commit -m "chore(ml): refresh win-predictor"
-git push origin staging     # merge to development after staging verify
+git commit -m "chore(ml): refresh win-predictor after walkforward"
+git push origin staging
 ```
 
-Embeddings are **not** in git — the VPS deploy step seeds those.
+Then merge to `development` and push (so dev VPS gets the model via `git pull`):
+
+```bash
+git checkout development
+git merge staging
+git push origin development
+git checkout staging
+```
+
+Embeddings are **not** in git — step 5 seeds those on VPS Postgres.
+
+**Success criteria**
+
+- `git log -1 -- data/models/win-predictor.json` shows your commit
+- Both `staging` and `development` branches pushed
+
+---
+
+### Step 5 — Deploy embeddings to VPS (rsync tmp + seed)
+
+From laptop — one command does rsync, migrate, seed, PM2 reload:
+
+```bash
+npm run ml:deploy:staging    # staging VPS (port 3001)
+npm run ml:deploy:dev        # dev VPS (port 3002)
+```
+
+Deploy defaults: `--from-walkforward --all-live --skip-train` (model comes from git, not re-trained on VPS).
+
+**Per-umbrella seed only** (CSVs already rsync'd, or partial refresh):
+
+```bash
+# On VPS (or add flags to deploy script):
+npm run ml:seed:ts           # TF + MS + AMT only
+npm run ml:seed:af           # SMC + Wyckoff + VSA
+npm run ml:seed:md           # MR + SND + SA
+npm run ml:seed:bs           # BR + ICT + LS
+npm run ml:seed              # all 12 LIVE strategies
+```
+
+**TS-only deploy from laptop:**
+
+```bash
+./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --ts-all --skip-train
+```
+
+**Success criteria**
+
+- Rsync completes without SSH errors
+- `npx prisma migrate deploy` succeeds (pgvector extension present)
+- Seed console: `[seed-walkforward] Upserted N TradeEmbedding rows` with N > 0
+- PM2 reload: `be-quantara-staging` or `be-quantara-dev` online
+
+---
+
+### Step 6 — PM2 reload + verify
+
+If you used `ml:deploy:*`, PM2 reload is already done. Otherwise on VPS:
+
+```bash
+pm2 startOrReload ecosystem.config.js --only be-quantara-staging --update-env
+# dev: --only be-quantara-dev
+```
+
+**Verify checklist**
+
+```bash
+# Health
+curl -sf http://127.0.0.1:3001/health          # staging=3001, dev=3002
+
+# DB + pgvector
+npm run ml:verify-db
+
+# Embedding counts (expect component keys, not umbrella keys)
+npm run ml:embeddings
+npm run ml:embeddings -- --umbrella=TREND_SURGE   # TS component breakdown
+
+# RAG gate preflight
+npm run ml:diag -- --strategy TREND_SURGE --symbol BTCUSDT
+npm run ml:diag -- --strategy ADAPTIVE_FUSION --symbol BTCUSDT
+
+# API (needs JWT)
+curl -H "Authorization: Bearer <token>" \
+  https://staging.quantara.software/api/v1/backtest/rag-gate-status
+```
+
+**Success criteria**
+
+| Check | Pass |
+|-------|------|
+| `ml:verify-db` | pgvector OK, TradeEmbedding table exists |
+| `ml:embeddings` | Non-zero counts for component keys (`TREND_FOLLOWING`, `SMART_MONEY_CONCEPTS`, …) |
+| `ml:diag` | `hasModel: true`, embedding count > 0, similar neighbors found |
+| `rag-gate-status` API | `vectorStoreReady: true`, per-strategy counts populated |
+| Backtest with `rag_gate=true` | `ragStats.skipped` < total (not 100% fail-open) |
+
+---
 
 ### When to retrain vs just redeploy
 
-| Situation | Local | VPS |
-|-----------|-------|-----|
-| HTF / strategy logic changed | Re-export walkforward, retrain | `npm run ml:deploy:staging` |
-| Walkforward CSV refresh only | Re-export `tmp/` | `npm run ml:deploy:staging` |
-| Model already in git, CSVs unchanged | — | deploy (default skips train) |
-| Schema migration only | — | deploy runs `migrate deploy` + seed |
+| Situation | Steps | Commands |
+|-----------|-------|----------|
+| Strategy / feature logic changed | Full 1–6 | export → bootstrap → train → commit → deploy |
+| Walkforward CSV refresh only | 1, 5, 6 | re-export `tmp/` → `ml:deploy:staging` (skip train) |
+| Model already in git, CSVs unchanged | 5, 6 | `ml:deploy:staging` |
+| TS embeddings missing (fail-open) | 1 (TS), 5, 6 | export tf/ms/amt → `ml:deploy:dev --ts-all` or `ml:seed:ts` on VPS |
+| Schema migration only | 5, 6 | deploy runs `migrate deploy` + seed |
+| Per-umbrella hotfix | 1 (umbrella), 5, 6 | export 3 strategies → `ml:seed:ts` / `ml:seed:af` etc. |
 
 ---
 
