@@ -14,6 +14,14 @@ function parseStringArg(argv, flag) {
  * Common walk-forward CLI flags shared by grid export scripts.
  * @param {string[]} [argv]
  */
+function parseRsiVariantArg(argv = process.argv.slice(2)) {
+  const cli = parseStringArg(argv, "--rsi-variant");
+  const env = process.env.RSI_VARIANT;
+  const raw = cli || env || null;
+  if (!raw) return null;
+  return String(raw).toLowerCase();
+}
+
 function parseGridArgs(argv = process.argv.slice(2)) {
   return {
     dryRun: argv.includes("--dry-run"),
@@ -23,6 +31,7 @@ function parseGridArgs(argv = process.argv.slice(2)) {
     analyzeOnly: argv.includes("--analyze-only"),
     windowFilter: parseIntArg(argv, "--window"),
     symbolFilter: parseStringArg(argv, "--symbol"),
+    rsiVariant: parseRsiVariantArg(argv),
   };
 }
 
@@ -30,4 +39,5 @@ module.exports = {
   parseGridArgs,
   parseIntArg,
   parseStringArg,
+  parseRsiVariantArg,
 };

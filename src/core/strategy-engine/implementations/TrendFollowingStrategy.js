@@ -44,6 +44,7 @@ class TrendFollowingStrategy extends StrategyBase {
       smaTrendMid: 21,
       adxPeriod: 14,
       rsiPeriod: 14,
+      rsiGateEnabled: true,
       rsiOversold: 30,
       rsiOverbought: 70,
       volSMAPeriod: 20,

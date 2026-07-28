@@ -16,12 +16,13 @@ const fs = require("fs");
 const path = require("path");
 
 const { REPO_ROOT } = require("./paths");
-const { GAP_POLICY_5, GAP_POLICY_8, filterWindows } = require("./windows");
+const { GAP_POLICY_5, GAP_POLICY_8, VSA_INTRADAY_3, filterWindows } = require("./windows");
 const { DEFAULT_SYMBOLS_5 } = require("./symbols");
 const { parseGridArgs } = require("./parseArgs");
 const { runGrid } = require("./runGridExport");
 const { collectSummary, printSummaryTable, printVerdict } = require("./summary");
 const { requireViaApiCredentials, resolveViaApiToken } = require("./auth");
+const { resolveRsiVariant } = require("../../../src/core/strategy-engine/ts/trendFollowingEntry");
 
 const OUT_PREFIX = {
   "smart-money-concepts": "smc",
@@ -59,7 +60,13 @@ function resolveGrid(tradeType) {
   };
 }
 
-function buildManifest({ win, symbol, strategyKey, tradeType }) {
+function rsiVariantOutSuffix(rsiVariant) {
+  if (!rsiVariant || rsiVariant === "a") return "";
+  return `-rsi-${rsiVariant}`;
+}
+
+function buildManifest({ win, symbol, strategyKey, tradeType, rsiVariant = null }) {
+  const preset = resolveRsiVariant(rsiVariant);
   return {
     window: win.id,
     start: win.start,
@@ -67,7 +74,8 @@ function buildManifest({ win, symbol, strategyKey, tradeType }) {
     symbol,
     strategy: strategyKey,
     tradeType,
-    exportVariant: "full",
+    exportVariant: rsiVariant ? `rsi-${rsiVariant}` : "full",
+    ...(preset ? { rsiAblation: { variant: rsiVariant, ...preset } } : {}),
     note: "Walk-forward via dataset-expand SSOT (strategyDefaults on BE)",
   };
 }
@@ -75,21 +83,26 @@ function buildManifest({ win, symbol, strategyKey, tradeType }) {
 /**
  * @param {{ strategyKey: string, tradeType: string, slug: string }} opts
  */
-async function walkforwardMain({ strategyKey, tradeType, slug }) {
+async function walkforwardMain({ strategyKey, tradeType, slug, windowsOverride = null }) {
   require("dotenv").config({ path: path.join(REPO_ROOT, ".env") });
 
   const prefix = outPrefix(slug);
   const typeSlug = tradeType.toLowerCase();
-  const OUT_ROOT = path.join(REPO_ROOT, `tmp/${prefix}-${typeSlug}-walkforward`);
+  const { dryRun, useLocal, summaryOnly, windowFilter, symbolFilter, rsiVariant } = parseGridArgs();
+  const variantSuffix = rsiVariantOutSuffix(rsiVariant);
+  const OUT_ROOT = path.join(REPO_ROOT, `tmp/${prefix}-${typeSlug}-walkforward${variantSuffix}`);
   const PROMOTE_HINT = `liveTradeTypeGate.js (${strategyKey} ${tradeType})`;
   const grid = resolveGrid(tradeType);
 
   process.stdout.write(`[walkforward] ${strategyKey} · ${tradeType} export…\n`);
+  if (rsiVariant) {
+    const preset = resolveRsiVariant(rsiVariant);
+    console.log(`RSI ablation variant: ${rsiVariant.toUpperCase()}${preset ? ` (${preset.label})` : ""}`);
+  }
 
-  const { dryRun, useLocal, summaryOnly, windowFilter, symbolFilter } = parseGridArgs();
   const api = process.env.DATASET_EXPAND_API_URL;
 
-  const windows = filterWindows(grid.windows, windowFilter);
+  const windows = filterWindows(windowsOverride || grid.windows, windowFilter);
   const symbols = symbolFilter ? [symbolFilter] : grid.defaultSymbols;
 
   if (!windows.length) {
@@ -122,11 +135,12 @@ async function walkforwardMain({ strategyKey, tradeType, slug }) {
     strategyKey,
     tradeType,
     outRoot: OUT_ROOT,
-    buildManifest: (ctx) => buildManifest({ ...ctx, strategyKey, tradeType }),
+    buildManifest: (ctx) => buildManifest({ ...ctx, strategyKey, tradeType, rsiVariant }),
     dryRun,
     useLocal,
     token,
     api,
+    rsiVariant,
   });
 
   const failed = results.filter((r) => !r.ok);
@@ -170,4 +184,6 @@ module.exports = {
   OUT_PREFIX,
   outPrefix,
   resolveGrid,
+  rsiVariantOutSuffix,
+  buildManifest,
 };

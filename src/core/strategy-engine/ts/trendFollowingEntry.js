@@ -24,7 +24,47 @@ const DEFAULTS = {
   donchianPeriod: 20,
   adxMinStrength: 25,
   minVolRatio: 1.0,
+  rsiGateEnabled: true,
+  rsiOversold: 30,
+  rsiOverbought: 70,
 };
+
+/** Walk-forward / ablation presets (A=baseline, B=off, C=wide). */
+const RSI_VARIANT_PRESETS = {
+  a: { label: "baseline 30-70", rsiGateEnabled: true, rsiOversold: 30, rsiOverbought: 70 },
+  b: { label: "gate OFF", rsiGateEnabled: false },
+  c: { label: "wide 20-80", rsiGateEnabled: true, rsiOversold: 20, rsiOverbought: 80 },
+};
+
+function resolveRsiVariant(variant) {
+  if (variant == null || variant === "") return null;
+  const key = String(variant).toLowerCase();
+  return RSI_VARIANT_PRESETS[key] || null;
+}
+
+function rsiBounds(cfg = DEFAULTS) {
+  return {
+    min: cfg.rsiOversold ?? cfg.rsiMin ?? DEFAULTS.rsiOversold,
+    max: cfg.rsiOverbought ?? cfg.rsiMax ?? DEFAULTS.rsiOverbought,
+  };
+}
+
+function passesRsiGate(rsiEntry, cfg = DEFAULTS) {
+  if (cfg.rsiGateEnabled === false) return true;
+  const { min, max } = rsiBounds(cfg);
+  if (rsiEntry == null) return false;
+  return rsiEntry >= min && rsiEntry <= max;
+}
+
+function rsiGateRejectReason(rsiEntry, cfg = DEFAULTS) {
+  if (cfg.rsiGateEnabled === false) return null;
+  const { min, max } = rsiBounds(cfg);
+  if (rsiEntry == null) return `RSI null outside ${min}-${max}`;
+  if (rsiEntry < min || rsiEntry > max) {
+    return `RSI ${rsiEntry.toFixed(1)} outside ${min}-${max}`;
+  }
+  return null;
+}
 
 function freshTrendState() {
   return {
@@ -116,8 +156,9 @@ function checkLongEntry(
     return { valid: false, reason: "EMA9 not above EMA21 (structure broken)" };
   }
 
-  if (rsiEntry == null || rsiEntry < 30 || rsiEntry > 70) {
-    return { valid: false, reason: `RSI ${rsiEntry?.toFixed(1) || "null"} outside 30-70` };
+  const rsiReject = rsiGateRejectReason(rsiEntry, cfg);
+  if (rsiReject) {
+    return { valid: false, reason: rsiReject };
   }
 
   const minVolRatio = minVolRatioOverride ?? cfg.minVolRatio;
@@ -171,8 +212,9 @@ function checkShortEntry(
     return { valid: false, reason: "EMA9 not below EMA21" };
   }
 
-  if (rsiEntry == null || rsiEntry < 30 || rsiEntry > 70) {
-    return { valid: false, reason: "RSI outside 30-70" };
+  const rsiReject = rsiGateRejectReason(rsiEntry, cfg);
+  if (rsiReject) {
+    return { valid: false, reason: rsiReject };
   }
 
   const minVolRatioS = minVolRatioOverride ?? cfg.minVolRatio;
@@ -247,7 +289,8 @@ function evaluateTrendFollowingEntry({
   const volumeCurrentEntry = volumesEntry[volumesEntry.length - 1];
   const volumeSMAEntry = indicators.volSMA?.[lastIdx] || 0;
 
-  if (!atr || !rsiEntry || !emaFastEntry || !emaMidEntry) {
+  const rsiRequired = cfg.rsiGateEnabled !== false;
+  if (!atr || !emaFastEntry || !emaMidEntry || (rsiRequired && rsiEntry == null)) {
     _abl("rejIndicators");
     return { signal: null, trendState: state, entryChecklist: null };
   }
@@ -365,6 +408,11 @@ function evaluateTrendFollowingEntry({
 
 module.exports = {
   DEFAULTS,
+  RSI_VARIANT_PRESETS,
+  resolveRsiVariant,
+  rsiBounds,
+  passesRsiGate,
+  rsiGateRejectReason,
   freshTrendState,
   detectHTFTrend,
   isDonchianBroken,

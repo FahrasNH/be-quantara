@@ -34,6 +34,7 @@ async function runWindowSymbol(opts) {
     useLocal,
     token,
     api,
+    rsiVariant = null,
   } = opts;
 
   const outDir = windowDir(outRoot, win.id, symbol);
@@ -62,6 +63,9 @@ async function runWindowSymbol(opts) {
   } else {
     argv.push("--via-api", "--api", api, "--token", token);
   }
+  if (rsiVariant) {
+    argv.push("--rsi-variant", rsiVariant);
+  }
 
   try {
     await runDatasetExpand({ strategyKey, tradeType, argv });
@@ -88,6 +92,7 @@ async function runGrid({
   useLocal,
   token,
   api,
+  rsiVariant = null,
   throttleMs = 1500,
 }) {
   const results = [];
@@ -104,6 +109,7 @@ async function runGrid({
         useLocal,
         token,
         api,
+        rsiVariant,
       }));
       if (!dryRun && !useLocal && throttleMs > 0) {
         await new Promise((r) => setTimeout(r, throttleMs));
