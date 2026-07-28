@@ -51,15 +51,15 @@ function rsiBounds(cfg = DEFAULTS) {
 
 function passesRsiGate(rsiEntry, cfg = DEFAULTS) {
   if (cfg.rsiGateEnabled === false) return true;
+  if (rsiEntry == null) return true;
   const { min, max } = rsiBounds(cfg);
-  if (rsiEntry == null) return false;
   return rsiEntry >= min && rsiEntry <= max;
 }
 
 function rsiGateRejectReason(rsiEntry, cfg = DEFAULTS) {
   if (cfg.rsiGateEnabled === false) return null;
+  if (rsiEntry == null) return null;
   const { min, max } = rsiBounds(cfg);
-  if (rsiEntry == null) return `RSI null outside ${min}-${max}`;
   if (rsiEntry < min || rsiEntry > max) {
     return `RSI ${rsiEntry.toFixed(1)} outside ${min}-${max}`;
   }
@@ -148,11 +148,11 @@ function checkLongEntry(
     return { valid: false, reason: "No Donchian breakout confirmation" };
   }
 
-  if (closeCurr <= emaFastEntry) {
+  if (emaFastEntry != null && closeCurr <= emaFastEntry) {
     return { valid: false, reason: "Close not above EMA9 (pullback too deep)" };
   }
 
-  if (emaFastEntry <= emaMidEntry) {
+  if (emaFastEntry != null && emaMidEntry != null && emaFastEntry <= emaMidEntry) {
     return { valid: false, reason: "EMA9 not above EMA21 (structure broken)" };
   }
 
@@ -204,11 +204,11 @@ function checkShortEntry(
     return { valid: false, reason: "No Donchian breakout confirmation" };
   }
 
-  if (closeCurr >= emaFastEntry) {
+  if (emaFastEntry != null && closeCurr >= emaFastEntry) {
     return { valid: false, reason: "Close not below EMA9" };
   }
 
-  if (emaFastEntry >= emaMidEntry) {
+  if (emaFastEntry != null && emaMidEntry != null && emaFastEntry >= emaMidEntry) {
     return { valid: false, reason: "EMA9 not below EMA21" };
   }
 
@@ -289,8 +289,7 @@ function evaluateTrendFollowingEntry({
   const volumeCurrentEntry = volumesEntry[volumesEntry.length - 1];
   const volumeSMAEntry = indicators.volSMA?.[lastIdx] || 0;
 
-  const rsiRequired = cfg.rsiGateEnabled !== false;
-  if (!atr || !emaFastEntry || !emaMidEntry || (rsiRequired && rsiEntry == null)) {
+  if (!atr) {
     _abl("rejIndicators");
     return { signal: null, trendState: state, entryChecklist: null };
   }
@@ -367,7 +366,7 @@ function evaluateTrendFollowingEntry({
         htfTrendAligned: true,
         adxPassed: true,
         donchianBroken: true,
-        ema9Retest: true,
+        ema9Retest: emaFastEntry != null && emaMidEntry != null,
         volumeConfirmed: true,
         volRatio,
         adxMinStrength,
@@ -393,7 +392,7 @@ function evaluateTrendFollowingEntry({
         htfTrendAligned: true,
         adxPassed: true,
         donchianBroken: true,
-        ema9Retest: true,
+        ema9Retest: emaFastEntry != null && emaMidEntry != null,
         volumeConfirmed: true,
         volRatio,
         adxMinStrength,
