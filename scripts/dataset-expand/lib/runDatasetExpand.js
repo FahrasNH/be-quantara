@@ -31,7 +31,6 @@ const {
 const { resolveFeeSchedule } = require("../../../src/shared/constants/exchangeFeeSchedules");
 const { isAfStrategy, naturalTypeOrder, SLUG_BY_KEY } = require("./strategyRegistry");
 const { runViaApi, loginForToken } = require("./viaApi");
-const { resolveRsiVariant } = require("../../../src/core/strategy-engine/ts/trendFollowingEntry");
 
 const CORE_CSV_KEYS = [
   "id", "symbol", "side", "strategy", "component", "entryPrice", "exitPrice",
@@ -81,10 +80,6 @@ function parseArgs(argv = process.argv.slice(2)) {
     user: get("--user", process.env.DATASET_EXPAND_USER_ID || null),
     start: get("--start", null),
     end: get("--end", null),
-    rsiVariant: (() => {
-      const raw = get("--rsi-variant", process.env.RSI_VARIANT || null);
-      return raw ? String(raw).toLowerCase() : null;
-    })(),
   };
 }
 
@@ -378,12 +373,6 @@ function ensureDatasetComponentIsolation(strategyKey, paramsIn = {}) {
   return params;
 }
 
-function applyRsiVariant(params, rsiVariant) {
-  const preset = resolveRsiVariant(rsiVariant);
-  if (!preset) return params;
-  return { ...params, ...preset };
-}
-
 /**
  * Parity policy (2026-07-16): BE `strategyDefaults.js` is the SSOT for entry
  * geometry across ablation (via-api) · UI Advance · dry-run · live.
@@ -393,7 +382,7 @@ function applyRsiVariant(params, rsiVariant) {
  * defaultParamsFor must mirror the same numbers (see FE backtestStrategies.js).
  * Do NOT reintroduce FE-only stricter/looser research knobs here.
  */
-function buildConfig(strategyKey, tradeType, relax, rsiVariant = null) {
+function buildConfig(strategyKey, tradeType, relax) {
   // Do NOT send empty typeOverrides — shallow (pre-fix) or even deep merge
   // of `{ Scalping: {} }` is pointless noise. Let BE resolveStrategyDefaults
   // SSOT supply atrGateRelative / atrMinMult / conf floors.
@@ -401,9 +390,6 @@ function buildConfig(strategyKey, tradeType, relax, rsiVariant = null) {
     strategyKey,
     applyStrategyJobDefaults(strategyKey, {}),
   );
-  if (strategyKey === "TREND_FOLLOWING" && rsiVariant) {
-    params = applyRsiVariant(params, rsiVariant);
-  }
   if (!relax) return params;
 
   const { resolveStrategyDefaults } = require("../../../src/config/strategyDefaults");
@@ -671,7 +657,7 @@ async function main({ strategyKey, tradeType, argv = process.argv.slice(2) }) {
   }
   const tfs = TYPE_TF[tradeType];
   const outDir = opts.out || defaultOutDir(strategyKey, tradeType);
-  const cfg = buildConfig(strategyKey, tradeType, opts.relax, opts.rsiVariant);
+  const cfg = buildConfig(strategyKey, tradeType, opts.relax);
   const columns = mlDatasetColumns(strategyKey);
 
   logPhase(
@@ -726,7 +712,6 @@ async function main({ strategyKey, tradeType, argv = process.argv.slice(2) }) {
     days: opts.days,
     symbols: opts.symbols,
     relax: opts.relax,
-    rsiVariant: opts.rsiVariant || null,
     totalTrades: allRows.length,
     targetMet: allRows.length >= 300,
     perSymbol,
@@ -767,7 +752,6 @@ module.exports = {
   main,
   parseArgs,
   buildConfig,
-  applyRsiVariant,
   ensureDatasetComponentIsolation,
   defaultDaysForType,
   TYPE_TF,

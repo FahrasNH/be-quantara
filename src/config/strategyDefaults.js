@@ -348,13 +348,6 @@ const STRATEGIES = {
     emaTrend:      50,
 
     rsiPeriod:     14,
-    rsiGateEnabled: true,
-    rsiOverbought: 70,
-    rsiOversold:   30,
-    rsiLongMin:    35,
-    rsiLongMax:    75,
-    rsiShortMin:   25,
-    rsiShortMax:   65,
 
     atrPeriod:     14,
     atrMultiplier: 1.5,

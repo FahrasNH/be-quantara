@@ -166,7 +166,6 @@ function scoreTrendFollowing(f) {
     barsInTrendMaturity: sweetSpotPts(f.tfBarsInTrend, {
       peak: 12, inner: 4, outer: 45, maxPts: 15, floor: 3,
     }),
-    emaStructure: booleanPts(f.tfEmaCrossover, 15),
     volume: linearPts(f.tfVolRatio, 1.0, 2.0, 15),
     donchianBreakout: linearPts(f.tfDonchianPeriod, 10, 30, 10),
   };

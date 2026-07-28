@@ -219,7 +219,7 @@ const ML_FIELD_SETS = Object.freeze({
   TREND_FOLLOWING: Object.freeze([
     "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",
     "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend",
-    "tfVolRatio", "tfHtfTrendConfirmed", "tfEmaCrossover",
+    "tfVolRatio", "tfHtfTrendConfirmed",
   ]),
   MARKET_STRUCTURE: Object.freeze([
     "gradedScore", "gradedScoreBreakdown", "scoringStrategyKey",

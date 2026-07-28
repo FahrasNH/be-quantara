@@ -24,7 +24,7 @@ class TrendFollowingStrategy extends StrategyBase {
       label: "Trend Following Strategy",
       description:
         "Multi-timeframe trend following using EMA/SMA, Donchian Channel, ADX, and ATR. " +
-        "Confirms trend strength, enters on breakout with pullback retest. " +
+        "Confirms HTF trend strength, MTF Donchian breakout, and 5m volume entry. " +
         "Medium-term holding, strong risk-reward. Best for FORGE tier (Rp15-30M).",
       version: "1.0.0",
       enabled: true,
@@ -44,9 +44,6 @@ class TrendFollowingStrategy extends StrategyBase {
       smaTrendMid: 21,
       adxPeriod: 14,
       rsiPeriod: 14,
-      rsiGateEnabled: true,
-      rsiOversold: 30,
-      rsiOverbought: 70,
       volSMAPeriod: 20,
       riskPerTrade: 0.015,
       slMultiplier: 1.5,
@@ -75,7 +72,7 @@ class TrendFollowingStrategy extends StrategyBase {
       { key: "rejIndicators", label: "3. - Indicators unavailable" },
       { key: "rejHtfTrend", label: "4. - HTF trend gate" },
       { key: "rejBreakout", label: "5. - No Donchian breakout" },
-      { key: "rejChecklist", label: "6. - Entry checklist (ADX/EMA/RSI/vol)" },
+      { key: "rejChecklist", label: "6. - Entry checklist (ADX/vol)" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
@@ -323,7 +320,6 @@ class TrendFollowingStrategy extends StrategyBase {
       tfBarsInTrend: this._trendState.barsInTrend ?? null,
       tfVolRatio: volRatio ?? null,
       tfHtfTrendConfirmed: Boolean(this._trendState.htfTrendConfirmed),
-      tfEmaCrossover: Boolean(checklist.ema9Retest ?? false),
     };
 
     return enrichMetaWithGradedScore({
@@ -342,7 +338,6 @@ class TrendFollowingStrategy extends StrategyBase {
         htfTrendAligned: checklist.htfTrendAligned ?? this._trendState.htfTrendConfirmed,
         adxPassed: checklist.adxPassed ?? (this._trendState.htfAdxStrength >= adxMinStrength),
         donchianBroken: checklist.donchianBroken ?? this._trendState.donchianBroken,
-        ema9Retest: checklist.ema9Retest ?? false,
         volumeConfirmed: checklist.volumeConfirmed ?? false,
         volRatio,
         adxMinStrength,

@@ -385,7 +385,6 @@ function mapBacktestTrade(trade, ctx, index) {
     tfBarsInTrend: trade.tfBarsInTrend ?? NA,
     tfVolRatio: trade.tfVolRatio ?? NA,
     tfHtfTrendConfirmed: trade.tfHtfTrendConfirmed ?? NA,
-    tfEmaCrossover: trade.tfEmaCrossover ?? NA,
     msSwingHighPrice: trade.msSwingHighPrice ?? NA,
     msSwingLowPrice: trade.msSwingLowPrice ?? NA,
     msPullbackDepthAtr: trade.msPullbackDepthAtr ?? NA,

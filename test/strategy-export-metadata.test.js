@@ -56,7 +56,7 @@ const EXPECTED_COUNTS = {
   SMART_MONEY_CONCEPTS: 17,
   BREAKOUT_RETEST: 14,
   AUCTION_MARKET_THEORY: 8,
-  TREND_FOLLOWING: 9,
+  TREND_FOLLOWING: 8,
   MARKET_STRUCTURE: 9,
   MEAN_REVERSION: 10,
   SUPPLY_AND_DEMAND: 10,
@@ -318,7 +318,7 @@ describe("AUCTION_MARKET_THEORY extract & wire metadata", () => {
 });
 
 describe("TREND_FOLLOWING extract & wire metadata", () => {
-  test("getLastSignalMeta returns 6 tf* fields", () => {
+  test("getLastSignalMeta returns 5 tf* fields", () => {
     const strat = new TrendFollowingStrategy();
     const meta = strat.getLastSignalMeta();
     for (const k of ML_FIELD_SETS.TREND_FOLLOWING) {
@@ -333,11 +333,11 @@ describe("TREND_FOLLOWING extract & wire metadata", () => {
       donchianPeriod: 20,
       barsInTrend: 12,
       htfTrendConfirmed: true,
-      entryChecklist: { volRatio: 1.4, ema9Retest: true },
+      entryChecklist: { volRatio: 1.4 },
     });
     expect(enrich.tfAdxStrength).toBe(32);
     expect(enrich.tfVolRatio).toBe(1.4);
-    expect(enrich.tfEmaCrossover).toBe(true);
+    expect(enrich.tfEmaCrossover).toBe(undefined);
 
     const row = mapBacktestTrade({
       side: "LONG", entry: 100, exit: 101, reason: "TP",
@@ -554,7 +554,7 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const trades = [
       mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
-        tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
+        tfVolRatio: 1.2, tfHtfTrendConfirmed: true,
         mrRsiValue: 99, // should NOT appear on TF_specific
       }),
       mkTrade("MEAN_REVERSION", {
@@ -606,7 +606,7 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const trades = [
       mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
-        tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
+        tfVolRatio: 1.2, tfHtfTrendConfirmed: true,
       }),
     ];
     const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING"], { coreOnly: true });
@@ -619,7 +619,7 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const trades = [
       mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
-        tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true,
+        tfVolRatio: 1.2, tfHtfTrendConfirmed: true,
       }),
     ];
     const buf = buildDynamicMultiSheetXlsx(trades, ["TREND_FOLLOWING"]);
@@ -638,7 +638,7 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const trades = [
       mkTrade("TREND_FOLLOWING", {
         tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5,
-        tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: false,
+        tfVolRatio: 1.2, tfHtfTrendConfirmed: true,
       }),
       mkTrade("MEAN_REVERSION", {
         mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98,
@@ -669,7 +669,7 @@ describe("Dynamic ML multi-sheet XLSX", () => {
     const samples = {
       SMART_MONEY_CONCEPTS: { sweepStrength: 1, fvgSizeAtr: 0.2, obDistanceAtr: 0.1, displacementPct: 1, htfAdx: 25, confSweepStrength: 1, confFvgSize: 0.2, confDisplacementPct: 1, confHtfAlignment: 5, confMitigationDepth: 0.2, confObConfluence: true },
       BREAKOUT_RETEST: { bbSqueezeWidthAtr: 0.4, breakoutVolumeRatio: 1.5, retestDepthAtr: 0.2, rejectionWickPct: 0.5, consolidationBars: 8, breakoutCandleAtr: 0.9, fundingRateAtEntry: 0.0001, fundingForecast24h: 0.0002, volumeRatio: 1.5, bbWidth: 0.01 },
-      TREND_FOLLOWING: { tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5, tfVolRatio: 1.2, tfHtfTrendConfirmed: true, tfEmaCrossover: true },
+      TREND_FOLLOWING: { tfAdxStrength: 30, tfDonchianPeriod: 20, tfBarsInTrend: 5, tfVolRatio: 1.2, tfHtfTrendConfirmed: true },
       MARKET_STRUCTURE: { msSwingHighPrice: 110, msSwingLowPrice: 100, msPullbackDepthAtr: 0.5, msHhPattern: true, msLlPattern: false, msPullbackConfirmed: true },
       AUCTION_MARKET_THEORY: { vpVwapLevel: 100, vpVahLevel: 101, vpValLevel: 99, vpPocLevel: 100, vpTriggerType: "VWAP_RECLAIM" },
       MEAN_REVERSION: { mrRsiValue: 25, mrBbMidLevel: 100, mrBbUpperLevel: 102, mrBbLowerLevel: 98, mrVwapLevel: 99, mrVwapDeviation: -1, mrAdxRegime: "BALANCE" },

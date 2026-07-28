@@ -2461,7 +2461,6 @@ class BotEngine extends EventEmitter {
               indicatorSnapshot.tfBarsInTrend = tfMeta.tfBarsInTrend ?? null;
               indicatorSnapshot.tfVolRatio = tfMeta.tfVolRatio ?? null;
               indicatorSnapshot.tfHtfTrendConfirmed = tfMeta.tfHtfTrendConfirmed ?? null;
-              indicatorSnapshot.tfEmaCrossover = tfMeta.tfEmaCrossover ?? null;
             } else if (tfMeta.winningComponent === "MARKET_STRUCTURE") {
               indicatorSnapshot.msSwingHighPrice = tfMeta.msSwingHighPrice ?? null;
               indicatorSnapshot.msSwingLowPrice = tfMeta.msSwingLowPrice ?? null;

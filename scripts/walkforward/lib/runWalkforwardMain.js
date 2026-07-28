@@ -22,7 +22,6 @@ const { parseGridArgs } = require("./parseArgs");
 const { runGrid } = require("./runGridExport");
 const { collectSummary, printSummaryTable, printVerdict } = require("./summary");
 const { requireViaApiCredentials, resolveViaApiToken } = require("./auth");
-const { resolveRsiVariant } = require("../../../src/core/strategy-engine/ts/trendFollowingEntry");
 
 const OUT_PREFIX = {
   "smart-money-concepts": "smc",
@@ -60,13 +59,7 @@ function resolveGrid(tradeType) {
   };
 }
 
-function rsiVariantOutSuffix(rsiVariant) {
-  if (!rsiVariant || rsiVariant === "a") return "";
-  return `-rsi-${rsiVariant}`;
-}
-
-function buildManifest({ win, symbol, strategyKey, tradeType, rsiVariant = null }) {
-  const preset = resolveRsiVariant(rsiVariant);
+function buildManifest({ win, symbol, strategyKey, tradeType }) {
   return {
     window: win.id,
     start: win.start,
@@ -74,8 +67,7 @@ function buildManifest({ win, symbol, strategyKey, tradeType, rsiVariant = null 
     symbol,
     strategy: strategyKey,
     tradeType,
-    exportVariant: rsiVariant ? `rsi-${rsiVariant}` : "full",
-    ...(preset ? { rsiAblation: { variant: rsiVariant, ...preset } } : {}),
+    exportVariant: "full",
     note: "Walk-forward via dataset-expand SSOT (strategyDefaults on BE)",
   };
 }
@@ -88,17 +80,12 @@ async function walkforwardMain({ strategyKey, tradeType, slug, windowsOverride =
 
   const prefix = outPrefix(slug);
   const typeSlug = tradeType.toLowerCase();
-  const { dryRun, useLocal, summaryOnly, windowFilter, symbolFilter, rsiVariant } = parseGridArgs();
-  const variantSuffix = rsiVariantOutSuffix(rsiVariant);
-  const OUT_ROOT = path.join(REPO_ROOT, `tmp/${prefix}-${typeSlug}-walkforward${variantSuffix}`);
+  const { dryRun, useLocal, summaryOnly, windowFilter, symbolFilter } = parseGridArgs();
+  const OUT_ROOT = path.join(REPO_ROOT, `tmp/${prefix}-${typeSlug}-walkforward`);
   const PROMOTE_HINT = `liveTradeTypeGate.js (${strategyKey} ${tradeType})`;
   const grid = resolveGrid(tradeType);
 
   process.stdout.write(`[walkforward] ${strategyKey} · ${tradeType} export…\n`);
-  if (rsiVariant) {
-    const preset = resolveRsiVariant(rsiVariant);
-    console.log(`RSI ablation variant: ${rsiVariant.toUpperCase()}${preset ? ` (${preset.label})` : ""}`);
-  }
 
   const api = process.env.DATASET_EXPAND_API_URL;
 
@@ -135,12 +122,11 @@ async function walkforwardMain({ strategyKey, tradeType, slug, windowsOverride =
     strategyKey,
     tradeType,
     outRoot: OUT_ROOT,
-    buildManifest: (ctx) => buildManifest({ ...ctx, strategyKey, tradeType, rsiVariant }),
+    buildManifest: (ctx) => buildManifest({ ...ctx, strategyKey, tradeType }),
     dryRun,
     useLocal,
     token,
     api,
-    rsiVariant,
   });
 
   const failed = results.filter((r) => !r.ok);
@@ -184,6 +170,5 @@ module.exports = {
   OUT_PREFIX,
   outPrefix,
   resolveGrid,
-  rsiVariantOutSuffix,
   buildManifest,
 };
