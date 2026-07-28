@@ -9,6 +9,8 @@
  *
  * Usage:
  *   node scripts/ml/seed-embeddings-from-walkforward.js --tf-all
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --af-all   # SMC + Wyckoff + VSA
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --ts-all   # TF + MS + AMT
  *   node scripts/ml/seed-embeddings-from-walkforward.js --dir=tmp/tf-scalping-walkforward
  *   node scripts/ml/seed-embeddings-from-walkforward.js \
  *     --dir=tmp/tf-scalping-walkforward --dir=tmp/tf-intraday-walkforward \
@@ -39,6 +41,91 @@ const SMC_ALL_DIRS = [
   "tmp/smc-swing-walkforward",
 ];
 
+const AF_ALL_DIRS = [
+  ...SMC_ALL_DIRS,
+  "tmp/wyckoff-scalping-walkforward",
+  "tmp/wyckoff-intraday-walkforward",
+  "tmp/wyckoff-swing-walkforward",
+  "tmp/vsa-scalping-walkforward",
+  "tmp/vsa-intraday-walkforward",
+  "tmp/vsa-swing-walkforward",
+];
+
+const TS_ALL_DIRS = [
+  ...TF_ALL_DIRS,
+  "tmp/ms-scalping-walkforward",
+  "tmp/ms-intraday-walkforward",
+  "tmp/ms-swing-walkforward",
+  "tmp/amt-scalping-walkforward",
+  "tmp/amt-intraday-walkforward",
+  "tmp/amt-swing-walkforward",
+];
+
+function dbHostHint() {
+  const dbUrl = process.env.DATABASE_URL || "";
+  try {
+    const u = new URL(dbUrl.replace(/^postgres(ql)?:\/\//, "http://"));
+    return `${u.hostname}:${u.port || 5432}`;
+  } catch {
+    return dbUrl ? "(from DATABASE_URL)" : "(DATABASE_URL unset)";
+  }
+}
+
+function isLocalDbUrl() {
+  const dbUrl = process.env.DATABASE_URL || "";
+  return /localhost|127\.0\.0\.1|::1/i.test(dbUrl);
+}
+
+/**
+ * Fail fast before parsing CSVs — seed must run against staging Postgres on VPS.
+ * @param {import('pg').Pool} pool
+ */
+async function preflightDatabase(pool) {
+  try {
+    await pool.query("SELECT 1");
+  } catch (err) {
+    const msg = err?.message || String(err);
+    console.error(`[seed-walkforward] Cannot connect to Postgres at ${dbHostHint()}: ${msg}`);
+    if (isLocalDbUrl()) {
+      console.error("[seed-walkforward] DATABASE_URL points to localhost — no local Postgres is expected.");
+      console.error("[seed-walkforward] Run on VPS (recommended):");
+      console.error("[seed-walkforward]   cd /opt/quantara-staging/be");
+      console.error("[seed-walkforward]   npm run ml:seed-embeddings-walkforward -- --tf-all");
+      console.error("[seed-walkforward] Or one-command from laptop:");
+      console.error("[seed-walkforward]   RSYNC=1 ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all --skip-train");
+      console.error("[seed-walkforward] Or SSH tunnel: ssh -L 5433:127.0.0.1:5432 root@srv1722932 then point DATABASE_URL at localhost:5433");
+    }
+    process.exit(1);
+  }
+
+  let extRows;
+  try {
+    ({ rows: extRows } = await pool.query(
+      "SELECT extversion FROM pg_extension WHERE extname = 'vector' LIMIT 1"
+    ));
+  } catch (err) {
+    console.error(`[seed-walkforward] pgvector check failed: ${err?.message || err}`);
+    process.exit(1);
+  }
+
+  if (!extRows?.length) {
+    console.error("[seed-walkforward] pgvector extension missing on this database.");
+    console.error("[seed-walkforward] On VPS: npx prisma migrate deploy");
+    console.error("[seed-walkforward] Verify:  SELECT * FROM pg_extension WHERE extname='vector';");
+    process.exit(1);
+  }
+
+  const { rows: tblRows } = await pool.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'TradeEmbedding' LIMIT 1"
+  );
+  if (!tblRows?.length) {
+    console.error("[seed-walkforward] TradeEmbedding table missing — run: npx prisma migrate deploy");
+    process.exit(1);
+  }
+
+  console.log(`[seed-walkforward] DB OK (${dbHostHint()}, pgvector ${extRows[0].extversion})`);
+}
+
 function parseArgs() {
   const out = {
     dirs: [],
@@ -51,6 +138,8 @@ function parseArgs() {
   for (const arg of process.argv.slice(2)) {
     if (arg === "--tf-all") out.preset = "tf";
     else if (arg === "--smc-all") out.preset = "smc";
+    else if (arg === "--af-all") out.preset = "af";
+    else if (arg === "--ts-all") out.preset = "ts";
     else if (arg === "--dry-run") out.dryRun = true;
     else if (arg.startsWith("--dir=")) out.dirs.push(path.resolve(REPO_ROOT, arg.slice(6)));
     else if (arg.startsWith("--min=")) out.min = parseInt(arg.slice(6), 10);
@@ -64,6 +153,12 @@ function parseArgs() {
   } else if (out.preset === "smc") {
     out.dirs = SMC_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
     out.strategy = out.strategy || "SMART_MONEY_CONCEPTS";
+  } else if (out.preset === "af") {
+    out.dirs = AF_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
+    out.strategy = null; // multi-strategy umbrella
+  } else if (out.preset === "ts") {
+    out.dirs = TS_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
+    out.strategy = null;
   } else if (out.dirs.length === 0) {
     out.dirs = [path.join(REPO_ROOT, "tmp/tf-scalping-walkforward")];
     out.strategy = out.strategy || "TREND_FOLLOWING";
@@ -199,6 +294,13 @@ function buildTradeId(prefix, row, csvPath) {
 
 async function main() {
   const { dirs, min, strategy, dryRun, tradeIdPrefix } = parseArgs();
+
+  if (!dryRun) {
+    await preflightDatabase(_pool);
+  } else {
+    console.log("[seed-walkforward] DRY RUN — skipping DB preflight");
+  }
+
   const csvFiles = [];
   const missing = [];
 
@@ -290,22 +392,40 @@ async function main() {
   }
 
   const vs = new VectorStore(_pool);
-  const hasVector = await vs.checkAvailability();
-  if (!hasVector) {
-    console.error("[seed-walkforward] pgvector unavailable — run prisma migrate deploy on staging DB");
+
+  const batchSize = 50;
+  let upserted = 0;
+  for (let i = 0; i < embeddings.length; i += batchSize) {
+    const batch = embeddings.slice(i, i + batchSize);
+    try {
+      await vs.batchUpsert(batch);
+      upserted += batch.length;
+    } catch (err) {
+      console.error(`[seed-walkforward] batchUpsert failed at offset ${i}: ${err?.message || err}`);
+      process.exit(1);
+    }
+  }
+
+  const totalCount = await vs.count();
+  const strategyCount = strategy
+    ? await vs.count({ strategyKey: strategy })
+    : null;
+
+  if (upserted !== embeddings.length) {
+    console.error(`[seed-walkforward] Upsert incomplete — wrote ${upserted}/${embeddings.length}`);
+    process.exit(1);
+  }
+  if (totalCount === 0) {
+    console.error("[seed-walkforward] Upsert finished but TradeEmbedding count is still 0");
     process.exit(1);
   }
 
-  const batchSize = 50;
-  for (let i = 0; i < embeddings.length; i += batchSize) {
-    await vs.batchUpsert(embeddings.slice(i, i + batchSize));
+  console.log(`[seed-walkforward] Upserted ${upserted} TradeEmbedding rows`);
+  if (strategyCount != null) {
+    console.log(`[seed-walkforward] DB count — strategy ${strategy}: ${strategyCount}, total: ${totalCount}`);
+  } else {
+    console.log(`[seed-walkforward] DB count — total: ${totalCount} (multi-strategy preset, no filter)`);
   }
-
-  const tfCount = await vs.count({ strategyKey: strategy || "TREND_FOLLOWING" });
-  const totalCount = await vs.count();
-
-  console.log(`[seed-walkforward] Upserted ${embeddings.length} TradeEmbedding rows`);
-  console.log(`[seed-walkforward] DB count — strategy ${strategy || "TREND_FOLLOWING"}: ${tfCount}, total: ${totalCount}`);
   console.log("[seed-walkforward] Done. Verify: curl http://127.0.0.1:3001/api/v1/backtest/rag-gate-status (needs JWT on public URL)");
 
   await _pool.end();

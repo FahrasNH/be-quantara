@@ -5,13 +5,15 @@
 #   ./scripts/ml/deploy-rag-staging-remote.sh
 #   ./scripts/ml/deploy-rag-staging-remote.sh --skip-train   # embeddings only
 #   ./scripts/ml/deploy-rag-staging-remote.sh --min=50        # require N closed trades
-#   ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all  # seed from CSV (no live trades)
+#   ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all  # seed from CSV
+#   RSYNC=1 ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all --skip-train
 #
 # Env:
-#   VPS_HOST=root@187.77.135.156
+#   VPS_HOST=root@srv1722932   (or root@187.77.135.156)
 #   REMOTE_BE=/opt/quantara-staging/be
 #   PM2_APP=be-quantara-staging
-#   RSYNC_TF=1  — when set with --from-walkforward, rsync local tmp/tf-* before seed
+#   RSYNC=1  — rsync local tmp/*-walkforward before remote seed (default when --from-walkforward)
+#   RSYNC=0  — skip rsync (CSVs already on VPS)
 
 set -euo pipefail
 
@@ -29,20 +31,68 @@ for arg in "$@"; do
     --skip-train) SKIP_TRAIN=true ;;
     --min=*) MIN_TRADES="${arg#*=}" ;;
     --from-walkforward) FROM_WALKFORWARD=true ;;
-    --tf-all|--smc-all|--dir=*|--strategy=*) WF_ARGS="${WF_ARGS} ${arg}" ;;
+    --tf-all|--smc-all|--af-all|--ts-all|--dir=*|--strategy=*) WF_ARGS="${WF_ARGS} ${arg}" ;;
   esac
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-if [[ "${FROM_WALKFORWARD}" == "true" && "${RSYNC_TF:-}" == "1" ]]; then
-  echo "==> Rsync local tmp/tf-* walkforward CSVs to VPS"
-  rsync -avz --progress \
-    "${REPO_ROOT}/tmp/tf-scalping-walkforward/" \
-    "${REPO_ROOT}/tmp/tf-intraday-walkforward/" \
-    "${REPO_ROOT}/tmp/tf-swing-walkforward/" \
-    "${VPS_HOST}:${REMOTE_BE}/tmp/" || true
+collect_rsync_dirs() {
+  local -a dirs=()
+  local arg rel base
+  for arg in "$@"; do
+    case "$arg" in
+      --tf-all)
+        dirs+=(
+          "tf-scalping-walkforward" "tf-intraday-walkforward" "tf-swing-walkforward"
+        )
+        ;;
+      --smc-all)
+        dirs+=(
+          "smc-scalping-walkforward" "smc-intraday-walkforward" "smc-swing-walkforward"
+        )
+        ;;
+      --af-all)
+        dirs+=(
+          "smc-scalping-walkforward" "smc-intraday-walkforward" "smc-swing-walkforward"
+          "wyckoff-scalping-walkforward" "wyckoff-intraday-walkforward" "wyckoff-swing-walkforward"
+          "vsa-scalping-walkforward" "vsa-intraday-walkforward" "vsa-swing-walkforward"
+        )
+        ;;
+      --ts-all)
+        dirs+=(
+          "tf-scalping-walkforward" "tf-intraday-walkforward" "tf-swing-walkforward"
+          "ms-scalping-walkforward" "ms-intraday-walkforward" "ms-swing-walkforward"
+          "amt-scalping-walkforward" "amt-intraday-walkforward" "amt-swing-walkforward"
+        )
+        ;;
+      --dir=*)
+        rel="${arg#*=}"
+        rel="${rel#tmp/}"
+        base="$(basename "${rel%/}")"
+        dirs+=("${base}")
+        ;;
+    esac
+  done
+  if [[ ${#dirs[@]} -eq 0 ]]; then
+    dirs+=("tf-scalping-walkforward" "tf-intraday-walkforward" "tf-swing-walkforward")
+  fi
+  printf '%s\n' "${dirs[@]}" | awk '!seen[$0]++'
+}
+
+if [[ "${FROM_WALKFORWARD}" == "true" && "${RSYNC:-1}" != "0" ]]; then
+  echo "==> Rsync local walkforward CSV dirs to ${VPS_HOST}:${REMOTE_BE}/tmp/"
+  while IFS= read -r dir; do
+    [[ -z "${dir}" ]] && continue
+    local_src="${REPO_ROOT}/tmp/${dir}/"
+    if [[ -d "${local_src}" ]]; then
+      echo "    ${dir}/"
+      rsync -avz --progress "${local_src}" "${VPS_HOST}:${REMOTE_BE}/tmp/${dir}/"
+    else
+      echo "    (skip ${dir} — not found locally)"
+    fi
+  done < <(collect_rsync_dirs "$@")
 fi
 
 echo "==> Deploy RAG pipeline on ${VPS_HOST}:${REMOTE_BE}"
@@ -62,6 +112,22 @@ npm ci
 echo "==> prisma migrate deploy"
 npx prisma migrate deploy
 
+echo "==> verify pgvector extension"
+node -e "
+require('dotenv').config();
+const { _pool } = require('./src/infrastructure/db/database');
+_pool.query(\"SELECT extname, extversion FROM pg_extension WHERE extname = 'vector'\")
+  .then(r => {
+    if (!r.rows.length) {
+      console.error('pgvector extension missing after migrate deploy');
+      process.exit(1);
+    }
+    console.log('pgvector OK:', r.rows[0]);
+    return _pool.end();
+  })
+  .catch(e => { console.error(e.message); process.exit(1); });
+"
+
 CLOSED=\$(node -e "
 require('dotenv').config();
 const { _pool } = require('./src/infrastructure/db/database');
@@ -71,16 +137,14 @@ _pool.query(\"SELECT COUNT(*)::int AS n FROM trades WHERE status='closed' AND cl
 ")
 echo "==> Closed engine trades: \${CLOSED} (min ${MIN_TRADES})"
 
-if [[ "\${CLOSED}" -lt ${MIN_TRADES} ]]; then
-  if [[ "${FROM_WALKFORWARD}" == "true" ]]; then
-    echo "==> Closed trades \${CLOSED} < ${MIN_TRADES}; seeding from walkforward CSV"
-    npm run ml:seed-embeddings-walkforward -- --min=${MIN_TRADES}${WF_ARGS}
-  else
-    echo "ERROR: Need >= ${MIN_TRADES} closed trades. Start staging bots (paper/dry-run OK) and re-run."
-    echo "       Or use: ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all --min=${MIN_TRADES}"
-    echo "       pm2 logs ${PM2_APP} — ensure bot sessions are running."
-    exit 1
-  fi
+if [[ "${FROM_WALKFORWARD}" == "true" ]]; then
+  echo "==> Seeding TradeEmbedding from walkforward CSV (uses VPS DATABASE_URL + pgvector)"
+  npm run ml:seed-embeddings-walkforward -- --min=${MIN_TRADES}${WF_ARGS}
+elif [[ "\${CLOSED}" -lt ${MIN_TRADES} ]]; then
+  echo "ERROR: Need >= ${MIN_TRADES} closed trades. Start staging bots (paper/dry-run OK) and re-run."
+  echo "       Or use: RSYNC=1 ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all --min=${MIN_TRADES}"
+  echo "       pm2 logs ${PM2_APP} — ensure bot sessions are running."
+  exit 1
 else
   echo "==> npm run ml:bootstrap-engine-trades"
   npm run ml:bootstrap-engine-trades -- --min=${MIN_TRADES}
@@ -106,18 +170,19 @@ require('dotenv').config();
 const { _pool } = require('./src/infrastructure/db/database');
 Promise.all([
   _pool.query('SELECT COUNT(*)::int AS n FROM \"TradeEmbedding\"'),
-  _pool.query(\"SELECT COUNT(*)::int AS n FROM \\\"TradeEmbedding\\\" WHERE metadata->>'strategyKey' = 'TREND_FOLLOWING'\"),
-]).then(([all, tf]) => {
+  _pool.query(\"SELECT metadata->>'strategyKey' AS k, COUNT(*)::int AS n FROM \\\"TradeEmbedding\\\" GROUP BY 1 ORDER BY n DESC LIMIT 10\"),
+]).then(([all, byStrat]) => {
   console.log(JSON.stringify({
     embeddingCount: all.rows[0].n,
-    tfEmbeddingCount: tf.rows[0].n,
+    topStrategies: byStrat.rows,
   }, null, 2));
   return _pool.end();
 }).catch(e => { console.error(e.message); process.exit(1); });
 "
 
-echo "==> WinPredictor model"
-node -e "
+if [[ "${SKIP_TRAIN}" != "true" ]]; then
+  echo "==> WinPredictor model"
+  node -e "
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -125,6 +190,7 @@ const model = path.join('data/models/win-predictor.json');
 const hasModel = fs.existsSync(model);
 console.log(JSON.stringify({ hasModel, modelPath: model }, null, 2));
 "
+fi
 EOF
 
 echo ""
