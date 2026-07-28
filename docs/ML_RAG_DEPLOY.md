@@ -233,6 +233,51 @@ curl -H "Authorization: Bearer <token>" \
 
 ---
 
+## AF vs TS — apa arti "backfill"?
+
+Di staging Jul 2026, **Adaptive Fusion** memakai **dua jalur berbeda** (sering disebut "backfill" secara informal):
+
+| Jalur | Script | Target DB | Untuk RAG embedding? |
+|-------|--------|-----------|----------------------|
+| **Walkforward seed** (utama) | `seed-embeddings-from-walkforward.js --af-all` | `TradeEmbedding` | ✅ Ya — retrieval similarity |
+| **Engine bootstrap** (staging ops) | `bootstrap-from-engine-trades.js` | `TradeEmbedding` + `ml-engine-dataset.json` | ✅ Ya — dari ~510 trade bot closed |
+| **Shadow log backfill** | `backfill-ml-shadow-log.js` | `MLShadowLog` | ❌ Bukan embedding — untuk promosi shadow/AUC |
+| **ML readiness backfill** | `backfill-ml-readiness.js` | kolom Prisma `Trade` | ❌ Bukan embedding — field pair_tier, dll. |
+| **Regime backfill** | `backfill-regime.js` | `entryContext.market.regime` | ❌ Bukan embedding — klasifikasi regime historis |
+| **Walkforward bootstrap** (lokal) | `bootstrap-from-walkforward-csv.js --smc-all` | `data/ml-engine-dataset.json` saja | ❌ Bukan embedding — training WinPredictor offline |
+
+**Kesimpulan:** RAG gate butuh **`TradeEmbedding`** (pgvector). AF mengisi ini dari **walkforward CSV** (~21k sample SMC+Wyckoff+VSA) **dan** sempat supplement dari **engine trades** di staging. Bukan dari `backfill-ml-readiness` / `backfill-regime`.
+
+**Trend Surge (TS)** dengan seed `--ts-all` (9141 embedding di VPS) sudah setara dengan jalur walkforward AF — **tidak perlu** langkah backfill terpisah untuk embedding. Opsional: `ml:backfill:shadow` jika ingin metrik promosi dari trade bot TS live.
+
+### Workflow TS (VPS)
+
+```bash
+# Sudah dilakukan — seed embedding dari walkforward CSV
+cd /opt/quantara-staging/be   # atau dev
+npm run ml:seed:ts
+
+# Verifikasi
+npm run ml:embeddings
+npm run ml:diag -- --strategy TREND_SURGE --symbol BTCUSDT
+
+# Opsional — supplement dari trade bot closed (bukan wajib jika walkforward sudah cukup)
+npm run ml:bootstrap:engine
+npm run ml:backfill:shadow -- --days=30
+```
+
+### Workflow AF (referensi)
+
+```bash
+# Seed embedding AF tier (SMC + Wyckoff + VSA)
+npm run ml:seed:af
+
+# Atau full 12 strategi
+npm run ml:seed
+```
+
+---
+
 ## npm scripts (baru)
 
 | Script | Fungsi |
@@ -240,7 +285,11 @@ curl -H "Authorization: Bearer <token>" \
 | `ml:deploy:staging` | Full deploy staging (rsync + migrate + seed all + PM2) |
 | `ml:deploy:dev` | Sama untuk dev VPS |
 | `ml:seed` | Seed 12 strategi LIVE (VPS DATABASE_URL) |
+| `ml:seed:af` / `ml:seed:ts` / `ml:seed:md` / `ml:seed:bs` | Seed per umbrella tier |
 | `ml:seed:dry-run` | Hitung embedding tanpa tulis DB |
+| `ml:bootstrap:engine` | Closed engine trades → dataset + TradeEmbedding (VPS) |
+| `ml:bootstrap:walkforward` | CSV walkforward → `ml-engine-dataset.json` (lokal) |
+| `ml:backfill:shadow` | Engine trades → `MLShadowLog` (bukan embedding) |
 | `ml:diag` | RAG preflight on VPS (umbrella or component `--strategy`) |
 | `ml:verify-db` | pgvector + TradeEmbedding table check |
 | `ml:embeddings` | Print embedding counts by strategyKey |
