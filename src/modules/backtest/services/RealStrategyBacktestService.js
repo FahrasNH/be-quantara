@@ -1781,6 +1781,26 @@ function _applyConservativeDiscount(score) {
   return score;
 }
 
+/** Debug session 816643 — RAG gate runtime evidence (PM2 logs + local ingest). */
+function _ragDebugLog(location, message, data, hypothesisId = "RAG") {
+  const payload = {
+    sessionId: "816643",
+    location,
+    message,
+    data,
+    hypothesisId,
+    timestamp: Date.now(),
+  };
+  // #region agent log
+  console.warn("[RAG-DEBUG-816643]", JSON.stringify(payload));
+  fetch("http://127.0.0.1:7388/ingest/342b9c62-4dc5-4962-a9c1-f9c519fa2002", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "816643" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+  // #endregion
+}
+
 /** Best-effort: persist backtest trades with outcome metadata for future RAG similarity. */
 async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
   if (!deps?.vs || !deps?.fe || !Array.isArray(trades) || trades.length === 0) return 0;
@@ -1884,7 +1904,43 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
     vectorLikelyEmpty = true;
   }
 
+  let embeddingCount = 0;
+  let tsEmbeddingCounts = {};
+  try {
+    embeddingCount = await vs.count().catch(() => 0);
+    if (embeddingCount > 0) {
+      const { _pool } = require("../../../infrastructure/db/database");
+      for (const k of ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"]) {
+        const r = await _pool.query(
+          `SELECT COUNT(*)::int AS n FROM "TradeEmbedding" WHERE metadata->>'strategyKey' = $1`,
+          [k]
+        ).catch(() => ({ rows: [{ n: 0 }] }));
+        tsEmbeddingCounts[k] = r.rows?.[0]?.n ?? 0;
+      }
+    }
+  } catch { /* ignore */ }
+
+  const ctxFilterKeys = _resolveRagStrategyFilterKeys({}, ctx);
+  // #region agent log
+  _ragDebugLog(
+    "RealStrategyBacktestService.js:_applyRagGate:init",
+    "RAG gate init",
+    {
+      hasModel,
+      vectorLikelyEmpty,
+      embeddingCount,
+      tsEmbeddingCounts,
+      ctxStrategyKey: ctx.strategyKey,
+      ctxFilterKeys,
+      tradeCount: trades.length,
+      ragMinSupport: RAG_MIN_SUPPORT,
+    },
+    "A-B-C"
+  );
+  // #endregion
+
   const sorted = [...trades].sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
+  const sampleTradeLogs = [];
   const kept = [];
   const logs = [];
   let approved = 0;
@@ -1914,10 +1970,14 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
     let neighborCount = 0;
     let outcomeCount = 0;
 
+    let featureError = null;
+    let similarError = null;
     try {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
       if (wp.model) lgbScore = wp.predict(features).pWin;
-    } catch { /* ignore */ }
+    } catch (err) {
+      featureError = err?.message || String(err);
+    }
 
     try {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
@@ -1932,7 +1992,25 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
         outcomeCount = outcomes.length;
         ragScore = _ragScoreFromOutcomes(outcomes);
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      similarError = err?.message || String(err);
+    }
+
+    if (i === 0 || i === Math.floor(sorted.length / 2) || i === sorted.length - 1) {
+      sampleTradeLogs.push({
+        idx: i,
+        tradeStrategyKey: t.strategyKey,
+        winningComponent: t.winningComponent,
+        ragStrategyKeys,
+        neighborCount,
+        outcomeCount,
+        lgbScore,
+        ragScore,
+        featureError,
+        similarError,
+        tradeTime: tradeTime.toISOString(),
+      });
+    }
 
     let rawScore;
     if (lgbScore !== null && ragScore !== null) rawScore = 0.5 * lgbScore + 0.5 * ragScore;
@@ -2007,6 +2085,23 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
   const ineffective = allSkippedNoScores || depsIneffective;
   const failOpen = allSkippedNoScores || depsIneffective;
 
+  // #region agent log
+  _ragDebugLog(
+    "RealStrategyBacktestService.js:_applyRagGate:done",
+    "RAG gate complete",
+    {
+      approved,
+      rejected,
+      skipped,
+      scoreCount,
+      sampleTradeLogs,
+      ineffective,
+      failOpen,
+    },
+    "D-E"
+  );
+  // #endregion
+
   const stats = {
     total: trades.length,
     approved,
@@ -2014,6 +2109,13 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
     skipped,
     avgScore: scoreCount > 0 ? scoreSum / scoreCount : null,
     failOpen,
+    diag: {
+      hasModel,
+      embeddingCount,
+      tsEmbeddingCounts,
+      ctxFilterKeys,
+      sampleTradeLogs,
+    },
   };
   if (ineffective) {
     stats.ineffective = true;

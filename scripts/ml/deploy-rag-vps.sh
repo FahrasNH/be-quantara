@@ -2,15 +2,15 @@
 # One-command ML/RAG deploy: laptop → VPS (rsync tmp + migrate + seed + PM2 reload).
 #
 # Usage (from laptop with SSH to VPS):
-#   npm run ml:deploy-rag-staging
-#   npm run ml:deploy-rag-dev
+#   npm run ml:deploy:staging
+#   npm run ml:deploy:dev
 #
 #   ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live
 #   ./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --af-all --skip-train
 #   ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live --skip-rsync
 #
 # When already SSH'd into the VPS checkout:
-#   npm run ml:deploy-rag-dev          # auto-detects VPS path, skips rsync + ssh
+#   npm run ml:deploy:dev               # auto-detects VPS path, skips rsync + ssh
 #   ./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --all-live --local
 #
 # Args:
@@ -73,7 +73,7 @@ done
 
 if [[ -z "${DEPLOY_ENV}" ]]; then
   echo "ERROR: Missing --env staging|dev"
-  echo "  npm run ml:deploy-rag-staging"
+  echo "  npm run ml:deploy:staging"
   echo "  ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live"
   exit 1
 fi
@@ -104,7 +104,7 @@ esac
 if [[ "${FROM_WALKFORWARD}" != "true" ]]; then
   echo "ERROR: --from-walkforward is required (staging rarely has enough closed engine trades)."
   echo "       Example: npm run ml:deploy-rag-staging"
-  echo "       Or bootstrap from engine: ssh ${VPS_HOST} 'cd ${REMOTE_BE} && npm run ml:bootstrap-engine-trades'"
+  echo "       Or bootstrap from engine: ssh ${VPS_HOST} 'cd ${REMOTE_BE} && node scripts/ml/bootstrap-from-engine-trades.js'"
   exit 1
 fi
 
@@ -148,10 +148,10 @@ print_rsync_from_laptop() {
   done < <(collect_rsync_dirs)
   echo ""
   echo "Then re-run on VPS:"
-  echo "  cd ${REMOTE_BE} && npm run ml:deploy-rag-${DEPLOY_ENV}"
+  echo "  cd ${REMOTE_BE} && npm run ml:deploy:${DEPLOY_ENV}"
   echo ""
   echo "Or seed only what exists on VPS with a narrower preset, e.g.:"
-  echo "  npm run ml:seed-embeddings-walkforward -- --min=${MIN_TRADES} --ts-all"
+  echo "  npm run ml:seed -- --min=${MIN_TRADES} --ts-all"
 }
 
 count_tmp_dirs() {
@@ -285,15 +285,15 @@ const { _pool } = require('./src/infrastructure/db/database');
 "
 
 echo "==> Seeding TradeEmbedding from walkforward CSV (VPS DATABASE_URL + pgvector)"
-if ! npm run ml:seed-embeddings-walkforward -- --min=${MIN_TRADES}${WF_ARGS}; then
+if ! node scripts/ml/seed-embeddings-from-walkforward.js --min=${MIN_TRADES}${WF_ARGS}; then
   echo "ERROR: seed failed — check CSV paths under ${REMOTE_BE}/tmp/"
-  echo "       Dry-run locally: npm run ml:seed-all-live:dry-run"
+  echo "       Dry-run locally: npm run ml:seed:dry-run"
   exit 1
 fi
 
 if [[ "${SKIP_TRAIN}" != "true" ]]; then
-  echo "==> npm run ml:train-win-predictor"
-  npm run ml:train-win-predictor || {
+  echo "==> npm run ml:train"
+  npm run ml:train || {
     echo "WARN: train failed — git-pulled win-predictor.json may still work if committed."
   }
 else
