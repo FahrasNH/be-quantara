@@ -5,6 +5,7 @@
 
 const assert = require("assert");
 const VectorStore = require("../src/infrastructure/db/VectorStore");
+const { resolveRagStrategyFilterKeys } = require("../src/config/strategies");
 const {
   _resolveRagStrategyFilterKeys,
   _ragScoreFromOutcomes,
@@ -68,6 +69,27 @@ async function main() {
     assert.deepStrictEqual(keys, ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"]);
   });
 
+  await test("umbrella MEAN_DRIFT fans out to MD components", () => {
+    const keys = _resolveRagStrategyFilterKeys({}, { strategyKey: "MEAN_DRIFT" });
+    assert.ok(Array.isArray(keys));
+    assert.deepStrictEqual(keys, ["MEAN_REVERSION", "SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"]);
+  });
+
+  await test("umbrella BREAKOUT_STORM fans out to BS race participants", () => {
+    const keys = _resolveRagStrategyFilterKeys({}, { strategyKey: "BREAKOUT_STORM" });
+    assert.ok(Array.isArray(keys));
+    assert.ok(keys.includes("ICT_STYLE_TRADING"));
+    assert.ok(keys.includes("LIQUIDATION_SQUEEZE"));
+  });
+
+  await test("winningComponent preferred over umbrella ctx", () => {
+    const keys = _resolveRagStrategyFilterKeys(
+      { winningComponent: "AUCTION_MARKET_THEORY" },
+      { strategyKey: "TREND_SURGE" },
+    );
+    assert.strictEqual(keys, "AUCTION_MARKET_THEORY");
+  });
+
   await test("standalone component key passes through", () => {
     const keys = _resolveRagStrategyFilterKeys({}, { strategyKey: "MEAN_REVERSION" });
     assert.strictEqual(keys, "MEAN_REVERSION");
@@ -83,6 +105,33 @@ async function main() {
     outcomes[0] = "loss";
     const score = _ragScoreFromOutcomes(outcomes);
     assert.ok(Math.abs(score - (RAG_MIN_SUPPORT - 1) / RAG_MIN_SUPPORT) < 1e-9);
+  });
+
+  await test("resolveRagStrategyFilterKeys SSOT — TREND_SURGE fan-out", () => {
+    assert.deepStrictEqual(
+      resolveRagStrategyFilterKeys("TREND_SURGE"),
+      ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"],
+    );
+  });
+
+  await test("_applyRagGate — umbrella ctx passes array to VectorStore", async () => {
+    let capturedFilter = null;
+    const deps = makeMockDeps([]);
+    deps.vs.findSimilar = async (_vec, _k, filters) => {
+      capturedFilter = filters;
+      return [];
+    };
+
+    await _applyRagGate(
+      [{ openTime: "2024-01-01T00:00:00.000Z", side: "LONG" }],
+      { strategyKey: "TREND_SURGE", symbol: "BTCUSDT" },
+      { deps },
+    );
+
+    assert.ok(Array.isArray(capturedFilter.strategyKey));
+    assert.deepStrictEqual(capturedFilter.strategyKey, [
+      "TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY",
+    ]);
   });
 
   await test("_applyRagGate — uses per-trade key in VectorStore filter", async () => {

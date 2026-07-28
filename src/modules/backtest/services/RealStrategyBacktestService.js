@@ -1706,6 +1706,8 @@ const RAG_CONSERVATIVE_DISCOUNT = 0.9;
 const RAG_APPROVE_THRESHOLD = parseFloat(process.env.RAG_APPROVE_THRESHOLD || "0.4");
 /** Minimum similar-trade outcomes before RAG score affects gate (fail-open below threshold). */
 const RAG_MIN_SUPPORT = Math.max(1, parseInt(process.env.RAG_MIN_SUPPORT || "10", 10) || 10);
+/** Pseudo-count per class for Beta shrinkage toward 0.5 (0 = disabled). */
+const RAG_BAYESIAN_PRIOR = Math.max(0, parseFloat(process.env.RAG_BAYESIAN_PRIOR || "0") || 0);
 /** When true, persist backtest trade embeddings after RAG gate (can leak future outcomes into reruns). Default off. */
 const RAG_SEED_AFTER_BACKTEST = process.env.RAG_SEED_AFTER_BACKTEST === "true";
 
@@ -1736,6 +1738,9 @@ function _primaryRagStrategyKey(filterKeys) {
 function _ragScoreFromOutcomes(outcomes) {
   if (!outcomes || outcomes.length < RAG_MIN_SUPPORT) return null;
   const wins = outcomes.filter((o) => o === "win").length;
+  if (RAG_BAYESIAN_PRIOR > 0) {
+    return (wins + RAG_BAYESIAN_PRIOR) / (outcomes.length + 2 * RAG_BAYESIAN_PRIOR);
+  }
   return wins / outcomes.length;
 }
 
