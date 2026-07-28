@@ -1,64 +1,46 @@
 # ML / RAG Deploy Playbook
 
-**Scope:** Operasional — deploy WinPredictor + TradeEmbedding ke VPS setelah walkforward / retrain.  
-**Technical companion:** [`RAG.md`](./RAG.md) (konsep gate, arsitektur).  
-**Doc date:** 2026-07-28
+How to deploy WinPredictor and trade embeddings to the VPS after walkforward export or retrain. For gate concepts and architecture, see [`RAG.md`](./RAG.md).
+
+**Last updated:** 2026-07-28
 
 ---
 
-## Ringkasan (Bahasa Indonesia)
+## TL;DR — most common commands
 
-RAG di Quantara butuh **dua artefak terpisah**:
+Run these from the **laptop** at the repo root (`be-bot-trading/`).
 
-| Artefak | Lokasi | Masuk git? |
-|---------|--------|------------|
-| Model WinPredictor | `data/models/win-predictor.json` | ✅ Ya |
-| Embedding trade (retrieval) | Postgres `TradeEmbedding` + pgvector | ❌ Tidak — seed di VPS |
+| Goal | Command |
+|------|---------|
+| Deploy to **staging** VPS | `npm run ml:deploy:staging` |
+| Deploy to **dev** VPS | `npm run ml:deploy:dev` |
+| Refresh model locally, then deploy | `npm run ml:refresh` → commit model → `npm run ml:deploy:staging` |
+| Check embedding counts (no DB write) | `npm run ml:seed:dry-run` |
+| Verify RAG gate on VPS | `npm run ml:diag -- --strategy TREND_SURGE --symbol BTCUSDT` |
 
-CSV walkforward ada di **`tmp/` lokal** (tidak di-commit). Seed **harus** jalan di VPS — `DATABASE_URL` laptop menunjuk localhost yang tidak punya Postgres/pgvector.
-
-**Satu perintah dari laptop (staging):**
-
-```bash
-npm run ml:deploy-rag-staging
-```
-
-Perintah ini: rsync `tmp/*-walkforward` → VPS → `git pull` → `prisma migrate deploy` → seed 12 strategi → reload PM2.
+**One deploy does:** rsync `tmp/*-walkforward` → VPS → `git pull` → `prisma migrate deploy` → seed 12 strategies → PM2 reload.
 
 ---
 
-## Alur end-to-end
+## How it works (30 seconds)
 
-```mermaid
-flowchart LR
-  subgraph Laptop
-    WF[Walkforward export<br/>tmp/*-walkforward]
-    DS[data/ml-engine-dataset.json]
-    MD[data/models/win-predictor.json]
-    WF --> DS
-    DS --> MD
-    MD --> GIT[git push staging]
-  end
+RAG needs **two separate artifacts**:
 
-  subgraph VPS
-    RSYNC[rsync tmp/]
-    MIG[prisma migrate deploy]
-    SEED[ml:seed-all-live]
-    PM2[pm2 reload]
-    PG[(Postgres TradeEmbedding)]
-    GIT --> PULL[git pull]
-    RSYNC --> SEED
-    PULL --> MIG --> SEED --> PG --> PM2
-  end
+| Artifact | Where it lives | In git? |
+|----------|----------------|---------|
+| WinPredictor model | `data/models/win-predictor.json` | Yes |
+| Trade embeddings (retrieval) | Postgres `TradeEmbedding` + pgvector | No — seeded on VPS |
 
-  WF --> RSYNC
+Walkforward CSVs live in **`tmp/` on your laptop** (never committed). Seeding must run on the VPS — your laptop's `DATABASE_URL` points at localhost, which has no Postgres/pgvector.
+
 ```
-
-**Urutan yang benar:**
-
-1. **Lokal:** export walkforward → (opsional) train model → commit + push model ke git.
-2. **Laptop → VPS:** `npm run ml:deploy-rag-staging` (atau dev).
-3. **Verifikasi:** health + rag-gate-status.
+Laptop                          VPS
+──────                          ───
+walkforward → tmp/     rsync →  tmp/
+train → win-predictor  git  →  win-predictor.json
+                               seed → TradeEmbedding
+                               pm2 reload
+```
 
 ---
 
@@ -66,151 +48,140 @@ flowchart LR
 
 ### Laptop
 
-- SSH ke VPS: `VPS_HOST=root@187.77.135.156` (default di script).
-- Folder `tmp/<prefix>-{scalping|intraday|swing}-walkforward/` sudah terisi (dari `scripts/walkforward/`).
-- Node 18+ dan `npm ci` sudah pernah jalan di repo.
+- SSH access to VPS (`VPS_HOST=root@187.77.135.156` is the default in scripts)
+- Walkforward exports in `tmp/<prefix>-{scalping|intraday|swing}-walkforward/`
+- Node 18+ and `npm ci` already run once in this repo
 
 ### VPS (staging / dev)
 
-| Env | Path checkout | Branch git | PM2 app | Port |
+| Env | Checkout path | Git branch | PM2 app | Port |
 |-----|---------------|------------|---------|------|
 | **staging** | `/opt/quantara-staging/be` | `staging` | `be-quantara-staging` | 3001 |
 | **dev** | `/opt/quantara-dev/be` | `development` | `be-quantara-dev` | 3002 |
 | prod | `/opt/quantara-prod/be` | `main` | `be-quantara-prod` | 3000 |
 
-- `.env` di path checkout dengan `DATABASE_URL` Postgres **VPS** (bukan localhost laptop).
-- Extension **pgvector** terpasang (via Prisma migrate).
-- Tabel `TradeEmbedding` ada (migrate deploy).
+Also required on VPS:
+
+- `.env` with **VPS** `DATABASE_URL` (not localhost from your laptop)
+- pgvector extension (via `prisma migrate deploy`)
+- `TradeEmbedding` table exists
 
 ---
 
-## Kapan perlu retrain / redeploy?
+## Local refresh (before deploy)
 
-| Trigger | Lokal | VPS deploy |
-|---------|-------|------------|
-| HTF / logic strategi berubah | Re-export walkforward, retrain model | `ml:deploy-rag-staging` |
-| Strategi baru (12 → N) | Export + update preset | `--all-live` (sudah default) |
-| Refresh walkforward saja | Export ulang tmp/ | `ml:deploy-rag-staging` (skip train OK) |
-| Hanya migrate schema | — | deploy script (migrate + seed) |
-| Model di git sudah baru, CSV sama | — | `--skip-train` (default npm script) |
+Use this when strategy logic changed or you need a new WinPredictor model.
 
----
+### 1. Export walkforward CSVs
 
-## Quick start — one-liner
-
-### Staging (paling sering)
+Run exports from `scripts/walkforward/` — one per strategy × trade type. Example:
 
 ```bash
-# Dari root be-bot-trading di laptop:
-npm run ml:deploy-rag-staging
+node scripts/walkforward/smart-money-concepts/intraday.js
 ```
 
-Setara manual:
+Repeat for each strategy you need, or export all 12. Output goes to `tmp/<prefix>-{scalping|intraday|swing}-walkforward/`.
+
+### 2. Train model (optional)
+
+```bash
+npm run ml:refresh          # dry-run count + train + prints next steps
+# or just train:
+npm run ml:train
+```
+
+### 3. Commit model to git
+
+```bash
+git add data/models/win-predictor.json data/ml-engine-dataset.json
+git commit -m "chore(ml): refresh win-predictor"
+git push origin staging     # merge to development after staging verify
+```
+
+Embeddings are **not** in git — the VPS deploy step seeds those.
+
+### When to retrain vs just redeploy
+
+| Situation | Local | VPS |
+|-----------|-------|-----|
+| HTF / strategy logic changed | Re-export walkforward, retrain | `npm run ml:deploy:staging` |
+| Walkforward CSV refresh only | Re-export `tmp/` | `npm run ml:deploy:staging` |
+| Model already in git, CSVs unchanged | — | deploy (default skips train) |
+| Schema migration only | — | deploy runs `migrate deploy` + seed |
+
+---
+
+## VPS deploy
+
+### From laptop (recommended)
+
+```bash
+npm run ml:deploy:staging    # most common
+npm run ml:deploy:dev
+```
+
+Equivalent manual form:
 
 ```bash
 ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live --skip-train
 ```
 
-### Development VPS
+### Already SSH'd into the VPS?
+
+The script auto-detects when `pwd` is `/opt/quantara-{staging|dev}/be` — it skips rsync/SSH and runs migrate + seed + PM2 locally.
 
 ```bash
-npm run ml:deploy-rag-dev
+cd /opt/quantara-staging/be
+npm run ml:deploy:staging
 ```
 
-### Deploy sudah SSH ke VPS
+If `tmp/` on the VPS is empty, the script prints exact `rsync` commands to run from your laptop. **Do not** seed from the VPS until CSVs are there.
 
-Script **auto-detect** jika `pwd` = `/opt/quantara-{staging|dev}/be`: skip rsync + ssh, jalankan migrate/seed/PM2 lokal.
+### Seed a subset (tier or single strategy)
+
+Deploy defaults to all 12 LIVE strategies (`--all-live`). For narrower seeding:
 
 ```bash
-# Setelah CSV sudah di-rsync dari laptop:
-cd /opt/quantara-dev/be
-npm run ml:deploy-rag-dev
-
-# Atau paksa mode lokal:
-./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --all-live --local
+# On VPS (or via deploy script flags):
+npm run ml:seed:af          # SMC + Wyckoff + VSA
+npm run ml:seed:ts          # Trend Following + Market Structure + AMT
+npm run ml:seed:md          # Mean Reversion + Supply/Demand + Stat Arb
+npm run ml:seed:bs          # Breakout Retest + ICT + Liquidation Squeeze
 ```
 
-Jika `tmp/` di VPS kosong, script menampilkan perintah `rsync` exact dari laptop — **jangan** jalankan deploy dari VPS sebelum rsync.
+Preset source of truth: `scripts/ml/walkforward-dir-presets.js`
 
-**Preferred:** deploy dari laptop (`npm run ml:deploy-rag-staging`) agar rsync + seed satu langkah.
+### 12 strategies → tmp/ folders
 
-### Cek jumlah embedding (lokal, tanpa DB)
+Each strategy has 3 trade types: `{prefix}-{scalping|intraday|swing}-walkforward`.
 
-```bash
-npm run ml:seed-all-live:dry-run
-```
+| # | Strategy | Tier | tmp prefix |
+|---|----------|------|------------|
+| 1 | SMART_MONEY_CONCEPTS | AF | `smc` |
+| 2 | WYCKOFF | AF | `wyckoff` |
+| 3 | VOLUME_SPREAD_ANALYSIS | AF | `vsa` |
+| 4 | TREND_FOLLOWING | TS | `tf` |
+| 5 | MARKET_STRUCTURE | TS | `ms` |
+| 6 | AUCTION_MARKET_THEORY | TS | `amt` |
+| 7 | MEAN_REVERSION | MD | `mr` |
+| 8 | SUPPLY_AND_DEMAND | MD | `snd` |
+| 9 | STATISTICAL_ARBITRAGE | MD | `sa` |
+| 10 | BREAKOUT_RETEST | BS | `br` |
+| 11 | ICT_STYLE_TRADING | BS | `ict` |
+| 12 | LIQUIDATION_SQUEEZE | BS | `ls` |
 
-### Refresh model lokal + petunjuk deploy
+Example path: `tmp/tf-intraday-walkforward/window-01/BTCUSDT/trades.csv`
 
-```bash
-npm run ml:full-rag-refresh
-# lalu commit model, push, npm run ml:deploy-rag-staging
-```
+### Manual fallback (if one-command fails)
 
----
-
-## Preset seed — 12 strategi LIVE
-
-Semua preset dipakai oleh `seed-embeddings-from-walkforward.js` dan `deploy-rag-vps.sh`.
-
-| Flag | Strategi | tmp/ prefix |
-|------|----------|-------------|
-| `--all-live` / `--seed-all` | **Semua 12** | smc, wyckoff, vsa, tf, ms, amt, mr, snd, sa, br, ict, ls |
-| `--af-all` | AF tier | smc, wyckoff, vsa |
-| `--ts-all` | TS tier | tf, ms, amt |
-| `--md-all` | MD tier | mr, snd, sa |
-| `--bs-all` | BS tier | br, ict, ls |
-| `--tf-all`, `--smc-all`, … | Satu strategi × 3 trade type | lihat tabel di bawah |
-
-### Mapping strategi → folder tmp/
-
-| # | Strategy key | Abbrev tier | tmp prefix | Contoh path |
-|---|--------------|-------------|------------|-------------|
-| 1 | SMART_MONEY_CONCEPTS | AF | `smc` | `tmp/smc-intraday-walkforward/` |
-| 2 | WYCKOFF | AF | `wyckoff` | `tmp/wyckoff-swing-walkforward/` |
-| 3 | VOLUME_SPREAD_ANALYSIS | AF | `vsa` | `tmp/vsa-scalping-walkforward/` |
-| 4 | TREND_FOLLOWING | TS | `tf` | `tmp/tf-intraday-walkforward/` |
-| 5 | MARKET_STRUCTURE | TS | `ms` | `tmp/ms-intraday-walkforward/` |
-| 6 | AUCTION_MARKET_THEORY | TS | `amt` | `tmp/amt-swing-walkforward/` |
-| 7 | MEAN_REVERSION | MD | `mr` | `tmp/mr-scalping-walkforward/` |
-| 8 | SUPPLY_AND_DEMAND | MD | `snd` | `tmp/snd-intraday-walkforward/` |
-| 9 | STATISTICAL_ARBITRAGE | MD | `sa` | `tmp/sa-swing-walkforward/` |
-| 10 | BREAKOUT_RETEST | BS | `br` | `tmp/br-intraday-walkforward/` |
-| 11 | ICT_STYLE_TRADING | BS | `ict` | `tmp/ict-scalping-walkforward/` |
-| 12 | LIQUIDATION_SQUEEZE | BS | `ls` | `tmp/ls-swing-walkforward/` |
-
-Setiap strategi punya 3 trade type: `{prefix}-{scalping|intraday|swing}-walkforward`.
-
-SSOT preset: `scripts/ml/walkforward-dir-presets.js`
-
----
-
-## Step-by-step manual (fallback)
-
-Jika one-command gagal, lakukan bertahap.
-
-### A. Lokal — walkforward + train
-
-```bash
-# Export (contoh SMC intraday — ulangi per strategi atau pakai scripts/walkforward)
-node scripts/walkforward/smart-money-concepts/intraday.js
-
-# Opsional: train + commit model
-npm run ml:train-win-predictor
-git add data/models/win-predictor.json data/ml-engine-dataset.json
-git commit -m "chore(ml): refresh win-predictor"
-git push origin staging
-```
-
-### B. Rsync tmp ke VPS
+**A. Rsync from laptop**
 
 ```bash
 rsync -avz tmp/smc-intraday-walkforward/ \
   root@187.77.135.156:/opt/quantara-staging/be/tmp/smc-intraday-walkforward/
-# atau preset penuh via deploy script
 ```
 
-### C. Di VPS — migrate + seed
+**B. On VPS**
 
 ```bash
 ssh root@187.77.135.156
@@ -218,209 +189,214 @@ cd /opt/quantara-staging/be
 git fetch origin staging && git reset --hard origin/staging
 npm ci
 npx prisma migrate deploy
-npm run ml:seed-all-live
+npm run ml:seed
 pm2 startOrReload ecosystem.config.js --only be-quantara-staging --update-env
 ```
 
-### D. Verifikasi
+---
+
+## Verify
 
 ```bash
-curl -sf http://127.0.0.1:3001/health
-# rag-gate-status butuh JWT:
+# Health (on VPS)
+curl -sf http://127.0.0.1:3001/health          # staging = 3001, dev = 3002
+
+# DB + pgvector
+npm run ml:verify-db
+
+# Embedding counts by strategy
+npm run ml:embeddings
+
+# RAG gate preflight (on VPS)
+npm run ml:diag -- --strategy TREND_SURGE --symbol BTCUSDT
+
+# API (needs JWT)
 curl -H "Authorization: Bearer <token>" \
   https://staging.quantara.software/api/v1/backtest/rag-gate-status
 ```
 
 ---
 
-## AF vs TS — apa arti "backfill"?
+## AF vs TS — what "backfill" actually means
 
-Di staging Jul 2026, **Adaptive Fusion** memakai **dua jalur berbeda** (sering disebut "backfill" secara informal):
+People say "backfill" for several different scripts. Only some of them fill **`TradeEmbedding`** (what RAG retrieval needs).
 
-| Jalur | Script | Target DB | Untuk RAG embedding? |
-|-------|--------|-----------|----------------------|
-| **Walkforward seed** (utama) | `seed-embeddings-from-walkforward.js --af-all` | `TradeEmbedding` | ✅ Ya — retrieval similarity |
-| **Engine bootstrap** (staging ops) | `bootstrap-from-engine-trades.js` | `TradeEmbedding` + `ml-engine-dataset.json` | ✅ Ya — dari ~510 trade bot closed |
-| **Shadow log backfill** | `backfill-ml-shadow-log.js` | `MLShadowLog` | ❌ Bukan embedding — untuk promosi shadow/AUC |
-| **ML readiness backfill** | `backfill-ml-readiness.js` | kolom Prisma `Trade` | ❌ Bukan embedding — field pair_tier, dll. |
-| **Regime backfill** | `backfill-regime.js` | `entryContext.market.regime` | ❌ Bukan embedding — klasifikasi regime historis |
-| **Walkforward bootstrap** (lokal) | `bootstrap-from-walkforward-csv.js --smc-all` | `data/ml-engine-dataset.json` saja | ❌ Bukan embedding — training WinPredictor offline |
+| Script / command | Writes to | For RAG embeddings? |
+|------------------|-----------|------------------------|
+| `npm run ml:seed:af` / `ml:seed:ts` / `ml:seed` | `TradeEmbedding` | **Yes** — main path |
+| `npm run ml:bootstrap:engine` | `TradeEmbedding` + dataset | Yes — from ~510 closed bot trades |
+| `npm run ml:backfill:shadow` | `MLShadowLog` | No — shadow/AUC promotion metrics |
+| `npm run ml:bootstrap:walkforward` | `ml-engine-dataset.json` (local) | No — offline WinPredictor training |
+| `scripts/backfill-ml-readiness.js` | `Trade` columns | No — pair_tier, etc. |
+| `scripts/backfill-regime.js` | `entryContext.market.regime` | No — historical regime labels |
 
-**Kesimpulan:** RAG gate butuh **`TradeEmbedding`** (pgvector). AF mengisi ini dari **walkforward CSV** (~21k sample SMC+Wyckoff+VSA) **dan** sempat supplement dari **engine trades** di staging. Bukan dari `backfill-ml-readiness` / `backfill-regime`.
+**Bottom line:** RAG gate reads **`TradeEmbedding`** in pgvector. AF fills this from walkforward CSV (`ml:seed:af`) and optionally engine trades. TS uses the same walkforward path (`ml:seed:ts`) — no separate backfill needed for embeddings.
 
-**Trend Surge (TS)** dengan seed `--ts-all` (9141 embedding di VPS) sudah setara dengan jalur walkforward AF — **tidak perlu** langkah backfill terpisah untuk embedding. Opsional: `ml:backfill:shadow` jika ingin metrik promosi dari trade bot TS live.
-
-### Workflow TS (VPS)
+### TS workflow (VPS)
 
 ```bash
-# Sudah dilakukan — seed embedding dari walkforward CSV
-cd /opt/quantara-staging/be   # atau dev
 npm run ml:seed:ts
-
-# Verifikasi
 npm run ml:embeddings
 npm run ml:diag -- --strategy TREND_SURGE --symbol BTCUSDT
 
-# Opsional — supplement dari trade bot closed (bukan wajib jika walkforward sudah cukup)
+# Optional — supplement from live bot trades
 npm run ml:bootstrap:engine
 npm run ml:backfill:shadow -- --days=30
 ```
 
-### Workflow AF (referensi)
+### AF workflow (VPS)
 
 ```bash
-# Seed embedding AF tier (SMC + Wyckoff + VSA)
-npm run ml:seed:af
-
-# Atau full 12 strategi
-npm run ml:seed
+npm run ml:seed:af          # SMC + Wyckoff + VSA only
+npm run ml:seed             # all 12 strategies
 ```
 
 ---
 
-## npm scripts (baru)
+## npm scripts reference
 
-| Script | Fungsi |
-|--------|--------|
-| `ml:deploy:staging` | Full deploy staging (rsync + migrate + seed all + PM2) |
-| `ml:deploy:dev` | Sama untuk dev VPS |
-| `ml:seed` | Seed 12 strategi LIVE (VPS DATABASE_URL) |
-| `ml:seed:af` / `ml:seed:ts` / `ml:seed:md` / `ml:seed:bs` | Seed per umbrella tier |
-| `ml:seed:dry-run` | Hitung embedding tanpa tulis DB |
+| Script | What it does |
+|--------|--------------|
+| `ml:deploy:staging` | Full staging deploy (rsync + migrate + seed all + PM2) |
+| `ml:deploy:dev` | Same for dev VPS |
+| `ml:seed` | Seed all 12 LIVE strategies |
+| `ml:seed:af` / `ml:seed:ts` / `ml:seed:md` / `ml:seed:bs` | Seed one umbrella tier |
+| `ml:seed:dry-run` | Count embeddings without writing DB |
+| `ml:refresh` | Local: dry-run count + train + deploy instructions |
+| `ml:train` | Train WinPredictor → `data/models/win-predictor.json` |
 | `ml:bootstrap:engine` | Closed engine trades → dataset + TradeEmbedding (VPS) |
-| `ml:bootstrap:walkforward` | CSV walkforward → `ml-engine-dataset.json` (lokal) |
-| `ml:backfill:shadow` | Engine trades → `MLShadowLog` (bukan embedding) |
-| `ml:diag` | RAG preflight on VPS (umbrella or component `--strategy`) |
+| `ml:bootstrap:walkforward` | CSV walkforward → `ml-engine-dataset.json` (local) |
+| `ml:backfill:shadow` | Engine trades → `MLShadowLog` (not embeddings) |
+| `ml:diag` | RAG preflight (`--strategy`, `--symbol`) |
 | `ml:verify-db` | pgvector + TradeEmbedding table check |
 | `ml:embeddings` | Print embedding counts by strategyKey |
-| `ml:refresh` | Dry-run count + train lokal + instruksi deploy |
 
 ---
 
-## Apa yang masuk git vs lokal
+## Git vs local vs VPS
 
-| Path | Git | Catatan |
-|------|-----|---------|
-| `data/models/win-predictor.json` | ✅ | Model gate — pull di VPS |
-| `data/ml-engine-dataset.json` | ✅ | Cache training |
-| `tmp/*-walkforward/` | ❌ | CSV export — rsync ke VPS |
-| `.env` | ❌ | Secrets + DATABASE_URL per env |
-| Postgres `TradeEmbedding` | ❌ | Hanya di DB VPS |
+| Path | Git? | Notes |
+|------|------|-------|
+| `data/models/win-predictor.json` | Yes | Pulled on VPS via `git pull` |
+| `data/ml-engine-dataset.json` | Yes | Training cache |
+| `tmp/*-walkforward/` | No | Rsync to VPS only |
+| `.env` | No | Secrets + per-env `DATABASE_URL` |
+| Postgres `TradeEmbedding` | No | Lives only on VPS DB |
 
-**Jangan** commit `tmp/` atau `.env`.
+Do not commit `tmp/` or `.env`.
 
 ---
 
-## Dev vs staging vs prod
+## Environments
 
 | | staging | development | production |
 |---|---------|-------------|------------|
 | Branch | `staging` | `development` | `main` |
-| Deploy ML script | `ml:deploy-rag-staging` | `ml:deploy-rag-dev` | Manual / change window |
-| ML_GATE_MODE tipikal | `shadow` | `shadow` / off | `active` hanya setelah promosi |
-| RAG backtest UI | ON (`RAG_BACKTEST_ENABLED`) | ON | Sesuai policy |
+| Deploy command | `ml:deploy:staging` | `ml:deploy:dev` | Manual / change window |
+| Typical `ML_GATE_MODE` | `shadow` | `shadow` / off | `active` after promotion |
+| RAG backtest UI | ON | ON | Per policy |
 
-**Branch confusion:** push fitur ML ke **`staging`** dulu, deploy staging, lalu merge ke **`development`** untuk dev VPS. Prod (`main`) terpisah.
+**Branch flow:** push ML changes to `staging` → deploy & verify → merge to `development` for dev VPS. Production (`main`) is separate.
 
 ---
 
 ## Troubleshooting
 
-### `pgvector extension missing`
+### pgvector extension missing
 
-```bash
-cd /opt/quantara-staging/be
-npx prisma migrate deploy
-# verify:
-psql "$DATABASE_URL" -c "SELECT * FROM pg_extension WHERE extname='vector';"
-```
+- **Symptom:** migrate or seed fails on vector type
+- **Cause:** migration not applied
+- **Fix:**
+  ```bash
+  cd /opt/quantara-staging/be
+  npx prisma migrate deploy
+  psql "$DATABASE_URL" -c "SELECT * FROM pg_extension WHERE extname='vector';"
+  ```
 
-### `ECONNREFUSED` / `Cannot connect to Postgres at localhost`
+### `ECONNREFUSED` / Cannot connect to Postgres at localhost
 
-Seed dijalankan di **laptop** — salah. Harus:
+- **Symptom:** seed fails immediately on laptop
+- **Cause:** seed ran locally; laptop has no VPS Postgres
+- **Fix:** run `npm run ml:deploy:staging` from laptop (seeds via SSH), or SSH to VPS and run `npm run ml:seed`
 
-- `npm run ml:deploy-rag-staging` (seed di VPS via SSH), atau
-- SSH ke VPS lalu `npm run ml:seed-all-live`
+### TradeEmbedding table missing
 
-### `TradeEmbedding table missing`
+- **Symptom:** seed or verify fails on table not found
+- **Cause:** VPS branch missing migration
+- **Fix:** `git pull` + `npx prisma migrate deploy`
 
-```bash
-npx prisma migrate deploy
-```
+### No local `tmp/*-walkforward` dirs found
 
-Pastikan branch VPS sudah pull commit yang punya migration TradeEmbedding.
+- **Symptom:** deploy exits before rsync
+- **Cause:** walkforward not exported locally, or deploy started on VPS without CSVs
+- **Fix:** export walkforward on laptop, then `npm run ml:deploy:staging`. Or rsync manually first.
 
-### `No local tmp/*-walkforward dirs found`
+### No `trades.csv` under tmp/
 
-Deploy dijalankan **di VPS** tanpa CSV — `tmp/` hanya ada di laptop.
+- **Symptom:** seed reports 0 trades
+- **Cause:** incomplete export or failed rsync
+- **Fix:**
+  ```bash
+  npm run ml:seed:dry-run
+  ls tmp/*-walkforward/**/trades.csv | head
+  head -3 tmp/tf-scalping-walkforward/window-01/BTCUSDT/trades.csv
+  ```
 
-```bash
-# Dari laptop (preferred):
-npm run ml:deploy-rag-dev
+### Need >= N embeddings, got 0
 
-# Atau rsync manual dulu, lalu di VPS:
-rsync -avz tmp/tf-scalping-walkforward/ root@187.77.135.156:/opt/quantara-dev/be/tmp/tf-scalping-walkforward/
-```
+- **Symptom:** seed rejects with minimum count error
+- **Cause:** empty CSV or `Result` column not `win`/`loss`
+- **Fix:** inspect CSV headers and rows (see command above)
 
-### `No trades.csv under tmp/...`
+### Bot logs: "no ML signal" / gate cold-start
 
-Walkforward belum di-export lokal, atau rsync gagal.
+- **Symptom:** trades not gated despite RAG enabled
+- **Cause:** low embedding count, missing model, or shadow mode
+- **Fix:**
+  - Re-seed with correct tier preset (`ml:seed:af`, `ml:seed:ts`, etc.)
+  - Confirm `data/models/win-predictor.json` exists after `git pull`
+  - Check `ML_GATE_MODE=shadow` — logs only, does not reject trades
 
-```bash
-npm run ml:seed-all-live:dry-run   # cek file lokal
-ls tmp/*-walkforward/**/trades.csv | head
-```
+### rsync / SSH fails
 
-### `Need >= N embeddings, got 0`
+- **Symptom:** permission denied or host unreachable
+- **Cause:** wrong `VPS_HOST` or missing SSH key
+- **Fix:**
+  ```bash
+  ssh root@187.77.135.156 'ls /opt/quantara-staging/be/tmp'
+  ```
 
-CSV kosong atau kolom `Result` bukan `win`/`loss`. Cek satu file:
+### PM2 reload but health check fails
 
-```bash
-head -3 tmp/tf-scalping-walkforward/window-01/BTCUSDT/trades.csv
-```
-
-### Log bot: `no ML signal` / gate cold-start
-
-- `TradeEmbedding` count rendah untuk strategyKey tersebut → seed ulang dengan preset yang benar.
-- `win-predictor.json` missing di VPS → `git pull` + pastikan file ada.
-- `ML_GATE_MODE=shadow` → gate log saja, bukan reject.
-
-### rsync permission / SSH
-
-```bash
-ssh root@187.77.135.156 'ls /opt/quantara-staging/be/tmp'
-```
-
-Pastikan `VPS_HOST` benar dan key SSH terpasang.
-
-### PM2 reload tapi health gagal
-
-```bash
-pm2 logs be-quantara-staging --lines 50
-node --check index.js
-```
+- **Symptom:** deploy completes but `/health` fails
+- **Cause:** app crash on startup
+- **Fix:**
+  ```bash
+  pm2 logs be-quantara-staging --lines 50
+  node --check index.js
+  ```
 
 ---
 
-## Script reference
+## Script files
 
-| File | Peran |
-|------|-------|
-| `scripts/ml/deploy-rag-vps.sh` | **Main** one-command deploy |
-| `scripts/ml/deploy-rag-staging-remote.sh` | Wrapper → `--env staging` |
+| File | Role |
+|------|------|
+| `scripts/ml/deploy-rag-vps.sh` | Main one-command deploy |
 | `scripts/ml/seed-embeddings-from-walkforward.js` | CSV → TradeEmbedding |
-| `scripts/ml/walkforward-dir-presets.js` | SSOT 12-strategy dir lists |
-| `scripts/ml/full-rag-refresh.sh` | Local train workflow |
+| `scripts/ml/walkforward-dir-presets.js` | 12-strategy dir lists (SSOT) |
+| `scripts/ml/full-rag-refresh.sh` | Local train workflow (`ml:refresh`) |
 | `scripts/ml/train-win-predictor.js` | Train → win-predictor.json |
+| `scripts/ml/diag-rag-gate.js` | RAG preflight diagnostics |
 
 ---
 
 ## Related docs
 
-- [`RAG.md`](./RAG.md) — konsep gate, FeatureEngineer, shadow mode
-- [`scripts/walkforward/README.md`](../scripts/walkforward/README.md) — export CSV
+- [`RAG.md`](./RAG.md) — gate concepts, FeatureEngineer, shadow mode
+- [`scripts/walkforward/README.md`](../scripts/walkforward/README.md) — CSV export
 - `ARCHITECTURE.md` — deployment branches & PM2
 
 ---
 
-*Playbook ini menggambarkan tooling per 2026-07-28. Jika preset strategi bertambah, update `walkforward-dir-presets.js`.*
+*If strategy presets change, update `walkforward-dir-presets.js` first, then this doc.*
