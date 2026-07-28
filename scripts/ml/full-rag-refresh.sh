@@ -30,7 +30,7 @@ for arg in "$@"; do
 done
 
 echo "==> [1/3] Dry-run seed count (all 12 LIVE strategies)"
-npm run ml:seed-all-live:dry-run
+npm run ml:seed:dry-run
 
 echo ""
 echo "==> [2/3] Bootstrap ml-engine-dataset.json from all walkforward dirs"
@@ -40,7 +40,7 @@ echo "       Tip: ensure tmp/*-walkforward exists locally from walkforward expor
 if [[ "${SKIP_TRAIN}" != "true" ]]; then
   echo ""
   echo "==> [3/3] Train WinPredictor locally"
-  npm run ml:train-win-predictor
+  npm run ml:train
   echo ""
   echo "Model written: data/models/win-predictor.json"
   echo "Report:        data/models/win-predictor-training-report.json (if generated)"
@@ -59,9 +59,9 @@ echo "       git commit -m 'chore(ml): refresh win-predictor after walkforward'"
 echo "       git push origin staging   # then merge to development"
 echo ""
 echo "  2. One-command VPS deploy (from laptop):"
-echo "       npm run ml:deploy-rag-staging"
+echo "       npm run ml:deploy:staging"
 echo "     or dev:"
-echo "       npm run ml:deploy-rag-dev"
+echo "       npm run ml:deploy:dev"
 echo ""
 echo "  See docs/ML_RAG_DEPLOY.md for troubleshooting."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
