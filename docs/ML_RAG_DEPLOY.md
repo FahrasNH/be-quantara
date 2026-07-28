@@ -117,6 +117,23 @@ Setara manual:
 npm run ml:deploy-rag-dev
 ```
 
+### Deploy sudah SSH ke VPS
+
+Script **auto-detect** jika `pwd` = `/opt/quantara-{staging|dev}/be`: skip rsync + ssh, jalankan migrate/seed/PM2 lokal.
+
+```bash
+# Setelah CSV sudah di-rsync dari laptop:
+cd /opt/quantara-dev/be
+npm run ml:deploy-rag-dev
+
+# Atau paksa mode lokal:
+./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --all-live --local
+```
+
+Jika `tmp/` di VPS kosong, script menampilkan perintah `rsync` exact dari laptop — **jangan** jalankan deploy dari VPS sebelum rsync.
+
+**Preferred:** deploy dari laptop (`npm run ml:deploy-rag-staging`) agar rsync + seed satu langkah.
+
 ### Cek jumlah embedding (lokal, tanpa DB)
 
 ```bash
@@ -280,6 +297,18 @@ npx prisma migrate deploy
 ```
 
 Pastikan branch VPS sudah pull commit yang punya migration TradeEmbedding.
+
+### `No local tmp/*-walkforward dirs found`
+
+Deploy dijalankan **di VPS** tanpa CSV — `tmp/` hanya ada di laptop.
+
+```bash
+# Dari laptop (preferred):
+npm run ml:deploy-rag-dev
+
+# Atau rsync manual dulu, lalu di VPS:
+rsync -avz tmp/tf-scalping-walkforward/ root@187.77.135.156:/opt/quantara-dev/be/tmp/tf-scalping-walkforward/
+```
 
 ### `No trades.csv under tmp/...`
 
