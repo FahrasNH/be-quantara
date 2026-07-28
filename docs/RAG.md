@@ -3,6 +3,7 @@
 **Scope:** Apa arti RAG di project ini, mengapa bisa berjalan, dan bagaimana alurnya dari data → model → gate.  
 **Bukan:** RAG generik NLP (chatbot knowledge-base). Di Quantara, RAG = **Retrieval-Augmented Gate** untuk keputusan trade.  
 **Doc date:** 2026-07-26  
+**Deploy ops:** [`ML_RAG_DEPLOY.md`](./ML_RAG_DEPLOY.md) — one-command VPS deploy, preset 12 strategi, troubleshooting.  
 **SSOT terkait:** `ARCHITECTURE.md` (§ RAG gate), `src/modules/ml/`, `scripts/ml/`, `scripts/walkforward/`
 
 ---
@@ -455,8 +456,24 @@ RAG di Quantara **bukan magic** — butuh tiga fondasi yang sudah ada di stack.
 
 ---
 
+**Perintah:** `npm run ml:deploy-rag-staging`  
+**Kapan:** One-command dari laptop — rsync tmp + migrate + seed 12 strategi + PM2 reload  
+**Detail:** [`ML_RAG_DEPLOY.md`](./ML_RAG_DEPLOY.md)
+
+---
+
+**Perintah:** `./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live`  
+**Kapan:** Sama seperti di atas (flags eksplisit)
+
+---
+
+**Perintah:** `npm run ml:seed-all-live:dry-run`  
+**Kapan:** Cek jumlah embedding dari CSV lokal tanpa DB
+
+---
+
 **Perintah:** `./scripts/ml/deploy-rag-staging-remote.sh`  
-**Kapan:** Bootstrap + train + reload PM2 di VPS staging
+**Kapan:** Wrapper legacy → `deploy-rag-vps.sh --env staging`
 
 ---
 
@@ -474,10 +491,11 @@ node scripts/walkforward/smart-money-concepts/swing.js
 # 2) Merge dataset
 node scripts/ml/bootstrap-from-walkforward-csv.js --smc-all
 
-# 3) Train
+# 3) Train (opsional jika model sudah di git)
 npm run ml:train-win-predictor
 
-# 4) Deploy artefak ke VPS + restart BE
+# 4) Deploy ke VPS — lihat ML_RAG_DEPLOY.md
+npm run ml:deploy-rag-staging
 # 5) UI: Backtest → Advanced Options → RAG Gate ON
 # 6) Live: set ML_GATE_MODE=shadow (staging) → amati shadow log
 ```
@@ -539,6 +557,7 @@ npm run ml:train-win-predictor
 
 ## 7. Referensi silang
 
+- **Deploy VPS (ops):** [`ML_RAG_DEPLOY.md`](./ML_RAG_DEPLOY.md)
 - Architecture ringkas gate backtest: `ARCHITECTURE.md` → “RAG gate on backtest”
 - Walkforward: `scripts/walkforward/README.md`
 - Dataset expand (via-api): `scripts/dataset-expand/README.md`

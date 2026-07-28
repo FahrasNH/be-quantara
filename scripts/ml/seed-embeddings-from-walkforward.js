@@ -8,9 +8,12 @@
  * (or were rsync'd to the VPS).
  *
  * Usage:
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --all-live  # all 12 LIVE strategies
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --af-all      # SMC + Wyckoff + VSA
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --ts-all      # TF + MS + AMT
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --md-all      # MR + SND + SA
+ *   node scripts/ml/seed-embeddings-from-walkforward.js --bs-all      # BR + ICT + LS
  *   node scripts/ml/seed-embeddings-from-walkforward.js --tf-all
- *   node scripts/ml/seed-embeddings-from-walkforward.js --af-all   # SMC + Wyckoff + VSA
- *   node scripts/ml/seed-embeddings-from-walkforward.js --ts-all   # TF + MS + AMT
  *   node scripts/ml/seed-embeddings-from-walkforward.js --dir=tmp/tf-scalping-walkforward
  *   node scripts/ml/seed-embeddings-from-walkforward.js \
  *     --dir=tmp/tf-scalping-walkforward --dir=tmp/tf-intraday-walkforward \
@@ -28,38 +31,11 @@ const FeatureEngineer = require("#modules/ml/domain/FeatureEngineer.js");
 const VectorStore = require("../../src/infrastructure/db/VectorStore");
 const { _pool } = require("../../src/infrastructure/db/database");
 const { REPO_ROOT } = require("#modules/ml/constants/modelPaths.js");
-
-const TF_ALL_DIRS = [
-  "tmp/tf-scalping-walkforward",
-  "tmp/tf-intraday-walkforward",
-  "tmp/tf-swing-walkforward",
-];
-
-const SMC_ALL_DIRS = [
-  "tmp/smc-scalping-walkforward",
-  "tmp/smc-intraday-walkforward",
-  "tmp/smc-swing-walkforward",
-];
-
-const AF_ALL_DIRS = [
-  ...SMC_ALL_DIRS,
-  "tmp/wyckoff-scalping-walkforward",
-  "tmp/wyckoff-intraday-walkforward",
-  "tmp/wyckoff-swing-walkforward",
-  "tmp/vsa-scalping-walkforward",
-  "tmp/vsa-intraday-walkforward",
-  "tmp/vsa-swing-walkforward",
-];
-
-const TS_ALL_DIRS = [
-  ...TF_ALL_DIRS,
-  "tmp/ms-scalping-walkforward",
-  "tmp/ms-intraday-walkforward",
-  "tmp/ms-swing-walkforward",
-  "tmp/amt-scalping-walkforward",
-  "tmp/amt-intraday-walkforward",
-  "tmp/amt-swing-walkforward",
-];
+const {
+  FLAG_TO_PRESET,
+  presetToDirs,
+  collectDirsFromArgv,
+} = require("./walkforward-dir-presets.js");
 
 function dbHostHint() {
   const dbUrl = process.env.DATABASE_URL || "";
@@ -92,7 +68,8 @@ async function preflightDatabase(pool) {
       console.error("[seed-walkforward]   cd /opt/quantara-staging/be");
       console.error("[seed-walkforward]   npm run ml:seed-embeddings-walkforward -- --tf-all");
       console.error("[seed-walkforward] Or one-command from laptop:");
-      console.error("[seed-walkforward]   RSYNC=1 ./scripts/ml/deploy-rag-staging-remote.sh --from-walkforward --tf-all --skip-train");
+      console.error("[seed-walkforward]   npm run ml:deploy-rag-staging");
+      console.error("[seed-walkforward]   # or: ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live");
       console.error("[seed-walkforward] Or SSH tunnel: ssh -L 5433:127.0.0.1:5432 root@srv1722932 then point DATABASE_URL at localhost:5433");
     }
     process.exit(1);
@@ -127,6 +104,7 @@ async function preflightDatabase(pool) {
 }
 
 function parseArgs() {
+  const argv = process.argv.slice(2);
   const out = {
     dirs: [],
     min: 5,
@@ -135,11 +113,9 @@ function parseArgs() {
     preset: null,
     tradeIdPrefix: "wf",
   };
-  for (const arg of process.argv.slice(2)) {
-    if (arg === "--tf-all") out.preset = "tf";
-    else if (arg === "--smc-all") out.preset = "smc";
-    else if (arg === "--af-all") out.preset = "af";
-    else if (arg === "--ts-all") out.preset = "ts";
+  for (const arg of argv) {
+    const presetKey = FLAG_TO_PRESET[arg];
+    if (presetKey) out.preset = presetKey;
     else if (arg === "--dry-run") out.dryRun = true;
     else if (arg.startsWith("--dir=")) out.dirs.push(path.resolve(REPO_ROOT, arg.slice(6)));
     else if (arg.startsWith("--min=")) out.min = parseInt(arg.slice(6), 10);
@@ -147,21 +123,38 @@ function parseArgs() {
     else if (arg.startsWith("--prefix=")) out.tradeIdPrefix = arg.slice(9);
   }
 
-  if (out.preset === "tf") {
-    out.dirs = TF_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
-    out.strategy = out.strategy || "TREND_FOLLOWING";
-  } else if (out.preset === "smc") {
-    out.dirs = SMC_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
-    out.strategy = out.strategy || "SMART_MONEY_CONCEPTS";
-  } else if (out.preset === "af") {
-    out.dirs = AF_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
-    out.strategy = null; // multi-strategy umbrella
-  } else if (out.preset === "ts") {
-    out.dirs = TS_ALL_DIRS.map((d) => path.join(REPO_ROOT, d));
-    out.strategy = null;
+  const SINGLE_STRATEGY_PRESETS = {
+    smc: "SMART_MONEY_CONCEPTS",
+    wyckoff: "WYCKOFF",
+    vsa: "VOLUME_SPREAD_ANALYSIS",
+    tf: "TREND_FOLLOWING",
+    ms: "MARKET_STRUCTURE",
+    amt: "AUCTION_MARKET_THEORY",
+    mr: "MEAN_REVERSION",
+    snd: "SUPPLY_AND_DEMAND",
+    sa: "STATISTICAL_ARBITRAGE",
+    br: "BREAKOUT_RETEST",
+    ict: "ICT_STYLE_TRADING",
+    ls: "LIQUIDATION_SQUEEZE",
+  };
+
+  if (out.preset) {
+    const relDirs = presetToDirs(out.preset);
+    if (!relDirs) {
+      console.error(`[seed-walkforward] Unknown preset: ${out.preset}`);
+      process.exit(1);
+    }
+    out.dirs = relDirs.map((d) => path.join(REPO_ROOT, d));
+    if (!out.strategy && SINGLE_STRATEGY_PRESETS[out.preset]) {
+      out.strategy = SINGLE_STRATEGY_PRESETS[out.preset];
+    } else if (!out.strategy && ["af", "ts", "md", "bs", "all-live"].includes(out.preset)) {
+      out.strategy = null;
+    }
   } else if (out.dirs.length === 0) {
-    out.dirs = [path.join(REPO_ROOT, "tmp/tf-scalping-walkforward")];
-    out.strategy = out.strategy || "TREND_FOLLOWING";
+    out.dirs = collectDirsFromArgv(argv).map((d) => path.join(REPO_ROOT, d));
+    if (out.dirs.length === 1 && out.dirs[0].includes("tf-scalping")) {
+      out.strategy = out.strategy || "TREND_FOLLOWING";
+    }
   }
   return out;
 }
