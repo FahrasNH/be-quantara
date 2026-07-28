@@ -36,6 +36,7 @@ const {
   presetToDirs,
   collectDirsFromArgv,
 } = require("./walkforward-dir-presets.js");
+const { normalizeStrategyKey } = require("../../src/config/strategyKeyNormalizer");
 
 function dbHostHint() {
   const dbUrl = process.env.DATABASE_URL || "";
@@ -196,7 +197,7 @@ function num(v, fallback = null) {
 }
 
 function csvRowToEntryContext(row) {
-  const strategyKey = row.Strategy || "TREND_FOLLOWING";
+  const strategyKey = normalizeStrategyKey(String(row.Strategy || "TREND_FOLLOWING").toUpperCase());
   const entryPrice = num(row["Entry Price"], 1);
   const side = String(row.Side || "LONG").toUpperCase();
 
@@ -332,7 +333,8 @@ async function main() {
 
       try {
         const entryContext = csvRowToEntryContext(row);
-        const strategyKey = strategy || entryContext.strategyKey || "TREND_FOLLOWING";
+        const rawKey = strategy || entryContext.strategyKey || row.Strategy || "TREND_FOLLOWING";
+        const strategyKey = normalizeStrategyKey(String(rawKey).toUpperCase());
         const symbol = row.Symbol || "BTCUSDT";
         const side = String(row.Side || "LONG").toUpperCase();
         const entryPrice = num(row["Entry Price"], 1);

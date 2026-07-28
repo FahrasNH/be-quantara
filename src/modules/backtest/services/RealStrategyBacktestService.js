@@ -78,6 +78,7 @@ const { buildBacktestEntryContext } = require("../../analytics/domain/engineTrad
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const { resolveRagStrategyFilterKeys: resolveRagFilterKeysForKey } = require("../../../config/strategies");
 const {
   requiresHtfDirectionalBlock,
   requiresHtfFailClosed,
@@ -1703,8 +1704,40 @@ async function _applyGrokGate(trades, ctx = {}) {
 
 const RAG_CONSERVATIVE_DISCOUNT = 0.9;
 const RAG_APPROVE_THRESHOLD = parseFloat(process.env.RAG_APPROVE_THRESHOLD || "0.4");
+/** Minimum similar-trade outcomes before RAG score affects gate (fail-open below threshold). */
+const RAG_MIN_SUPPORT = Math.max(1, parseInt(process.env.RAG_MIN_SUPPORT || "10", 10) || 10);
 /** When true, persist backtest trade embeddings after RAG gate (can leak future outcomes into reruns). Default off. */
 const RAG_SEED_AFTER_BACKTEST = process.env.RAG_SEED_AFTER_BACKTEST === "true";
+
+/**
+ * Resolve strategyKey filter for RAG retrieval — per-trade component wins over umbrella ctx.
+ * @returns {string|string[]|null}
+ */
+function _resolveRagStrategyFilterKeys(trade, ctx = {}) {
+  const tradeRaw = trade?.strategyKey ?? trade?.winningComponent ?? null;
+  if (tradeRaw) {
+    return normalizeStrategyKey(String(tradeRaw).toUpperCase());
+  }
+
+  const ctxRaw = String(ctx.strategyKey || "").toUpperCase();
+  if (!ctxRaw) return null;
+
+  const keys = resolveRagFilterKeysForKey(ctxRaw);
+  if (keys.length === 0) return null;
+  if (keys.length === 1) return keys[0];
+  return keys;
+}
+
+function _primaryRagStrategyKey(filterKeys) {
+  if (Array.isArray(filterKeys)) return filterKeys[0] || null;
+  return filterKeys || null;
+}
+
+function _ragScoreFromOutcomes(outcomes) {
+  if (!outcomes || outcomes.length < RAG_MIN_SUPPORT) return null;
+  const wins = outcomes.filter((o) => o === "win").length;
+  return wins / outcomes.length;
+}
 
 /** Resolve win/loss from TradeEmbedding metadata (outcome field or pnlPct fallback). */
 function _resolveSimilarOutcome(metadata) {
@@ -1765,9 +1798,11 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
       confidence: t.confidence,
       regime: t.regime || t.marketCond,
     };
+    const ragStrategyKeys = _resolveRagStrategyFilterKeys(t, ctx);
+    const metadataStrategyKey = _primaryRagStrategyKey(ragStrategyKeys) || ctx.strategyKey;
     try {
       const features = deps.fe.buildFeatureVector(entryContext, {
-        strategyKey: ctx.strategyKey,
+        strategyKey: metadataStrategyKey,
         symbol: ctx.symbol || t.symbol,
         side: t.side,
       });
@@ -1775,7 +1810,7 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
         tradeId: String(tradeId),
         vector: features,
         metadata: {
-          strategyKey: ctx.strategyKey,
+          strategyKey: metadataStrategyKey,
           symbol: ctx.symbol || t.symbol,
           side: t.side,
           regime: entryContext.regime || t.regime || t.marketCond,
@@ -1805,8 +1840,8 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
  * @param {Array}  trades
  * @param {Object} ctx — { strategyKey, symbol, onRagProgress }
  */
-async function _applyRagGate(trades, ctx = {}) {
-  const deps = getRagGateDeps();
+async function _applyRagGate(trades, ctx = {}, opts = {}) {
+  const deps = opts.deps || getRagGateDeps();
   if (!deps) {
     return {
       trades,
@@ -1862,14 +1897,17 @@ async function _applyRagGate(trades, ctx = {}) {
       confidence: t.confidence,
       regime: t.regime || t.marketCond,
     };
+    const ragStrategyKeys = _resolveRagStrategyFilterKeys(t, ctx);
     const tradeMetadata = {
-      strategyKey: ctx.strategyKey,
+      strategyKey: _primaryRagStrategyKey(ragStrategyKeys),
       symbol: ctx.symbol || t.symbol,
       side: t.side,
     };
 
     let lgbScore = null;
     let ragScore = null;
+    let neighborCount = 0;
+    let outcomeCount = 0;
 
     try {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
@@ -1880,15 +1918,14 @@ async function _applyRagGate(trades, ctx = {}) {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
       const similar = await vs.findSimilar(features, 20, {
         symbol: tradeMetadata.symbol,
-        strategyKey: ctx.strategyKey,
+        strategyKey: ragStrategyKeys,
         beforeDate: tradeTime.toISOString(),
       });
+      neighborCount = similar.length;
       if (similar.length > 0) {
         const outcomes = similar.map((s) => _resolveSimilarOutcome(s.metadata)).filter(Boolean);
-        if (outcomes.length > 0) {
-          const wins = outcomes.filter((o) => o === "win").length;
-          ragScore = wins / outcomes.length;
-        }
+        outcomeCount = outcomes.length;
+        ragScore = _ragScoreFromOutcomes(outcomes);
       }
     } catch { /* ignore */ }
 
@@ -1908,6 +1945,8 @@ async function _applyRagGate(trades, ctx = {}) {
         reason: "lgb-only-no-rag-evidence (kept)",
         ragScore: null,
         lgbScore,
+        neighborCount,
+        outcomeCount,
       });
       if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
       continue;
@@ -1920,9 +1959,13 @@ async function _applyRagGate(trades, ctx = {}) {
         symbol: ctx.symbol,
         side: t.side,
         approved: true,
-        reason: "no-ml-signal (kept)",
+        reason: outcomeCount > 0 && outcomeCount < RAG_MIN_SUPPORT
+          ? `insufficient-rag-support (${outcomeCount}<${RAG_MIN_SUPPORT}, kept)`
+          : "no-ml-signal (kept)",
         ragScore: null,
         lgbScore: null,
+        neighborCount,
+        outcomeCount,
       });
       if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
       continue;
@@ -1941,6 +1984,8 @@ async function _applyRagGate(trades, ctx = {}) {
       adjustedScore: adjusted,
       ragScore,
       lgbScore,
+      neighborCount,
+      outcomeCount,
       reason: isApproved ? "score >= threshold" : "score below threshold",
     });
 
@@ -3655,6 +3700,9 @@ module.exports = {
   _refreshPerTypeStatsFromTrades,
   _applyGrokGate,
   _applyRagGate,
+  _resolveRagStrategyFilterKeys,
+  _ragScoreFromOutcomes,
+  RAG_MIN_SUPPORT,
   resolveTsCombination,
   resolveTsLayerFlags,
   resolveMdCombination,
