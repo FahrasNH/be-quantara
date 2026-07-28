@@ -43,6 +43,7 @@
     "scripts:generate-ml-features": "node scripts/ml/generate-ml-features.js",
     "ml:bootstrap-engine-trades": "node scripts/ml/bootstrap-from-engine-trades.js",
     "ml:bootstrap-walkforward": "node scripts/ml/bootstrap-from-walkforward-csv.js",
+    "ml:seed-embeddings-walkforward": "node scripts/ml/seed-embeddings-from-walkforward.js",
     "ml:train-win-predictor": "node scripts/ml/train-win-predictor.js",
     "test:sprint5": "node test/sprint5-ml-validation-qa.test.js",
     "analytics:ml-shadow-report": "node scripts/ml/ml-shadow-report.js",
