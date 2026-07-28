@@ -45,6 +45,13 @@
     "ml:train": "node scripts/ml/train-win-predictor.js",
     "ml:seed": "node scripts/ml/seed-embeddings-from-walkforward.js --all-live",
     "ml:seed:dry-run": "node scripts/ml/seed-embeddings-from-walkforward.js --all-live --dry-run",
+    "ml:seed:af": "node scripts/ml/seed-embeddings-from-walkforward.js --af-all",
+    "ml:seed:ts": "node scripts/ml/seed-embeddings-from-walkforward.js --ts-all",
+    "ml:seed:md": "node scripts/ml/seed-embeddings-from-walkforward.js --md-all",
+    "ml:seed:bs": "node scripts/ml/seed-embeddings-from-walkforward.js --bs-all",
+    "ml:bootstrap:engine": "node scripts/ml/bootstrap-from-engine-trades.js",
+    "ml:bootstrap:walkforward": "node scripts/ml/bootstrap-from-walkforward-csv.js",
+    "ml:backfill:shadow": "node scripts/ml/backfill-ml-shadow-log.js",
     "ml:deploy:staging": "bash scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live --skip-train",
     "ml:deploy:dev": "bash scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --all-live --skip-train",
     "test:core": "node test/indicators.test.js && node test/run-strategies.js && node test/AccountCoordinator.test.js && node test/integration-security-risk.test.js && node test/quantara.patches.test.js && node test/SignalConflictResolver.test.js && node test/MultiStrategyCoordinator.test.js && node test/entitlement-strategies.test.js && node test/tierConfig-allocation.test.js && node test/tradeAttribution.test.js && node test/multi-strategy-integration.test.js && node test/confirmToken.test.js && node test/multi-strategy-acceptance.test.js && node test/multi-strategy-scenarios.test.js && node test/tradingCosts.test.js && node test/trade-export.test.js && node test/exchangeSwitch.test.js && node test/exchangeSymbols.test.js && node test/afs.test.js && node test/botOpLock.test.js && node test/tp-intrabar.test.js && node test/close-idempotency.test.js && node test/stop-during-warmup.test.js && node test/admin-v2.test.js && node test/PairClassifier.test.js && node test/setTPSL-order-type.test.js && node test/status-report-rate-limit.test.js && node test/candle-fetch-rate-gate.test.js && node test/margin-gate-bugfix.test.js && node test/payment-pricing.test.js && node test/payment-security.test.js && node test/account-position-cap.test.js && node test/backtest-phase1.test.js && node test/backtest-preset-service.test.js && node test/historical-klines.test.js && node test/xai-integration.test.js && node test/smc-strategy.test.js && node test/smc-sequence.test.js && node test/grok-real-engine-gate.test.js && node test/backtest-job-isolation.test.js && node test/path-aliases.test.js"
