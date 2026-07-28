@@ -9,6 +9,10 @@
 #   ./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --af-all --skip-train
 #   ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live --skip-rsync
 #
+# When already SSH'd into the VPS checkout:
+#   npm run ml:deploy-rag-dev          # auto-detects VPS path, skips rsync + ssh
+#   ./scripts/ml/deploy-rag-vps.sh --env dev --from-walkforward --all-live --local
+#
 # Args:
 #   --env staging|dev       Target environment (required unless DEPLOY_ENV set)
 #   --from-walkforward      Seed TradeEmbedding from tmp/*-walkforward CSV (recommended)
@@ -17,6 +21,7 @@
 #   --tf-all|--smc-all|...  Single-strategy presets (see walkforward-dir-presets.js)
 #   --skip-train            Skip ml:train-win-predictor on VPS (model already in git)
 #   --skip-rsync            CSVs already on VPS; skip laptop → VPS rsync
+#   --local                 Force local-only mode (no ssh) — use when already on VPS
 #   --min=N                 Minimum embeddings required (default 5)
 #
 # Env overrides:
@@ -34,6 +39,8 @@ MIN_TRADES=5
 SKIP_TRAIN=false
 FROM_WALKFORWARD=false
 SKIP_RSYNC=false
+FORCE_LOCAL=false
+LOCAL_ONLY=false
 WF_ARGS=""
 EXTRA_ARGS=()
 
@@ -43,6 +50,7 @@ for arg in "$@"; do
     --env) ;; # value handled by next iteration — use --env=staging instead
     --skip-train) SKIP_TRAIN=true ;;
     --skip-rsync) SKIP_RSYNC=true ;;
+    --local) FORCE_LOCAL=true ;;
     --min=*) MIN_TRADES="${arg#*=}" ;;
     --from-walkforward) FROM_WALKFORWARD=true ;;
     --all-live|--seed-all|--af-all|--ts-all|--md-all|--bs-all|--tf-all|--smc-all|--wyckoff-all|--vsa-all|--ms-all|--amt-all|--mr-all|--snd-all|--sa-all|--br-all|--ict-all|--ls-all|--dir=*|--strategy=*)
@@ -109,6 +117,19 @@ if [[ "${RSYNC:-1}" == "0" ]]; then
   SKIP_RSYNC=true
 fi
 
+resolve_path() {
+  readlink -f "$1" 2>/dev/null || cd "$1" 2>/dev/null && pwd || echo "$1"
+}
+
+REPO_ROOT_RESOLVED="$(resolve_path "${REPO_ROOT}")"
+REMOTE_BE_RESOLVED="$(resolve_path "${REMOTE_BE}")"
+
+if [[ "${FORCE_LOCAL}" == "true" ]] || [[ "${REPO_ROOT_RESOLVED}" == "${REMOTE_BE_RESOLVED}" ]]; then
+  LOCAL_ONLY=true
+  SKIP_RSYNC=true
+  REPO_ROOT="${REMOTE_BE}"
+fi
+
 collect_rsync_dirs() {
   node -e "
     const { collectBasenamesFromArgv } = require('${REPO_ROOT}/scripts/ml/walkforward-dir-presets.js');
@@ -117,7 +138,42 @@ collect_rsync_dirs() {
   " "${EXTRA_ARGS[@]}"
 }
 
-echo "==> ML/RAG deploy → ${DEPLOY_ENV} (${VPS_HOST}:${REMOTE_BE}, branch ${GIT_BRANCH})"
+print_rsync_from_laptop() {
+  echo ""
+  echo "Run rsync from your laptop (be-bot-trading repo with tmp/ exports):"
+  echo ""
+  while IFS= read -r dir; do
+    [[ -z "${dir}" ]] && continue
+    echo "  rsync -avz tmp/${dir}/ ${VPS_HOST}:${REMOTE_BE}/tmp/${dir}/"
+  done < <(collect_rsync_dirs)
+  echo ""
+  echo "Then re-run on VPS:"
+  echo "  cd ${REMOTE_BE} && npm run ml:deploy-rag-${DEPLOY_ENV}"
+  echo ""
+  echo "Or seed only what exists on VPS with a narrower preset, e.g.:"
+  echo "  npm run ml:seed-embeddings-walkforward -- --min=${MIN_TRADES} --ts-all"
+}
+
+count_tmp_dirs() {
+  local root="$1"
+  local found=0
+  local missing=0
+  while IFS= read -r dir; do
+    [[ -z "${dir}" ]] && continue
+    if [[ -d "${root}/tmp/${dir}" ]]; then
+      found=$((found + 1))
+    else
+      missing=$((missing + 1))
+    fi
+  done < <(collect_rsync_dirs)
+  echo "${found} ${missing}"
+}
+
+if [[ "${LOCAL_ONLY}" == "true" ]]; then
+  echo "==> ML/RAG deploy (local VPS mode) → ${DEPLOY_ENV} (${REMOTE_BE}, branch ${GIT_BRANCH})"
+else
+  echo "==> ML/RAG deploy → ${DEPLOY_ENV} (${VPS_HOST}:${REMOTE_BE}, branch ${GIT_BRANCH})"
+fi
 
 if [[ "${FROM_WALKFORWARD}" == "true" && "${SKIP_RSYNC}" != "true" ]]; then
   echo "==> Rsync local walkforward CSV dirs → ${VPS_HOST}:${REMOTE_BE}/tmp/"
@@ -137,18 +193,41 @@ if [[ "${FROM_WALKFORWARD}" == "true" && "${SKIP_RSYNC}" != "true" ]]; then
   done < <(collect_rsync_dirs)
   if [[ "${RSYNC_OK}" -eq 0 ]]; then
     echo "ERROR: No local tmp/*-walkforward dirs found."
-    echo "       Run walkforward exports locally, then retry."
+    echo "       Run walkforward exports locally, then retry from laptop."
     echo "       See: docs/ML_RAG_DEPLOY.md § Local refresh"
     exit 1
   fi
   if [[ "${RSYNC_MISSING}" -gt 0 ]]; then
     echo "WARN: ${RSYNC_MISSING} preset dir(s) missing locally — seed will use what exists on VPS."
   fi
-else
-  echo "==> Skipping rsync (--skip-rsync or RSYNC=0)"
+elif [[ "${FROM_WALKFORWARD}" == "true" && "${SKIP_RSYNC}" == "true" ]]; then
+  read -r TMP_FOUND TMP_MISSING <<< "$(count_tmp_dirs "${REPO_ROOT}")"
+  if [[ "${LOCAL_ONLY}" == "true" ]]; then
+    echo "==> Skipping rsync (already on VPS at ${REMOTE_BE})"
+  else
+    echo "==> Skipping rsync (--skip-rsync or RSYNC=0)"
+  fi
+  echo "    tmp dirs on target: ${TMP_FOUND} found, ${TMP_MISSING} missing for preset"
+  if [[ "${TMP_FOUND}" -eq 0 ]]; then
+    echo "ERROR: No tmp/*-walkforward dirs on VPS."
+    print_rsync_from_laptop
+    exit 1
+  fi
+  if [[ "${TMP_MISSING}" -gt 0 ]]; then
+    echo "WARN: ${TMP_MISSING} preset dir(s) missing on VPS — seed will use what exists."
+    if [[ "${LOCAL_ONLY}" == "true" ]]; then
+      echo "       To sync missing dirs from laptop:"
+      while IFS= read -r dir; do
+        [[ -z "${dir}" ]] && continue
+        [[ -d "${REPO_ROOT}/tmp/${dir}" ]] && continue
+        echo "         rsync -avz tmp/${dir}/ ${VPS_HOST}:${REMOTE_BE}/tmp/${dir}/"
+      done < <(collect_rsync_dirs)
+    fi
+  fi
 fi
 
-ssh "${VPS_HOST}" bash -s <<EOF
+deploy_remote_script() {
+  cat <<EOF
 set -euo pipefail
 cd "${REMOTE_BE}"
 
@@ -251,6 +330,13 @@ console.log(JSON.stringify({ hasModel: fs.existsSync(model), modelPath: model },
 "
 fi
 EOF
+}
+
+if [[ "${LOCAL_ONLY}" == "true" ]]; then
+  deploy_remote_script | bash
+else
+  deploy_remote_script | ssh "${VPS_HOST}" bash -s
+fi
 
 echo ""
 echo "Done (${DEPLOY_ENV}). Verify:"
