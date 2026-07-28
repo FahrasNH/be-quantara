@@ -250,39 +250,7 @@ if ! npx prisma migrate deploy; then
 fi
 
 echo "==> verify pgvector + TradeEmbedding table"
-node -e "
-require('dotenv').config();
-const { _pool } = require('./src/infrastructure/db/database');
-(async () => {
-  try {
-    const ext = await _pool.query(\"SELECT extversion FROM pg_extension WHERE extname = 'vector' LIMIT 1\");
-    if (!ext.rows.length) {
-      console.error('ERROR: pgvector extension missing after migrate deploy');
-      console.error('       Run: npx prisma migrate deploy');
-      console.error('       Verify: SELECT * FROM pg_extension WHERE extname=\\'vector\\';');
-      process.exit(1);
-    }
-    const tbl = await _pool.query(
-      \"SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='TradeEmbedding' LIMIT 1\"
-    );
-    if (!tbl.rows.length) {
-      console.error('ERROR: TradeEmbedding table missing — run: npx prisma migrate deploy');
-      process.exit(1);
-    }
-    console.log('DB OK — pgvector', ext.rows[0].extversion);
-  } catch (e) {
-    const msg = e.message || String(e);
-    console.error('ERROR: DB preflight failed:', msg);
-    if (/ECONNREFUSED|connect/i.test(msg)) {
-      console.error('       DATABASE_URL in ${REMOTE_BE}/.env may be wrong or Postgres is down.');
-      console.error('       Seed must run ON VPS — not laptop localhost.');
-    }
-    process.exit(1);
-  } finally {
-    await _pool.end();
-  }
-})();
-"
+node scripts/ml/verify-rag-db.js
 
 echo "==> Seeding TradeEmbedding from walkforward CSV (VPS DATABASE_URL + pgvector)"
 if ! node scripts/ml/seed-embeddings-from-walkforward.js --min=${MIN_TRADES}${WF_ARGS}; then
@@ -310,25 +278,7 @@ echo "==> Health (port ${HEALTH_PORT})"
 curl -sf "http://127.0.0.1:${HEALTH_PORT}/health" && echo "" || echo "WARN: health check failed — pm2 logs ${PM2_APP}"
 
 echo "==> TradeEmbedding counts"
-node -e "
-require('dotenv').config();
-const { _pool } = require('./src/infrastructure/db/database');
-Promise.all([
-  _pool.query('SELECT COUNT(*)::int AS n FROM \"TradeEmbedding\"'),
-  _pool.query(\"SELECT metadata->>'strategyKey' AS k, COUNT(*)::int AS n FROM \\\"TradeEmbedding\\\" GROUP BY 1 ORDER BY n DESC LIMIT 12\"),
-]).then(([all, byStrat]) => {
-  console.log(JSON.stringify({ embeddingCount: all.rows[0].n, byStrategy: byStrat.rows }, null, 2));
-  return _pool.end();
-}).catch(e => { console.error(e.message); process.exit(1); });
-"
-
-if [[ "${SKIP_TRAIN}" != "true" ]]; then
-  node -e "
-const fs = require('fs');
-const model = 'data/models/win-predictor.json';
-console.log(JSON.stringify({ hasModel: fs.existsSync(model), modelPath: model }, null, 2));
-"
-fi
+node scripts/ml/print-embedding-counts.js
 EOF
 }
 

@@ -37,71 +37,19 @@ const {
   collectDirsFromArgv,
 } = require("./walkforward-dir-presets.js");
 const { normalizeStrategyKey } = require("../../src/config/strategyKeyNormalizer");
+const { STRATEGY_PREFIX } = require("./walkforward-dir-presets.js");
+const { preflightRagDatabase } = require("./rag-db-helpers");
 
-function dbHostHint() {
-  const dbUrl = process.env.DATABASE_URL || "";
-  try {
-    const u = new URL(dbUrl.replace(/^postgres(ql)?:\/\//, "http://"));
-    return `${u.hostname}:${u.port || 5432}`;
-  } catch {
-    return dbUrl ? "(from DATABASE_URL)" : "(DATABASE_URL unset)";
-  }
-}
+/** tmp/<prefix>-{scalping|intraday|swing}-walkforward → component strategyKey */
+const PREFIX_TO_STRATEGY = Object.fromEntries(
+  Object.entries(STRATEGY_PREFIX).map(([strategyKey, prefix]) => [prefix, strategyKey]),
+);
 
-function isLocalDbUrl() {
-  const dbUrl = process.env.DATABASE_URL || "";
-  return /localhost|127\.0\.0\.1|::1/i.test(dbUrl);
-}
-
-/**
- * Fail fast before parsing CSVs — seed must run against staging Postgres on VPS.
- * @param {import('pg').Pool} pool
- */
-async function preflightDatabase(pool) {
-  try {
-    await pool.query("SELECT 1");
-  } catch (err) {
-    const msg = err?.message || String(err);
-    console.error(`[seed-walkforward] Cannot connect to Postgres at ${dbHostHint()}: ${msg}`);
-    if (isLocalDbUrl()) {
-      console.error("[seed-walkforward] DATABASE_URL points to localhost — no local Postgres is expected.");
-      console.error("[seed-walkforward] Run on VPS (recommended):");
-      console.error("[seed-walkforward]   cd /opt/quantara-staging/be");
-      console.error("[seed-walkforward]   npm run ml:seed-embeddings-walkforward -- --tf-all");
-      console.error("[seed-walkforward] Or one-command from laptop:");
-      console.error("[seed-walkforward]   npm run ml:deploy-rag-staging");
-      console.error("[seed-walkforward]   # or: ./scripts/ml/deploy-rag-vps.sh --env staging --from-walkforward --all-live");
-      console.error("[seed-walkforward] Or SSH tunnel: ssh -L 5433:127.0.0.1:5432 root@srv1722932 then point DATABASE_URL at localhost:5433");
-    }
-    process.exit(1);
-  }
-
-  let extRows;
-  try {
-    ({ rows: extRows } = await pool.query(
-      "SELECT extversion FROM pg_extension WHERE extname = 'vector' LIMIT 1"
-    ));
-  } catch (err) {
-    console.error(`[seed-walkforward] pgvector check failed: ${err?.message || err}`);
-    process.exit(1);
-  }
-
-  if (!extRows?.length) {
-    console.error("[seed-walkforward] pgvector extension missing on this database.");
-    console.error("[seed-walkforward] On VPS: npx prisma migrate deploy");
-    console.error("[seed-walkforward] Verify:  SELECT * FROM pg_extension WHERE extname='vector';");
-    process.exit(1);
-  }
-
-  const { rows: tblRows } = await pool.query(
-    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'TradeEmbedding' LIMIT 1"
-  );
-  if (!tblRows?.length) {
-    console.error("[seed-walkforward] TradeEmbedding table missing — run: npx prisma migrate deploy");
-    process.exit(1);
-  }
-
-  console.log(`[seed-walkforward] DB OK (${dbHostHint()}, pgvector ${extRows[0].extversion})`);
+function inferStrategyKeyFromCsvPath(csvPath) {
+  const rel = path.relative(REPO_ROOT, csvPath).replace(/\\/g, "/");
+  const m = rel.match(/^tmp\/([a-z]+)-(?:scalping|intraday|swing)-walkforward\//);
+  if (m && PREFIX_TO_STRATEGY[m[1]]) return PREFIX_TO_STRATEGY[m[1]];
+  return null;
 }
 
 function parseArgs() {
@@ -196,8 +144,11 @@ function num(v, fallback = null) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function csvRowToEntryContext(row) {
-  const strategyKey = normalizeStrategyKey(String(row.Strategy || "TREND_FOLLOWING").toUpperCase());
+function csvRowToEntryContext(row, csvPath) {
+  const pathKey = inferStrategyKeyFromCsvPath(csvPath);
+  const strategyKey = normalizeStrategyKey(
+    String(row.Strategy || pathKey || "TREND_FOLLOWING").toUpperCase(),
+  );
   const entryPrice = num(row["Entry Price"], 1);
   const side = String(row.Side || "LONG").toUpperCase();
 
@@ -290,7 +241,8 @@ async function main() {
   const { dirs, min, strategy, dryRun, tradeIdPrefix } = parseArgs();
 
   if (!dryRun) {
-    await preflightDatabase(_pool);
+    const preflight = await preflightRagDatabase(_pool);
+    console.log(`[seed-walkforward] DB OK (${preflight.host}, pgvector ${preflight.pgvectorVersion})`);
   } else {
     console.log("[seed-walkforward] DRY RUN — skipping DB preflight");
   }
@@ -332,8 +284,9 @@ async function main() {
       seen.add(tradeId);
 
       try {
-        const entryContext = csvRowToEntryContext(row);
-        const rawKey = strategy || entryContext.strategyKey || row.Strategy || "TREND_FOLLOWING";
+        const entryContext = csvRowToEntryContext(row, csvPath);
+        const pathKey = inferStrategyKeyFromCsvPath(csvPath);
+        const rawKey = strategy || entryContext.strategyKey || row.Strategy || pathKey || "TREND_FOLLOWING";
         const strategyKey = normalizeStrategyKey(String(rawKey).toUpperCase());
         const symbol = row.Symbol || "BTCUSDT";
         const side = String(row.Side || "LONG").toUpperCase();

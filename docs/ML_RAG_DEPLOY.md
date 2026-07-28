@@ -237,11 +237,14 @@ curl -H "Authorization: Bearer <token>" \
 
 | Script | Fungsi |
 |--------|--------|
-| `ml:deploy-rag-staging` | Full deploy staging (rsync + migrate + seed all + PM2) |
-| `ml:deploy-rag-dev` | Sama untuk dev VPS |
-| `ml:seed-all-live` | Seed 12 strategi (jalan di mesin dengan DATABASE_URL valid) |
-| `ml:seed-all-live:dry-run` | Hitung embedding tanpa tulis DB |
-| `ml:full-rag-refresh` | Dry-run count + train lokal + instruksi deploy |
+| `ml:deploy:staging` | Full deploy staging (rsync + migrate + seed all + PM2) |
+| `ml:deploy:dev` | Sama untuk dev VPS |
+| `ml:seed` | Seed 12 strategi LIVE (VPS DATABASE_URL) |
+| `ml:seed:dry-run` | Hitung embedding tanpa tulis DB |
+| `ml:diag` | RAG preflight on VPS (umbrella or component `--strategy`) |
+| `ml:verify-db` | pgvector + TradeEmbedding table check |
+| `ml:embeddings` | Print embedding counts by strategyKey |
+| `ml:refresh` | Dry-run count + train lokal + instruksi deploy |
 
 ---
 
