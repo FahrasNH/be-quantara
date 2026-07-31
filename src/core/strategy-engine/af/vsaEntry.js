@@ -23,6 +23,7 @@ const {
 const {
   enrichMetaWithGradedScore,
 } = require("../scoring/ComponentScoringEngine");
+const { VSA_HTF_OVERLAY_ONLY } = require("../../../config/htfMode");
 const {
   detectIntradayVsaSignal,
   resolveIntradayDetectorMode,
@@ -150,34 +151,21 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   if (tradeTier === "Intraday") {
     const intradayFlags = resolveVsaIntradayGateFlags(config);
     const htfTrend = config.htfTrend ?? null;
+    // CONTEXT_ONLY: vsaHtfAlignGate = overlay flag only — no hard counter-trend block.
     if (intradayFlags.vsaHtfAlignGate === true && htfTrend) {
-      const stopping = isStoppingVolumeReason(gated.reason);
       const counter = isVsaCounterTrend(gated.vote, htfTrend);
-
-      if (gated.vote === "SHORT" && htfTrend === "BULLISH") {
-        _abl("rejHtfShortBullish");
-        return { vote: "NEUTRAL", confidence: 0, reason: "vsa_htf_short_bullish" };
-      }
-
-      if (stopping && counter) {
-        _abl("rejHtfStoppingCounter");
-        return { vote: "NEUTRAL", confidence: 0, reason: "vsa_htf_stopping_counter" };
-      }
-
-      if (gated.vote === "LONG" && htfTrend === "BEARISH") {
-        const penalty = Math.min(1, Math.max(0, intradayFlags.vsaHtfCounterPenalty));
-        const scaled = gated.confidence * (1 - penalty);
-        _abl("rejHtfLongBearishPenalty");
-        if (scaled < 0.01) {
-          return { vote: "NEUTRAL", confidence: 0, reason: "vsa_htf_long_bearish_penalty" };
-        }
+      if (counter) {
+        if (gated.vote === "SHORT" && htfTrend === "BULLISH") _abl("rejHtfShortBullish");
+        if (isStoppingVolumeReason(gated.reason) && counter) _abl("rejHtfStoppingCounter");
+        if (gated.vote === "LONG" && htfTrend === "BEARISH") _abl("rejHtfLongBearishPenalty");
         gated = {
           ...gated,
-          confidence: scaled,
           meta: {
             ...(gated.meta || {}),
             htfTrend,
-            htfCounterPenalty: penalty,
+            htfCounterTrend: true,
+            htfOverlayOnly: VSA_HTF_OVERLAY_ONLY,
+            vsaHtfConfidenceFlag: true,
           },
         };
       }

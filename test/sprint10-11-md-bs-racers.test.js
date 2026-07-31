@@ -156,7 +156,7 @@ test("Gelombang 2: HTF SIDEWAYS skip", () => {
   assert.strictEqual(r.reason, "htf_sideways");
 });
 
-test("Gelombang 2: HTF align gate blocks SHORT in BULLISH", () => {
+test("Gelombang 2: HTF regime gate does NOT block SHORT in BULLISH (REGIME_GATE)", () => {
   const n = 60;
   const base = flatSeries(n, 100);
   const shortCloses = base.slice();
@@ -170,11 +170,12 @@ test("Gelombang 2: HTF align gate blocks SHORT in BULLISH", () => {
       mdSaLookback: 40,
       mdSaSkipHtfSideways: false,
       mdSaHtfAlignGate: true,
+      mdSaHtfRegimeGate: true,
       htfTrend: "BULLISH",
     },
   });
-  assert.strictEqual(r.signal, null);
-  assert.strictEqual(r.reason, "htf_align_short_bullish");
+  assert.strictEqual(r.signal, "SHORT");
+  assert.notStrictEqual(r.reason, "htf_align_short_bullish");
 });
 
 test("Sprint 20: daily TRANSITION regime gate blocks non-TRANSITION", () => {

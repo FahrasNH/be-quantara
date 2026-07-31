@@ -1178,7 +1178,8 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // explicit penalty so race confidence stops preferring them.
     if (ctx._isBreakoutBar || ctx._brokeThroughFvg) score -= 15;
 
-    // HTF alignment is applied later as a soft −15 in detectSignalMulti; record
+    // HTF align (CONTEXT_ONLY): soft −15 scoring inside strategy — engine 7a does NOT
+    // hard-block SMC. Optional hard block via smcHtfHardBlock / tier regimeFilterRequired.
     // the provisional contribution here (0 until the gate runs). Callers may
     // overwrite confidenceComponents.htfAlignment after the HTF filter.
     const components = {

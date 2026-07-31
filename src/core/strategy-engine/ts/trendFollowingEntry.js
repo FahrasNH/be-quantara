@@ -1,7 +1,7 @@
 /**
  * Trend Following (TREND_FOLLOWING) — standalone entry for TREND_SURGE.
  *
- * 3-layer: HTF trend → MTF Donchian breakout → 5m entry pullback.
+ * 3-layer: HTF trend → MTF Donchian breakout → 5m entry (volume).
  * Extracted from TrendFollowingStrategy (Sprint 15 structure refactor).
  */
 
@@ -76,9 +76,6 @@ function isDonchianBroken(closesEntry, donchianUpper, donchianLower, direction) 
 function checkLongEntry(
   closesEntry,
   volumesEntry,
-  emaFastEntry,
-  emaMidEntry,
-  rsiEntry,
   volumeCurrentEntry,
   volumeSMAEntry,
   htfTrend,
@@ -93,8 +90,6 @@ function checkLongEntry(
     return { valid: false, reason: "No entry closes" };
   }
 
-  const closeCurr = closesEntry[closesEntry.length - 1];
-
   if (htfTrend !== "LONG") {
     return { valid: false, reason: "HTF not in uptrend" };
   }
@@ -108,18 +103,6 @@ function checkLongEntry(
     return { valid: false, reason: "No Donchian breakout confirmation" };
   }
 
-  if (closeCurr <= emaFastEntry) {
-    return { valid: false, reason: "Close not above EMA9 (pullback too deep)" };
-  }
-
-  if (emaFastEntry <= emaMidEntry) {
-    return { valid: false, reason: "EMA9 not above EMA21 (structure broken)" };
-  }
-
-  if (rsiEntry == null || rsiEntry < 30 || rsiEntry > 70) {
-    return { valid: false, reason: `RSI ${rsiEntry?.toFixed(1) || "null"} outside 30-70` };
-  }
-
   const minVolRatio = minVolRatioOverride ?? cfg.minVolRatio;
   if (volumeCurrentEntry < volumeSMAEntry * minVolRatio) {
     return { valid: false, reason: `Volume below ${minVolRatio}× SMA` };
@@ -131,9 +114,6 @@ function checkLongEntry(
 function checkShortEntry(
   closesEntry,
   volumesEntry,
-  emaFastEntry,
-  emaMidEntry,
-  rsiEntry,
   volumeCurrentEntry,
   volumeSMAEntry,
   htfTrend,
@@ -148,8 +128,6 @@ function checkShortEntry(
     return { valid: false, reason: "No entry closes" };
   }
 
-  const closeCurr = closesEntry[closesEntry.length - 1];
-
   if (htfTrend !== "SHORT") {
     return { valid: false, reason: "HTF not in downtrend" };
   }
@@ -161,18 +139,6 @@ function checkShortEntry(
 
   if (!donchianBroken) {
     return { valid: false, reason: "No Donchian breakout confirmation" };
-  }
-
-  if (closeCurr >= emaFastEntry) {
-    return { valid: false, reason: "Close not below EMA9" };
-  }
-
-  if (emaFastEntry >= emaMidEntry) {
-    return { valid: false, reason: "EMA9 not below EMA21" };
-  }
-
-  if (rsiEntry == null || rsiEntry < 30 || rsiEntry > 70) {
-    return { valid: false, reason: "RSI outside 30-70" };
   }
 
   const minVolRatioS = minVolRatioOverride ?? cfg.minVolRatio;
@@ -241,13 +207,10 @@ function evaluateTrendFollowingEntry({
   const closesEntry = (indicators.closes || []).slice(0, lastIdx + 1);
   const volumesEntry = (indicators.volumes || []).slice(0, lastIdx + 1);
   const atr = indicators.atr?.[lastIdx];
-  const rsiEntry = indicators.rsi?.[lastIdx];
-  const emaFastEntry = indicators.emaFast?.[lastIdx];
-  const emaMidEntry = indicators.emaSlow?.[lastIdx];
   const volumeCurrentEntry = volumesEntry[volumesEntry.length - 1];
   const volumeSMAEntry = indicators.volSMA?.[lastIdx] || 0;
 
-  if (!atr || !rsiEntry || !emaFastEntry || !emaMidEntry) {
+  if (!atr) {
     _abl("rejIndicators");
     return { signal: null, trendState: state, entryChecklist: null };
   }
@@ -260,8 +223,8 @@ function evaluateTrendFollowingEntry({
   const idxMTF = hasMTF ? Math.floor(lastIdx / (cfg.mtfRatio || 3)) : lastIdx;
 
   const htfClose = indicators.closesHTF?.[idxHTF] ?? closesEntry[closesEntry.length - 1];
-  const htfEmaFast = indicators.emaFastHTF?.[idxHTF] ?? emaFastEntry;
-  const htfEmaMid = indicators.emaMidHTF?.[idxHTF] ?? emaMidEntry;
+  const htfEmaFast = indicators.emaFastHTF?.[idxHTF] ?? indicators.emaFast?.[lastIdx] ?? null;
+  const htfEmaMid = indicators.emaMidHTF?.[idxHTF] ?? indicators.emaSlow?.[lastIdx] ?? null;
   const htfEmaSlow = indicators.emaSlowHTF?.[idxHTF] ?? indicators.emaTrend?.[lastIdx] ?? null;
   const htfAdx = indicators.adxHTF?.[idxHTF] ?? null;
 
@@ -308,7 +271,7 @@ function evaluateTrendFollowingEntry({
   const donchianPeriod = config.donchianPeriod ?? cfg.donchianPeriod ?? 20;
 
   const longCheck = checkLongEntry(
-    closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
+    closesEntry, volumesEntry,
     volumeCurrentEntry, volumeSMAEntry,
     htfTrend, donchianBroken, donchianUpperMTF, htfAdx,
     adxMinStrength, config.minVolRatio, cfg,
@@ -324,7 +287,6 @@ function evaluateTrendFollowingEntry({
         htfTrendAligned: true,
         adxPassed: true,
         donchianBroken: true,
-        ema9Retest: true,
         volumeConfirmed: true,
         volRatio,
         adxMinStrength,
@@ -334,7 +296,7 @@ function evaluateTrendFollowingEntry({
   }
 
   const shortCheck = checkShortEntry(
-    closesEntry, volumesEntry, emaFastEntry, emaMidEntry, rsiEntry,
+    closesEntry, volumesEntry,
     volumeCurrentEntry, volumeSMAEntry,
     htfTrend, donchianBroken, donchianLowerMTF, htfAdx,
     adxMinStrength, config.minVolRatio, cfg,
@@ -350,7 +312,6 @@ function evaluateTrendFollowingEntry({
         htfTrendAligned: true,
         adxPassed: true,
         donchianBroken: true,
-        ema9Retest: true,
         volumeConfirmed: true,
         volRatio,
         adxMinStrength,

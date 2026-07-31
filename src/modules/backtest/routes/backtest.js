@@ -381,6 +381,7 @@ module.exports = function createBacktestRouter(context) {
 
       let hasVector = false;
       let embeddingCount = 0;
+      let byStrategy = [];
       try {
         const { _pool } = require("../../../infrastructure/db/database");
         // Require actual pgvector extension row — constructing VectorStore is not enough.
@@ -394,6 +395,11 @@ module.exports = function createBacktestRouter(context) {
               `SELECT COUNT(*)::int AS cnt FROM "TradeEmbedding"`
             );
             embeddingCount = cnt.rows?.[0]?.cnt ?? 0;
+            const by = await _pool.query(
+              `SELECT metadata->>'strategyKey' AS k, COUNT(*)::int AS n
+               FROM "TradeEmbedding" GROUP BY 1 ORDER BY n DESC LIMIT 20`
+            );
+            byStrategy = by.rows || [];
           } catch {
             embeddingCount = 0;
           }
@@ -410,6 +416,7 @@ module.exports = function createBacktestRouter(context) {
         hasModel,
         hasVector,
         embeddingCount,
+        byStrategy,
       };
       if (!available) {
         payload.reason = "No WinPredictor model and insufficient TradeEmbedding rows";

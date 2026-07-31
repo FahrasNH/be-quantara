@@ -265,6 +265,47 @@ function getStrategyCatalog() {
   };
 }
 
+/** Umbrella key → live race participant component keys (for RAG vector fan-out). */
+const UMBRELLA_RAG_COMPONENTS = Object.freeze(
+  Object.fromEntries(
+    Object.values(TIER_COMPONENT_MAP).map((cfg) => [
+      cfg.umbrella,
+      (cfg.combination?.participants || cfg.active).map((k) => normalizeStrategyKey(k)),
+    ])
+  )
+);
+
+/**
+ * True when key is an umbrella identifier (before normalizeStrategyKey collapses it).
+ * @param {string|null|undefined} key
+ */
+function isUmbrellaStrategyKey(key) {
+  const upper = String(key || "").toUpperCase();
+  return upper in UMBRELLA_STRATEGIES || upper in UMBRELLA_RAG_COMPONENTS;
+}
+
+/**
+ * Resolve strategy key(s) for RAG pgvector filters.
+ * Umbrella keys fan out to all race participants; component keys return a singleton.
+ * @param {string|null|undefined} key
+ * @returns {string[]}
+ */
+function resolveRagStrategyFilterKeys(key) {
+  const upper = String(key || "").toUpperCase();
+  if (!upper) return [];
+
+  const umbrellaParts = UMBRELLA_RAG_COMPONENTS[upper];
+  if (umbrellaParts?.length) return [...umbrellaParts];
+
+  const normalized = normalizeStrategyKey(upper);
+  if (normalized && normalized !== upper && isUmbrellaStrategyKey(normalized)) {
+    const fromNorm = UMBRELLA_RAG_COMPONENTS[normalized];
+    if (fromNorm?.length) return [...fromNorm];
+  }
+
+  return normalized ? [normalized] : [];
+}
+
 module.exports = {
   UMBRELLA_STRATEGIES,
   COMPONENT_STRATEGIES,
@@ -295,4 +336,7 @@ module.exports = {
   isBsBrHaltedKey,
   applyDedicatedBsBrBacktestConfig,
   getStrategyCatalog,
+  UMBRELLA_RAG_COMPONENTS,
+  isUmbrellaStrategyKey,
+  resolveRagStrategyFilterKeys,
 };

@@ -22,6 +22,7 @@ const {
   candlesFromIndicators,
   DEFAULTS,
 } = require("../af/wyckoffEntry");
+const { applySoftBiasConfidencePenalty } = require("../../../config/htfMode");
 
 /** Strategy-level defaults layered on component DEFAULTS — Syarat-first. */
 const STRATEGY_DEFAULTS = {
@@ -181,15 +182,29 @@ class WyckoffStrategy extends StrategyBase {
     );
 
     const wyFields = this._buildWyFields(result);
+    const htfTrend = config.htfTrend ?? null;
+    let confidence = result.confidence;
+    let htfPenaltyMeta = {};
+    if (result.vote === "LONG" || result.vote === "SHORT") {
+      const penalized = applySoftBiasConfidencePenalty(confidence, result.vote, htfTrend);
+      confidence = penalized.confidence;
+      if (penalized.counterHtf) {
+        htfPenaltyMeta = {
+          htfCounterTrend: true,
+          htfPenaltyApplied: penalized.penaltyApplied,
+        };
+      }
+    }
     this._lastSignalMeta = {
       component: "WYCKOFF",
       winningComponent: (result.vote === "LONG" || result.vote === "SHORT") ? "WYCKOFF" : null,
       strategyLabel: "Wyckoff Method (Spring/Upthrust)",
       vote: result.vote,
-      confidence: result.confidence,
+      confidence,
       reason: result.reason,
       meta: result.meta || null,
       ...wyFields,
+      ...htfPenaltyMeta,
     };
 
     if (result.vote === "LONG" || result.vote === "SHORT") {

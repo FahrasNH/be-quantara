@@ -77,7 +77,7 @@ function extractGradedScoreEnrichment(meta) {
   };
 }
 
-/** TREND_FOLLOWING — 6 fields */
+/** TREND_FOLLOWING — 5 fields */
 function extractTsTfEnrichment(meta) {
   if (!meta) return {};
   const checklist = meta.entryChecklist || {};
@@ -87,9 +87,6 @@ function extractTsTfEnrichment(meta) {
     tfBarsInTrend: _num(meta.tfBarsInTrend ?? meta.barsInTrend),
     tfVolRatio: _num(meta.tfVolRatio ?? checklist.volRatio ?? meta.volRatio),
     tfHtfTrendConfirmed: _bool(meta.tfHtfTrendConfirmed ?? meta.htfTrendConfirmed),
-    tfEmaCrossover: _bool(
-      meta.tfEmaCrossover ?? checklist.ema9Retest ?? meta.emaCrossover ?? meta.ema9Retest
-    ),
   };
 }
 
@@ -396,7 +393,7 @@ const ALL_ML_ENRICH_KEYS = Object.freeze([
   "mfe", "mae", "mfePercent", "maePercent", "exitEfficiency",
   "bbSqueezeWidthAtr", "breakoutVolumeRatio", "retestDepthAtr", "rejectionWickPct",
   "consolidationBars", "breakoutCandleAtr", "fundingRateAtEntry", "fundingForecast24h",
-  "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend", "tfVolRatio", "tfHtfTrendConfirmed", "tfEmaCrossover",
+  "tfAdxStrength", "tfDonchianPeriod", "tfBarsInTrend", "tfVolRatio", "tfHtfTrendConfirmed",
   "msSwingHighPrice", "msSwingLowPrice", "msPullbackDepthAtr", "msHhPattern", "msLlPattern", "msPullbackConfirmed",
   "vpVwapLevel", "vpVahLevel", "vpValLevel", "vpPocLevel", "vpTriggerType",
   "mrRsiValue", "mrBbMidLevel", "mrBbUpperLevel", "mrBbLowerLevel", "mrVwapLevel", "mrVwapDeviation", "mrAdxRegime",

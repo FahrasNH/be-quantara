@@ -78,6 +78,11 @@ const { buildBacktestEntryContext } = require("../../analytics/domain/engineTrad
 const { resolveEntryReasons } = require("../../../server/services/csv/strategyReasonFormatters");
 const { resolveFeeSchedule } = require("../../../shared/constants/exchangeFeeSchedules");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const { resolveRagStrategyFilterKeys: resolveRagFilterKeysForKey } = require("../../../config/strategies");
+const {
+  requiresHtfDirectionalBlock,
+  requiresHtfFailClosed,
+} = require("../../../config/htfMode");
 
 const TRADE_LEG_NAMES = new Set(["Scalping", "Intraday", "Swing", "A", "B", "C"]);
 const LEG_ABC = Object.freeze({ A: "Scalping", B: "Intraday", C: "Swing" });
@@ -1734,8 +1739,45 @@ async function _applyGrokGate(trades, ctx = {}) {
 
 const RAG_CONSERVATIVE_DISCOUNT = 0.9;
 const RAG_APPROVE_THRESHOLD = parseFloat(process.env.RAG_APPROVE_THRESHOLD || "0.4");
+/** Minimum similar-trade outcomes before RAG score affects gate (fail-open below threshold). */
+const RAG_MIN_SUPPORT = Math.max(1, parseInt(process.env.RAG_MIN_SUPPORT || "10", 10) || 10);
+/** Pseudo-count per class for Beta shrinkage toward 0.5 (0 = disabled). */
+const RAG_BAYESIAN_PRIOR = Math.max(0, parseFloat(process.env.RAG_BAYESIAN_PRIOR || "0") || 0);
 /** When true, persist backtest trade embeddings after RAG gate (can leak future outcomes into reruns). Default off. */
 const RAG_SEED_AFTER_BACKTEST = process.env.RAG_SEED_AFTER_BACKTEST === "true";
+
+/**
+ * Resolve strategyKey filter for RAG retrieval — per-trade component wins over umbrella ctx.
+ * @returns {string|string[]|null}
+ */
+function _resolveRagStrategyFilterKeys(trade, ctx = {}) {
+  const tradeRaw = trade?.strategyKey ?? trade?.winningComponent ?? null;
+  if (tradeRaw) {
+    return normalizeStrategyKey(String(tradeRaw).toUpperCase());
+  }
+
+  const ctxRaw = String(ctx.strategyKey || "").toUpperCase();
+  if (!ctxRaw) return null;
+
+  const keys = resolveRagFilterKeysForKey(ctxRaw);
+  if (keys.length === 0) return null;
+  if (keys.length === 1) return keys[0];
+  return keys;
+}
+
+function _primaryRagStrategyKey(filterKeys) {
+  if (Array.isArray(filterKeys)) return filterKeys[0] || null;
+  return filterKeys || null;
+}
+
+function _ragScoreFromOutcomes(outcomes) {
+  if (!outcomes || outcomes.length < RAG_MIN_SUPPORT) return null;
+  const wins = outcomes.filter((o) => o === "win").length;
+  if (RAG_BAYESIAN_PRIOR > 0) {
+    return (wins + RAG_BAYESIAN_PRIOR) / (outcomes.length + 2 * RAG_BAYESIAN_PRIOR);
+  }
+  return wins / outcomes.length;
+}
 
 /** Resolve win/loss from TradeEmbedding metadata (outcome field or pnlPct fallback). */
 function _resolveSimilarOutcome(metadata) {
@@ -1774,6 +1816,26 @@ function _applyConservativeDiscount(score) {
   return score;
 }
 
+/** Debug session 816643 — RAG gate runtime evidence (PM2 logs + local ingest). */
+function _ragDebugLog(location, message, data, hypothesisId = "RAG") {
+  const payload = {
+    sessionId: "816643",
+    location,
+    message,
+    data,
+    hypothesisId,
+    timestamp: Date.now(),
+  };
+  // #region agent log
+  console.warn("[RAG-DEBUG-816643]", JSON.stringify(payload));
+  fetch("http://127.0.0.1:7388/ingest/342b9c62-4dc5-4962-a9c1-f9c519fa2002", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "816643" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+  // #endregion
+}
+
 /** Best-effort: persist backtest trades with outcome metadata for future RAG similarity. */
 async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
   if (!deps?.vs || !deps?.fe || !Array.isArray(trades) || trades.length === 0) return 0;
@@ -1796,9 +1858,11 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
       confidence: t.confidence,
       regime: t.regime || t.marketCond,
     };
+    const ragStrategyKeys = _resolveRagStrategyFilterKeys(t, ctx);
+    const metadataStrategyKey = _primaryRagStrategyKey(ragStrategyKeys) || ctx.strategyKey;
     try {
       const features = deps.fe.buildFeatureVector(entryContext, {
-        strategyKey: ctx.strategyKey,
+        strategyKey: metadataStrategyKey,
         symbol: ctx.symbol || t.symbol,
         side: t.side,
       });
@@ -1806,7 +1870,7 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
         tradeId: String(tradeId),
         vector: features,
         metadata: {
-          strategyKey: ctx.strategyKey,
+          strategyKey: metadataStrategyKey,
           symbol: ctx.symbol || t.symbol,
           side: t.side,
           regime: entryContext.regime || t.regime || t.marketCond,
@@ -1836,8 +1900,8 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
  * @param {Array}  trades
  * @param {Object} ctx — { strategyKey, symbol, onRagProgress }
  */
-async function _applyRagGate(trades, ctx = {}) {
-  const deps = getRagGateDeps();
+async function _applyRagGate(trades, ctx = {}, opts = {}) {
+  const deps = opts.deps || getRagGateDeps();
   if (!deps) {
     return {
       trades,
@@ -1875,7 +1939,43 @@ async function _applyRagGate(trades, ctx = {}) {
     vectorLikelyEmpty = true;
   }
 
+  let embeddingCount = 0;
+  let tsEmbeddingCounts = {};
+  try {
+    embeddingCount = await vs.count().catch(() => 0);
+    if (embeddingCount > 0) {
+      const { _pool } = require("../../../infrastructure/db/database");
+      for (const k of ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"]) {
+        const r = await _pool.query(
+          `SELECT COUNT(*)::int AS n FROM "TradeEmbedding" WHERE metadata->>'strategyKey' = $1`,
+          [k]
+        ).catch(() => ({ rows: [{ n: 0 }] }));
+        tsEmbeddingCounts[k] = r.rows?.[0]?.n ?? 0;
+      }
+    }
+  } catch { /* ignore */ }
+
+  const ctxFilterKeys = _resolveRagStrategyFilterKeys({}, ctx);
+  // #region agent log
+  _ragDebugLog(
+    "RealStrategyBacktestService.js:_applyRagGate:init",
+    "RAG gate init",
+    {
+      hasModel,
+      vectorLikelyEmpty,
+      embeddingCount,
+      tsEmbeddingCounts,
+      ctxStrategyKey: ctx.strategyKey,
+      ctxFilterKeys,
+      tradeCount: trades.length,
+      ragMinSupport: RAG_MIN_SUPPORT,
+    },
+    "A-B-C"
+  );
+  // #endregion
+
   const sorted = [...trades].sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
+  const sampleTradeLogs = [];
   const kept = [];
   const logs = [];
   let approved = 0;
@@ -1893,35 +1993,59 @@ async function _applyRagGate(trades, ctx = {}) {
       confidence: t.confidence,
       regime: t.regime || t.marketCond,
     };
+    const ragStrategyKeys = _resolveRagStrategyFilterKeys(t, ctx);
     const tradeMetadata = {
-      strategyKey: ctx.strategyKey,
+      strategyKey: _primaryRagStrategyKey(ragStrategyKeys),
       symbol: ctx.symbol || t.symbol,
       side: t.side,
     };
 
     let lgbScore = null;
     let ragScore = null;
+    let neighborCount = 0;
+    let outcomeCount = 0;
 
+    let featureError = null;
+    let similarError = null;
     try {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
       if (wp.model) lgbScore = wp.predict(features).pWin;
-    } catch { /* ignore */ }
+    } catch (err) {
+      featureError = err?.message || String(err);
+    }
 
     try {
       const features = fe.buildFeatureVector(entryContext, tradeMetadata);
       const similar = await vs.findSimilar(features, 20, {
         symbol: tradeMetadata.symbol,
-        strategyKey: ctx.strategyKey,
+        strategyKey: ragStrategyKeys,
         beforeDate: tradeTime.toISOString(),
       });
+      neighborCount = similar.length;
       if (similar.length > 0) {
         const outcomes = similar.map((s) => _resolveSimilarOutcome(s.metadata)).filter(Boolean);
-        if (outcomes.length > 0) {
-          const wins = outcomes.filter((o) => o === "win").length;
-          ragScore = wins / outcomes.length;
-        }
+        outcomeCount = outcomes.length;
+        ragScore = _ragScoreFromOutcomes(outcomes);
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      similarError = err?.message || String(err);
+    }
+
+    if (i === 0 || i === Math.floor(sorted.length / 2) || i === sorted.length - 1) {
+      sampleTradeLogs.push({
+        idx: i,
+        tradeStrategyKey: t.strategyKey,
+        winningComponent: t.winningComponent,
+        ragStrategyKeys,
+        neighborCount,
+        outcomeCount,
+        lgbScore,
+        ragScore,
+        featureError,
+        similarError,
+        tradeTime: tradeTime.toISOString(),
+      });
+    }
 
     let rawScore;
     if (lgbScore !== null && ragScore !== null) rawScore = 0.5 * lgbScore + 0.5 * ragScore;
@@ -1939,6 +2063,8 @@ async function _applyRagGate(trades, ctx = {}) {
         reason: "lgb-only-no-rag-evidence (kept)",
         ragScore: null,
         lgbScore,
+        neighborCount,
+        outcomeCount,
       });
       if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
       continue;
@@ -1951,9 +2077,13 @@ async function _applyRagGate(trades, ctx = {}) {
         symbol: ctx.symbol,
         side: t.side,
         approved: true,
-        reason: "no-ml-signal (kept)",
+        reason: outcomeCount > 0 && outcomeCount < RAG_MIN_SUPPORT
+          ? `insufficient-rag-support (${outcomeCount}<${RAG_MIN_SUPPORT}, kept)`
+          : "no-ml-signal (kept)",
         ragScore: null,
         lgbScore: null,
+        neighborCount,
+        outcomeCount,
       });
       if (ctx.onRagProgress) ctx.onRagProgress(i + 1, sorted.length);
       continue;
@@ -1972,6 +2102,8 @@ async function _applyRagGate(trades, ctx = {}) {
       adjustedScore: adjusted,
       ragScore,
       lgbScore,
+      neighborCount,
+      outcomeCount,
       reason: isApproved ? "score >= threshold" : "score below threshold",
     });
 
@@ -1988,6 +2120,23 @@ async function _applyRagGate(trades, ctx = {}) {
   const ineffective = allSkippedNoScores || depsIneffective;
   const failOpen = allSkippedNoScores || depsIneffective;
 
+  // #region agent log
+  _ragDebugLog(
+    "RealStrategyBacktestService.js:_applyRagGate:done",
+    "RAG gate complete",
+    {
+      approved,
+      rejected,
+      skipped,
+      scoreCount,
+      sampleTradeLogs,
+      ineffective,
+      failOpen,
+    },
+    "D-E"
+  );
+  // #endregion
+
   const stats = {
     total: trades.length,
     approved,
@@ -1995,6 +2144,13 @@ async function _applyRagGate(trades, ctx = {}) {
     skipped,
     avgScore: scoreCount > 0 ? scoreSum / scoreCount : null,
     failOpen,
+    diag: {
+      hasModel,
+      embeddingCount,
+      tsEmbeddingCounts,
+      ctxFilterKeys,
+      sampleTradeLogs,
+    },
   };
   if (ineffective) {
     stats.ineffective = true;
@@ -3083,7 +3239,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     // ── 3. HTF trend + fail-closed (mirror step 6b/6c) ──────────────────────
     const htfTrend = htfTrendAt(i);
-    if (higherTf && htfTrend === "UNKNOWN") {
+    if (higherTf && htfTrend === "UNKNOWN" && requiresHtfFailClosed(strategyKey)) {
       diag.htfUnknownSkip += 1;
       equity.push({ date: isoOf(c), value: round2(capital) });
       continue;
@@ -3203,20 +3359,14 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
     const adjustedRiskPerTrade = regimeResult.riskPerTrade;
 
-    // ── 5. HTF directional block (mirror step 7a) ───────────────────────────
-    // MEAN_REVERSION (counter-trend) is exempt from directional block — has its own
-    // regime filter (step 2c in live BotEngine). BREAKOUT_RETEST exempt (consolidation
-    // reversal valid). Other trend-following strategies require HTF alignment.
-    const isMR = isMRKey(strategyKey);
-    const isBR = isBRKey(strategyKey);
-    if (!isMR && !isBR) {
+    // ── 5. HTF directional block (mirror step 7a) — REQUIRED_ALIGN only ───
+    if (requiresHtfDirectionalBlock(strategyKey)) {
       if (signal === "LONG" && htfTrend === "BEARISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
       if (signal === "SHORT" && htfTrend === "BULLISH") { diag.htfDirBlock += 1; equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
     }
 
-    // ── 5b. MEAN_REVERSION regime gate (mirror step 2c in live BotEngine) ──
-    // MR counter-trend entries need regime check: block SHORT in strong bull,
-    // LONG in strong bear, and all entries during ATR spike (wide spreads).
+    // ── 5b. MEAN_REVERSION regime gate (REGIME_GATE — mirror BotEngine MR filter)
+    const isMR = isMRKey(strategyKey);
     if (isMR && htfIndicators && htfPtr) {
       const j = htfPtr[i];
       if (j >= 0 && j < htfIndicators.emaFast.length) {
@@ -3713,6 +3863,9 @@ module.exports = {
   _refreshPerTypeStatsFromTrades,
   _applyGrokGate,
   _applyRagGate,
+  _resolveRagStrategyFilterKeys,
+  _ragScoreFromOutcomes,
+  RAG_MIN_SUPPORT,
   resolveTsCombination,
   resolveTsLayerFlags,
   resolveMdCombination,

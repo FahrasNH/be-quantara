@@ -59,7 +59,6 @@ const SAMPLE_FEATURES = {
     tfAdxStrength: 32,
     tfHtfTrendConfirmed: true,
     tfBarsInTrend: 14,
-    tfEmaCrossover: true,
     tfVolRatio: 1.5,
     tfDonchianPeriod: 20,
   },
@@ -161,7 +160,6 @@ test("enrichMetaWithGradedScore attaches graded fields", () => {
     tfAdxStrength: 30,
     tfHtfTrendConfirmed: true,
     tfBarsInTrend: 10,
-    tfEmaCrossover: true,
     tfVolRatio: 1.4,
     tfDonchianPeriod: 18,
   }, "TREND_FOLLOWING");

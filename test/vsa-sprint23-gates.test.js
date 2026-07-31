@@ -125,7 +125,7 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ablation.passed, 0);
   });
 
-  test("Intraday HTF gate: hard block SHORT×BULLISH", () => {
+  test("Intraday HTF overlay: flag SHORT×BULLISH (no hard block)", () => {
     const ablation = { rejHtfShortBullish: 0, passed: 0 };
     const gated = applyVsaEntryGates(
       { vote: "SHORT", confidence: 0.8, reason: "vsa_no_demand" },
@@ -134,12 +134,13 @@ describe("VSA Sprint 23 gates", () => {
         ablation,
       },
     );
-    assert.equal(gated.vote, "NEUTRAL");
-    assert.equal(gated.reason, "vsa_htf_short_bullish");
+    assert.equal(gated.vote, "SHORT");
+    assert.equal(gated.meta?.htfCounterTrend, true);
+    assert.equal(gated.meta?.vsaHtfConfidenceFlag, true);
     assert.equal(ablation.rejHtfShortBullish, 1);
   });
 
-  test("Intraday HTF gate: hard block STOPPING_VOLUME counter-trend", () => {
+  test("Intraday HTF overlay: flag STOPPING_VOLUME counter-trend (no block)", () => {
     const ablation = { rejHtfStoppingCounter: 0 };
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.9, reason: "vsa_stopping_volume_low" },
@@ -148,12 +149,12 @@ describe("VSA Sprint 23 gates", () => {
         ablation,
       },
     );
-    assert.equal(gated.vote, "NEUTRAL");
-    assert.equal(gated.reason, "vsa_htf_stopping_counter");
+    assert.equal(gated.vote, "LONG");
+    assert.equal(gated.meta?.htfCounterTrend, true);
     assert.equal(ablation.rejHtfStoppingCounter, 1);
   });
 
-  test("Intraday HTF gate: penalty LONG×BEARISH (non-stopping)", () => {
+  test("Intraday HTF overlay: flag LONG×BEARISH (no confidence penalty)", () => {
     const ablation = { rejHtfLongBearishPenalty: 0 };
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.8, reason: "vsa_no_supply" },
@@ -168,9 +169,9 @@ describe("VSA Sprint 23 gates", () => {
       },
     );
     assert.equal(gated.vote, "LONG");
+    assert.equal(gated.meta?.htfCounterTrend, true);
+    assert.equal(gated.meta?.vsaHtfConfidenceFlag, true);
     assert.equal(ablation.rejHtfLongBearishPenalty, 1);
-    assert.ok(gated.confidence < 0.8);
-    assert.equal(gated.meta?.htfCounterPenalty, 0.5);
   });
 
   test("Intraday defaults enable HTF align gate; session filter OFF", () => {

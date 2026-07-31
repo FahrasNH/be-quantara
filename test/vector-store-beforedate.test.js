@@ -68,6 +68,24 @@ async function main() {
     assert.ok(selectCall.params.includes("MEAN_REVERSION"), "strategyKey param bound");
   });
 
+  await test("findSimilar — strategyKey array uses ANY()", async () => {
+    const pool = makeCapturingPool();
+    const vs = new VectorStore(pool);
+    const vec = new Array(60).fill(0.3);
+
+    await vs.findSimilar(vec, 10, {
+      strategyKey: ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"],
+      beforeDate: "2025-01-15T12:00:00.000Z",
+    });
+
+    const selectCall = pool.calls.find((c) => c.sql.includes("SELECT") && c.sql.includes("TradeEmbedding"));
+    assert.ok(selectCall.sql.includes("= ANY("), "expected ANY() for strategyKey array");
+    assert.deepStrictEqual(
+      selectCall.params[1],
+      ["TREND_FOLLOWING", "MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"],
+    );
+  });
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail > 0 ? 1 : 0);
 }

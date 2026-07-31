@@ -11,6 +11,7 @@ const {
   evaluateOIFundingGate,
   DEFAULTS,
 } = require("../bs/liquidationSqueezeEntry");
+const { isCounterHtfTrend } = require("../../../config/htfMode");
 
 class LiquidationSqueezeStrategy extends StrategyBase {
   constructor(config = {}) {
@@ -67,6 +68,36 @@ class LiquidationSqueezeStrategy extends StrategyBase {
     return { allowed: true, reason: "ok" };
   }
 
+  /**
+   * CONTEXT_ONLY liquidity-context overlay.
+   * TODO: wire full HTF swing-liquidity pool detection — stub flags missing HTF liq.
+   */
+  _htfLiquidityContextOk(signal, indicators, config = {}, lastIdx = null) {
+    const htfIdx = config.htfIdx;
+    const highs = indicators?.highsHTF ?? config.htfHighs;
+    const lows = indicators?.lowsHTF ?? config.htfLows;
+    if (htfIdx == null || htfIdx < 0 || !highs?.length || !lows?.length) {
+      return { ok: true, reason: "htf_liq_unavailable_fail_open" };
+    }
+    const lookback = Math.min(20, htfIdx);
+    const sliceLows = lows.slice(Math.max(0, htfIdx - lookback), htfIdx + 1).filter(v => v != null);
+    const sliceHighs = highs.slice(Math.max(0, htfIdx - lookback), htfIdx + 1).filter(v => v != null);
+    if (!sliceLows.length || !sliceHighs.length) {
+      return { ok: true, reason: "htf_liq_unavailable_fail_open" };
+    }
+    const price = indicators.closes?.[lastIdx];
+    if (price == null) return { ok: true, reason: "htf_liq_unavailable_fail_open" };
+    if (signal === "LONG") {
+      const liqLow = Math.min(...sliceLows);
+      return { ok: price >= liqLow * 0.995, reason: "htf_liq_long_context" };
+    }
+    if (signal === "SHORT") {
+      const liqHigh = Math.max(...sliceHighs);
+      return { ok: price <= liqHigh * 1.005, reason: "htf_liq_short_context" };
+    }
+    return { ok: true, reason: "ok" };
+  }
+
   detectSignal(indicators, lastIdx, config = {}) {
     const exchangeData = {
       funding: indicators.funding ?? indicators.fundingRate ?? config.funding ?? null,
@@ -86,6 +117,22 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       config: { ...DEFAULTS, ...this.config, ...config },
     });
     const wick = result.wick || {};
+    const htfTrend = config.htfTrend ?? null;
+    let confidence = result.confidence;
+    let htfMeta = {};
+    if (result.signal) {
+      const liqCtx = this._htfLiquidityContextOk(result.signal, indicators, config, lastIdx);
+      htfMeta.htfLiquidityContextOk = liqCtx.ok;
+      htfMeta.htfLiquidityReason = liqCtx.reason;
+      if (!liqCtx.ok) {
+        // Liquidity-context penalty only — no generic −15 SOFT_BIAS penalty for LS.
+        confidence = Math.max(0, (confidence ?? 0) - 0.1);
+        htfMeta.htfLiquidityPenalty = 0.1;
+      } else if (isCounterHtfTrend(result.signal, htfTrend)) {
+        htfMeta.htfCounterTrend = true;
+        htfMeta.htfOverlayOnly = true;
+      }
+    }
     // Sprint 15: flat ls* ML fields (OI percentile / BB squeeze when feed available)
     const lsFields = {
       lsOiValue: result.oiValue ?? exchangeData.oiHistory?.slice?.(-1)?.[0] ?? null,
@@ -100,14 +147,15 @@ class LiquidationSqueezeStrategy extends StrategyBase {
       component: "LIQUIDATION_SQUEEZE",
       winningComponent: result.signal ? "LIQUIDATION_SQUEEZE" : null,
       strategyLabel: "Liquidation/Squeeze Trading",
-      componentConfidence: result.signal ? Math.round(result.confidence * 100) : 0,
-      confidence: result.confidence,
+      componentConfidence: result.signal ? Math.round(confidence * 100) : 0,
+      confidence,
       reason: result.reason,
       funding: result.funding,
       oiChange: result.oiChange,
       dataAvailable: result.dataAvailable,
       wick: result.wick,
       ...lsFields,
+      ...htfMeta,
     };
     return result.signal || null;
   }

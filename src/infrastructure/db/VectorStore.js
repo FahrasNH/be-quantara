@@ -74,8 +74,16 @@ class VectorStore {
       conditions.push(`metadata->>'regime' = $${idx++}`);
     }
     if (filters.strategyKey) {
-      params.push(filters.strategyKey);
-      conditions.push(`metadata->>'strategyKey' = $${idx++}`);
+      const keys = Array.isArray(filters.strategyKey)
+        ? filters.strategyKey.filter(Boolean)
+        : [filters.strategyKey];
+      if (keys.length === 1) {
+        params.push(keys[0]);
+        conditions.push(`metadata->>'strategyKey' = $${idx++}`);
+      } else if (keys.length > 1) {
+        params.push(keys);
+        conditions.push(`metadata->>'strategyKey' = ANY($${idx++}::text[])`);
+      }
     }
     if (filters.symbol) {
       params.push(filters.symbol);

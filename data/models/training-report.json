@@ -1,14 +1,14 @@
 {
-  "auc": 0.506105787609639,
-  "accuracy": 0.6512338425381904,
+  "auc": 0.5056981070544472,
+  "accuracy": 0.6520370694177303,
   "precision": 0,
   "recall": 0,
   "splits": [
     {
-      "auc": 0.5915388302972198,
-      "accuracy": 0.680365296803653,
-      "trainSize": 1223,
-      "testSize": 438
+      "auc": 0.5437862473925992,
+      "accuracy": 0.6812297734627831,
+      "trainSize": 1838,
+      "testSize": 618
     },
     {
       "auc": 0.5,
@@ -17,60 +17,60 @@
       "testSize": 0
     },
     {
-      "auc": 0.4690533980582523,
-      "accuracy": 0.6167664670658682,
-      "trainSize": 1407,
-      "testSize": 167
+      "auc": 0.4963380281690144,
+      "accuracy": 0.6377551020408163,
+      "trainSize": 1787,
+      "testSize": 196
     },
     {
-      "auc": 0.4916582406471184,
-      "accuracy": 0.6515151515151515,
-      "trainSize": 338,
-      "testSize": 132
+      "auc": 0.4470099079971691,
+      "accuracy": 0.6681222707423581,
+      "trainSize": 429,
+      "testSize": 229
     }
   ],
-  "avgAuc": 0.5130626172506476,
-  "avgAccuracy": 0.6121617288461682,
+  "avgAuc": 0.49678354588969564,
+  "avgAccuracy": 0.6217767865614894,
   "featureImportance": [
     {
       "name": "market_atrPct",
-      "importance": 0.3657348477773464
+      "importance": 0.35636556463680197
     },
     {
       "name": "market_atr",
-      "importance": 0.27186673124508276
-    },
-    {
-      "name": "signal_votingScore",
-      "importance": 0.09777940362690352
+      "importance": 0.21188172141155598
     },
     {
       "name": "time_hour_of_day",
-      "importance": 0.08956383575394496
+      "importance": 0.15525421235645162
     },
     {
       "name": "signal_liquidityScore",
-      "importance": 0.0554775732413988
+      "importance": 0.07879558114968824
+    },
+    {
+      "name": "signal_votingScore",
+      "importance": 0.056891519245450765
+    },
+    {
+      "name": "signal_chochScore",
+      "importance": 0.039093118401555896
     },
     {
       "name": "signal_bosScore",
-      "importance": 0.03719523434225444
-    },
-    {
-      "name": "signal_entryConfidence",
-      "importance": 0.025075823055166858
-    },
-    {
-      "name": "signal_signalQuality",
-      "importance": 0.016868245966780406
+      "importance": 0.032821369791834754
     },
     {
       "name": "signal_fvgScore",
-      "importance": 0.012048656859808132
+      "importance": 0.026532966874739404
     },
     {
-      "name": "regime_ranging",
-      "importance": 0.009251951739997828
+      "name": "signal_confidenceScore",
+      "importance": 0.011299625755174743
+    },
+    {
+      "name": "time_minute_of_hour",
+      "importance": 0.01018342064586315
     }
   ],
   "hyperparams": {
@@ -80,8 +80,8 @@
     "subsample": 0.8,
     "minSamplesLeaf": 2
   },
-  "trainedAt": "2026-07-27T07:13:59.091Z",
-  "tradeCount": 21273,
-  "winRate": 0.3479057960795374,
+  "trainedAt": "2026-07-28T02:24:20.732Z",
+  "tradeCount": 28593,
+  "winRate": 0.3460986954849089,
   "source": "ml-engine-dataset.json"
 }

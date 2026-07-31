@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { REPO_ROOT } = require("./paths");
-const { GAP_POLICY_5, GAP_POLICY_8, filterWindows } = require("./windows");
+const { GAP_POLICY_5, GAP_POLICY_8, VSA_INTRADAY_3, filterWindows } = require("./windows");
 const { DEFAULT_SYMBOLS_5 } = require("./symbols");
 const { parseGridArgs } = require("./parseArgs");
 const { runGrid } = require("./runGridExport");
@@ -75,21 +75,21 @@ function buildManifest({ win, symbol, strategyKey, tradeType }) {
 /**
  * @param {{ strategyKey: string, tradeType: string, slug: string }} opts
  */
-async function walkforwardMain({ strategyKey, tradeType, slug }) {
+async function walkforwardMain({ strategyKey, tradeType, slug, windowsOverride = null }) {
   require("dotenv").config({ path: path.join(REPO_ROOT, ".env") });
 
   const prefix = outPrefix(slug);
   const typeSlug = tradeType.toLowerCase();
+  const { dryRun, useLocal, summaryOnly, windowFilter, symbolFilter } = parseGridArgs();
   const OUT_ROOT = path.join(REPO_ROOT, `tmp/${prefix}-${typeSlug}-walkforward`);
   const PROMOTE_HINT = `liveTradeTypeGate.js (${strategyKey} ${tradeType})`;
   const grid = resolveGrid(tradeType);
 
   process.stdout.write(`[walkforward] ${strategyKey} · ${tradeType} export…\n`);
 
-  const { dryRun, useLocal, summaryOnly, windowFilter, symbolFilter } = parseGridArgs();
   const api = process.env.DATASET_EXPAND_API_URL;
 
-  const windows = filterWindows(grid.windows, windowFilter);
+  const windows = filterWindows(windowsOverride || grid.windows, windowFilter);
   const symbols = symbolFilter ? [symbolFilter] : grid.defaultSymbols;
 
   if (!windows.length) {
@@ -170,4 +170,5 @@ module.exports = {
   OUT_PREFIX,
   outPrefix,
   resolveGrid,
+  buildManifest,
 };
