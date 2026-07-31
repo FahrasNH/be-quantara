@@ -55,7 +55,7 @@ const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefault
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { computeStatisticalArbitrageZ } = require("../../../core/strategy-engine/md/statisticalArbitrageEntry");
-const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
+const { riskShareForType, applyLegRiskShare } = require("../../../core/risk-engine/typeRiskLadder");
 const { buildAtrBaseline, checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const {
@@ -673,6 +673,11 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  // Session / hour filters (Wyckoff Scalping blockedUtcHours, AMT VWAP) need bar times.
+  if (!indicators.timestamps) {
+    indicators.timestamps = entryCandles.map((c) => c.timestamp ?? c.openTime ?? c.time ?? null);
+  }
+
   // SMART_MONEY_CONCEPTS entry-TF ADX (chop gate) + MEAN_REVERSION ADX regime gate (MD-SUB-01):
   // calcIndicators does not populate adx — attach it for strategies that need it.
   if (isSmcKey(strategyKey) || isMRKey(strategyKey)) {
@@ -802,6 +807,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   // (see checkPartialMilestones in runRealBacktest). Previously this multi-position
   // engine — the one SMART_MONEY_CONCEPTS/triple-type backtests actually use — had NO partial-TP
   // path at all: "Is Partial" was always false regardless of the FE tpMode toggle.
+  // Per-leg tpMode arrives via typeOverrides spread onto cfg in runTripleTypeBacktest
+  // (e.g. Scalping partial BE-trail while Intraday/Swing stay full TP runners).
   const tpModeCfg = cfg.tpMode ?? "full";
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
   const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
@@ -812,6 +819,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   // so a leg-specific ladder (e.g. Swing 1.5R/2.67R) could never be tested.
   const slPlusM1R = cfg.slPlusM1R ?? 1.0;
   const slPlusM2R = cfg.slPlusM2R ?? 2.0;
+  // 0 = true breakeven; default 0.3 locks a small buffer (VAULT lesson).
+  const slPlusBeOffsetR = Number.isFinite(cfg.slPlusBeOffsetR) ? cfg.slPlusBeOffsetR : 0.3;
 
   function checkPartialMilestones(componentId, position, c, exitIdx) {
     if (!slPlusEnabled || !position || position.remainingSize <= 0) return;
@@ -821,12 +830,23 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     const favorableExtreme = position.side === "LONG" ? c.high : c.low;
     const gain = position.side === "LONG" ? favorableExtreme - position.entry : position.entry - favorableExtreme;
     const rMult = gain / R;
+    const m1R = position.slPlusM1R ?? slPlusM1R;
+    const m2R = position.slPlusM2R ?? slPlusM2R;
+    const p1 = position.slPlusPartial1Pct ?? slPlusPartial1Pct;
+    const p2 = position.slPlusPartial2Pct ?? slPlusPartial2Pct;
+    const beOff = Number.isFinite(position.slPlusBeOffsetR) ? position.slPlusBeOffsetR : slPlusBeOffsetR;
 
     const partialAt = (price, size, reason, newSL) => {
       let px = price;
-      if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+      // Partial takes are limit exits at the R-level (same as TP), not market stops.
+      const compOv = cfg.typeOverrides?.[componentId] || {};
+      const useMaker = compOv.makerEntry === true || cfg.makerEntry === true || position.makerEntry === true;
+      const makerRate = cfg.makerFeeRate ?? 0.0002;
+      if (slip && !useMaker) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
       const grossPnl = position.side === "LONG" ? (px - position.entry) * size : (position.entry - px) * size;
-      const fee = feeRate * (position.entry + px) * size;
+      const entryFeeRate = useMaker ? makerRate : feeRate;
+      const exitFeeRate = useMaker ? makerRate : feeRate;
+      const fee = entryFeeRate * position.entry * size + exitFeeRate * px * size;
       const pnl = grossPnl - fee;
       capital += pnl;
       position.remainingSize -= size;
@@ -865,26 +885,32 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       }, position, position.winningComponent || strategyKey, position.strategyLabel || strategyDisplayName));
     };
 
-    // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP — see runRealBacktest note).
-    if (!position.m1 && rMult >= slPlusM1R) {
+    // Milestone 1: +slPlusM1R → partial (or 0% = BE-trail only), SL → entry±beOff*R.
+    // p1≥1 (or size≈remaining) = full bank at m1R — no runner left for taker SL_TRAIL drag.
+    if (!position.m1 && rMult >= m1R) {
       position.m1 = true;
-      const partial = position.originalSize * slPlusPartial1Pct;
-      const newSL = position.side === "LONG" ? position.entry + 0.3 * R : position.entry - 0.3 * R;
-      if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? slPlusM1R * R : -slPlusM1R * R), partial, "Partial_1R", newSL);
+      const partial = Math.min(position.originalSize * p1, position.remainingSize);
+      const newSL = position.side === "LONG" ? position.entry + beOff * R : position.entry - beOff * R;
+      const px = position.entry + (position.side === "LONG" ? m1R * R : -m1R * R);
+      if (partial > 0 && partial >= position.remainingSize * 0.999) {
+        closePosition(componentId, position, px, "TP", exitIdx);
+        position.remainingSize = 0;
+        return;
+      } else if (partial > 0 && partial < position.remainingSize) {
+        partialAt(px, partial, "Partial_1R", newSL);
       } else {
         position.slCurrent = newSL;
       }
     }
 
     // Milestone 2: +slPlusM2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
-    if (position.m1 && !position.m2 && rMult >= slPlusM2R) {
+    if (position.m1 && !position.m2 && rMult >= m2R && position.remainingSize > 0) {
       position.m2 = true;
-      const fromOriginal = position.originalSize * slPlusPartial2Pct;
+      const fromOriginal = position.originalSize * p2;
       const partial = Math.min(fromOriginal, position.remainingSize * 0.90);
       const newSL = position.side === "LONG" ? position.entry + R : position.entry - R;
       if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? slPlusM2R * R : -slPlusM2R * R), partial, "Partial_2R", newSL);
+        partialAt(position.entry + (position.side === "LONG" ? m2R * R : -m2R * R), partial, "Partial_2R", newSL);
       } else {
         position.slCurrent = newSL;
       }
@@ -1331,6 +1357,12 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
         tpMultiplier: tpMult,
       });
 
+      // Wyckoff (and others) may reject fee-toxic micro-SL via calculateRiskConfig → null
+      if (!riskCfg || !(riskCfg.slDistance > 0) || !(riskCfg.tpDistance > 0)) {
+        execAbl.rejSlTp += 1;
+        continue;
+      }
+
       // Apply pair-tier SL/TP adjustments for STABLE/VOLATILE classification
       // (live parity: BotEngine.js:2601-2602). cfg.pairSlMultiplier set by
       // PairClassifier.classify(...).paramOverrides.slMultiplier — a CONTINUOUS
@@ -1349,7 +1381,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       // riskAmt. size = riskAmt / slDist. Dividing by the FULL SL→TP span (as
       // before) shrank every position ~2.8× → effective risk ~0.18% instead of
       // the configured 0.5%, which is why return + drawdown were both tiny.
-      const riskAmt = capital * adjustedRiskPerTrade;
+      // riskSizingBasis:"initial" → size from startCapital (live parity via
+      // BotEngine startCapital) so equity run-ups cannot inflate $ risk / MDD.
+      const riskBase = cfg.riskSizingBasis === "initial" ? startCapital : capital;
+      const riskAmt = riskBase * adjustedRiskPerTrade;
       const size = slDist > 0 ? riskAmt / slDist : 0;
 
       if (size <= 0) { execAbl.rejSize += 1; continue; }
@@ -2244,7 +2279,12 @@ async function runTripleTypeBacktest(opts = {}) {
       enabledComponents: [tradeType],
       smcEnabledComponents: [tradeType],
       higherTf: legOverrides?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
-      riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
+      // Per-leg riskMult / riskPerTrade (typeOverrides) — scale one leg without
+      // changing sibling shares from typeRiskWeights.
+      riskPerTrade: applyLegRiskShare(
+        riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01, cfg.typeRiskWeights),
+        legOverrides,
+      ),
       tradeType,
       activeComponents: [tradeType],
       entryTf: tradeType === "Swing" ? "4h"
@@ -2698,6 +2738,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   // actually run through) kept the hardcoded 1.0/2.0, silently ignoring it.
   const slPlusM1R = cfg.slPlusM1R ?? 1.0;
   const slPlusM2R = cfg.slPlusM2R ?? 2.0;
+  const slPlusBeOffsetR = Number.isFinite(cfg.slPlusBeOffsetR) ? cfg.slPlusBeOffsetR : 0.3;
 
   function checkPartialMilestones(c, exitIdx) {
     if (!slPlusEnabled || !position || position.remainingSize <= 0) return;
@@ -2710,9 +2751,13 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
 
     const partialAt = (price, size, reason, newSL) => {
       let px = price;
-      if (slip) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
+      const useMaker = cfg.makerEntry === true || position.makerEntry === true;
+      const makerRate = cfg.makerFeeRate ?? 0.0002;
+      if (slip && !useMaker) px = position.side === "LONG" ? px * (1 - slip) : px * (1 + slip);
       const grossPnl = position.side === "LONG" ? (px - position.entry) * size : (position.entry - px) * size;
-      const fee = feeRate * (position.entry + px) * size;
+      const entryFeeRate = useMaker ? makerRate : feeRate;
+      const exitFeeRate = useMaker ? makerRate : feeRate;
+      const fee = entryFeeRate * position.entry * size + exitFeeRate * px * size;
       const pnl = grossPnl - fee;
       capital += pnl;
       position.remainingSize -= size;
@@ -2747,26 +2792,29 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       }, position, strategyKey, position.strategyLabel || strategyDisplayName));
     };
 
-    // Milestone 1: +slPlusM1R → partial 40%, SL → +0.3R (NOT pure BEP).
-    // 4yr VAULT backtest showed runners parked at exact BEP died on the first
-    // shallow pullback: TF 4/5 and MR 3/3 partial-triggered trades exited via
-    // SL_TRAIL at ~breakeven and never reached +2R/full TP. +0.3R keeps a small
-    // locked profit while giving the runner breathing room below +1R.
+    // Milestone 1: +slPlusM1R → partial (or 0% = BE-trail), SL → entry±beOff*R.
+    // Default beOff=0.3 (VAULT); Wyckoff Scalping uses 0 (true BE) via cfg.slPlusBeOffsetR.
+    // p1≥1 (or size≈remaining) = full bank at m1R as maker TP (no runner).
     if (!position.m1 && rMult >= slPlusM1R) {
       position.m1 = true;
-      const partial = position.originalSize * slPlusPartial1Pct;
+      const partial = Math.min(position.originalSize * slPlusPartial1Pct, position.remainingSize);
       const newSL = position.side === "LONG"
-        ? position.entry + 0.3 * R
-        : position.entry - 0.3 * R; // +0.3R buffer
-      if (partial > 0 && partial < position.remainingSize) {
-        partialAt(position.entry + (position.side === "LONG" ? slPlusM1R * R : -slPlusM1R * R), partial, "Partial_1R", newSL);
+        ? position.entry + slPlusBeOffsetR * R
+        : position.entry - slPlusBeOffsetR * R;
+      const px = position.entry + (position.side === "LONG" ? slPlusM1R * R : -slPlusM1R * R);
+      if (partial > 0 && partial >= position.remainingSize * 0.999) {
+        closePosition(px, "TP", exitIdx);
+        position.remainingSize = 0;
+        return;
+      } else if (partial > 0 && partial < position.remainingSize) {
+        partialAt(px, partial, "Partial_1R", newSL);
       } else {
         position.slCurrent = newSL;
       }
     }
 
     // Milestone 2: +slPlusM2R → partial 27.5% of ORIGINAL (capped to 90% of remaining), SL → +1R
-    if (position.m1 && !position.m2 && rMult >= slPlusM2R) {
+    if (position.m1 && !position.m2 && rMult >= slPlusM2R && position.remainingSize > 0) {
       position.m2 = true;
       const fromOriginal = position.originalSize * slPlusPartial2Pct;
       const partial = Math.min(fromOriginal, position.remainingSize * 0.90);
@@ -3261,6 +3309,10 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         breakoutLevel: meta.breakoutLevel,
         retestExtreme: meta.retestExtreme,
       });
+      if (!rc || !(rc.slDistance > 0) || !(rc.tpDistance > 0)) {
+        equity.push({ date: isoOf(c), value: round2(capital) });
+        continue;
+      }
       slDist = rc.slDistance * pairSlMult;
       tpDist = rc.tpDistance * pairSlMult;
       component = resolveWinningComponentKey(meta, strategy, strategyKey);
@@ -3456,12 +3508,16 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   for (const tradeType of typeOrder) {
 
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
+    const legOv = cfg.typeOverrides?.[tradeType] ?? {};
     const typeConfig = normalizeTfGeometryKeys(strategyKey, {
       ...cfg,
 
-      ...(cfg.typeOverrides?.[tradeType] ?? {}),
-      higherTf: cfg.typeOverrides?.[tradeType]?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
-      riskPerTrade: riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01),
+      ...legOv,
+      higherTf: legOv.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
+      riskPerTrade: applyLegRiskShare(
+        riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01, cfg.typeRiskWeights),
+        legOv,
+      ),
       // AMT / AUCTION_MARKET_THEORY: Swing → utc_week session; Intraday → utc_day (volumeProfileComponent)
       tradeType,
       activeComponents: [tradeType],

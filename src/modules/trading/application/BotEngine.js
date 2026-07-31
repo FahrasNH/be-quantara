@@ -159,6 +159,8 @@ class BotEngine extends EventEmitter {
       atrMultiplier: strat.atrMultiplier,
       riskReward:    strat.riskReward,
       riskPerTrade:  strat.riskPerTrade,
+      riskSizingBasis: strat.riskSizingBasis || "equity",
+      typeRiskWeights: strat.typeRiskWeights || null,
       riskPerTradeStrong: strat.riskPerTradeStrong ?? null,
       // v2.3 spec (STRATEGIES.md §9): maxRiskPerTrade default 0.05 → 0.012.
       // Tetap bisa di-override per-strategi via strat.maxRiskPerTrade / DB config.
@@ -2877,6 +2879,11 @@ class BotEngine extends EventEmitter {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
           marginReserved: finalMargin,
           tpMode: options.tpMode ?? this.config.tpMode ?? "full",
+          slPlusPartial1Pct: options.slPlusPartial1Pct ?? this.config.slPlusPartial1Pct,
+          slPlusPartial2Pct: options.slPlusPartial2Pct ?? this.config.slPlusPartial2Pct,
+          slPlusM1R: options.slPlusM1R ?? this.config.slPlusM1R ?? 1.0,
+          slPlusM2R: options.slPlusM2R ?? this.config.slPlusM2R ?? 2.0,
+          slPlusBeOffsetR: options.slPlusBeOffsetR ?? this.config.slPlusBeOffsetR ?? 0.3,
           // BUG-004: simpan snapshot indikator entry agar partial-close bisa
           // menyalin RSI/ATR/ATR% (tanpa ini partial trade dapat NaN).
           entrySnapshot: enrichedSnapshot,
@@ -3029,6 +3036,11 @@ class BotEngine extends EventEmitter {
         id: `dry_${openTime}`, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr,
         marginReserved,
         tpMode: options.tpMode ?? this.config.tpMode ?? "full",
+        slPlusPartial1Pct: options.slPlusPartial1Pct ?? this.config.slPlusPartial1Pct,
+        slPlusPartial2Pct: options.slPlusPartial2Pct ?? this.config.slPlusPartial2Pct,
+        slPlusM1R: options.slPlusM1R ?? this.config.slPlusM1R ?? 1.0,
+        slPlusM2R: options.slPlusM2R ?? this.config.slPlusM2R ?? 2.0,
+        slPlusBeOffsetR: options.slPlusBeOffsetR ?? this.config.slPlusBeOffsetR ?? 0.3,
         // BUG-004: snapshot entry untuk diwariskan ke partial-close.
         entrySnapshot: enrichedSnapshot,
         strategyName:  attributionKey ?? this.config.strategyKey ?? null,
@@ -3217,7 +3229,22 @@ class BotEngine extends EventEmitter {
       strongTrendTPMult: this.config.strongTrendTPMult ?? 1,
       slMultiplier: typeOverride.slAtrMult ?? this.config.slAtrMult,
       tpMultiplier: typeOverride.tpAtrMult ?? this.config.tpAtrMult,
+      tpMode: typeOverride.tpMode,
+      slPlusPartial1Pct: typeOverride.slPlusPartial1Pct,
+      slPlusPartial2Pct: typeOverride.slPlusPartial2Pct,
+      slPlusM1R: typeOverride.slPlusM1R,
+      slPlusM2R: typeOverride.slPlusM2R,
+      slPlusBeOffsetR: typeOverride.slPlusBeOffsetR,
+      minRr: typeOverride.minRr,
+      minSlPct: typeOverride.minSlPct,
+      minSlPctMode: typeOverride.minSlPctMode,
+      minSlAtrMult: typeOverride.minSlAtrMult,
     });
+
+    if (!riskCfg || !(riskCfg.slDistance > 0) || !(riskCfg.tpDistance > 0)) {
+      this._log("info", `[Multi-AF:${componentId}] ${signal} ditolak — risk config rejected (min SL / invalid levels)`);
+      return;
+    }
 
     const baseSlDist = riskCfg.slDistance;
     const slDist = baseSlDist * (this.config.pairSlMultiplier || 1);
@@ -3246,18 +3273,30 @@ class BotEngine extends EventEmitter {
     // helper the backtest engines use — single source of truth, so live sizing
     // can never silently drift from the backtest (the 3× SMC live-risk bug
     // class, 311e18d). With combined 0.035 → A 0.5%, B 1%, C 2%.
-    const { riskShareForType } = require("../../../core/risk-engine/typeRiskLadder");
+    const { riskShareForType, applyLegRiskShare } = require("../../../core/risk-engine/typeRiskLadder");
     const enabledComponents =
       this.config.afEnabledComponents ||
       this.config.enabledComponents ||
       this.config.smcEnabledComponents ||
       ["Scalping", "Intraday", "Swing"];
-    const riskPerTrade = riskShareForType(
-      componentId,
-      enabledComponents,
-      this.config.riskPerTrade || 0.01,
+    const legOverrides =
+      this.config.typeOverrides?.[typeName] ||
+      this.config.typeOverrides?.[componentId] ||
+      {};
+    const riskPerTrade = applyLegRiskShare(
+      riskShareForType(
+        componentId,
+        enabledComponents,
+        this.config.riskPerTrade || 0.01,
+        this.config.typeRiskWeights,
+      ),
+      legOverrides,
     );
-    const riskAmt = this.state.capital * riskPerTrade;
+    // Parity with RealStrategyBacktestService riskSizingBasis:"initial".
+    const riskBasis = this.config.riskSizingBasis === "initial"
+      ? (this.state.startCapital || this.config.capital || this.state.capital)
+      : this.state.capital;
+    const riskAmt = riskBasis * riskPerTrade;
     const qty = slDist > 0 ? riskAmt / slDist : 0;
 
     if (qty <= 0) {
@@ -3292,6 +3331,7 @@ class BotEngine extends EventEmitter {
 
     // Create position object
     const positionId = `${componentId}-${Date.now()}`;
+    const tpMode = riskCfg.preferredTpMode || typeOverride.tpMode || this.config.tpMode || "full";
     const position = {
       positionId,
       componentId,
@@ -3302,6 +3342,7 @@ class BotEngine extends EventEmitter {
       sl,
       tp,
       qty,
+      size: qty,
       riskAmt,
       openTime: new Date().toISOString(),
       openCandle: lastIdx,
@@ -3310,6 +3351,18 @@ class BotEngine extends EventEmitter {
       marketCond: marketCond || "NORMAL",
       marginReserved: requiredMargin,
       coordinatorBotKey: botKey,
+      // SL+ / partial ladder — parity with backtest typeOverrides + calculateRiskConfig
+      tpMode,
+      slPlusPartial1Pct: riskCfg.slPlusPartial1Pct ?? typeOverride.slPlusPartial1Pct ?? this.config.slPlusPartial1Pct,
+      slPlusPartial2Pct: riskCfg.slPlusPartial2Pct ?? typeOverride.slPlusPartial2Pct ?? this.config.slPlusPartial2Pct,
+      slPlusM1R: riskCfg.slPlusM1R ?? typeOverride.slPlusM1R ?? this.config.slPlusM1R ?? 1.0,
+      slPlusM2R: riskCfg.slPlusM2R ?? typeOverride.slPlusM2R ?? this.config.slPlusM2R ?? 2.0,
+      slPlusBeOffsetR: riskCfg.slPlusBeOffsetR ?? typeOverride.slPlusBeOffsetR ?? this.config.slPlusBeOffsetR ?? 0.3,
+      remainingSize: qty,
+      R: slDist,
+      slCurrent: sl,
+      m1: false, m2: false, m3: false,
+      makerEntry: typeOverride.makerEntry === true || this.config.makerEntry === true,
     };
 
     // Store position
@@ -3585,34 +3638,42 @@ class BotEngine extends EventEmitter {
     const sym     = (this.config.symbol || "").replace("/", "").replace(":USDT", "");
     const minLot  = MIN_LOT[sym] ?? 0.001;
 
-    // ── Milestone 1: +1R → partial 40%, SL ke +0.3R (bukan BEP murni) ───────
-    // 4yr VAULT backtest: runner yang diparkir tepat di BEP mati kena pullback
-    // dangkal pertama (TF 4/5 & MR 3/3 keluar via SL_TRAIL ~breakeven, tak pernah
-    // sampai +2R). +0.3R tetap mengunci profit kecil tapi memberi ruang napas.
+    // ── Milestone 1: +M1R → partial (or 0% = BE-trail), SL → entry±beOff*R ──
+    // Default beOff=0.3 (VAULT). Wyckoff Scalping uses beOff=0 via pos/config.
     // HARUS identik dengan RealStrategyBacktestService.checkPartialMilestones.
-    if (!pos.m1 && rMult >= 1.0) {
-      const pct     = this.config.slPlusPartial1Pct;
-      const partial = parseFloat((pos.size * pct).toFixed(8));
-      const newSL   = pos.side === "LONG" ? pos.entry + 0.3 * R : pos.entry - 0.3 * R; // +0.3R
+    const m1R = Number.isFinite(pos.slPlusM1R) ? pos.slPlusM1R : (this.config.slPlusM1R ?? 1.0);
+    const m2R = Number.isFinite(pos.slPlusM2R) ? pos.slPlusM2R : (this.config.slPlusM2R ?? 2.0);
+    const beOff = Number.isFinite(pos.slPlusBeOffsetR)
+      ? pos.slPlusBeOffsetR
+      : (Number.isFinite(this.config.slPlusBeOffsetR) ? this.config.slPlusBeOffsetR : 0.3);
+    const pct1 = pos.slPlusPartial1Pct ?? this.config.slPlusPartial1Pct;
+    const pct2 = pos.slPlusPartial2Pct ?? this.config.slPlusPartial2Pct;
+
+    if (!pos.m1 && rMult >= m1R) {
+      const partial = parseFloat((pos.size * pct1).toFixed(8));
+      const newSL   = pos.side === "LONG" ? pos.entry + beOff * R : pos.entry - beOff * R;
       pos.m1 = true;
 
-      if (partial >= minLot) {
-        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, "+0.3R");
+      // p1≥1 (or size≈remaining) = full bank at m1R as limit TP — no runner left.
+      const rem = pos.remainingSize ?? pos.size;
+      if (partial >= minLot && partial >= rem * 0.999) {
+        await this._executePartialClose(pos, price, rem, "TP", newSL, `full@${m1R}R`);
+      } else if (partial >= minLot) {
+        await this._executePartialClose(pos, price, partial, "Partial_1R", newSL, `+${beOff}R`);
       } else {
-        // Size terlalu kecil untuk partial — geser SL ke +0.3R saja agar tetap terlindungi
+        // Size terlalu kecil / 0% BE-trail — geser SL saja agar tetap terlindungi
         this._log("info",
           `SL+ M1: partial ${partial.toFixed(4)} < min lot ${minLot} ${sym} ` +
-          `— skip partial, SL digeser ke +0.3R $${newSL.toFixed(2)} ✓`
+          `— skip partial, SL digeser ke +${beOff}R $${newSL.toFixed(2)} ✓`
         );
         pos.slCurrent = newSL;
         if (!this.config.dryRun) await this._updateSLOnExchange(pos, newSL);
       }
     }
 
-    // ── Milestone 2: +2R → partial 27.5% of ORIGINAL, SL ke +1R ────────────
-    if (pos.m1 && !pos.m2 && rMult >= 2.0) {
-      const pct          = this.config.slPlusPartial2Pct;
-      const fromOriginal = parseFloat((pos.size * pct).toFixed(8));
+    // ── Milestone 2: +M2R → partial of ORIGINAL, SL → +1R ──────────────────
+    if (pos.m1 && !pos.m2 && rMult >= m2R) {
+      const fromOriginal = parseFloat((pos.size * pct2).toFixed(8));
       const partial      = Math.min(fromOriginal, parseFloat((pos.remainingSize * 0.90).toFixed(8)));
       const newSL        = pos.side === "LONG" ? pos.entry + R : pos.entry - R; // +1R
       pos.m2 = true;

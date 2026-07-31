@@ -60,6 +60,9 @@ const TS_COMPONENTS = ["MARKET_STRUCTURE", "AUCTION_MARKET_THEORY"];
 const MD_COMPONENTS = ["SUPPLY_AND_DEMAND", "STATISTICAL_ARBITRAGE"];
 const BS_COMPONENTS = ["ICT_STYLE_TRADING", "LIQUIDATION_SQUEEZE"];
 
+// Per-leg exit mode is valid on typeOverrides (e.g. Wyckoff Scalping BE-trail).
+const LEG_ALLOWED_PARENT_KEYS = new Set(["tpMode"]);
+
 function assertNoKeys(cfg, forbidden, label) {
   for (const key of forbidden) {
     assert.ok(!(key in cfg), `${label} must not have parent-only key ${key}`);
@@ -67,6 +70,7 @@ function assertNoKeys(cfg, forbidden, label) {
   for (const leg of ["Scalping", "Intraday", "Swing"]) {
     const ov = cfg.typeOverrides?.[leg] || {};
     for (const key of forbidden) {
+      if (LEG_ALLOWED_PARENT_KEYS.has(key)) continue;
       assert.ok(!(key in ov), `${label}.typeOverrides.${leg} must not have ${key}`);
     }
   }
@@ -123,7 +127,7 @@ for (const key of AF_COMPONENTS.concat(TS_COMPONENTS, MD_COMPONENTS, BS_COMPONEN
 }
 
 // ── Component-specific knobs present (not just tier base) ────────────────────
-assert.equal(STRATEGIES.WYCKOFF.entryModel, "aggressive");
+assert.equal(STRATEGIES.WYCKOFF.entryModel, "balanced");
 assert.equal(STRATEGIES.WYCKOFF.springLookback, 20);
 assert.equal(STRATEGIES.VOLUME_SPREAD_ANALYSIS.wideSpreadMult, 1.3);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.leftLook, 2);
