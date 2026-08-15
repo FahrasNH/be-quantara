@@ -294,7 +294,8 @@ class BotEngine extends EventEmitter {
     };
 
     const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
-    this.config = normalizeSmcParams(this.config);
+    const { applyDryRunStrategyRelaxations } = require("../../../config/dryRunStrategyRelaxations");
+    this.config = applyDryRunStrategyRelaxations(normalizeSmcParams(this.config));
 
     this.state = {
       running:       false,

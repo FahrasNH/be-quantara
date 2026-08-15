@@ -168,11 +168,45 @@ const TIER_COMPONENT_MAP = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const { TIER_ORDER } = require("../core/risk-engine/tierConfig");
+
 /**
  * Get active component keys for a given tier.
  */
 function getActiveComponentsForTier(tier) {
   return TIER_COMPONENT_MAP[tier]?.active || [];
+}
+
+/**
+ * Accumulate race-pool component keys from FOUNDRY through the given tier
+ * (inclusive). Used for dry-run multi-strategy execution — tier entitlement
+ * unlocks component racers, not just umbrella engine keys.
+ * @param {string} tier
+ * @returns {string[]}
+ */
+function getComponentPoolUpToTier(tier) {
+  const idx = TIER_ORDER.indexOf(tier);
+  const endIdx = idx >= 0 ? idx : 0;
+  const pool = [];
+  const seen = new Set();
+  for (let i = 0; i <= endIdx; i++) {
+    for (const key of TIER_COMPONENT_MAP[TIER_ORDER[i]]?.active || []) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        pool.push(key);
+      }
+    }
+  }
+  return pool;
+}
+
+/**
+ * All live component racers for staging dry-run observation.
+ * Includes halted BREAKOUT_RETEST (dry-run/backtest validation only).
+ * @returns {string[]}
+ */
+function getAllDryRunComponentPool() {
+  return LIVE_COMPONENT_KEYS.slice();
 }
 
 /**
@@ -331,6 +365,8 @@ module.exports = {
   getGen1DeprecationStats,
   resetGen1DeprecationStats,
   getActiveComponentsForTier,
+  getComponentPoolUpToTier,
+  getAllDryRunComponentPool,
   isActiveComponent,
   isLegacyAlias,
   isBsBrHaltedKey,
