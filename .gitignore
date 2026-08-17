@@ -14,6 +14,8 @@ bot.db
 scalping-ablation.txt
 ablation.txt
 *.ablation.txt
+# Keep backtest-reports/ visible in the IDE (large runs — avoid committing).
+# backtest-reports/
 
 # Generated docs (keep .md as source of truth)
 docs/**/*.docx
