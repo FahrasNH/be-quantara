@@ -156,9 +156,18 @@ class MultiStrategyCoordinator extends EventEmitter {
     // Detail risk/RR per strategi tetap tersedia di config; yang relevan bagi user
     // saat ada posisi (strategi mana, holding time, Net P&L) ditampilkan di panel
     // detail koin, bukan diulang tiap startup.
-    // Strategi disingkat ke inisial (AF · TM · MR · BR) agar muat satu baris —
-    // nama lengkap ditampilkan di log entry tiap kali strategi memfire posisi.
-    const names = this.strategies.map(k => this._abbrev(k)).join(" · ");
+    // Strategi disingkat ke inisial umbrella (AF · TS · MD · BS) agar muat satu
+    // baris — nama lengkap ditampilkan di log entry tiap kali strategi memfire.
+    //
+    // DE-DUPE: STRATEGY_ABBREV memetakan tiap strategi KOMPONEN ke singkatan
+    // UMBRELLA-nya (SMC/Wyckoff/VSA → semuanya "AF"). Tanpa de-dupe, 11 engine
+    // tampil sebagai "AF · AF · AF · TS · TS · TS · MD · MD · MD · BS · BS" —
+    // berulang tanpa menambah informasi. Tampilkan tiap umbrella sekali saja,
+    // urutan kemunculan dipertahankan, dan jumlah engine ditaruh di belakang
+    // supaya pembagian modal per strategi tetap bisa dipahami.
+    const uniqueAbbrevs = [...new Set(this.strategies.map(k => this._abbrev(k)))];
+    const engineCount = this.strategies.length;
+    const names = `${uniqueAbbrevs.join(" · ")} (${engineCount} engine)`;
     const lines = [];
     lines.push(`══ QUANTARA BOT — ${coin}/USDT (multi-strategi) ══`);
     lines.push(`Exchange   : ${c0.exchangeLabel}`);
