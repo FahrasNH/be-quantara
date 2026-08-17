@@ -106,8 +106,117 @@ class BinanceClient extends CcxtFuturesClient {
     return { success: false, message: detail };
   }
 
+  /**
+   * Map a raw Binance/CCXT error to a SPECIFIC, actionable diagnosis.
+   *
+   * Why: the previous implementation emitted ONE generic message ("periksa key /
+   * IP whitelist / Futures") for EVERY failure mode. Clock drift, geo-block and
+   * network timeouts have nothing to do with the key or the IP whitelist, so the
+   * message actively pointed users at the wrong thing. Mirrors the per-code
+   * mapping OkxClient already does (50110 → IP whitelist).
+   *
+   * @param {Error} err
+   * @returns {{ code: string, message: string }}
+   */
+  static diagnoseError(err) {
+    const raw = String(err?.message || "");
+    const status = err?.httpStatus ?? err?.statusCode ?? null;
+
+    // Clock drift — the single most common VPS failure, and NOT a key/IP issue.
+    if (/-1021/.test(raw) || /timestamp for this request/i.test(raw) || /recvWindow/i.test(raw)) {
+      return {
+        code: "BINANCE_CLOCK_DRIFT",
+        message:
+          "Jam server tidak sinkron dengan Binance (error -1021). Ini BUKAN masalah API key atau IP whitelist. "
+          + "Perbaiki dengan menyalakan NTP di server: `timedatectl set-ntp true` lalu coba lagi.",
+      };
+    }
+
+    // Signature mismatch — usually a mangled secret (trailing space / wrong key pair).
+    if (/-1022/.test(raw) || /signature for this request is not valid/i.test(raw)) {
+      return {
+        code: "BINANCE_BAD_SIGNATURE",
+        message:
+          "Signature ditolak Binance (error -1022). Secret key kemungkinan salah atau tersalin tidak lengkap. "
+          + "Salin ulang API secret dari Binance tanpa spasi tambahan.",
+      };
+    }
+
+    // Geo-restriction — Binance answers 451 for blocked jurisdictions.
+    if (status === 451 || /restricted location/i.test(raw) || /eligibility/i.test(raw)) {
+      return {
+        code: "BINANCE_GEO_RESTRICTED",
+        message:
+          "Binance memblokir permintaan dari lokasi server ini (HTTP 451). Ini BUKAN masalah API key. "
+          + "Gunakan server di region yang diizinkan Binance.",
+      };
+    }
+
+    // Network / DNS — nothing to do with credentials.
+    if (/ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ECONNRESET|socket hang up|network|timeout/i.test(raw)) {
+      return {
+        code: "BINANCE_NETWORK_ERROR",
+        message:
+          "Server tidak bisa menjangkau Binance (masalah jaringan/DNS). Ini BUKAN masalah API key. "
+          + "Cek koneksi keluar server ke api.binance.com dan fapi.binance.com.",
+      };
+    }
+
+    // Genuine key / IP / permission rejection.
+    if (/-2015/.test(raw) || /invalid api-key/i.test(raw) || /-2008/.test(raw)) {
+      return {
+        code: "BINANCE_KEY_OR_IP_REJECTED",
+        message:
+          "Binance menolak API key (error -2015). Periksa: (1) API key/secret benar, "
+          + "(2) IP publik server ada di whitelist API key, (3) 'Enable Futures' aktif. "
+          + "Catatan: perubahan whitelist Binance butuh beberapa menit untuk aktif.",
+      };
+    }
+
+    if (/-2014/.test(raw) || /api-key format invalid/i.test(raw)) {
+      return {
+        code: "BINANCE_KEY_FORMAT_INVALID",
+        message: "Format API key tidak valid (error -2014). Salin ulang API key dari Binance.",
+      };
+    }
+
+    return {
+      code: "BINANCE_VALIDATION_FAILED",
+      message: `Gagal memverifikasi API key Binance: ${raw || "penyebab tidak diketahui"}`,
+    };
+  }
+
+  /**
+   * Validate that the key can do what the bot actually needs.
+   *
+   * Order matters (changed deliberately):
+   *   1. FUTURES capability via fapi (fetchBalance) — this is the real gate; it
+   *      proves the key works on the domain the bot trades on.
+   *   2. Withdrawal restriction via SAPI (api.binance.com, SPOT domain) — a
+   *      security check, kept, but no longer able to block a perfectly good
+   *      futures key when the SPOT domain is the thing that's failing.
+   *
+   * Previously step 2 was the ONLY gate, so a key that could trade futures fine
+   * was still rejected whenever the unrelated SPOT endpoint failed.
+   */
   async validatePermissions() {
-    let restrictions;
+    // ── 1. Futures capability (fapi.binance.com) — the gate that matters ──────
+    try {
+      await this.exchange.fetchBalance({ type: "future" });
+    } catch (err) {
+      const diag = BinanceClient.diagnoseError(err);
+      const e = new Error(diag.message);
+      e.statusCode = 400;
+      e.code = diag.code;
+      e.originalMessage = err.message;
+      throw e;
+    }
+
+    // ── 2. Withdrawal permission (sapi / SPOT domain) — security check ────────
+    const truthy = (v) => v === true || v === "true" || v === 1 || v === "1";
+    let restrictions = null;
+    let withdrawalCheckSkipped = null;
+
     try {
       const fetchRestrictions = this.exchange.sapiGetAccountApiRestrictions;
       if (typeof fetchRestrictions !== "function") {
@@ -115,23 +224,16 @@ class BinanceClient extends CcxtFuturesClient {
       }
       restrictions = await fetchRestrictions.call(this.exchange);
     } catch (err) {
-      const hint = err.message?.includes("-2015") || /invalid api-key/i.test(err.message || "")
-        ? " Periksa API key/secret dan pastikan IP publik VPS ada di whitelist Binance."
-        : "";
-      const e = new Error(
-        `Tidak bisa memverifikasi izin API key Binance.${hint} Pastikan key valid, Futures aktif, dan IP whitelist benar.`
-      );
-      e.statusCode = 400;
-      e.code = "BINANCE_VALIDATION_FAILED";
-      e.originalMessage = err.message;
-      throw e;
+      // Futures already proved the key is valid and reachable, so a SPOT-domain
+      // failure must NOT block onboarding. Surface it instead of hiding it: the
+      // caller audits `withdrawalCheckSkipped` so a skipped security check is
+      // never silent.
+      withdrawalCheckSkipped = BinanceClient.diagnoseError(err).message;
+      log.warn(`[Binance validate] Withdrawal check dilewati — ${withdrawalCheckSkipped}`);
+      return { ok: true, futures: true, withdrawal: null, withdrawalCheckSkipped };
     }
 
-    const truthy = (v) => v === true || v === "true" || v === 1 || v === "1";
-    const withdrawal = truthy(restrictions?.enableWithdrawals);
-    const futures = truthy(restrictions?.enableFutures);
-
-    if (withdrawal) {
+    if (truthy(restrictions?.enableWithdrawals)) {
       const e = new Error(
         "Withdrawal permission terdeteksi pada API key. Cabut izin withdrawal di pengaturan API Binance sebelum menghubungkan."
       );
@@ -140,13 +242,9 @@ class BinanceClient extends CcxtFuturesClient {
       throw e;
     }
 
-    if (!futures) {
-      const e = new Error(
-        "API key tidak memiliki izin Futures. Aktifkan 'Enable Futures' di pengaturan API Binance."
-      );
-      e.statusCode = 400;
-      e.code = "FUTURES_PERMISSION_MISSING";
-      throw e;
+    // Futures already verified live above; this flag is only a secondary signal.
+    if (!truthy(restrictions?.enableFutures)) {
+      log.warn("[Binance validate] apiRestrictions.enableFutures=false tetapi fapi balance berhasil — mengikuti hasil fapi.");
     }
 
     return { ok: true, futures: true, withdrawal: false };
