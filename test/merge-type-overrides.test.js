@@ -122,3 +122,40 @@ describe("resolveBacktestStrategyDefaults — Sprint 23 VSA leg merge", () => {
     assert.equal(cfg.typeOverrides.Scalping.vsaScalpingShelved, true);
   });
 });
+
+describe("resolveBacktestStrategyDefaults — Wyckoff-only remount (prod parity)", () => {
+  test("FE collapse Wyckoff-only → SMART_MONEY_CONCEPTS gets STRATEGIES.WYCKOFF geometry", () => {
+    const cfg = resolveBacktestStrategyDefaults("SMART_MONEY_CONCEPTS", {
+      afActiveRacers: ["WYCKOFF"],
+      selectedComponents: ["WYCKOFF"],
+    });
+    assert.equal(cfg.name, "WYCKOFF");
+    assert.equal(cfg.typeOverrides.Scalping.tpMode, "partial");
+    assert.equal(cfg.typeOverrides.Intraday.tpMode, "partial");
+    assert.equal(cfg.typeOverrides.Swing.tpMode, "partial");
+    assert.equal(cfg.typeOverrides.Scalping.blockLong, true);
+    assert.equal(cfg.typeOverrides.Scalping.makerEntry, true);
+    assert.ok(Array.isArray(cfg.typeOverrides.Scalping.blockedUtcHours));
+    assert.equal(cfg.riskPerTrade, 0.11);
+    assert.equal(cfg.riskSizingBasis, "initial");
+    // Must NOT keep SMC Scalping ATR floor that wiped Wyckoff 5m gates.
+    assert.equal(cfg.typeOverrides.Scalping.atrMinMult, 0.08);
+    assert.equal(cfg.typeOverrides.Scalping.smcSessionFilter, undefined);
+  });
+
+  test("standalone WYCKOFF key unchanged", () => {
+    const cfg = resolveBacktestStrategyDefaults("WYCKOFF", {});
+    assert.equal(cfg.name, "WYCKOFF");
+    assert.equal(cfg.typeOverrides.Scalping.tpMode, "partial");
+    assert.equal(cfg.riskPerTrade, 0.11);
+  });
+
+  test("full FOUNDRY AF does not remount pure Wyckoff SSOT over SMC", () => {
+    const cfg = resolveBacktestStrategyDefaults("SMART_MONEY_CONCEPTS", {
+      selectedComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
+    });
+    assert.equal(cfg.name, "SMART_MONEY_CONCEPTS");
+    assert.equal(cfg.typeOverrides.Scalping.tpMode, undefined);
+    assert.equal(cfg.typeOverrides.Scalping.smcSessionFilter, false);
+  });
+});

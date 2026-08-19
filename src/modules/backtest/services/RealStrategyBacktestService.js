@@ -227,17 +227,36 @@ function _isVsaOnlyJob(strategyKey, config = {}) {
   return active.length === 1 && active[0] === "VOLUME_SPREAD_ANALYSIS";
 }
 
+/** Wyckoff-only job — standalone key or FE collapse to SMART_MONEY_CONCEPTS engine. */
+function _isWyckoffOnlyJob(strategyKey, config = {}) {
+  if (strategyKey === "WYCKOFF") return true;
+  if (!isSmcKey(strategyKey)) return false;
+  const active = _resolveAfActiveRacers(config);
+  return active.length === 1 && active[0] === "WYCKOFF";
+}
+
 function _afRacersIncludeVsa(config = {}) {
   return _resolveAfActiveRacers(config).includes("VOLUME_SPREAD_ANALYSIS");
 }
 
 /**
  * Backtest SSOT: merge component leg overrides when FE collapses racers into umbrella
- * engine keys. Sprint 23 VSA gates (vsaScalpingShelved, vsaSwingLongOnly, …) live in
- * STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides — NOT in SMART_MONEY_CONCEPTS.
+ * engine keys.
+ * - VSA gates live in STRATEGIES.VOLUME_SPREAD_ANALYSIS (not SMART_MONEY_CONCEPTS).
+ * - Wyckoff partial-bank / blockedUtcHours / risk ladder live in STRATEGIES.WYCKOFF.
+ * Without remount, Advance "Wyckoff" (engine=SMC + selectedComponents=[WYCKOFF])
+ * silently runs SMC geometry → WR/PnL diverge from CLI strategyKey=WYCKOFF.
  */
 function resolveBacktestStrategyDefaults(strategyKey, config = {}) {
   const base = resolveStrategyDefaults(strategyKey);
+
+  // Pure remount — do NOT overlay SMC typeOverrides (would wipe tpMode:partial,
+  // blockedUtcHours, makerEntry, Wyckoff ATR floors). Client opts still merge later
+  // via mergeBacktestCfg(base, opts.config).
+  if (_isWyckoffOnlyJob(strategyKey, config)) {
+    return { ...resolveStrategyDefaults("WYCKOFF") };
+  }
+
   const vsaDefaults = STRATEGIES.VOLUME_SPREAD_ANALYSIS;
   if (!vsaDefaults) return base;
 
@@ -3851,6 +3870,7 @@ module.exports = {
   mergeBacktestCfg,
   resolveBacktestStrategyDefaults,
   _isVsaOnlyJob,
+  _isWyckoffOnlyJob,
   formatScalpingFunnel,
   formatStrategyFunnel,
   formatExecSection,

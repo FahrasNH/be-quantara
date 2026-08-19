@@ -11,6 +11,13 @@
  *   WYCKOFF_BT_TYPES  / --types      Intraday|Scalping|…  (default: Intraday)
  *   WYCKOFF_BT_CAPITAL / --capital   1000                 (default: 1000)
  *   WYCKOFF_BT_EXCHANGE / --exchange binance|bitget|okx   (default: binance)
+ *   WYCKOFF_BT_KLINES / --klines     exchange|vision|file (default: exchange = web parity)
+ *       exchange = HistoricalKlinesService (CCXT USDT-M futures/swap) — SAME as website
+ *       vision   = data-api.binance.vision SPOT klines (NOT futures parity)
+ *       file     = offline JSON (default dir: backtest-reports/btcusdt_data) — NO API
+ *   WYCKOFF_BT_CACHE_DIR / --cache-dir  JSON candle dir (default: backtest-reports/btcusdt_data)
+ *   WYCKOFF_BT_WEB_PARITY / --web-parity  0|1  (default: 1 for real) — 5m→180d cap,
+ *       daily regime candles, HTF warmupBars=60, pair-tier SL× (mirrors runBacktestJob)
  *   WYCKOFF_BT_ENTRY_MODEL / --entry-model  balanced|moderate|aggressive|conservative
  *   WYCKOFF_BT_FEES / --fees         0|1                  (default: 0 for mock, 1 for real)
  *   WYCKOFF_BT_OUT_DIR / --out       custom output folder (optional)
@@ -45,11 +52,17 @@ const assert = require("node:assert/strict");
 const { runTripleTypeBacktest } = require("#modules/backtest/services/RealStrategyBacktestService.js");
 const {
   applyStrategyJobDefaults,
+  ensurePairTierOnParameters,
+  getEffectivePeriod,
   TYPE_TF,
+  TYPE_MAX_BARS,
 } = require("#modules/backtest/services/runBacktestJob.js");
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_OUT_ROOT = path.join(REPO_ROOT, "backtest-reports", "wyckoff");
+
+/** Once Binance CCXT/fapi is blocked (e.g. ISP Internet Positif), skip retries. */
+let exchangeKlinesBlocked = false;
 
 // ── Config parsing ───────────────────────────────────────────────────────────
 
@@ -92,11 +105,35 @@ function parseCfg(argv = process.argv.slice(2)) {
   const source = String(get("--source", "WYCKOFF_BT_SOURCE", "mock")).toLowerCase();
   const months = Math.max(1, parseInt(get("--months", "WYCKOFF_BT_MONTHS", "12"), 10) || 12);
   const feesFlag = get("--fees", "WYCKOFF_BT_FEES", source === "real" ? "1" : "0");
+  const isReal = source === "real" || source === "db";
+  // Real defaults to offline file cache (backtest-reports/btcusdt_data) — no exchange API.
+  const defaultCacheDir = path.join(REPO_ROOT, "backtest-reports", "btcusdt_data");
+  const legacyCacheDir = path.join(REPO_ROOT, "tmp", "wyckoff-bt-cache");
+  const cacheDirRaw = get(
+    "--cache-dir",
+    "WYCKOFF_BT_CACHE_DIR",
+    fs.existsSync(defaultCacheDir) ? defaultCacheDir : legacyCacheDir,
+  );
+  const klinesRaw = String(
+    get("--klines", "WYCKOFF_BT_KLINES", isReal ? "file" : "exchange"),
+  ).toLowerCase();
+  const klines = klinesRaw === "vision" || klinesRaw === "spot"
+    ? "vision"
+    : (klinesRaw === "file" || klinesRaw === "cache" || klinesRaw === "local")
+      ? "file"
+      : "exchange";
+  const webParityFlag = get(
+    "--web-parity",
+    "WYCKOFF_BT_WEB_PARITY",
+    isReal ? "1" : "0",
+  );
 
   return {
-    source: source === "real" || source === "db" ? "real" : "mock",
+    source: isReal ? "real" : "mock",
     months,
     days: Math.round(months * 30.44),
+    /** Maps CLI --months onto website periodId ("3m"|"6m"|"12m"). */
+    periodId: months <= 3 ? "3m" : months <= 6 ? "6m" : "12m",
     symbol: String(get("--symbol", "WYCKOFF_BT_SYMBOL", "BTCUSDT")).toUpperCase(),
     types: String(get("--types", "WYCKOFF_BT_TYPES", "Intraday"))
       .split(",")
@@ -104,6 +141,10 @@ function parseCfg(argv = process.argv.slice(2)) {
       .filter(Boolean),
     capital: parseFloat(get("--capital", "WYCKOFF_BT_CAPITAL", "1000")) || 1000,
     exchange: String(get("--exchange", "WYCKOFF_BT_EXCHANGE", "binance")).toLowerCase(),
+    /** exchange | vision | file (offline JSON dump). */
+    klines,
+    cacheDir: path.resolve(String(cacheDirRaw)),
+    webParity: webParityFlag === "1" || webParityFlag === "true",
     entryModel: String(get("--entry-model", "WYCKOFF_BT_ENTRY_MODEL", "balanced")),
     enableFees: feesFlag === "1" || feesFlag === "true",
     userId: get("--user", "WYCKOFF_BT_USER_ID", process.env.DATASET_EXPAND_USER_ID || null),
@@ -167,7 +208,10 @@ function genMock(symbol, days, intervalMin) {
   return candles;
 }
 
-/** Public Binance Vision OHLCV (no API key; works when api.binance.com is blocked). */
+/**
+ * Public Binance Vision SPOT OHLCV (no API key).
+ * Reachable when api.binance.com / fapi.binance.com are geo-blocked.
+ */
 async function fetchBinanceVisionKlines(symbol, interval, startMs, endMs) {
   const out = [];
   let cursor = startMs;
@@ -184,6 +228,7 @@ async function fetchBinanceVisionKlines(symbol, interval, startMs, endMs) {
       if (ts < startMs || ts > endMs) continue;
       out.push({
         timestamp: ts,
+        date: new Date(ts).toISOString(),
         open: +r[1],
         high: +r[2],
         low: +r[3],
@@ -199,42 +244,292 @@ async function fetchBinanceVisionKlines(symbol, interval, startMs, endMs) {
   return out;
 }
 
-async function loadCandles(tf, cfg) {
+/**
+ * Direct USDT-M futures klines (no CCXT loadMarkets → avoids api.binance.com).
+ * Tries fapi.binance.com then data-api.binance.vision/fapi (often 404).
+ */
+async function fetchBinanceFuturesKlines(symbol, interval, startMs, endMs) {
+  const hosts = [
+    "https://fapi.binance.com",
+    "https://data-api.binance.vision",
+  ];
+  let lastErr = null;
+  for (const host of hosts) {
+    try {
+      const out = [];
+      let cursor = startMs;
+      const limit = 1000;
+      while (cursor < endMs) {
+        const url = `${host}/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}`
+          + `&interval=${encodeURIComponent(interval)}&startTime=${cursor}&endTime=${endMs}&limit=${limit}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+        if (!res.ok) throw new Error(`${host} HTTP ${res.status}`);
+        const rows = await res.json();
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        for (const r of rows) {
+          const ts = Number(r[0]);
+          if (ts < startMs || ts > endMs) continue;
+          out.push({
+            timestamp: ts,
+            date: new Date(ts).toISOString(),
+            open: +r[1],
+            high: +r[2],
+            low: +r[3],
+            close: +r[4],
+            volume: +r[5],
+          });
+        }
+        const lastTs = Number(rows[rows.length - 1][0]);
+        const next = lastTs + 1;
+        if (next <= cursor || rows.length < limit) break;
+        cursor = next;
+      }
+      if (out.length > 50) return { candles: out, host };
+      lastErr = new Error(`${host}: only ${out.length} bars`);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("Binance futures klines unreachable");
+}
+
+function resolveKlineRangeMs(tf, cfg, { warmupBars = 0, periodId = null } = {}) {
+  const HistoricalKlinesService = require("#modules/backtest/services/HistoricalKlinesService.js");
+  const effectivePeriod = periodId
+    || (cfg.webParity ? getEffectivePeriod(cfg.periodId, tf) : cfg.periodId);
+  const range = HistoricalKlinesService.periodToRange(effectivePeriod);
+  if (!range) {
+    const endMs = Date.now();
+    return {
+      startMs: endMs - cfg.days * 86_400_000,
+      endMs,
+      effectivePeriod: cfg.periodId,
+    };
+  }
+  let { startMs, endMs } = range;
+  if (warmupBars > 0) {
+    const tfMs = HistoricalKlinesService.CANDLE_INTERVAL_MS[String(tf).toLowerCase()];
+    if (tfMs) startMs -= warmupBars * tfMs;
+  }
+  const typeMaxBars = TYPE_MAX_BARS[tf];
+  if (typeMaxBars) {
+    const tfMs = HistoricalKlinesService.CANDLE_INTERVAL_MS[String(tf).toLowerCase()];
+    if (tfMs) {
+      const minStart = endMs - typeMaxBars * tfMs;
+      if (startMs < minStart) startMs = minStart;
+    }
+  }
+  return { startMs, endMs, effectivePeriod };
+}
+
+async function loadVisionSpotCandles(symbol, tf, startMs, endMs, effectivePeriod, warmupBars, label) {
+  const candles = await fetchBinanceVisionKlines(symbol, tf, startMs, endMs);
+  if (candles.length <= 50) {
+    throw new Error(`binance.vision returned only ${candles.length} ${tf} bars`);
+  }
+  return {
+    candles,
+    source: label,
+    meta: {
+      count: candles.length,
+      effectivePeriod,
+      warmupBars,
+      exchange: "binance",
+      warn: "SPOT Vision — not identical to website futures OHLCV",
+    },
+  };
+}
+
+/** Normalize dump row (legacy lowercase OR Binance PascalCase export). */
+function normalizeCacheCandle(r) {
+  const ts = Number(
+    r.timestamp ?? r.t ?? r.OpenTimeMilliseconds ?? r.openTime ?? r.time ?? r[0],
+  );
+  if (!Number.isFinite(ts)) return null;
+  const open = +(r.open ?? r.Open ?? r[1]);
+  const high = +(r.high ?? r.High ?? r[2]);
+  const low = +(r.low ?? r.Low ?? r[3]);
+  const close = +(r.close ?? r.Close ?? r[4]);
+  const volume = +(r.volume ?? r.Volume ?? r[5] ?? 0);
+  if (![open, high, low, close].every(Number.isFinite)) return null;
+  return {
+    timestamp: ts,
+    date: r.date || r.OpenTimeUTC || new Date(ts).toISOString(),
+    open,
+    high,
+    low,
+    close,
+    volume,
+  };
+}
+
+function readJsonArrayFile(filePath) {
+  let text = fs.readFileSync(filePath, "utf8");
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const raw = JSON.parse(text);
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.candles)) return raw.candles;
+  if (Array.isArray(raw?.data)) return raw.data;
+  throw new Error(`Expected JSON array in ${path.basename(filePath)}`);
+}
+
+/**
+ * Offline JSON: backtest-reports/btcusdt_data/BTCUSDT_15m_12_months.json
+ * (also supports legacy tmp/wyckoff-bt-cache/BTCUSDT_5m_365d.json).
+ */
+function loadFileCacheCandles(symbol, tf, startMs, endMs, effectivePeriod, warmupBars, cacheDir) {
+  if (!fs.existsSync(cacheDir)) {
+    throw new Error(
+      `Candle cache dir missing: ${cacheDir}. `
+      + `Place BTCUSDT_*_12_months.json under backtest-reports/btcusdt_data`,
+    );
+  }
+  const tfKey = String(tf);
+  const files = fs.readdirSync(cacheDir)
+    .filter((f) => f.endsWith(".json") && (
+      f.startsWith(`${symbol}_${tfKey}_`)
+      // case-insensitive TF match (1M vs 1m)
+      || f.toLowerCase().startsWith(`${symbol}_${tfKey}_`.toLowerCase())
+    ))
+    .sort();
+  if (!files.length) {
+    throw new Error(
+      `No cache file for ${symbol} ${tf} in ${cacheDir}. `
+      + `Expected e.g. ${symbol}_${tf}_12_months.json`,
+    );
+  }
+  // Prefer longest window / 12_months naming when several exist.
+  const pick = files.find((f) => /12_months/i.test(f)) || files[files.length - 1];
+  const raw = readJsonArrayFile(path.join(cacheDir, pick));
+  if (!raw.length) throw new Error(`Empty candle cache: ${pick}`);
+
+  const candles = [];
+  for (const r of raw) {
+    const c = normalizeCacheCandle(r);
+    if (!c) continue;
+    if (c.timestamp < startMs || c.timestamp > endMs) continue;
+    candles.push(c);
+  }
+  // Weekly / monthly dumps are short; allow fewer bars than intraday.
+  const minBars = /^(1w|1W|1M)$/.test(tfKey) ? 20 : 50;
+  if (candles.length < minBars) {
+    throw new Error(
+      `File cache ${pick} only has ${candles.length} bars in requested window `
+      + `(need ≥${minBars}; ${new Date(startMs).toISOString().slice(0, 10)}…`
+      + `${new Date(endMs).toISOString().slice(0, 10)}).`,
+    );
+  }
+  return {
+    candles,
+    source: `file(${pick})`,
+    meta: {
+      count: candles.length,
+      effectivePeriod,
+      warmupBars,
+      cacheFile: pick,
+      cacheDir,
+    },
+  };
+}
+
+/**
+ * Load OHLCV for one TF.
+ * Default (klines=exchange): HistoricalKlinesService — SAME path as website
+ *   (CCXT USDT-M futures / Bitget swap). If api.binance.com is geo-blocked
+ *   (common: ISP Internet Positif), falls back once to Vision SPOT.
+ * Optional (klines=vision): Binance Vision SPOT only (skip blocked futures hosts).
+ * Optional (klines=file): offline JSON under --cache-dir (dump once, reuse forever).
+ * Note: curl cannot bypass the same ISP block — api/fapi redirect to internet-positif.info.
+ */
+async function loadCandles(tf, cfg, { warmupBars = 0, periodId = null } = {}) {
   const intervalMin = TF_MIN[tf] || 15;
   if (cfg.source === "mock") {
     return { candles: genMock(cfg.symbol, cfg.days, intervalMin), source: "mock" };
   }
 
-  const end = new Date();
-  const start = new Date(end.getTime() - cfg.days * 24 * 60 * 60 * 1000);
+  const { startMs, endMs, effectivePeriod } = resolveKlineRangeMs(tf, cfg, { warmupBars, periodId });
 
-  // Prefer Binance Vision public data API (reachable when api.binance.com is geo-blocked).
-  if (cfg.exchange === "binance" || cfg.exchange === "binanceusdm") {
-    try {
-      const candles = await fetchBinanceVisionKlines(
-        cfg.symbol,
-        tf,
-        start.getTime(),
-        end.getTime(),
-      );
-      if (candles.length > 50) {
-        return { candles, source: "binance.vision", meta: { count: candles.length } };
-      }
-    } catch (err) {
-      console.warn(`[wyckoff-report] binance.vision fetch failed: ${err.message}`);
-    }
+  if (cfg.klines === "file") {
+    return loadFileCacheCandles(
+      cfg.symbol, tf, startMs, endMs, effectivePeriod, warmupBars, cfg.cacheDir,
+    );
   }
 
+  // Explicit Vision SPOT, or resume after we already know futures hosts are blocked.
+  if (cfg.klines === "vision" || exchangeKlinesBlocked) {
+    if (exchangeKlinesBlocked && cfg.klines !== "vision") {
+      // quiet after the first loud warning
+    }
+    return loadVisionSpotCandles(
+      cfg.symbol, tf, startMs, endMs, effectivePeriod, warmupBars,
+      exchangeKlinesBlocked ? "binance.vision(spot-fallback)" : "binance.vision(spot)",
+    );
+  }
+
+  // Website path: CCXT futures/swap via HistoricalKlinesService.
   const HistoricalKlinesService = require("#modules/backtest/services/HistoricalKlinesService.js");
-  const res = await HistoricalKlinesService.fetchHistoricalKlines(cfg.userId, {
-    symbol: cfg.symbol,
-    timeframe: tf,
-    start: start.toISOString(),
-    end: end.toISOString(),
-    exchangeType: cfg.exchange,
-    allowClamp: true,
-  });
-  return { candles: res.candles || [], source: res.exchange || cfg.exchange, meta: res };
+  const typeMaxBars = TYPE_MAX_BARS[tf];
+  try {
+    const res = await HistoricalKlinesService.fetchHistoricalKlines(cfg.userId, {
+      symbol: cfg.symbol,
+      timeframe: tf,
+      periodId: effectivePeriod,
+      exchangeType: cfg.exchange,
+      allowClamp: true,
+      warmupBars,
+      ...(typeMaxBars ? { maxBarsOverride: typeMaxBars } : {}),
+    });
+    return {
+      candles: res.candles || [],
+      source: `${res.exchange || cfg.exchange}(futures/swap)`,
+      meta: {
+        count: (res.candles || []).length,
+        effectivePeriod,
+        warmupBars,
+        exchange: res.exchange,
+        coverage: res.coverage,
+        clamped: res.clamped,
+      },
+    };
+  } catch (err) {
+    const code = err?.code || "";
+    const msg = String(err?.message || err);
+    const networkBlocked = code === "EXCHANGE_NETWORK_ERROR"
+      || /unreachable|fetch failed|ECONNRESET|ENOTFOUND|ETIMEDOUT|451|403|CERT_/i.test(msg);
+    if (!networkBlocked) throw err;
+
+    console.warn(`[wyckoff-report] ${cfg.exchange} API blocked/unreachable: ${msg}`);
+
+    // Direct futures REST (skips CCXT loadMarkets → api.binance.com).
+    if (cfg.exchange === "binance" || cfg.exchange === "binanceusdm") {
+      try {
+        const { candles, host } = await fetchBinanceFuturesKlines(
+          cfg.symbol, tf, startMs, endMs,
+        );
+        console.warn(`[wyckoff-report] using direct futures klines via ${host}`);
+        return {
+          candles,
+          source: `binance-fapi(${host.includes("vision") ? "vision" : "fapi"})`,
+          meta: { count: candles.length, effectivePeriod, warmupBars, exchange: "binance" },
+        };
+      } catch (fapiErr) {
+        console.warn(`[wyckoff-report] futures REST also failed: ${fapiErr.message}`);
+      }
+
+      exchangeKlinesBlocked = true;
+      console.warn(
+        "[wyckoff-report] FALLBACK → binance.vision SPOT (curl cannot bypass ISP block on api/fapi). "
+        + "Website uses USDT-M futures — PnL will NOT match exactly. "
+        + "True parity: run on VPS, use VPN, or --klines vision to skip the blocked hosts.",
+      );
+      return loadVisionSpotCandles(
+        cfg.symbol, tf, startMs, endMs, effectivePeriod, warmupBars,
+        "binance.vision(spot-fallback)",
+      );
+    }
+
+    throw err;
+  }
 }
 
 // ── Report printer ───────────────────────────────────────────────────────────
@@ -300,15 +595,27 @@ function printReport(cfg, result, loadMeta) {
   console.log(`  WYCKOFF LOCAL BACKTEST REPORT`);
   console.log(`${"═".repeat(58)}`);
   console.log(`  Symbol        : ${cfg.symbol}`);
-  console.log(`  Window        : last ${cfg.months} month(s) (~${cfg.days}d)`);
+  console.log(`  Window        : last ${cfg.months} month(s) (~${cfg.days}d)  periodId=${cfg.periodId}`);
   console.log(`  Source        : ${cfg.source}${loadMeta?.source ? ` (${loadMeta.source})` : ""}`);
+  console.log(`  Klines        : ${cfg.klines}${cfg.webParity ? " + web-parity" : ""}`);
   console.log(`  Types         : ${cfg.types.join(", ")}`);
   console.log(`  Entry model   : ${cfg.entryModel}`);
   console.log(`  Capital       : $${cfg.capital}`);
   console.log(`  Fees          : ${cfg.enableFees ? "ON" : "OFF"}`);
+  if (loadMeta?.pairTier?.pairSlMultiplier != null) {
+    console.log(`  Pair tier SL× : ${Number(loadMeta.pairTier.pairSlMultiplier).toFixed(3)}`);
+  }
   if (loadMeta?.bars) {
     console.log(`  Entry bars    : ${loadMeta.bars.entry?.toLocaleString?.() ?? loadMeta.bars.entry}`);
     console.log(`  HTF bars      : ${loadMeta.bars.htf?.toLocaleString?.() ?? loadMeta.bars.htf}`);
+    if (loadMeta.bars.daily) {
+      console.log(`  Daily bars    : ${loadMeta.bars.daily?.toLocaleString?.() ?? loadMeta.bars.daily}`);
+    }
+    const ep = loadMeta.bars.perType?.effectivePeriods;
+    if (ep) {
+      const parts = Object.entries(ep).map(([t, v]) => `${t}:${v.entry}`);
+      if (parts.length) console.log(`  Eff. periods  : ${parts.join("  ")}`);
+    }
   }
   console.log(line);
   console.log(`  Total Trades  : ${stats.totalTrades ?? trades.length}  (${extra.wins}W / ${extra.losses}L)`);
@@ -655,27 +962,73 @@ async function runWyckoffCustomBacktest(cfg) {
     throw new Error(`No valid trade types in: ${cfg.types.join(",")}. Use Scalping, Intraday, and/or Swing.`);
   }
 
+  if (cfg.source === "real" && cfg.klines === "vision") {
+    console.warn(
+      "[wyckoff-report] WARNING: --klines vision uses Binance SPOT bars. "
+      + "Website Advance uses USDT-M futures/swap via HistoricalKlinesService — "
+      + "results will NOT match. Prefer default --klines exchange.",
+    );
+  }
+  if (cfg.source === "real" && cfg.klines === "file") {
+    console.log(`[wyckoff-report] offline file cache: ${cfg.cacheDir}`);
+  }
+
   const entryCandles = {};
   const htfCandles = {};
-  const barsMeta = { entry: {}, htf: {} };
+  const barsMeta = { entry: {}, htf: {}, sources: {}, effectivePeriods: {} };
+  let candleExchange = cfg.exchange;
 
   for (const type of typeOrder) {
     const tfs = TYPE_TF[type];
-    const entryLoad = await loadCandles(tfs.entry, cfg);
-    const htfLoad = await loadCandles(tfs.trend, cfg);
+    // Web parity: 12m + 5m → 180d (getEffectivePeriod); HTF gets warmupBars=60.
+    const entryPeriod = cfg.webParity
+      ? getEffectivePeriod(cfg.periodId, tfs.entry)
+      : cfg.periodId;
+    const htfPeriod = cfg.webParity
+      ? getEffectivePeriod(cfg.periodId, tfs.trend)
+      : cfg.periodId;
+
+    console.log(
+      `[wyckoff-report] fetch ${type} entry=${tfs.entry} period=${entryPeriod}`
+      + ` htf=${tfs.trend} period=${htfPeriod} via ${cfg.klines}/${cfg.exchange}`,
+    );
+
+    const entryLoad = await loadCandles(tfs.entry, cfg, { periodId: entryPeriod });
+    const htfLoad = await loadCandles(tfs.trend, cfg, {
+      periodId: htfPeriod,
+      warmupBars: cfg.webParity ? 60 : 0,
+    });
     entryCandles[type] = entryLoad.candles;
     htfCandles[type] = htfLoad.candles;
     barsMeta.entry[type] = entryLoad.candles.length;
     barsMeta.htf[type] = htfLoad.candles.length;
+    barsMeta.sources[type] = { entry: entryLoad.source, htf: htfLoad.source };
+    barsMeta.effectivePeriods[type] = { entry: entryPeriod, htf: htfPeriod };
+    if (entryLoad.meta?.exchange) candleExchange = entryLoad.meta.exchange;
 
     if (!entryLoad.candles.length) {
-      throw new Error(`No ${tfs.entry} candles for ${type} (${cfg.source})`);
+      throw new Error(`No ${tfs.entry} candles for ${type} (${cfg.source}/${cfg.klines})`);
+    }
+  }
+
+  // Website always fetches 1d for dailyRegimeGate (CHOP → 50% size on WYCKOFF).
+  // Also fetch on Vision / spot-fallback so desktop runs keep the same gate.
+  let dailyCandles = [];
+  if (cfg.source === "real" && cfg.webParity) {
+    try {
+      console.log("[wyckoff-report] fetch 1d daily candles for regime gate…");
+      const dailyLoad = await loadCandles("1d", cfg, { periodId: cfg.periodId });
+      dailyCandles = dailyLoad.candles || [];
+      barsMeta.daily = dailyCandles.length;
+    } catch (err) {
+      console.warn(`[wyckoff-report] daily candles failed (fail-open): ${err.message}`);
+      dailyCandles = [];
     }
   }
 
   const { STRATEGIES } = require("#config/strategyDefaults.js");
   const wyDefaults = STRATEGIES.WYCKOFF || {};
-  const config = applyStrategyJobDefaults("WYCKOFF", {
+  let config = applyStrategyJobDefaults("WYCKOFF", {
     activeTypes: typeOrder,
     entryModel: cfg.entryModel,
     allowHtfSideways: wyDefaults.allowHtfSideways,
@@ -721,6 +1074,31 @@ async function runWyckoffCustomBacktest(cfg) {
   if (wyDefaults.longVolumeConfirmMult != null) config.longVolumeConfirmMult = wyDefaults.longVolumeConfirmMult;
   if (wyDefaults.shortVolumeConfirmMult != null) config.shortVolumeConfirmMult = wyDefaults.shortVolumeConfirmMult;
 
+  // Website runBacktestJob stamps PairClassifier SL× via live exchange metrics.
+  // Offline --klines file must NOT hit exchange/DB (avoids ECONNREFUSED noise).
+  let pairTierMeta = null;
+  if (cfg.source === "real" && cfg.webParity && cfg.klines !== "file") {
+    try {
+      config = await ensurePairTierOnParameters(config, {
+        symbol: cfg.symbol,
+        strategyKey: "WYCKOFF",
+        exchangeType: candleExchange || cfg.exchange,
+      });
+      pairTierMeta = {
+        pairSlMultiplier: config.pairSlMultiplier ?? null,
+        pairTier: config.pairTier ?? null,
+      };
+      if (pairTierMeta.pairSlMultiplier != null) {
+        console.log(
+          `[wyckoff-report] pair tier applied  SL×${Number(pairTierMeta.pairSlMultiplier).toFixed(3)}`
+          + (pairTierMeta.pairTier ? ` (${pairTierMeta.pairTier})` : ""),
+        );
+      }
+    } catch (err) {
+      console.warn(`[wyckoff-report] pair tier skipped: ${err.message}`);
+    }
+  }
+
   const result = await runTripleTypeBacktest({
     strategyKey: "WYCKOFF",
     capital: cfg.capital,
@@ -729,18 +1107,27 @@ async function runWyckoffCustomBacktest(cfg) {
     typeOrder,
     entryCandles,
     htfCandles,
-    dailyCandles: [],
+    dailyCandles,
     config,
     symbol: cfg.symbol,
     dataSource: cfg.source,
-    exchangeType: cfg.exchange,
+    exchangeType: candleExchange || cfg.exchange,
   });
 
   const loadMeta = {
-    source: cfg.source,
+    source: cfg.klines === "file"
+      ? `file(${cfg.cacheDir})`
+      : cfg.klines === "vision"
+        ? "binance.vision(spot)"
+        : `${candleExchange || cfg.exchange}(futures/swap)`,
+    klines: cfg.klines,
+    webParity: !!cfg.webParity,
+    periodId: cfg.periodId,
+    pairTier: pairTierMeta,
     bars: {
       entry: Object.values(barsMeta.entry).reduce((a, b) => a + b, 0),
       htf: Object.values(barsMeta.htf).reduce((a, b) => a + b, 0),
+      daily: barsMeta.daily || 0,
       perType: barsMeta,
     },
   };
@@ -832,6 +1219,7 @@ describe("Wyckoff customizable backtest report", () => {
 // Export helpers for optional programmatic use / future scripts
 module.exports = {
   parseCfg,
+  loadCandles,
   runWyckoffCustomBacktest,
   printReport,
   computeExtraStats,
