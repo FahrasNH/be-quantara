@@ -222,7 +222,12 @@ module.exports = function createAccountRouter(helpers = {}) {
               userId,
               action: "EXCHANGE_KEY_REJECTED",
               resource: "UserExchange",
-              details: JSON.stringify({ exchange: "okx", code: err.code, reason: err.message }),
+              details: JSON.stringify({
+                exchange: "okx",
+                code: err.code,
+                reason: err.message,
+                originalMessage: err.originalMessage || null,
+              }),
               ipAddress: req.ip ?? null,
               userAgent: req.headers["user-agent"] ?? null,
             },
@@ -264,7 +269,15 @@ module.exports = function createAccountRouter(helpers = {}) {
               userId,
               action: "EXCHANGE_KEY_REJECTED",
               resource: "UserExchange",
-              details: JSON.stringify({ exchange: "binance", code: err.code, reason: err.message }),
+              // Simpan penyebab ASLI dari exchange (originalMessage), bukan hanya
+              // pesan yang sudah digeneralisasi — tanpa ini jejak forensiknya hilang
+              // dan insiden berikutnya harus didiagnosis dari nol.
+              details: JSON.stringify({
+                exchange: "binance",
+                code: err.code,
+                reason: err.message,
+                originalMessage: err.originalMessage || null,
+              }),
               ipAddress: req.ip ?? null,
               userAgent: req.headers["user-agent"] ?? null,
             },

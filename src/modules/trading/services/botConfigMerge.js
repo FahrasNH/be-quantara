@@ -1,5 +1,7 @@
 "use strict";
 
+const { applyDryRunStrategyRelaxations } = require("../../../config/dryRunStrategyRelaxations");
+
 /**
  * Merge Bot.configOverrides (ParameterDeployService) into engine start config.
  *
@@ -73,7 +75,7 @@ function mergeBotStartOverrides({ dbConfigOverrides, strategyKey, explicit = {} 
   if (dryRun != null) merged.dryRun = dryRun;
   if (tpMode != null) merged.tpMode = tpMode;
 
-  return merged;
+  return applyDryRunStrategyRelaxations(merged);
 }
 
 module.exports = {

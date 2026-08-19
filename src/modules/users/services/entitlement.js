@@ -8,7 +8,14 @@
 const { canUseStrategy, getTierConfig, migrateLegacyTier } = require("../../../core/risk-engine/tierConfig");
 // Sumber kebenaran strategi yang belum boleh live (single source of truth).
 const { DRY_RUN_ONLY_STRATEGIES } = require("../../../shared/middleware/strategyGuard");
-const { isBsBrHaltedKey } = require("../../../config/strategies");
+const {
+  isBsBrHaltedKey,
+  getComponentPoolUpToTier,
+  getAllDryRunComponentPool,
+} = require("../../../config/strategies");
+
+/** When true, dry-run bots run every live component racer (staging observation). */
+const DRY_RUN_ALL_STRATEGIES = process.env.DRY_RUN_ALL_STRATEGIES === "true";
 
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 const prisma = require("../../../infrastructure/db/prismaClient");
@@ -34,9 +41,30 @@ function isStrategyLiveReady(strategyKey) {
  */
 function filterStrategiesByMode(strategies, mode) {
   const list = Array.isArray(strategies) ? strategies : [];
-  // Sprint 14: always drop halted BREAKOUT_RETEST from auto multi-strategy pools
-  const withoutHalted = list.filter((s) => !isBsBrHaltedKey(s));
-  return mode === "live" ? withoutHalted.filter(isStrategyLiveReady) : withoutHalted.slice();
+  if (mode === "live") {
+    return list.filter((s) => !isBsBrHaltedKey(s)).filter(isStrategyLiveReady);
+  }
+  // Dry-run: keep halted BR when explicitly in pool (DRY_RUN_ALL_STRATEGIES / component pool).
+  return list.slice();
+}
+
+/**
+ * Resolve which strategy keys to spawn for auto multi-strategy execution.
+ * Live: umbrella keys from tierConfig (1–4). Dry-run: component race pool
+ * from TIER_COMPONENT_MAP (3 per umbrella tier) so all racers observe signals.
+ *
+ * @param {string} tier
+ * @param {("dry"|"live")} mode
+ * @returns {string[]}
+ */
+function resolveExecutionStrategies(tier, mode) {
+  if (mode === "live") {
+    return getTierConfig(tier)?.strategies ?? [];
+  }
+  if (DRY_RUN_ALL_STRATEGIES) {
+    return getAllDryRunComponentPool();
+  }
+  return getComponentPoolUpToTier(tier);
 }
 
 /**
@@ -214,8 +242,8 @@ async function getGrokConfirmEntitlement(userId) {
  */
 async function getTierStrategies(userId, mode = "dry") {
   const tier = await getUserTier(userId);
-  const config = getTierConfig(tier);
-  return filterStrategiesByMode(config?.strategies ?? [], mode);
+  const raw = resolveExecutionStrategies(tier, mode);
+  return filterStrategiesByMode(raw, mode);
 }
 
 /**
@@ -249,8 +277,10 @@ module.exports = {
   assertStrategyAllowed,
   getStrategyEntitlements,
   getTierStrategies,
+  resolveExecutionStrategies,
   isStrategyLiveReady,
   filterStrategiesByMode,
   shouldAutoEnableGrokConfirm,
   getGrokConfirmEntitlement,
+  DRY_RUN_ALL_STRATEGIES,
 };

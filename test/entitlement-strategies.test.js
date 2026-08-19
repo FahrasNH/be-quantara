@@ -24,10 +24,9 @@ const vault = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT
 
 {
   const dry = filterStrategiesByMode(vault, "dry");
-  // Sprint 14 factory reset: BREAKOUT_RETEST / BREAKOUT_RETEST is halted from auto pools
-  // (dry + live). Dedicated BR backtests still override via applyDedicatedBsBrBacktestConfig.
-  t("dry mode → BR halted from auto pools (3 strategies)", dry.length === 3);
-  t("dry mode → BR not in pool while halted", !dry.includes("BREAKOUT_RETEST"));
+  // Dry-run keeps halted BR when explicitly in the input list (observation / DRY_RUN_ALL pool).
+  t("dry mode → keeps all 4 umbrella keys including halted BR", dry.length === 4);
+  t("dry mode → BR still present while halted", dry.includes("BREAKOUT_RETEST"));
 }
 {
   const live = filterStrategiesByMode(vault, "live");
