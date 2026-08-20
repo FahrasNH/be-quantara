@@ -163,11 +163,8 @@ class MultiStrategyCoordinator extends EventEmitter {
     // UMBRELLA-nya (SMC/Wyckoff/VSA → semuanya "AF"). Tanpa de-dupe, 11 engine
     // tampil sebagai "AF · AF · AF · TS · TS · TS · MD · MD · MD · BS · BS" —
     // berulang tanpa menambah informasi. Tampilkan tiap umbrella sekali saja,
-    // urutan kemunculan dipertahankan, dan jumlah engine ditaruh di belakang
-    // supaya pembagian modal per strategi tetap bisa dipahami.
-    const uniqueAbbrevs = [...new Set(this.strategies.map(k => this._abbrev(k)))];
-    const engineCount = this.strategies.length;
-    const names = `${uniqueAbbrevs.join(" · ")} (${engineCount} engine)`;
+    // urutan kemunculan dipertahankan.
+    const names = [...new Set(this.strategies.map(k => this._abbrev(k)))].join(" · ");
     const lines = [];
     lines.push(`══ QUANTARA BOT — ${coin}/USDT (multi-strategi) ══`);
     lines.push(`Exchange   : ${c0.exchangeLabel}`);
