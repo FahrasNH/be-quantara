@@ -1350,7 +1350,12 @@ async function cacheCandles(exchange, symbol, interval, candles) {
       );
     }
   } catch (e) {
-    console.warn(`[DB] cacheCandles gagal: ${e.message}`);
+    const msg = String(e?.message || e);
+    // Offline CLI / laptop without Postgres — expected; do not spam the console.
+    if (/ECONNREFUSED|ENOTFOUND|ECONNRESET|EAI_AGAIN|connect.*refused/i.test(msg)) {
+      return;
+    }
+    console.warn(`[DB] cacheCandles gagal: ${msg}`);
   }
 }
 
