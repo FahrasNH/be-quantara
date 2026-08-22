@@ -4473,6 +4473,17 @@ class BotEngine extends EventEmitter {
     }
     this.state.openPositions = this.state.openPositions.filter(p => !toClose.includes(p.id));
 
+    // BUGFIX (dry-run margin leak): jalur LIVE melepas reservasi koordinator di
+    // tiga titik (rekonsiliasi exchange, manual close, time stop) tetapi jalur
+    // DRY-RUN ini tidak pernah melakukannya. Akibatnya reservasi ber-`direction`
+    // tertinggal di AccountCoordinator setelah posisi tutup, dan
+    // hasGroupOpenPosition() terus mengembalikan true → SEMUA engine segrup
+    // diblokir "Sudah ada posisi terbuka <SYMBOL> — race-to-confirm: max 1 per
+    // simbol" padahal tidak ada posisi terbuka. Karena reservasi hanya ada di
+    // memori, restart bot "memperbaikinya" — itulah kenapa gejalanya hilang
+    // setelah stop/start. Idempotent: no-op bila masih ada posisi terbuka.
+    if (toClose.length > 0) this._releaseMarginIfFlat();
+
     // Sync session stats ke DB setelah posisi ditutup (dry run)
     if (toClose.length > 0) this._syncSessionStats();
   }
