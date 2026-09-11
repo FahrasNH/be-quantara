@@ -97,6 +97,52 @@ class AdaptiveStrategyEngine extends BotEngine {
   }
 
   /**
+   * Throttle untuk diagnostik "tidak ada sinyal". Terpisah dari
+   * _shouldLogDecision() (180s) milik BotEngine supaya tidak saling merebut slot.
+   *
+   * Volume: N engine × 1 baris / interval. Default 30 menit; bisa dinaikkan lewat
+   * NO_SIGNAL_DIAG_MS bila BotLog terasa ramai.
+   */
+  _shouldLogNoSignal() {
+    const everyMs = parseInt(process.env.NO_SIGNAL_DIAG_MS, 10) || 1_800_000;
+    const now = Date.now();
+    if (!this._lastNoSignalLogAt || now - this._lastNoSignalLogAt >= everyMs) {
+      this._lastNoSignalLogAt = now;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Ringkas histogram ablation jadi SATU baris agar terlihat gate mana yang
+   * menahan strategi ini. Semua 12 strategi mengekspos API yang sama
+   * (resetAblation / getAblation / getAblationSchema), jadi ini generik.
+   *
+   * Contoh keluaran:
+   *   [NO-SIGNAL] SMART_MONEY_CONCEPTS: seqCandidate=12 · rejByConf=12
+   *   [NO-SIGNAL] WYCKOFF: tidak ada setup sama sekali (semua counter 0)
+   */
+  _logNoSignalAblation() {
+    if (typeof this.strategy.getAblation !== "function") return;
+    let abl;
+    try {
+      abl = this.strategy.getAblation();
+    } catch {
+      return;
+    }
+    if (!abl || typeof abl !== "object") return;
+
+    const nonZero = Object.entries(abl)
+      .filter(([, v]) => Number(v) > 0)
+      .map(([k, v]) => `${k}=${v}`);
+
+    const detail = nonZero.length
+      ? nonZero.join(" · ")
+      : "tidak ada setup sama sekali (semua counter 0)";
+    this._log("info", `[NO-SIGNAL] ${this.strategyKey}: ${detail}`);
+  }
+
+  /**
    * Get strategy rankings for current market conditions
    * Returns: [{ key, label, score, canActivate }, ...]
    */
@@ -278,6 +324,18 @@ class AdaptiveStrategyEngine extends BotEngine {
       }
 
       // 7. Deteksi sinyal — kirim htfTrend dari state (bukan hardcoded "NEUTRAL")
+      //
+      // OBSERVABILITAS: aktifkan penghitung ablation HANYA pada tick yang memang
+      // akan di-log (throttle). Strategi menyimpan `_ablation = null` secara
+      // default dan tiap gate mengecek keberadaannya, jadi overhead nol saat
+      // tidak diinstrumentasi. Tanpa ini, `if (!signal) return` di bawah senyap
+      // total — mustahil membedakan "detector tidak menemukan setup" dari
+      // "setup ditemukan tapi ditolak gate" (mis. SMC conf floor 80).
+      const instrument = this._shouldLogNoSignal();
+      if (instrument && typeof this.strategy.resetAblation === "function") {
+        this.strategy.resetAblation();
+      }
+
       const signal = this.strategy.detectSignal(indicators, lastIdx, {
         ...this.config,
         balance:        this.capital || this.config.capital,
@@ -302,7 +360,10 @@ class AdaptiveStrategyEngine extends BotEngine {
         tierOverrides:        this.config.tierOverrides,
       });
 
-      if (!signal) return;
+      if (!signal) {
+        if (instrument) this._logNoSignalAblation();
+        return;
+      }
 
       // Expose for MultiStrategyCoordinator.evaluate() / getPendingSignal()
       this._pendingSignal = { direction: signal };
