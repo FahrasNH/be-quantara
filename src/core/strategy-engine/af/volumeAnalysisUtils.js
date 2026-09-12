@@ -93,21 +93,66 @@ function percentileRank(series, lastIdx, lookback = 100) {
 }
 
 /**
- * Bollinger Band width series: (upper - lower) / middle for each bar up to lastIdx.
+ * Memo per (closes array identity) → per (period:stdDev) → deret + sejauh mana
+ * sudah dihitung. WeakMap: begitu array candle tidak dipakai lagi, cache ikut
+ * di-GC. Di-key per-parameter supaya pemanggil dengan setelan berbeda
+ * (SMC 20/2 vs Wyckoff cfg) tidak saling membatalkan cache.
+ */
+const _bbWidthCache = new WeakMap();
+
+/**
+ * Bollinger Band width series: (upper - lower) / middle untuk tiap bar s/d lastIdx.
+ *
+ * PERF (akar "Job not found or expired (TTL)" pada backtest Wyckoff):
+ * versi lama mengalokasikan `new Array(lastIdx+1)` DAN menghitung ulang seluruh
+ * deret dari indeks 0 pada SETIAP panggilan. detectTradingRange memanggilnya
+ * sekali per bar → O(n²) untuk keseluruhan backtest. Profil CPU: 78,7% waktu
+ * Wyckoff habis di fungsi ini, dan biaya per bar tumbuh 210µs → 892µs seiring
+ * indeks (uji 12k bar). Pada 12 bulan data 5m (~105k bar) ini menembus TTL
+ * worker 90 menit sehingga job dibuang dari store.
+ *
+ * Sekarang deret dihitung INKREMENTAL dan di-memo per array candle: tiap bar
+ * hanya menghitung indeks yang belum pernah dihitung → O(n) untuk seluruh
+ * backtest. Nilai yang dihasilkan identik dengan versi lama.
+ *
+ * Aman untuk live: tiap tick membuat array candle baru → cache miss → dihitung
+ * sekali atas ~200 bar, sama seperti sebelumnya.
+ *
+ * @returns {Array<number|null|undefined>} indeks tetap sejajar dengan `closes`;
+ *   posisi < period-1 kosong (null/undefined) — pemanggil sudah memeriksa
+ *   `== null` / `Number.isFinite`, sehingga perilakunya tidak berubah.
  */
 function bbWidthSeries(closes, lastIdx, period = 20, stdDev = 2) {
-  const widths = new Array(lastIdx + 1).fill(null);
-  if (!closes || lastIdx < period - 1) return widths;
+  if (!closes || lastIdx < period - 1) {
+    return new Array(Math.max(0, lastIdx + 1)).fill(null);
+  }
 
-  for (let i = period - 1; i <= lastIdx; i++) {
+  let byParams = _bbWidthCache.get(closes);
+  if (!byParams) {
+    byParams = new Map();
+    _bbWidthCache.set(closes, byParams);
+  }
+  const key = `${period}:${stdDev}`;
+  let entry = byParams.get(key);
+  if (!entry) {
+    entry = { widths: [], upTo: period - 2 };
+    byParams.set(key, entry);
+  }
+
+  const widths = entry.widths;
+  for (let i = entry.upTo + 1; i <= lastIdx; i++) {
     let sum = 0;
     for (let j = i - period + 1; j <= i; j++) sum += closes[j];
     const mean = sum / period;
-    if (!mean || !Number.isFinite(mean)) continue;
+    if (!mean || !Number.isFinite(mean)) {
+      widths[i] = null;
+      continue;
+    }
 
     let variance = 0;
     for (let j = i - period + 1; j <= i; j++) {
-      variance += Math.pow(closes[j] - mean, 2);
+      const d = closes[j] - mean;
+      variance += d * d;
     }
     variance /= period;
     const std = Math.sqrt(variance);
@@ -115,6 +160,8 @@ function bbWidthSeries(closes, lastIdx, period = 20, stdDev = 2) {
     const lower = mean - stdDev * std;
     widths[i] = (upper - lower) / mean;
   }
+  if (lastIdx > entry.upTo) entry.upTo = lastIdx;
+
   return widths;
 }
 
