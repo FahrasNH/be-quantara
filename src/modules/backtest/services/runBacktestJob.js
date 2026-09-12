@@ -247,13 +247,13 @@ function applyStrategyJobDefaults(strategyKey, parametersIn = {}) {
       }
     }
   }
-  // Standalone Wyckoff (incl. FE Advanced collapse WYCKOFF → SMART_MONEY_CONCEPTS + afActiveVoters)
-  // must use aggressive entryModel. Moderate Syarat checklist remains via explicit override.
+  // Standalone Wyckoff defaults to balanced (frequency ~50–100/yr + HTF align).
+  // moderate / aggressive / conservative remain via explicit override.
   if (_isWyckoffOnlyJob(strategyKey, parameters)
       && parameters.entryModel == null
       && !(parameters.wyckoff && "entryModel" in parameters.wyckoff)) {
-    parameters.entryModel = "aggressive";
-    parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "aggressive" };
+    parameters.entryModel = "balanced";
+    parameters.wyckoff = { ...(parameters.wyckoff || {}), entryModel: "balanced" };
   }
   // SMC-only AF run — skip Wyckoff/VSA race overhead (still 1:1 for SMC signals).
   if (_isSmcOnlyJob(strategyKey, parameters) && parameters.afCombinationMode == null) {

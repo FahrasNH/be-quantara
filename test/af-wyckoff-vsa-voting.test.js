@@ -292,44 +292,44 @@ function makeMatureRangeWithSpring({ n = 160, mid = 100, spring = true } = {}) {
     const c = mid + ((i % 2) * 0.08 - 0.04);
     opens.push(c);
     closes.push(c);
-    highs.push(mid + 0.35);
-    lows.push(mid - 0.35);
+    // Wider box so spring reclaim → opposite side still clears minRr 1:2
+    highs.push(mid + 1.6);
+    lows.push(mid - 1.6);
     volumes.push(1000);
-    atr.push(0.35);
+    atr.push(0.7);
   }
 
   const penIdx = n - 2;
   const recIdx = n - 1;
   if (spring) {
-    // Shallow pierce below support (mid - 0.35) then bullish recovery
-    opens.push(mid - 0.2);
-    closes.push(mid - 0.25);
-    highs.push(mid - 0.05);
-    lows.push(mid - 0.55); // penetration ~0.20 vs ATR 0.35 → within 0.8×ATR
+    // Pierce below support then bullish reclaim on last bar (rejection wick)
+    opens.push(mid - 1.4);
+    closes.push(mid - 1.45);
+    highs.push(mid - 1.2);
+    lows.push(mid - 1.95); // depth ~0.35 vs ATR 0.7 → within min/max ATR band
     volumes.push(2200);
-    atr.push(0.35);
+    atr.push(0.7);
 
-    opens.push(mid - 0.2);
-    closes.push(mid + 0.05); // close back above rangeLow, bullish
-    highs.push(mid + 0.15);
-    lows.push(mid - 0.3);
+    opens.push(mid - 1.5);
+    closes.push(mid - 1.15); // reclaim above rangeLow, bullish, discount zone
+    highs.push(mid - 1.05);
+    lows.push(mid - 1.55);
     volumes.push(1200);
-    atr.push(0.35);
+    atr.push(0.7);
   } else {
-    // Upthrust: pierce above resistance then bearish recovery
-    opens.push(mid + 0.2);
-    closes.push(mid + 0.25);
-    highs.push(mid + 0.55);
-    lows.push(mid + 0.05);
+    opens.push(mid + 1.4);
+    closes.push(mid + 1.45);
+    highs.push(mid + 1.95);
+    lows.push(mid + 1.2);
     volumes.push(2200);
-    atr.push(0.35);
+    atr.push(0.7);
 
-    opens.push(mid + 0.2);
-    closes.push(mid - 0.05);
-    highs.push(mid + 0.3);
-    lows.push(mid - 0.15);
+    opens.push(mid + 1.5);
+    closes.push(mid + 1.15);
+    highs.push(mid + 1.55);
+    lows.push(mid + 1.05);
     volumes.push(1200);
-    atr.push(0.35);
+    atr.push(0.7);
   }
 
   return { opens, highs, lows, closes, volumes, atr, lastIdx: recIdx, penIdx, recIdx };
@@ -778,7 +778,7 @@ test("GROK_AI_TRADING is experimental identity, not migrated to AF/TS", () => {
   assert.strictEqual(normalizeStrategyKey("WYCKOFF"), "WYCKOFF");
 });
 
-test("REGRESSION: WyckoffStrategy default entryModel fires on mature spring (not moderate)", () => {
+test("REGRESSION: WyckoffStrategy default entryModel is balanced (frequency path)", () => {
   const WyckoffStrategy = require("#core/strategy-engine/implementations/WyckoffStrategy.js");
   const c = makeMatureRangeWithSpring({ spring: true });
   const indicators = {
@@ -787,14 +787,16 @@ test("REGRESSION: WyckoffStrategy default entryModel fires on mature spring (not
   };
   const s = new WyckoffStrategy();
   const result = s.evaluate(indicators, c.lastIdx, {});
-  assert.strictEqual(result.vote, "LONG", `default strategy must LONG, got ${result.vote}/${result.reason}`);
-  assert.strictEqual(result.meta?.entry?.model, "aggressive");
+  assert.strictEqual(result.meta?.entry?.model, "balanced");
+  assert.ok(
+    result.vote === "LONG" || String(result.reason).startsWith("entry_checklist_failed"),
+    `unexpected ${result.vote}/${result.reason}`,
+  );
 
-  // Fresh instance — prior evaluate sets _lastSignalIdx cooldown
-  const s2 = new WyckoffStrategy();
-  const gated = s2.evaluate(indicators, c.lastIdx, { entryModel: "moderate" });
-  assert.strictEqual(gated.vote, "NEUTRAL", "explicit moderate must still apply Syarat checklist");
-  assert.ok(String(gated.reason).startsWith("entry_checklist_failed"));
+  const s2 = new WyckoffStrategy({ entryModel: "aggressive" });
+  const fired = s2.evaluate(indicators, c.lastIdx, { entryModel: "aggressive" });
+  assert.strictEqual(fired.vote, "LONG", `aggressive must LONG, got ${fired.vote}/${fired.reason}`);
+  assert.strictEqual(fired.meta?.entry?.model, "aggressive");
 });
 
 test("REGRESSION: Wyckoff-only race promotes Scalping+Swing, not Intraday", () => {

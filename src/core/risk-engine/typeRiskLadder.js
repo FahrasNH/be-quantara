@@ -16,11 +16,8 @@
 // source of truth so live sizing can never drift from what the backtest showed
 // (the 3× SMC live-risk bug class, 311e18d).
 //
-// v4.0 Rationale (user directive):
-// - Scalping 1%: highest frequency, shortest hold (2h) — smallest per-trade risk
-// - Intraday 2%: medium frequency / hold (6h)
-// - Swing 2%: lowest frequency, longest hold (5d) — stable anchor capital
-// - Combined cap 5% keeps concurrent 3-leg exposure bounded (safety preserved).
+// Optional cfg.typeRiskWeights overrides the default map per strategy (e.g.
+// Wyckoff de-emphasizes Scalping fee-drag while keeping trade frequency).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TYPE_RISK_WEIGHTS = { Scalping: 1, Intraday: 2, Swing: 2 };
@@ -38,16 +35,41 @@ function resolveType(idOrType) {
  * @param {string} type          - "Scalping" | "Intraday" | "Swing" (or "A"/"B"/"C")
  * @param {string[]} activeTypes - all concurrently-running type legs
  * @param {number} combinedRisk  - the strategy's configured riskPerTrade (combined cap)
+ * @param {Object} [weightOverrides] - optional per-type weights (e.g. { Scalping: 0.25 })
  */
-function riskShareForType(type, activeTypes, combinedRisk) {
+function riskShareForType(type, activeTypes, combinedRisk, weightOverrides) {
+  const weights = (weightOverrides && typeof weightOverrides === "object")
+    ? { ...TYPE_RISK_WEIGHTS, ...weightOverrides }
+    : TYPE_RISK_WEIGHTS;
   const resolved = resolveType(type);
-  const w = TYPE_RISK_WEIGHTS[resolved] ?? 1;
+  const w = weights[resolved] ?? 1;
   const sum = (activeTypes || []).reduce(
-    (s, t) => s + (TYPE_RISK_WEIGHTS[resolveType(t)] ?? 1),
+    (s, t) => s + (weights[resolveType(t)] ?? 1),
     0,
   );
   if (!sum || !Number.isFinite(combinedRisk)) return combinedRisk;
   return combinedRisk * (w / sum);
 }
 
-module.exports = { TYPE_RISK_WEIGHTS, COMPONENT_TYPE, resolveType, riskShareForType };
+/**
+ * Apply optional per-leg risk overrides from typeOverrides[leg]:
+ *   - riskPerTrade: absolute share (replaces ladder share)
+ *   - riskMult: multiply the ladder share (e.g. Swing 4× without touching SC/ID)
+ * Sibling legs are unchanged when only one leg sets these knobs.
+ */
+function applyLegRiskShare(sharedRisk, legOverrides = {}) {
+  if (Number.isFinite(legOverrides?.riskPerTrade) && legOverrides.riskPerTrade > 0) {
+    return legOverrides.riskPerTrade;
+  }
+  const mult = Number(legOverrides?.riskMult);
+  if (Number.isFinite(mult) && mult > 0) return sharedRisk * mult;
+  return sharedRisk;
+}
+
+module.exports = {
+  TYPE_RISK_WEIGHTS,
+  COMPONENT_TYPE,
+  resolveType,
+  riskShareForType,
+  applyLegRiskShare,
+};

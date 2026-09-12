@@ -221,21 +221,23 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     const out = applyStrategyJobDefaults("WYCKOFF", {});
     assert.deepStrictEqual(out.afActiveRacers, ["WYCKOFF"]);
     assert.deepStrictEqual(out.selectedComponents, ["WYCKOFF"]);
-    assert.strictEqual(out.entryModel, "aggressive");
-    assert.strictEqual(out.wyckoff.entryModel, "aggressive");
+    assert.strictEqual(out.entryModel, "balanced");
+    assert.strictEqual(out.wyckoff.entryModel, "balanced");
     const preserved = applyStrategyJobDefaults("WYCKOFF", { afActiveVoters: ["VOLUME_SPREAD_ANALYSIS"] });
     assert.deepStrictEqual(preserved.afActiveVoters, ["VOLUME_SPREAD_ANALYSIS"]);
     assert.ok(!preserved.afActiveRacers);
+    const aggressive = applyStrategyJobDefaults("WYCKOFF", { entryModel: "aggressive" });
+    assert.strictEqual(aggressive.entryModel, "aggressive");
     const moderate = applyStrategyJobDefaults("WYCKOFF", { entryModel: "moderate" });
     assert.strictEqual(moderate.entryModel, "moderate");
     const feWyckoffOnly = applyStrategyJobDefaults("WYCKOFF", {
       afActiveVoters: ["WYCKOFF"],
       selectedComponents: ["WYCKOFF"],
     });
-    assert.strictEqual(feWyckoffOnly.entryModel, "aggressive");
+    assert.strictEqual(feWyckoffOnly.entryModel, "balanced");
   });
 
-  await test("FE Advanced SMART_MONEY_CONCEPTS + Wyckoff-only voters still get aggressive entryModel", () => {
+  await test("FE Advanced SMART_MONEY_CONCEPTS + Wyckoff-only voters still get balanced entryModel", () => {
     const { applyStrategyJobDefaults } = require("../src/server/services/runBacktestJob");
     // useBacktest collapses WYCKOFF → engine SMART_MONEY_CONCEPTS with afActiveVoters/selectedComponents
     const feCollapse = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
@@ -244,11 +246,11 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
       afUseThreeComponentVoting: true,
       afMinVotes: 2,
     });
-    assert.strictEqual(feCollapse.entryModel, "aggressive");
-    assert.strictEqual(feCollapse.wyckoff.entryModel, "aggressive");
+    assert.strictEqual(feCollapse.entryModel, "balanced");
+    assert.strictEqual(feCollapse.wyckoff.entryModel, "balanced");
     assert.deepStrictEqual(feCollapse.afActiveVoters, ["WYCKOFF"]);
 
-    // Full FOUNDRY package must NOT force Wyckoff aggressive (SMC+Wyckoff+VSA race)
+    // Full FOUNDRY package must NOT force Wyckoff balanced (SMC+Wyckoff+VSA race)
     const fullAf = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
       afActiveVoters: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
       selectedComponents: ["SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS"],
@@ -256,7 +258,7 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(fullAf.entryModel, undefined);
     assert.ok(!fullAf.wyckoff);
 
-    // VSA-only collapse must not get Wyckoff aggressive defaults
+    // VSA-only collapse must not get Wyckoff balanced defaults
     const vsaOnly = applyStrategyJobDefaults("SMART_MONEY_CONCEPTS", {
       afActiveVoters: ["VOLUME_SPREAD_ANALYSIS"],
       selectedComponents: ["VOLUME_SPREAD_ANALYSIS"],

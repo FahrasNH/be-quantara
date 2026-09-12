@@ -14,6 +14,8 @@ bot.db
 scalping-ablation.txt
 ablation.txt
 *.ablation.txt
+# Keep backtest-reports/ visible in the IDE (large runs — avoid committing).
+# backtest-reports/
 
 # Generated docs (keep .md as source of truth)
 docs/**/*.docx
@@ -44,3 +46,9 @@ data/models/*
 !data/models/win-predictor.json
 !data/models/training-report.json
 !data/ml-engine-dataset.json
+
+# Artefak backtest — JANGAN di-commit. Sempat masuk lewat branch development
+# (backtest-reports/ ~2,24 juta baris, tmp/wyckoff-bt-cache/ ~152 rb baris) dan
+# di-exclude saat merge ke staging. Kode/test Wyckoff-nya tetap ikut.
+backtest-reports/
+tmp/

@@ -47,21 +47,24 @@ const DEFAULTS = {
   bbPeriod: 20,
   bbStdDev: 2,
   bbWidthLookback: 100,
-  bbWidthMeanMult: 1.05,
+  bbWidthMeanMult: 0.98,
   bbWidthPercentileMax: 40,
   rangeLookback: 20,
   minRangeWidthPct: 0.005,
-  maxRangeWidthPct: 0.05,
+  maxRangeWidthPct: 0.045,
   minBarsInRange: 20,
   atrPeriod: 14,
-  penetrationAtrMult: 0.8,
+  // Max pierce depth (deeper = breakdown, not spring). Min filters noise ticks.
+  penetrationAtrMult: 0.85,
+  minPenetrationAtrMult: 0.2,
   recoveryWindow: 5,
-  volumeConfirmMult: 1.0,
+  // Require above-average volume on the liquidity grab (≥1.3× SMA).
+  volumeConfirmMult: 1.3,
   volumeSmaPeriod: 20,
   cooldownBars: 5,
-  // ── Entry gates (syarat_entry_wyckoff.txt) ────────────────────────────────
-  // Default moderate enforces Syarat §4–5. Use entryModel:"aggressive" to opt out.
-  entryModel: "moderate", // aggressive | moderate | conservative
+  // BTC frequency profile: target ~50–150 Intraday fills/year on BTCUSDT.
+  // (Selective atr≥0.36 + no-sideways ≈15 trades & +EV; user chose volume.)
+  entryModel: "balanced", // aggressive | balanced | moderate | conservative
   priorTrendBars: 40,
   priorTrendMinSlopePct: 0.01, // 1% net move before range
   rejectionWickRatio: 0.4, // lower/upper wick share of candle range
@@ -71,7 +74,93 @@ const DEFAULTS = {
   eventScanBars: 80,
   minRangeTouches: 2, // S/R tested at least twice (Syarat §1)
   cancelConfirmBars: 2, // bars to confirm invalidation breakdown/breakout
+  // Only enter on the reclaim/rejection close (no delayed chase).
+  requireReclaimOnLastBar: true,
+  requireHtfAlign: true,
+  allowHtfSideways: true,
+  // LONG on SIDEWAYS was the bleed in BTC 12m real (WR 12.5% vs SHORT 39%).
+  sidewaysShortOnly: true,
+  allowHtfSidewaysLong: false,
+  longVolumeConfirmMult: 1.45,
+  shortVolumeConfirmMult: 1.2,
+  minSlAtrMult: 0.9,
+  // Per-leg profile key (set by executor / typeOverrides spread): Scalping|Intraday|Swing
+  tradeType: null,
+  // Scalping: skip raw UT noise — "lpsy_only" | "ut_and_lpsy" (default) | "ut_only"
+  scalpPatternMode: "ut_and_lpsy",
+  // Optional UTC hour blocklist (lossy cluster filter), e.g. [16,17,18,19,20,21]
+  blockedUtcHours: null,
 };
+
+/**
+ * Trade-type profiles — Wyckoff behaviour is grouped by TF leg.
+ * typeOverrides / job config still win on conflict; these are the baseline
+ * differences so Scalping is not forced to share Intraday/Swing entry physics.
+ */
+const TRADE_TYPE_PROFILES = Object.freeze({
+  Scalping: {
+    // 5m bank mode: maker + SL floor; block toxic UTC, keep volume hours.
+    entryModel: "balanced",
+    scalpPatternMode: "ut_and_lpsy",
+    wyckoffSessionFilter: false,
+    blockedUtcHours: [0, 4, 15, 16, 17, 19, 20, 21],
+    allowHtfSideways: false,
+    allowLpsyFlexPrior: true,
+    blockLong: true,
+    volumeConfirmMult: 1.05,
+    shortVolumeConfirmMult: 1.05,
+    cooldownBars: 0,
+    recoveryWindow: 4,
+    minBarsInRange: 6,
+    minRr: 2.0,
+    requireReclaimOnLastBar: true,
+    requireHtfAlign: true,
+    sidewaysShortOnly: true,
+    allowHtfSidewaysLong: false,
+  },
+  Intraday: {
+    entryModel: "balanced",
+    scalpPatternMode: "ut_and_lpsy",
+    blockLong: true,
+    allowLpsyFlexPrior: true,
+    allowHtfSideways: true,
+    sidewaysShortOnly: true,
+    blockedUtcHours: [3, 8, 9, 12, 13, 16, 17, 19, 22],
+  },
+  Swing: {
+    entryModel: "aggressive",
+    scalpPatternMode: "ut_and_lpsy",
+    requireHtfAlign: true,
+    allowHtfSideways: false,
+    allowHtfSidewaysLong: false,
+    blockLong: true,
+    blockShort: false,
+    wyckoffSwingShelved: false,
+    // Volume contribution; size via typeOverrides.riskMult 0.25
+    blockedUtcHours: [8, 12],
+    atrRelMin: 0.4,
+    volumeConfirmMult: 0.6,
+    shortVolumeConfirmMult: 0.6,
+    minBarsInRange: 2,
+    minRr: 1.6,
+  },
+});
+
+function resolveWyckoffConfig(config = {}) {
+  const tradeType = config.tradeType
+    || config.type
+    || (config.enabledComponents?.length === 1 ? config.enabledComponents[0] : null);
+  const profile = (tradeType && TRADE_TYPE_PROFILES[tradeType]) || {};
+  return { ...DEFAULTS, ...profile, ...config, tradeType: tradeType || config.tradeType || null };
+}
+
+function isBlockedUtcHour(candles, lastIdx, blockedHours) {
+  if (!Array.isArray(blockedHours) || !blockedHours.length) return false;
+  const ts = candles?.timestamps?.[lastIdx] ?? candles?.opensTime?.[lastIdx] ?? null;
+  if (ts == null || !Number.isFinite(+ts)) return false;
+  const hour = new Date(+ts).getUTCHours();
+  return blockedHours.includes(hour);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -240,6 +329,8 @@ function detectTradingRange(candles, config = {}) {
       rangeEndIdx,
     };
   }
+  // bbWidthPercentileMax is diagnostic only: after a long compressed box the
+  // lookback is almost all tight widths, so rank ≈ mid/high even when valid.
 
   // Prefer indicator lookback for S/R when available; fall back to rangeLookback.
   const look = Math.max(cfg.rangeLookback, Math.min(cfg.lookback, rangeEndIdx + 1));
@@ -734,6 +825,7 @@ function detectSpring(candles, range, config = {}) {
 
     const penetrationDepth = range.rangeLow - lo;
     if (penetrationDepth <= 0) continue;
+    if (penetrationDepth < cfg.minPenetrationAtrMult * atr) continue;
     if (penetrationDepth > cfg.penetrationAtrMult * atr) continue;
 
     if (vol == null || vol === 0) continue;
@@ -742,6 +834,7 @@ function detectSpring(candles, range, config = {}) {
     if (vol < cfg.volumeConfirmMult * volSma) continue;
 
     for (let r = penIdx + 1; r <= Math.min(lastIdx, penIdx + cfg.recoveryWindow); r++) {
+      if (cfg.requireReclaimOnLastBar && r !== lastIdx) continue;
       const cl = closes[r];
       const op = opens?.[r] ?? closes[r - 1] ?? cl;
       if (cl == null) continue;
@@ -808,6 +901,7 @@ function detectUpthrust(candles, range, config = {}) {
 
     const penetrationDepth = hi - range.rangeHigh;
     if (penetrationDepth <= 0) continue;
+    if (penetrationDepth < cfg.minPenetrationAtrMult * atr) continue;
     if (penetrationDepth > cfg.penetrationAtrMult * atr) continue;
 
     if (vol == null || vol === 0) continue;
@@ -816,6 +910,7 @@ function detectUpthrust(candles, range, config = {}) {
     if (vol < cfg.volumeConfirmMult * volSma) continue;
 
     for (let r = penIdx + 1; r <= Math.min(lastIdx, penIdx + cfg.recoveryWindow); r++) {
+      if (cfg.requireReclaimOnLastBar && r !== lastIdx) continue;
       const cl = closes[r];
       const op = opens?.[r] ?? closes[r - 1] ?? cl;
       if (cl == null) continue;
@@ -984,8 +1079,9 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
 
   const checklist = {
     priorTrend: false,
+    htfAlign: true,
     tradingRange: range.isValid === true,
-    rangeTested: range.rangeTested === true || model === "aggressive",
+    rangeTested: range.rangeTested === true || model === "aggressive" || model === "balanced",
     climaxOrWeakening: false,
     discountOrPremium: false,
     manipulation: false, // Spring / UTAD
@@ -1008,22 +1104,66 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
   let choch = { detected: false };
   let lpsLevel = null;
 
+  const htf = cfg.htfTrend || cfg.HTFTrend || null;
+  const htfKnown = htf === "BULLISH" || htf === "BEARISH" || htf === "SIDEWAYS";
+  const htfAligned =
+    (side === "LONG" && htf === "BULLISH")
+    || (side === "SHORT" && htf === "BEARISH");
+  const htfAgainst =
+    (side === "LONG" && htf === "BEARISH")
+    || (side === "SHORT" && htf === "BULLISH");
+  if (cfg.requireHtfAlign && htfKnown) {
+    if (htfAgainst) {
+      checklist.htfAlign = false;
+    } else if (htf === "SIDEWAYS") {
+      // Report evidence: LONG on SIDEWAYS bled (WR ~12%); SHORT carried PnL.
+      // Default: sideways may SHORT, not LONG (override via allowHtfSidewaysLong).
+      const sideOk = cfg.allowHtfSideways !== false;
+      if (!sideOk) checklist.htfAlign = false;
+      else if (side === "LONG" && cfg.allowHtfSidewaysLong === false) checklist.htfAlign = false;
+      else if (side === "LONG" && cfg.sidewaysShortOnly === true) checklist.htfAlign = false;
+      else checklist.htfAlign = true;
+    } else {
+      checklist.htfAlign = !!htfAligned;
+    }
+  }
+
+  // Extra LONG quality: require stronger volume than shorts (springs fail more on BTC).
+  const volNeed = side === "LONG"
+    ? (cfg.longVolumeConfirmMult ?? cfg.volumeConfirmMult)
+    : (cfg.shortVolumeConfirmMult ?? cfg.volumeConfirmMult);
+
+  if (cfg.blockLong === true && side === "LONG") {
+    checklist.htfAlign = false;
+    checklist.volumeConfirm = false;
+  }
+  if (cfg.blockShort === true && side === "SHORT") {
+    checklist.htfAlign = false;
+    checklist.volumeConfirm = false;
+  }
+
   if (side === "LONG") {
-    checklist.priorTrend = prior.direction === "down" || model === "aggressive";
+    // Pullback-spring in HTF uptrend counts as prior context (crypto intraday)
+    checklist.priorTrend =
+      prior.direction === "down"
+      || htfAligned
+      || model === "aggressive"
+      || model === "balanced";
     checklist.climaxOrWeakening =
       events.sc.length > 0 ||
       events.ar.length > 0 ||
       events.st.length > 0 ||
-      model === "aggressive";
+      model === "aggressive" ||
+      model === "balanced";
     checklist.manipulation = !!pattern?.detected;
     checklist.reclaimOrReject =
       pattern?.recoveryIdx != null &&
       candles.closes[pattern.recoveryIdx] > range.rangeLow;
-    checklist.rejection = !!pattern?.rejection || model === "aggressive";
+    checklist.rejection = !!pattern?.rejection;
     checklist.volumeConfirm =
-      pattern?.volRatio != null && pattern.volRatio >= cfg.volumeConfirmMult;
+      pattern?.volRatio != null && pattern.volRatio >= volNeed;
     choch = detectLocalChoCH(candles, pattern.penIdx, lastIdx, "bullish", cfg);
-    checklist.choch = choch.detected || model === "aggressive";
+    checklist.choch = choch.detected || model === "aggressive" || model === "balanced";
     // Discount at reclaim, or moderate entry after confirmed CHoCH (§2A moderate)
     checklist.discountOrPremium =
       _inDiscountZone(locationPrice, range) ||
@@ -1041,23 +1181,26 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
       (pattern.penIdx != null ? candles.lows[pattern.penIdx] : range.rangeLow);
     checklist.proximityOk =
       _entryProximityOk("LONG", locationPrice, range, cfg.maxEntryProximityPct) ||
-      (model === "moderate" && choch.detected);
+      (model === "moderate" && choch.detected) ||
+      model === "balanced";
   } else {
-    checklist.priorTrend = prior.direction === "up" || model === "aggressive";
+    checklist.priorTrend =
+      prior.direction === "up" || htfAligned || model === "aggressive" || model === "balanced";
     checklist.climaxOrWeakening =
       events.bc.length > 0 ||
       events.arDist.length > 0 ||
       events.stDist.length > 0 ||
-      model === "aggressive";
+      model === "aggressive" ||
+      model === "balanced";
     checklist.manipulation = !!pattern?.detected;
     checklist.reclaimOrReject =
       pattern?.recoveryIdx != null &&
       candles.closes[pattern.recoveryIdx] < range.rangeHigh;
-    checklist.rejection = !!pattern?.rejection || model === "aggressive";
+    checklist.rejection = !!pattern?.rejection;
     checklist.volumeConfirm =
-      pattern?.volRatio != null && pattern.volRatio >= cfg.volumeConfirmMult;
+      pattern?.volRatio != null && pattern.volRatio >= volNeed;
     choch = detectLocalChoCH(candles, pattern.penIdx, lastIdx, "bearish", cfg);
-    checklist.choch = choch.detected || model === "aggressive";
+    checklist.choch = choch.detected || model === "aggressive" || model === "balanced";
     checklist.discountOrPremium =
       _inPremiumZone(locationPrice, range) ||
       (model === "moderate" && choch.detected) ||
@@ -1074,7 +1217,8 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
       (pattern.penIdx != null ? candles.highs[pattern.penIdx] : range.rangeHigh);
     checklist.proximityOk =
       _entryProximityOk("SHORT", locationPrice, range, cfg.maxEntryProximityPct) ||
-      (model === "moderate" && choch.detected);
+      (model === "moderate" && choch.detected) ||
+      model === "balanced";
   }
 
   // RR from reclaim (setup) — also accept mid-range target (§9) if opposite side too tight
@@ -1089,22 +1233,31 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
   checklist.rrOk = rr != null && rr >= cfg.minRr;
 
   // Required layers by model (maps to Syarat §4–5 / §11)
+  // Aggressive keeps race participation but still needs wick rejection + ≥1:2 RR
+  // (report: 25% WR / PF 0.60 when these were bypassed + ATR exits).
   const required = [
     "tradingRange",
     "manipulation",
     "reclaimOrReject",
     "volumeConfirm",
     "notCancelled",
+    "rejection",
+    "rrOk",
   ];
+  if (cfg.requireHtfAlign) {
+    required.push("htfAlign");
+  }
+  // balanced: location + tested range, skip full CHoCH/prior stack (frequency path)
+  if (model === "balanced") {
+    required.push("discountOrPremium", "rangeTested");
+  }
   if (model === "moderate" || model === "conservative") {
     required.push(
       "priorTrend",
       "rangeTested",
       "discountOrPremium",
-      "rejection",
       "choch",
       "proximityOk",
-      "rrOk",
     );
   }
   if (model === "conservative") {
@@ -1208,13 +1361,19 @@ function evaluateSchematicContinuation(candles, range, config = {}) {
 
   const lastLpsy = events.lpsy[events.lpsy.length - 1];
   const lastSow = events.sow[events.sow.length - 1];
+  // Short-biased legs may take LPSY without a strict prior uptrend (range
+  // distribution after sideways HTF still valid when blockLong / flex flag set).
+  const lpsyPriorOk =
+    prior.direction === "up"
+    || (cfg.allowLpsyFlexPrior === true && prior.direction !== "down")
+    || (cfg.blockLong === true && prior.direction !== "down");
   if (
     lastLpsy != null &&
     lastLpsy >= windowStart &&
     lastSow != null &&
     lastSow < lastLpsy &&
     (events.utadInd.length > 0 || events.bc.length > 0) &&
-    prior.direction === "up"
+    lpsyPriorOk
   ) {
     const invalidation = range.rangeHigh;
     const rr = _estimateRr("SHORT", entryPrice, invalidation, range);
@@ -1251,7 +1410,7 @@ function evaluateSchematicContinuation(candles, range, config = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function evaluateWyckoffComponent(candles, config = {}, state = {}) {
-  const cfg = { ...DEFAULTS, ...config };
+  const cfg = resolveWyckoffConfig(config);
   const lastIdx = candles?.lastIdx;
 
   // Ablation funnel (diagnostic counting only — pure guarded side-effect).
@@ -1263,6 +1422,11 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
 
   if (scalpingSessionBlocked(cfg, candles, lastIdx, "wyckoffSessionFilter", applyWyckoffSessionFilter, ablation)) {
     return { vote: "NEUTRAL", confidence: 0, reason: "wyckoff_session_block" };
+  }
+
+  if (isBlockedUtcHour(candles, lastIdx, cfg.blockedUtcHours)) {
+    _abl("rejCooldown");
+    return { vote: "NEUTRAL", confidence: 0, reason: "wyckoff_hour_block" };
   }
 
   if (lastIdx == null || !candles?.closes || candles.closes.length < cfg.minBars) {
@@ -1295,68 +1459,79 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
     };
   }
 
-  const spring = detectSpring(candles, range, cfg);
-  if (spring.detected) {
-    const entry = evaluateEntryChecklist(candles, range, spring, "LONG", cfg);
-    if (entry.passed) {
-      _abl("passed");
-      return {
-        vote: "LONG",
-        confidence: entry.confidence,
-        reason: entry.reason,
-        meta: {
-          range,
-          spring,
-          entry,
-          stopLoss: entry.invalidation,
-          takeProfit: range.rangeHigh,
-          rr: entry.rr,
-        },
-      };
-    }
-    // Fall through to check short only if long checklist failed without spring? No — spring found but gated.
-    _abl("rejChecklist");
-    return {
-      vote: "NEUTRAL",
-      confidence: 0,
-      reason: entry.reason,
-      meta: { range, spring, entry },
-    };
-  }
+  const patternMode = String(cfg.scalpPatternMode || "ut_and_lpsy").toLowerCase();
+  const allowSpringUt = patternMode !== "lpsy_only";
+  const allowContinuation = patternMode !== "ut_only";
 
-  const upthrust = detectUpthrust(candles, range, cfg);
-  if (upthrust.detected) {
-    const entry = evaluateEntryChecklist(candles, range, upthrust, "SHORT", cfg);
-    if (entry.passed) {
-      _abl("passed");
+  if (allowSpringUt) {
+    const spring = detectSpring(candles, range, cfg);
+    if (spring.detected) {
+      const entry = evaluateEntryChecklist(candles, range, spring, "LONG", cfg);
+      if (entry.passed) {
+        _abl("passed");
+        return {
+          vote: "LONG",
+          confidence: entry.confidence,
+          reason: entry.reason,
+          meta: {
+            range,
+            spring,
+            entry,
+            stopLoss: entry.invalidation,
+            takeProfit: range.rangeHigh,
+            rr: entry.rr,
+            tradeType: cfg.tradeType,
+          },
+        };
+      }
+      // Fall through to check short only if long checklist failed without spring? No — spring found but gated.
+      _abl("rejChecklist");
       return {
-        vote: "SHORT",
-        confidence: entry.confidence,
+        vote: "NEUTRAL",
+        confidence: 0,
         reason: entry.reason,
-        meta: {
-          range,
-          upthrust,
-          entry,
-          stopLoss: entry.invalidation,
-          takeProfit: range.rangeLow,
-          rr: entry.rr,
-        },
+        meta: { range, spring, entry },
       };
     }
-    _abl("rejChecklist");
-    return {
-      vote: "NEUTRAL",
-      confidence: 0,
-      reason: entry.reason,
-      meta: { range, upthrust, entry },
-    };
+
+    const upthrust = detectUpthrust(candles, range, cfg);
+    if (upthrust.detected) {
+      const entry = evaluateEntryChecklist(candles, range, upthrust, "SHORT", cfg);
+      if (entry.passed) {
+        _abl("passed");
+        return {
+          vote: "SHORT",
+          confidence: entry.confidence,
+          reason: entry.reason,
+          meta: {
+            range,
+            upthrust,
+            entry,
+            stopLoss: entry.invalidation,
+            takeProfit: range.rangeLow,
+            rr: entry.rr,
+            tradeType: cfg.tradeType,
+          },
+        };
+      }
+      _abl("rejChecklist");
+      return {
+        vote: "NEUTRAL",
+        confidence: 0,
+        reason: entry.reason,
+        meta: { range, upthrust, entry },
+      };
+    }
   }
 
   // Syarat §2B–C / §3B–C: SOS→LPS / SOW→LPSY continuation (moderate + conservative)
-  const continuation = evaluateSchematicContinuation(candles, range, cfg);
-  if (continuation) {
-    _abl("passed");
-    return continuation;
+  if (allowContinuation) {
+    const continuation = evaluateSchematicContinuation(candles, range, cfg);
+    if (continuation) {
+      _abl("passed");
+      if (continuation.meta) continuation.meta.tradeType = cfg.tradeType;
+      return continuation;
+    }
   }
 
   _abl("rejPattern");
@@ -1371,12 +1546,15 @@ function candlesFromIndicators(indicators, lastIdx) {
     closes: indicators.closes,
     volumes: indicators.volumes,
     atr: indicators.atr,
+    timestamps: indicators.timestamps || indicators.times || indicators.openTime || null,
     lastIdx,
   };
 }
 
 module.exports = {
   DEFAULTS,
+  TRADE_TYPE_PROFILES,
+  resolveWyckoffConfig,
   detectTradingRange,
   detectSpring,
   detectUpthrust,
@@ -1391,4 +1569,5 @@ module.exports = {
   candlesFromIndicators,
   relativeVolume,
   applyWyckoffSessionFilter,
+  isBlockedUtcHour,
 };
