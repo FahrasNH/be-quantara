@@ -13,7 +13,7 @@ const BotEngine = require("./BotEngine");
 const PositionManager = require("../../../core/position-engine/PositionManager");
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcADX } = require("../../../core/analytics-engine/indicators");
-const { isMeanReversionKey } = require("../../../core/execution-engine");
+const { isMeanReversionKey, stratLabel } = require("../../../core/execution-engine");
 const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency");
 const {
   buildAtrBaseline,
@@ -114,32 +114,67 @@ class AdaptiveStrategyEngine extends BotEngine {
   }
 
   /**
-   * Ringkas histogram ablation jadi SATU baris agar terlihat gate mana yang
-   * menahan strategi ini. Semua 12 strategi mengekspos API yang sama
-   * (resetAblation / getAblation / getAblationSchema), jadi ini generik.
+   * Jelaskan dalam bahasa manusia KENAPA strategi ini tidak memberi sinyal.
+   *
+   * Versi pertama membuang kunci mentah (`seqCandidate=1 · rejByConf=1`) — itu
+   * jargon internal, dan angkanya selalu 0/1 karena counter di-reset tiap tick,
+   * jadi tidak menambah informasi. Sekarang: nama strategi Title Case
+   * (stratLabel — aturan "no ALL_CAPS di UI"), dan label tahap dari
+   * ABLATION_SCHEMA yang memang sudah ditulis untuk dibaca manusia.
    *
    * Contoh keluaran:
-   *   [NO-SIGNAL] SMART_MONEY_CONCEPTS: seqCandidate=12 · rejByConf=12
-   *   [NO-SIGNAL] WYCKOFF: tidak ada setup sama sekali (semua counter 0)
+   *   [NO-SIGNAL] Smart Money Concepts — setup terbentuk, lalu berhenti di: Confidence floor
+   *   [NO-SIGNAL] Trend Following — berhenti di: No Donchian breakout
+   *   [NO-SIGNAL] Wyckoff — pola belum terbentuk (belum ada kandidat setup)
    */
   _logNoSignalAblation() {
     if (typeof this.strategy.getAblation !== "function") return;
-    let abl;
+    let abl, schema;
     try {
       abl = this.strategy.getAblation();
+      schema = typeof this.strategy.getAblationSchema === "function"
+        ? this.strategy.getAblationSchema()
+        : [];
     } catch {
       return;
     }
     if (!abl || typeof abl !== "object") return;
 
-    const nonZero = Object.entries(abl)
-      .filter(([, v]) => Number(v) > 0)
-      .map(([k, v]) => `${k}=${v}`);
+    const name = stratLabel(this.strategyKey) || this.strategyKey;
 
-    const detail = nonZero.length
-      ? nonZero.join(" · ")
-      : "tidak ada setup sama sekali (semua counter 0)";
-    this._log("info", `[NO-SIGNAL] ${this.strategyKey}: ${detail}`);
+    // Buang penomoran/tanda "- " dari label schema ("5. - No Donchian breakout").
+    const pretty = (label, key) =>
+      String(label || key).replace(/^\s*\d+[a-z]?\.\s*/i, "").replace(/^-\s*/, "").trim();
+
+    // Schema berurutan: tahap paling akhir yang menghitung = titik berhenti.
+    const stages = schema.length
+      ? schema.map((s) => ({ key: s.key, label: pretty(s.label, s.key) }))
+      : Object.keys(abl).map((k) => ({ key: k, label: k }));
+
+    const isReject = (k) => /^rej/i.test(k);
+    const reached = stages.filter((s) => Number(abl[s.key]) > 0);
+    const lastReject = [...reached].reverse().find((s) => isReject(s.key));
+    // Kandidat = tahap non-reject selain "evaluated" (mis. seqCandidate/seqSignal).
+    const sawCandidate = reached.some(
+      (s) => !isReject(s.key) && s.key !== "passed" && s.key !== "evaluated"
+    );
+
+    let detail;
+    if (lastReject) {
+      detail = sawCandidate
+        ? `setup terbentuk, lalu berhenti di: ${lastReject.label}`
+        : `berhenti di: ${lastReject.label}`;
+    } else if (sawCandidate) {
+      detail = "setup terbentuk tapi belum lolos konfirmasi";
+    } else if (reached.length) {
+      detail = "pola belum terbentuk (belum ada kandidat setup)";
+    } else {
+      // Tak satu pun counter naik — detektor tidak dijalankan pada tick ini
+      // (mis. data belum cukup) ATAU kunci ablation tidak cocok dgn detektor.
+      detail = "detektor tidak dievaluasi pada tick ini";
+    }
+
+    this._log("info", `[NO-SIGNAL] ${name} — ${detail}`);
   }
 
   /**
