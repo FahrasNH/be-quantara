@@ -15,10 +15,6 @@ const { validateExchangeKey } = require("./ExchangeService");
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
 const prisma = require("../../../infrastructure/db/prismaClient");
 
-// Debug logger dinonaktifkan (sebelumnya appendFileSync sinkron ke path lokal
-// hardcoded → blocking event loop di lokal, throw/syscall sia-sia di VPS).
-function _dbgLog() { /* no-op */ }
-
 // ─── getExchangeStatus ──────────────────────────────────────────────────────
 /**
  * Returns the current exchange status for a user.
@@ -168,20 +164,10 @@ async function switchExchange(userId, { newExchange, apiKey, secretKey, passphra
   await validateNewExchangeKey(newExchange, apiKey, secretKey, passphrase);
 
   // ── 4. Graceful stop: mark all running bots as stopped ───────────────────
-  const stopResult = await prisma.bot.updateMany({
+  await prisma.bot.updateMany({
     where: { userId, running: true },
     data: { running: false, stoppedAt: new Date() },
   });
-  // #region agent log
-  const dbRunningAfter = await prisma.bot.count({ where: { userId, running: true } });
-  _dbgLog("H1", "exchangeSwitch.js:stopBots", "DB bots stopped on exchange switch", {
-    userId,
-    fromExchange,
-    toExchange: newExchange,
-    stoppedCount: stopResult.count,
-    dbRunningAfter,
-  });
-  // #endregion
 
   // ── 5. Soft-delete old UserExchange records (set deletedAt) ───────────────
   await prisma.userExchange.updateMany({

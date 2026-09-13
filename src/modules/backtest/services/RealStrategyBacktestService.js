@@ -1835,26 +1835,6 @@ function _applyConservativeDiscount(score) {
   return score;
 }
 
-/** Debug session 816643 — RAG gate runtime evidence (PM2 logs + local ingest). */
-function _ragDebugLog(location, message, data, hypothesisId = "RAG") {
-  const payload = {
-    sessionId: "816643",
-    location,
-    message,
-    data,
-    hypothesisId,
-    timestamp: Date.now(),
-  };
-  // #region agent log
-  console.warn("[RAG-DEBUG-816643]", JSON.stringify(payload));
-  fetch("http://127.0.0.1:7388/ingest/342b9c62-4dc5-4962-a9c1-f9c519fa2002", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "816643" },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-  // #endregion
-}
-
 /** Best-effort: persist backtest trades with outcome metadata for future RAG similarity. */
 async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
   if (!deps?.vs || !deps?.fe || !Array.isArray(trades) || trades.length === 0) return 0;
@@ -1975,23 +1955,6 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
   } catch { /* ignore */ }
 
   const ctxFilterKeys = _resolveRagStrategyFilterKeys({}, ctx);
-  // #region agent log
-  _ragDebugLog(
-    "RealStrategyBacktestService.js:_applyRagGate:init",
-    "RAG gate init",
-    {
-      hasModel,
-      vectorLikelyEmpty,
-      embeddingCount,
-      tsEmbeddingCounts,
-      ctxStrategyKey: ctx.strategyKey,
-      ctxFilterKeys,
-      tradeCount: trades.length,
-      ragMinSupport: RAG_MIN_SUPPORT,
-    },
-    "A-B-C"
-  );
-  // #endregion
 
   const sorted = [...trades].sort((a, b) => new Date(a.openTime || a.date) - new Date(b.openTime || b.date));
   const sampleTradeLogs = [];
@@ -2138,23 +2101,6 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
   const depsIneffective = !hasModel && vectorLikelyEmpty;
   const ineffective = allSkippedNoScores || depsIneffective;
   const failOpen = allSkippedNoScores || depsIneffective;
-
-  // #region agent log
-  _ragDebugLog(
-    "RealStrategyBacktestService.js:_applyRagGate:done",
-    "RAG gate complete",
-    {
-      approved,
-      rejected,
-      skipped,
-      scoreCount,
-      sampleTradeLogs,
-      ineffective,
-      failOpen,
-    },
-    "D-E"
-  );
-  // #endregion
 
   const stats = {
     total: trades.length,
