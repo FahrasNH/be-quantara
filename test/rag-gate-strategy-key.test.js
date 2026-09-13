@@ -168,6 +168,52 @@ async function main() {
     assert.ok(result.logs[0].reason.includes("insufficient-rag-support"));
   });
 
+  // A degenerate WinPredictor (precision/recall ~0) emits a uniformly low pWin.
+  // Blended 50/50 it can sink an otherwise healthy trade below the 0.4 threshold;
+  // lgbWeight=0 must decide on retrieval evidence alone. Guards the Wyckoff
+  // "3 of 54 survived" diagnosis — see ragStats.diag.lgbWeight.
+  const flatLowLgb = (similar) => {
+    const deps = makeMockDeps(similar);
+    deps.wp = { model: {}, load: async () => {}, predict: () => ({ pWin: 0.1 }) };
+    return deps;
+  };
+  // 20 neighbours, 70% winners → ragScore 0.7.
+  const healthyNeighbours = Array.from({ length: 20 }, (_, i) => ({
+    tradeId: `n${i}`,
+    similarity: 0.9,
+    metadata: { outcome: i < 14 ? "win" : "loss" },
+  }));
+  const oneTrade = [{ openTime: "2024-01-01T00:00:00.000Z", side: "LONG", strategyKey: "TREND_FOLLOWING" }];
+  const ctx = { strategyKey: "TREND_FOLLOWING", symbol: "BTCUSDT" };
+
+  await test("_applyRagGate — low lgb drags a healthy trade under threshold at default blend", async () => {
+    const result = await _applyRagGate(oneTrade, ctx, { deps: flatLowLgb(healthyNeighbours), lgbWeight: 0.5 });
+    // 0.5*0.1 + 0.5*0.7 = 0.40 → conservative discount leaves it at 0.40, not below.
+    assert.strictEqual(result.stats.diag.lgbWeight, 0.5);
+    assert.ok(Math.abs(result.stats.avgScore - 0.4) < 1e-9, `expected 0.40, got ${result.stats.avgScore}`);
+  });
+
+  await test("_applyRagGate — lgbWeight=0 scores on retrieval evidence alone", async () => {
+    const result = await _applyRagGate(oneTrade, ctx, { deps: flatLowLgb(healthyNeighbours), lgbWeight: 0 });
+    // ragScore 0.7 → discounted to 0.5 + 0.2*0.9 = 0.68; model ignored entirely.
+    assert.strictEqual(result.stats.diag.lgbWeight, 0);
+    assert.ok(Math.abs(result.stats.avgScore - 0.68) < 1e-9, `expected 0.68, got ${result.stats.avgScore}`);
+    assert.strictEqual(result.trades.length, 1);
+  });
+
+  await test("_applyRagGate — lgbWeight=0 still rejects when neighbours themselves lost", async () => {
+    // 20 neighbours, 30% winners → ragScore 0.3 < 0.4. Weighting the model out
+    // must NOT rescue a trade whose retrieval evidence is genuinely bad.
+    const poorNeighbours = Array.from({ length: 20 }, (_, i) => ({
+      tradeId: `n${i}`,
+      similarity: 0.9,
+      metadata: { outcome: i < 6 ? "win" : "loss" },
+    }));
+    const result = await _applyRagGate(oneTrade, ctx, { deps: flatLowLgb(poorNeighbours), lgbWeight: 0 });
+    assert.strictEqual(result.trades.length, 0);
+    assert.strictEqual(result.rejected, 1);
+  });
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
