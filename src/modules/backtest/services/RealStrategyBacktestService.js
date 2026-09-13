@@ -1764,6 +1764,17 @@ const RAG_MIN_SUPPORT = Math.max(1, parseInt(process.env.RAG_MIN_SUPPORT || "10"
 const RAG_BAYESIAN_PRIOR = Math.max(0, parseFloat(process.env.RAG_BAYESIAN_PRIOR || "0") || 0);
 /** When true, persist backtest trade embeddings after RAG gate (can leak future outcomes into reruns). Default off. */
 const RAG_SEED_AFTER_BACKTEST = process.env.RAG_SEED_AFTER_BACKTEST === "true";
+/**
+ * Weight of the WinPredictor (LGB) score when blending with retrieval evidence.
+ * 0 = decide on retrieved neighbour outcomes alone — use this to isolate whether
+ * mass rejections come from the model or from retrieval. 1 = model alone, which
+ * defeats the "never reject on ML alone" rule, so only set it for experiments.
+ * Applies only when BOTH scores exist; the lgb-only path stays fail-open either way.
+ */
+const RAG_LGB_WEIGHT = (() => {
+  const raw = parseFloat(process.env.RAG_LGB_WEIGHT ?? "0.5");
+  return Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.5;
+})();
 
 /**
  * Resolve strategyKey filter for RAG retrieval — per-trade component wins over umbrella ctx.
@@ -1901,6 +1912,10 @@ async function _seedBacktestTradeEmbeddings(trades, ctx, deps) {
  */
 async function _applyRagGate(trades, ctx = {}, opts = {}) {
   const deps = opts.deps || getRagGateDeps();
+  // opts.lgbWeight lets tests exercise the blend without reloading the module.
+  const lgbWeight = Number.isFinite(opts.lgbWeight)
+    ? Math.min(1, Math.max(0, opts.lgbWeight))
+    : RAG_LGB_WEIGHT;
   if (!deps) {
     return {
       trades,
@@ -2030,7 +2045,9 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
     }
 
     let rawScore;
-    if (lgbScore !== null && ragScore !== null) rawScore = 0.5 * lgbScore + 0.5 * ragScore;
+    if (lgbScore !== null && ragScore !== null) {
+      rawScore = lgbWeight * lgbScore + (1 - lgbWeight) * ragScore;
+    }
     else if (ragScore !== null) rawScore = ragScore;
     else if (lgbScore !== null) {
       // LGB-only without RAG evidence — fail-open (RAG gate must not reject on ML alone)
@@ -2111,6 +2128,9 @@ async function _applyRagGate(trades, ctx = {}, opts = {}) {
     failOpen,
     diag: {
       hasModel,
+      lgbWeight,
+      approveThreshold: RAG_APPROVE_THRESHOLD,
+      minSupport: RAG_MIN_SUPPORT,
       embeddingCount,
       tsEmbeddingCounts,
       ctxFilterKeys,
