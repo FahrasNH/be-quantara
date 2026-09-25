@@ -94,6 +94,8 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     smcSessionFilter: false,
     smcBlockLongInChop: true,
     smcRequireObRetest: true,
+    // Require complete 5m sweep/CHoCH/displacement structure before entry.
+    validateEntryTFStructure: true,
   },
   Intraday: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,
@@ -110,6 +112,10 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     smcSessionFilter: false,
     // Sprint 22: both sides lose in CHOP on Intraday — block all entries (not Scalping LONG-only)
     smcBlockAllInChop: true,
+    // The shared sequence is too permissive for 15m. Require directional 1h
+    // regime and an independent slower 15m structure confirmation.
+    regimeMappingStrict: true,
+    structureConfirmValidate: true,
     // smcSweepVolMult intentionally unset — Scalping floor (1.2) hurts Intraday PF (Sprint 22 ablation)
   },
   Swing: {
@@ -118,6 +124,8 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     // Explicit geometry — Planned RR ~3.0 (longer hold needs larger payoff)
     slAtrMult: 1.2,
     tpAtrMult: 3.6,
+    // Reject 4h entries that never retest the structural OB/FVG zone.
+    smcRequireObRetest: true,
   },
 });
 

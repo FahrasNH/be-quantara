@@ -137,6 +137,8 @@ test("INTRADAY-SSOT: strategyDefaults Intraday has Sprint 22 gates + geometry", 
   assert.equal(ov.smcMinConfidenceIntraday, 80);
   assert.equal(ov.smcPivotStructure, true);
   assert.equal(ov.smcBlockAllInChop, true);
+  assert.equal(ov.regimeMappingStrict, true);
+  assert.equal(ov.structureConfirmValidate, true);
   assert.equal(ov.smcSessionFilter, false);
   assert.equal(ov.noTradeSessions, undefined);
   assert.equal(ov.slAtrMult, 1.8);
@@ -149,6 +151,7 @@ test("SWING-SSOT: strategyDefaults Swing has explicit geometry", () => {
   const ov = STRATEGIES.SMART_MONEY_CONCEPTS.typeOverrides.Swing;
   assert.equal(ov.slAtrMult, 1.2);
   assert.equal(ov.tpAtrMult, 3.6);
+  assert.equal(ov.smcRequireObRetest, true);
 });
 
 test("GATE-CHOP-LONG: blocks LONG in CHOP, allows SHORT", () => {
@@ -221,6 +224,7 @@ test("SCALP-SSOT: strategyDefaults Scalping has RR 2.0 + gates on (TIME_STOP OFF
   assert.equal(ov.smcSessionFilter, false);
   assert.equal(ov.smcBlockLongInChop, true);
   assert.equal(ov.smcRequireObRetest, true);
+  assert.equal(ov.validateEntryTFStructure, true);
   assert.equal(ov.smcMinConfidenceScalping, 40);
   assert.equal(ov.smcSweepVolMult, 1.2);
   assert.equal(ov.noTradeSessions, undefined);
