@@ -3,7 +3,8 @@
  *
  * Modes (vsaIntradayDetectorMode):
  *   legacy         — 1-bar pattern at lastIdx (pre-v2)
- *   confirmation   — pattern bar + next-bar VSA test (default v2)
+ *   confirmation   — pattern bar + next-bar midpoint/volume test
+ *   sequence       — stopping-volume climax followed by a named VSA test (default v3)
  *   htf_proximity  — pattern must sit near HTF swing (1h), not 15m noise
  *   sequence       — Wyckoff climax → test within N bars
  *   hvsa           — trend-aligned EMA-body momentum (philosophical comparator)
@@ -49,7 +50,7 @@ const VALID_MODES = new Set([
 
 function resolveIntradayDetectorMode(config = {}) {
   const ov = config.typeOverrides?.Intraday || {};
-  const mode = config.vsaIntradayDetectorMode ?? ov.vsaIntradayDetectorMode ?? "confirmation";
+  const mode = config.vsaIntradayDetectorMode ?? ov.vsaIntradayDetectorMode ?? "sequence";
   return VALID_MODES.has(mode) ? mode : "confirmation";
 }
 

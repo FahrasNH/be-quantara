@@ -91,7 +91,7 @@ describe("resolveBacktestStrategyDefaults — Sprint 23 VSA leg merge", () => {
     });
     assert.equal(cfg.typeOverrides.Scalping.vsaScalpingShelved, true);
     assert.equal(cfg.typeOverrides.Scalping.vsaSessionFilter, false);
-    assert.equal(cfg.typeOverrides.Intraday.vsaIntradayDetectorMode, "confirmation");
+    assert.equal(cfg.typeOverrides.Intraday.vsaIntradayDetectorMode, "sequence");
     assert.equal(cfg.typeOverrides.Intraday.vsaSessionFilter, false);
     assert.equal(cfg.typeOverrides.Intraday.noTradeSessions, undefined);
     assert.equal(cfg.typeOverrides.Swing.vsaSwingLongOnly, true);

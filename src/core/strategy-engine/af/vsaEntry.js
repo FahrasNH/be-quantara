@@ -64,6 +64,7 @@ function resolveVsaSwingGateFlags(config = {}) {
     vsaSessionFilter: config.vsaSessionFilter ?? ov.vsaSessionFilter ?? false,
     noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
     vsaSwingLongOnly: config.vsaSwingLongOnly ?? ov.vsaSwingLongOnly ?? false,
+    vsaSwingHtfAlignGate: config.vsaSwingHtfAlignGate ?? ov.vsaSwingHtfAlignGate ?? false,
     vsaMinConfidenceSwing: config.vsaMinConfidenceSwing ?? ov.vsaMinConfidenceSwing ?? null,
   };
 }
@@ -72,6 +73,7 @@ function resolveVsaIntradayGateFlags(config = {}) {
   const ov = config.typeOverrides?.Intraday || {};
   return {
     vsaHtfAlignGate: config.vsaHtfAlignGate ?? ov.vsaHtfAlignGate ?? false,
+    vsaHtfHardAlignGate: config.vsaHtfHardAlignGate ?? ov.vsaHtfHardAlignGate ?? false,
     /** Confidence multiplier removed on LONG×BEARISH (0.5 = halve confidence). */
     vsaHtfCounterPenalty: config.vsaHtfCounterPenalty ?? ov.vsaHtfCounterPenalty ?? 0.5,
     /** Sprint 23 Fix #2: Intraday London block (NOT Asia — session profile inverted). */
@@ -151,13 +153,26 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   if (tradeTier === "Intraday") {
     const intradayFlags = resolveVsaIntradayGateFlags(config);
     const htfTrend = config.htfTrend ?? null;
-    // CONTEXT_ONLY: vsaHtfAlignGate = overlay flag only — no hard counter-trend block.
     if (intradayFlags.vsaHtfAlignGate === true && htfTrend) {
       const counter = isVsaCounterTrend(gated.vote, htfTrend);
       if (counter) {
         if (gated.vote === "SHORT" && htfTrend === "BULLISH") _abl("rejHtfShortBullish");
         if (isStoppingVolumeReason(gated.reason) && counter) _abl("rejHtfStoppingCounter");
         if (gated.vote === "LONG" && htfTrend === "BEARISH") _abl("rejHtfLongBearishPenalty");
+        if (intradayFlags.vsaHtfHardAlignGate === true) {
+          return {
+            vote: "NEUTRAL",
+            confidence: 0,
+            reason: "vsa_intraday_htf_counter_trend",
+            meta: {
+              ...(gated.meta || {}),
+              htfTrend,
+              htfCounterTrend: true,
+              htfOverlayOnly: false,
+              vsaHtfConfidenceFlag: true,
+            },
+          };
+        }
         gated = {
           ...gated,
           meta: {
@@ -174,6 +189,16 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
 
   if (tradeTier === "Swing") {
     const swingFlags = resolveVsaSwingGateFlags(config);
+    const htfTrend = config.htfTrend ?? null;
+    if (swingFlags.vsaSwingHtfAlignGate === true && isVsaCounterTrend(gated.vote, htfTrend)) {
+      _abl("rejSwingHtfCounter");
+      return {
+        vote: "NEUTRAL",
+        confidence: 0,
+        reason: "vsa_swing_htf_counter_trend",
+        meta: { htfTrend, htfCounterTrend: true },
+      };
+    }
     if (swingFlags.vsaSwingLongOnly === true && gated.vote === "SHORT") {
       _abl("rejSwingShort");
       return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_long_only" };
@@ -193,6 +218,10 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
     const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
     const graded = enriched?.gradedScore ?? Math.round((gated.confidence || 0) * 100);
     const minConf = swingFlags.vsaMinConfidenceSwing;
+    // Keep the existing Stopping Volume bypass for Swing. The current
+    // long-only Swing score distribution is 52–70; applying the 60 floor to
+    // every stopping-volume signal collapses the leg to zero trades. The
+    // bypass remains explicit and is covered by a separate Swing WF task.
     const stoppingBypass = isStoppingVolumeReason(gated.reason);
     if (minConf != null && graded < minConf && !stoppingBypass) {
       _abl("rejMinConfidence");

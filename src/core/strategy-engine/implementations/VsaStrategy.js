@@ -40,12 +40,15 @@ class VsaStrategy extends StrategyBase {
       { key: "rejSwingProximity", label: "7. - Swing proximity gate" },
       { key: "rejClassify", label: "8. - Spread/CLV classify fail" },
       { key: "rejPattern", label: "9. - No VSA pattern" },
+      { key: "rejSequenceNoTest", label: "9a. - Sequence has no VSA test" },
+      { key: "rejSequenceNoClimax", label: "9b. - Sequence has no prior climax" },
       { key: "rejBySession", label: "10. - Session filter (no-trade window)" },
       { key: "rejHtfShortBullish", label: "11. - Intraday HTF SHORT×BULLISH block" },
       { key: "rejHtfStoppingCounter", label: "12. - Intraday HTF stopping-volume counter" },
       { key: "rejHtfLongBearishPenalty", label: "13. - Intraday HTF LONG×BEARISH penalty" },
       { key: "rejSwingShort", label: "14. - Swing LONG-only gate" },
-      { key: "rejMinConfidence", label: "15. - Swing graded conf floor" },
+      { key: "rejSwingHtfCounter", label: "15. - Swing HTF counter-trend gate" },
+      { key: "rejMinConfidence", label: "16. - Swing graded conf floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }

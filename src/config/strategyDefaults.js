@@ -145,18 +145,21 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     // Fix #4 REVERTED (Sprint 23 post-WF): relative gate unlocked 4–7× trades on
     // sub-0.4% ATR quiet legs with no gross edge — fees drove −89% NET (0/3 BLOCK).
     // Absolute 0.4% floor restored; pre-fix WF was mixed but survivable (+0.7/−38/−26%).
-    // CONTEXT_ONLY overlay — flags counter-HTF in meta; no hard directional block (HTF_Mode).
     vsaHtfAlignGate: true,
+    vsaHtfHardAlignGate: true,
     vsaHtfCounterPenalty: 0.5,
     // Session filter OFF — London block removed
     vsaSessionFilter: false,
-    // Fix #3: confirmation-bar detector v2 (alt: htf_proximity | sequence | hvsa | legacy)
-    vsaIntradayDetectorMode: "confirmation",
+    // V3: require a stopping-volume climax followed by a named VSA test.
+    vsaIntradayDetectorMode: "sequence",
   },
   Swing: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
     vsaSessionFilter: false,
     vsaSwingLongOnly: true,
+    // Keep opt-in until a Swing-specific WF proves the weekly counter-trend
+    // gate does not collapse the already sparse leg to zero trades.
+    vsaSwingHtfAlignGate: false,
     vsaMinConfidenceSwing: 60,
   },
 });

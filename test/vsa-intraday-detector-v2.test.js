@@ -36,10 +36,10 @@ function makeCandles(n, opts = {}) {
   return { opens, highs, lows, closes, volumes, atr, lastIdx: n - 1 };
 }
 
-describe("VSA Intraday detector v2", () => {
-  test("defaults: confirmation mode + session filter OFF", () => {
+describe("VSA Intraday detector v3", () => {
+  test("defaults: sequence mode + session filter OFF", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
-    assert.equal(ov.Intraday.vsaIntradayDetectorMode, "confirmation");
+    assert.equal(ov.Intraday.vsaIntradayDetectorMode, "sequence");
     assert.equal(ov.Intraday.vsaSessionFilter, false);
     assert.equal(ov.Intraday.noTradeSessions, undefined);
     assert.equal(ov.Scalping.vsaSessionFilter, false);
@@ -111,8 +111,8 @@ describe("VSA Intraday detector v2", () => {
     assert.equal(ablation.rejBySession, 0);
   });
 
-  test("resolveIntradayDetectorMode falls back to confirmation", () => {
-    assert.equal(resolveIntradayDetectorMode({}), "confirmation");
+  test("resolveIntradayDetectorMode falls back to sequence", () => {
+    assert.equal(resolveIntradayDetectorMode({}), "sequence");
     assert.equal(resolveIntradayDetectorMode({ vsaIntradayDetectorMode: "hvsa" }), "hvsa");
     assert.equal(resolveIntradayDetectorMode({ vsaIntradayDetectorMode: "bogus" }), "confirmation");
   });

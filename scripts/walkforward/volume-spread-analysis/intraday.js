@@ -50,11 +50,11 @@ function buildManifest({ win, symbol }) {
       vsaHtfCounterPenalty: 0.5,
       vsaScalpingShelved: true,
       vsaSessionFilter: false,
-      vsaIntradayDetectorMode: "confirmation",
+      vsaIntradayDetectorMode: "sequence",
       entryTf: "15m",
       htfTf: "1h",
       goNoGo: "gross PF > 1.0 in all 3 windows (Sprint 23 root-cause gate)",
-      note: "Intraday SSOT — session filter OFF",
+      note: "Intraday SSOT — sequence detector + session filter OFF",
     },
     exportVariant: "full",
   };
@@ -75,7 +75,7 @@ async function main() {
   console.log("VSA Intraday walk-forward re-validation (Sprint 23)");
   console.log(`Output: ${OUT_ROOT}`);
   console.log(`Windows: ${windows.map((w) => `${w.id}(${w.label})`).join(", ")} · Symbols: ${symbols.join(", ")}`);
-  console.log("Config: HTF-align gate + session OFF + confirmation-bar detector v2");
+  console.log("Config: HTF-align overlay + sequence detector v3 + session OFF");
 
   if (summaryOnly) {
     const summary = collectSummary(OUT_ROOT, windows, symbols, MIN_PASSES_PER_SYMBOL, PROMOTE_HINT);
