@@ -749,21 +749,21 @@ STRATEGIES.WYCKOFF = {
   longVolumeConfirmMult: 1.45,
   shortVolumeConfirmMult: 1.2,
   minSlAtrMult: 0.9,
-  // BTC 12m (2026-07-31): trades≥217, net ≥+$900 (≥90%), MDD ≤10%.
-  //   Chronological book: cut SC toxic hours (esp. 16/21), ID (3/9/13/22),
-  //   keep Swing for volume at riskMult 0.25, size from initial capital.
-  //   Validated: n=225 PnL~+$1121 MDD~9.75% (fees ON).
-  riskPerTrade: 0.11,
+  // Development recalibration (2026-09-25): the prior 12m fit used 11% combined
+  // risk and forced every leg short. That was not robust on the 9y BTC spot tape:
+  // fast-leg losses compounded while the low-R partial bank paid fees. Keep the
+  // type ladder, but use a survivable 3% combined cap and a 3% daily loss stop.
+  riskPerTrade: 0.03,
   typeRiskWeights: { Scalping: 2.0, Intraday: 3.0, Swing: 0.5 },
   riskSizingBasis: "initial",
-  maxDailyLossPct: 0.10,
+  maxDailyLossPct: 0.03,
   maxTradesPerDay: 40,
   atrMinMult: 0.32,
   atrMaxMult: 5.0,
   atrGateRelative: false,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    // 5m SHORT — full bank @ 0.60R (maker), fee-survivable SL floor, toxic hours blocked.
+    // 5m two-sided — 50% @ 1R, 25% @ 2R, runner to the planned 2R TP.
     Scalping: {
       ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
       tradeType: "Scalping",
@@ -776,8 +776,8 @@ STRATEGIES.WYCKOFF = {
       atrRelMax: 3.2,
       volumeConfirmMult: 1.05,
       shortVolumeConfirmMult: 1.05,
-      longVolumeConfirmMult: 9.0,
-      blockLong: true,
+      longVolumeConfirmMult: 1.2,
+      blockLong: false,
       allowLpsyFlexPrior: true,
       cooldownBars: 0,
       recoveryWindow: 4,
@@ -788,8 +788,9 @@ STRATEGIES.WYCKOFF = {
       allowHtfSideways: false,
       allowHtfSidewaysLong: false,
       requireHtfAlign: true,
-      // Block toxic UTC (esp. 16/21); keep UTC 2 open for volume.
-      blockedUtcHours: [0, 4, 15, 16, 17, 19, 20, 21],
+      // Development session guard from the long tape: keep UTC 01, 08–09 and
+      // 12–14, where this leg has the best fee-adjusted follow-through.
+      blockedUtcHours: [0, 2, 3, 4, 5, 6, 7, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22, 23],
       makerEntry: true,
       minSlPct: 0.01,
       minSlPctMode: "floor",
@@ -797,15 +798,15 @@ STRATEGIES.WYCKOFF = {
       slAtrMult: SCALP_GEOMETRY.slAtrMult,
       tpAtrMult: SCALP_GEOMETRY.tpAtrMult,
       tpMode: "partial",
-      slPlusPartial1Pct: 1.0,
-      slPlusPartial2Pct: 0,
-      slPlusM1R: 0.60,
-      slPlusM2R: 99,
+      slPlusPartial1Pct: 0.5,
+      slPlusPartial2Pct: 0.25,
+      slPlusM1R: 1.0,
+      slPlusM2R: 2.0,
       slPlusBeOffsetR: 0.25,
       cooldownAfterLoss: 15,
       maxConsecLoss: 3,
     },
-    // 15m SHORT — full bank @ 0.55R; block toxic UTC clusters.
+    // 15m two-sided — 50% @ 1R, 25% @ 2R, runner to the planned 2.2R TP.
     Intraday: {
       ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
       entryModel: "balanced",
@@ -813,13 +814,18 @@ STRATEGIES.WYCKOFF = {
       atrGateRelative: false,
       volumeConfirmMult: 1.15,
       shortVolumeConfirmMult: 1.15,
-      longVolumeConfirmMult: 9.0,
+      longVolumeConfirmMult: 1.3,
+      // 15m LONG remains shelved until it proves positive in walk-forward;
+      // the long-history tape shows a materially worse loss profile than SHORT.
       blockLong: true,
       allowLpsyFlexPrior: true,
+      wyckoffRequireStrongTrend: true,
       cooldownBars: 1,
       minRr: 2.0,
       sidewaysShortOnly: true,
-      allowHtfSideways: true,
+      // Continuation signals must agree with a directional 1h context; the
+      // old sideways exception produced a large fee-heavy Intraday bleed.
+      allowHtfSideways: false,
       allowHtfSidewaysLong: false,
       blockedUtcHours: [3, 8, 9, 12, 13, 16, 17, 19, 22],
       slAtrMult: 1.0,
@@ -827,15 +833,15 @@ STRATEGIES.WYCKOFF = {
       minSlAtrMult: 0.9,
       makerEntry: true,
       tpMode: "partial",
-      slPlusPartial1Pct: 1.0,
-      slPlusPartial2Pct: 0,
-      slPlusM1R: 0.55,
-      slPlusM2R: 99,
+      slPlusPartial1Pct: 0.5,
+      slPlusPartial2Pct: 0.25,
+      slPlusM1R: 1.0,
+      slPlusM2R: 2.0,
       slPlusBeOffsetR: 0.25,
       cooldownAfterLoss: 15,
       maxConsecLoss: 3,
     },
-    // Volume leg: bank @ 0.55R, riskMult 0.25 so SW fills add count without MDD blowup.
+    // 4h volume leg: 50% @ 1R, 25% @ 1.5R, runner to the planned ~1.8R TP.
     Swing: {
       ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
       entryModel: "aggressive",
@@ -846,8 +852,8 @@ STRATEGIES.WYCKOFF = {
       atrRelMax: 4.0,
       volumeConfirmMult: 0.6,
       shortVolumeConfirmMult: 0.6,
-      longVolumeConfirmMult: 1.0,
-      blockLong: true,
+      longVolumeConfirmMult: 1.2,
+      blockLong: false,
       blockShort: false,
       wyckoffSwingShelved: false,
       cooldownBars: 0,
@@ -861,16 +867,17 @@ STRATEGIES.WYCKOFF = {
       sidewaysShortOnly: false,
       allowHtfSideways: false,
       allowHtfSidewaysLong: false,
+      wyckoffRequireStrongTrend: true,
       blockedUtcHours: [8, 12],
       slAtrMult: 1.2,
       tpAtrMult: 2.2,
       minSlAtrMult: 1.0,
       makerEntry: true,
       tpMode: "partial",
-      slPlusPartial1Pct: 1.0,
-      slPlusPartial2Pct: 0,
-      slPlusM1R: 0.55,
-      slPlusM2R: 99,
+      slPlusPartial1Pct: 0.5,
+      slPlusPartial2Pct: 0.25,
+      slPlusM1R: 1.0,
+      slPlusM2R: 1.5,
       slPlusBeOffsetR: 0.25,
       riskMult: 0.25,
       cooldownAfterLoss: 0,
