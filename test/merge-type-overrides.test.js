@@ -133,10 +133,17 @@ describe("resolveBacktestStrategyDefaults — Wyckoff-only remount (prod parity)
     assert.equal(cfg.typeOverrides.Scalping.tpMode, "partial");
     assert.equal(cfg.typeOverrides.Intraday.tpMode, "partial");
     assert.equal(cfg.typeOverrides.Swing.tpMode, "partial");
-    assert.equal(cfg.typeOverrides.Scalping.blockLong, true);
+    assert.equal(cfg.typeOverrides.Scalping.blockLong, false);
+    assert.equal(cfg.typeOverrides.Intraday.blockLong, true);
+    assert.equal(cfg.typeOverrides.Intraday.wyckoffRequireStrongTrend, true);
     assert.equal(cfg.typeOverrides.Scalping.makerEntry, true);
     assert.ok(Array.isArray(cfg.typeOverrides.Scalping.blockedUtcHours));
-    assert.equal(cfg.riskPerTrade, 0.11);
+    assert.equal(cfg.riskPerTrade, 0.03);
+    assert.equal(cfg.maxDailyLossPct, 0.03);
+    assert.equal(cfg.typeOverrides.Scalping.slPlusPartial1Pct, 0.5);
+    assert.equal(cfg.typeOverrides.Scalping.slPlusPartial2Pct, 0.25);
+    assert.equal(cfg.typeOverrides.Scalping.slPlusM1R, 1.0);
+    assert.equal(cfg.typeOverrides.Scalping.slPlusM2R, 2.0);
     assert.equal(cfg.riskSizingBasis, "initial");
     // Must NOT keep SMC Scalping ATR floor that wiped Wyckoff 5m gates.
     assert.equal(cfg.typeOverrides.Scalping.atrMinMult, 0.08);
@@ -147,7 +154,7 @@ describe("resolveBacktestStrategyDefaults — Wyckoff-only remount (prod parity)
     const cfg = resolveBacktestStrategyDefaults("WYCKOFF", {});
     assert.equal(cfg.name, "WYCKOFF");
     assert.equal(cfg.typeOverrides.Scalping.tpMode, "partial");
-    assert.equal(cfg.riskPerTrade, 0.11);
+    assert.equal(cfg.riskPerTrade, 0.03);
   });
 
   test("full FOUNDRY AF does not remount pure Wyckoff SSOT over SMC", () => {

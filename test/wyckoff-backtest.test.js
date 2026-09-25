@@ -21,6 +21,7 @@ const {
   detectTradingRange,
   detectSpring,
   detectUpthrust,
+  isHtfDirectionAllowed,
   DEFAULTS,
 } = require("#core/strategy-engine/af/wyckoffEntry.js");
 const WyckoffStrategy = require("#core/strategy-engine/implementations/WyckoffStrategy.js");
@@ -230,6 +231,36 @@ describe("Wyckoff component detection", () => {
     const r = evaluateWyckoffComponent(c, { entryModel: "aggressive" }, { lastSignalIdx: c.lastIdx });
     assert.equal(r.vote, "NEUTRAL");
     assert.equal(r.reason, "cooldown_active");
+  });
+
+  test("HTF direction guard applies to continuation-compatible paths", () => {
+    assert.equal(isHtfDirectionAllowed("SHORT", {
+      requireHtfAlign: true,
+      htfTrend: "BULLISH",
+      allowHtfSideways: false,
+    }), false);
+    assert.equal(isHtfDirectionAllowed("SHORT", {
+      requireHtfAlign: true,
+      htfTrend: "SIDEWAYS",
+      allowHtfSideways: false,
+    }), false);
+    assert.equal(isHtfDirectionAllowed("SHORT", {
+      requireHtfAlign: true,
+      htfTrend: "BEARISH",
+      allowHtfSideways: false,
+    }), true);
+  });
+
+  test("daily strong-trend guard can shelve a leg without changing detectors", () => {
+    const c = makeMatureRangeWithSpring({ spring: true });
+    const result = evaluateWyckoffComponent(c, {
+      tradeType: "Intraday",
+      wyckoffRequireStrongTrend: true,
+      dailyRegime: "CHOP",
+      entryModel: "aggressive",
+    });
+    assert.equal(result.vote, "NEUTRAL");
+    assert.equal(result.reason, "wyckoff_regime_not_strong");
   });
 });
 

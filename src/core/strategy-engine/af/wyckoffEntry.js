@@ -90,6 +90,10 @@ const DEFAULTS = {
   scalpPatternMode: "ut_and_lpsy",
   // Optional UTC hour blocklist (lossy cluster filter), e.g. [16,17,18,19,20,21]
   blockedUtcHours: null,
+  // Optional daily regime guard. UNKNOWN/missing remains fail-open for callers
+  // that do not provide the daily regime snapshot.
+  wyckoffRequireStrongTrend: false,
+  wyckoffIntradayShelved: false,
 };
 
 /**
@@ -99,14 +103,14 @@ const DEFAULTS = {
  */
 const TRADE_TYPE_PROFILES = Object.freeze({
   Scalping: {
-    // 5m bank mode: maker + SL floor; block toxic UTC, keep volume hours.
+    // 5m two-sided mode: maker + SL floor; block toxic UTC, keep volume hours.
     entryModel: "balanced",
     scalpPatternMode: "ut_and_lpsy",
     wyckoffSessionFilter: false,
-    blockedUtcHours: [0, 4, 15, 16, 17, 19, 20, 21],
+    blockedUtcHours: [0, 2, 3, 4, 5, 6, 7, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22, 23],
     allowHtfSideways: false,
     allowLpsyFlexPrior: true,
-    blockLong: true,
+    blockLong: false,
     volumeConfirmMult: 1.05,
     shortVolumeConfirmMult: 1.05,
     cooldownBars: 0,
@@ -123,9 +127,11 @@ const TRADE_TYPE_PROFILES = Object.freeze({
     scalpPatternMode: "ut_and_lpsy",
     blockLong: true,
     allowLpsyFlexPrior: true,
-    allowHtfSideways: true,
+    allowHtfSideways: false,
+    requireHtfAlign: true,
     sidewaysShortOnly: true,
-    blockedUtcHours: [3, 8, 9, 12, 13, 16, 17, 19, 22],
+    wyckoffRequireStrongTrend: true,
+    blockedUtcHours: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22],
   },
   Swing: {
     entryModel: "aggressive",
@@ -133,8 +139,9 @@ const TRADE_TYPE_PROFILES = Object.freeze({
     requireHtfAlign: true,
     allowHtfSideways: false,
     allowHtfSidewaysLong: false,
-    blockLong: true,
+    blockLong: false,
     blockShort: false,
+    wyckoffRequireStrongTrend: true,
     wyckoffSwingShelved: false,
     // Volume contribution; size via typeOverrides.riskMult 0.25
     blockedUtcHours: [8, 12],
@@ -160,6 +167,35 @@ function isBlockedUtcHour(candles, lastIdx, blockedHours) {
   if (ts == null || !Number.isFinite(+ts)) return false;
   const hour = new Date(+ts).getUTCHours();
   return blockedHours.includes(hour);
+}
+
+/**
+ * Apply the same HTF directional contract to direct Spring/Upthrust and
+ * continuation SOS/SOW paths. Continuation used to return before the entry
+ * checklist, so LPSY could bypass allowHtfSideways/sidewaysShortOnly.
+ */
+function isHtfDirectionAllowed(side, config = {}) {
+  if (config.requireHtfAlign === false) return true;
+  const htf = config.htfTrend ?? config.HTFTrend ?? null;
+  if (htf !== "BULLISH" && htf !== "BEARISH" && htf !== "SIDEWAYS") return true;
+
+  if (side === "LONG") {
+    if (htf === "BEARISH") return false;
+    if (htf === "SIDEWAYS") {
+      return config.allowHtfSideways !== false
+        && config.allowHtfSidewaysLong === true
+        && config.sidewaysShortOnly !== true;
+    }
+    return true;
+  }
+
+  if (side === "SHORT") {
+    if (htf === "BULLISH") return false;
+    if (htf === "SIDEWAYS") return config.allowHtfSideways !== false;
+    return true;
+  }
+
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1100,8 +1136,8 @@ function evaluateEntryChecklist(candles, range, pattern, side, config = {}) {
   // Location / RR evaluated at reclaim bar (setup quality), not chased CHoCH close
   const locationIdx = pattern?.recoveryIdx ?? lastIdx;
   const locationPrice = candles.closes[locationIdx] ?? entryPrice;
-  let invalidation = null;
-  let choch = { detected: false };
+  let invalidation;
+  let choch;
   let lpsLevel = null;
 
   const htf = cfg.htfTrend || cfg.HTFTrend || null;
@@ -1328,6 +1364,7 @@ function evaluateSchematicContinuation(candles, range, config = {}) {
     lastSos < lastLps &&
     (events.springInd.length > 0 || events.sc.length > 0) &&
     prior.direction === "down" &&
+    isHtfDirectionAllowed("LONG", cfg) &&
     entryPrice != null &&
     entryPrice > (range.midRange ?? (range.rangeHigh + range.rangeLow) / 2)
   ) {
@@ -1361,8 +1398,8 @@ function evaluateSchematicContinuation(candles, range, config = {}) {
 
   const lastLpsy = events.lpsy[events.lpsy.length - 1];
   const lastSow = events.sow[events.sow.length - 1];
-  // Short-biased legs may take LPSY without a strict prior uptrend (range
-  // distribution after sideways HTF still valid when blockLong / flex flag set).
+  // Short-biased legs may take LPSY without a strict prior uptrend when the
+  // explicit flex flag is enabled; HTF direction is still enforced above.
   const lpsyPriorOk =
     prior.direction === "up"
     || (cfg.allowLpsyFlexPrior === true && prior.direction !== "down")
@@ -1373,7 +1410,8 @@ function evaluateSchematicContinuation(candles, range, config = {}) {
     lastSow != null &&
     lastSow < lastLpsy &&
     (events.utadInd.length > 0 || events.bc.length > 0) &&
-    lpsyPriorOk
+    lpsyPriorOk &&
+    isHtfDirectionAllowed("SHORT", cfg)
   ) {
     const invalidation = range.rangeHigh;
     const rr = _estimateRr("SHORT", entryPrice, invalidation, range);
@@ -1427,6 +1465,21 @@ function evaluateWyckoffComponent(candles, config = {}, state = {}) {
   if (isBlockedUtcHour(candles, lastIdx, cfg.blockedUtcHours)) {
     _abl("rejCooldown");
     return { vote: "NEUTRAL", confidence: 0, reason: "wyckoff_hour_block" };
+  }
+
+  if (cfg.wyckoffIntradayShelved === true && cfg.tradeType === "Intraday") {
+    _abl("rejRegime");
+    return { vote: "NEUTRAL", confidence: 0, reason: "wyckoff_intraday_shelved" };
+  }
+
+  if (
+    cfg.wyckoffRequireStrongTrend === true
+    && cfg.dailyRegime != null
+    && cfg.dailyRegime !== "UNKNOWN"
+    && cfg.dailyRegime !== "STRONG_TREND"
+  ) {
+    _abl("rejRegime");
+    return { vote: "NEUTRAL", confidence: 0, reason: "wyckoff_regime_not_strong" };
   }
 
   if (lastIdx == null || !candles?.closes || candles.closes.length < cfg.minBars) {
@@ -1570,4 +1623,5 @@ module.exports = {
   relativeVolume,
   applyWyckoffSessionFilter,
   isBlockedUtcHour,
+  isHtfDirectionAllowed,
 };
