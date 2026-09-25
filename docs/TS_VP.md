@@ -1,11 +1,11 @@
-# AUCTION_MARKET_THEORY — Entry Triggers (AS-IS)
+# AUCTION_MARKET_THEORY — Entry Triggers
 
 **Scope**: What triggers an AUCTION_MARKET_THEORY entry and the signal labels emitted on fill.  
 **Strategy key**: `AUCTION_MARKET_THEORY` (`VolumeProfileStrategy`, v2.0) — label: **Auction Market Theory**  
 **Engine SSOT**: `volumeProfileEntry.js` → `evaluateVolumeProfileEntry`  
 **Config SSOT**: `strategyDefaults.js` → `AUCTION_MARKET_THEORY` (inherits `TS_COMPONENT_BASE`)  
 **Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
-**Doc date**: 2026-07-25
+**Doc date**: 2026-09-26
 
 ---
 
@@ -29,13 +29,21 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 - **`vwapAtrMult`:** 0.5 (× ATR) — VWAP proximity tolerance
 - **`vwapTolerancePct`:** 0.005 (fraksi) — Fallback VWAP tolerance (~0.5%)
 - **`minSessionBars`:** 20 (bar) — Intraday UTC-day session floor
-- **`minSessionBarsSwing`:** 6 (bar) — Swing UTC-week session floor
+- **`minSessionBarsSwing`:** 6 (bar) — low-level UTC-week fallback; the production AMT Swing preset pins a 20-bar context floor after long-history validation
+- **`amtEntryQualityGate`:** true — closed-candle acceptance gate
+- **`amtHtfAlignGate`:** true — blocks counter-trend entries when HTF is directional
+- **`amtMinBodyAtr`:** 0.15 (base; per-leg override) — minimum body size
+- **`amtMinVolumeRatio`:** 0.8 (base; per-leg override) — current volume / prior 20-bar SMA
+- **`amtMinVwapDistanceAtr`:** 0.1 — minimum close distance beyond VWAP for cross entries
+- **`amtEdgeAtrMult`:** 0.25 — VA edge tolerance, separate from VWAP proximity tolerance
+- **`amtEdgePenetrationAtr`:** 0.1 — minimum sweep beyond VAL/VAH before an edge trigger is valid
+- **`amtVahRejectEnabled`:** false in the AMT preset — short VAH fades remain research opt-in until failed-auction confirmation is implemented
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `amtSessionFilter: false`, RR 2.0
-- **Intraday:** `atrMinMult: 0.4`
-- **Swing:** `atrMinMult: 0.8`
+- **Scalping:** `atrGateRelative: true`, `atrMinMult: 0.75`, `maxTradesPerDay: 1`, `amtSessionFilter: false`, body ≥ 0.2 ATR, volume ≥ 1.0×, RR 2.0
+- **Intraday:** `atrMinMult: 0.6`, `maxTradesPerDay: 1`, body ≥ 0.15 ATR, volume ≥ 0.9×
+- **Swing:** `atrMinMult: 0.8`, one trade/day, `minSessionBars: 20`, body ≥ 1.0 ATR, volume ≥ 0.8×
 
 ---
 
@@ -70,13 +78,13 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 ### Swing
 
 - **Floor:** none
-- **Formula / components:** UTC-week session; `minSessionBarsSwing` **6**
+- **Formula / components:** UTC-week session; production floor `minSessionBars` **20**
 
 ---
 
 ## Risk & SL/TP (per Trade Type)
 
-Session **VWAP proximity** for entries uses `vwapAtrMult` 0.5×ATR — separate from SL/TP distances below. Entry triggers: [How Entry Works](#how-entry-works).
+Session **VWAP proximity** for precision helpers uses `vwapAtrMult` 0.5×ATR — separate from the race-entry acceptance distance and SL/TP distances below. Entry triggers: [How Entry Works](#how-entry-works).
 
 ### Scalping
 
@@ -103,13 +111,13 @@ Session **VWAP proximity** for entries uses `vwapAtrMult` 0.5×ATR — separate 
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** UTC-**week** session (`minSessionBarsSwing` 6)
+- **Notes:** UTC-**week** session; production profile context floor **20 bars**
 
 ### Execution limits (all legs)
 
 **Limit:** Max trades/day
-**Value:** 4
-**SSOT:** `TS_COMPONENT_BASE`
+**Value:** AMT preset: 1 per leg; generic TS base: 4
+**SSOT:** `strategyDefaults.js` → `AUCTION_MARKET_THEORY.typeOverrides`
 
 ---
 **Limit:** Cooldown after loss
@@ -150,34 +158,37 @@ Trades **session auction imbalances** — price reclaiming or rejecting VWAP and
 ### Entry triggers
 
 ```
-Session VWAP/VA Compute → Trigger at VWAP or VA edge → signal
+Session VWAP/VA Compute → freeze previous completed levels → acceptance/HTF gates → signal
 ```
 
 ### `vwap_reclaim`
 
 - **Direction:** LONG
-- **Condition:** Close crosses back above session VWAP
+- **Condition:** Previous close was below the previous completed VWAP, current close reclaims the current VWAP, and the entry candle has bullish body/volume acceptance and minimum distance.
 
 ### `vwap_lose`
 
 - **Direction:** SHORT
-- **Condition:** Close crosses back below session VWAP
+- **Condition:** Previous close was above the previous completed VWAP, current close loses the current VWAP, and the entry candle has bearish body/volume acceptance and minimum distance.
 
 ### `val_bounce`
 
 - **Direction:** LONG
-- **Condition:** Rejection from Value Area Low (VAL)
+- **Condition:** Current candle sweeps the **previous completed** VAL by the configured penetration floor and closes back above it with bullish body/volume confirmation.
 
 ### `vah_reject`
 
 - **Direction:** SHORT
-- **Condition:** Rejection from Value Area High (VAH)
+- **Condition:** Research-only trigger. When enabled, the current candle must sweep the **previous completed** VAH by the configured penetration floor and close back below it with bearish body/volume confirmation.
 
 Precision helpers (`vwap_retest`, `poc_retest`) exist for rollback mode; race-mode fills use the four codes above.
 
 ### Gate funnel
 
 - **Session warmup (`minSessionBars`):** hard gate
+- **Previous-level freeze:** VAH/VAL/POC exclude the entry candle; this prevents a candle from defining its own rejection level.
+- **Candle/volume acceptance:** body direction, body/ATR floor, prior-SMA volume ratio, and VWAP distance for cross entries.
+- **HTF alignment:** directional HTF counter-trend is blocked; SIDEWAYS/UNKNOWN remains neutral/fail-closed at the engine layer.
 - **`awaiting_amt_trigger`:** no trade
 - **Session filter:** **off** (`amtSessionFilter: false`)
 - **ATR gate:** per-leg overrides

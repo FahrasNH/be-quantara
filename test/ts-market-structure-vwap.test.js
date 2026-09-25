@@ -302,6 +302,199 @@ test("race entry fires on VWAP reclaim", () => {
   assert.strictEqual(r.reason, "vwap_reclaim");
 });
 
+test("AMT uses the previous completed VWAP and freezes the prior profile", () => {
+  const n = 30;
+  const highs = Array(n).fill(100.1);
+  const lows = Array(n).fill(99.9);
+  const closes = Array(n).fill(99.9);
+  const opens = Array(n).fill(99.9);
+  const volumes = Array(n).fill(1000);
+  const volSMA = Array(n).fill(1000);
+  const atr = Array(n).fill(1);
+  const timestamps = Array.from({ length: n }, (_, i) => Date.UTC(2026, 0, 2) + i * 60_000);
+  const i = n - 1;
+
+  // Previous close is above the previous VWAP, but the current candle's
+  // extreme lifts the current VWAP above it. The old moving-level comparison
+  // falsely called this a reclaim; the corrected comparison must not.
+  closes[i - 1] = 100.0;
+  opens[i - 1] = 99.9;
+  closes[i] = 101.0;
+  opens[i] = 100.8;
+  highs[i] = 101.2;
+  lows[i] = 100.8;
+  volumes[i] = 1000;
+
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, volSMA, timestamps, atr },
+    i,
+    { minSessionBars: 8, htfTrend: "BULLISH" }
+  );
+  assert.strictEqual(r.signal, null);
+  assert.notStrictEqual(r.reason, "vwap_reclaim");
+  assert.strictEqual(r.meta?.profileIdx, i - 1);
+});
+
+test("AMT rejects a VWAP cross without volume acceptance", () => {
+  const n = 30;
+  const highs = Array(n).fill(100.1);
+  const lows = Array(n).fill(99.9);
+  const closes = Array(n).fill(100);
+  const opens = Array(n).fill(100);
+  const volumes = Array(n).fill(1000);
+  const volSMA = Array(n).fill(1000);
+  const atr = Array(n).fill(1);
+  const timestamps = Array.from({ length: n }, (_, i) => Date.UTC(2026, 0, 2) + i * 60_000);
+  const i = n - 1;
+  closes[i - 1] = 99.5;
+  closes[i] = 100.2;
+  opens[i] = 99.5;
+  highs[i] = 100.3;
+  lows[i] = 99.8;
+  volumes[i] = 100;
+
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, volSMA, timestamps, atr },
+    i,
+    { minSessionBars: 8, htfTrend: "BULLISH", amtMinVolumeRatio: 0.8 }
+  );
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "amt_volume_confirmation");
+  assert.ok(r.meta?.volumeRatio < 0.8);
+});
+
+test("AMT blocks a counter-trend signal when HTF alignment is enabled", () => {
+  const n = 30;
+  const highs = Array(n).fill(100.1);
+  const lows = Array(n).fill(99.9);
+  const closes = Array(n).fill(100);
+  const opens = Array(n).fill(100);
+  const volumes = Array(n).fill(1000);
+  const volSMA = Array(n).fill(1000);
+  const atr = Array(n).fill(1);
+  const timestamps = Array.from({ length: n }, (_, i) => Date.UTC(2026, 0, 2) + i * 60_000);
+  const i = n - 1;
+  closes[i - 1] = 99.5;
+  closes[i] = 100.2;
+  opens[i] = 99.5;
+  highs[i] = 100.3;
+  lows[i] = 99.8;
+
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, volSMA, timestamps, atr },
+    i,
+    { minSessionBars: 8, htfTrend: "BEARISH", amtHtfAlignGate: true }
+  );
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "amt_htf_counter_trend");
+  assert.strictEqual(r.meta?.htfCounterTrend, true);
+});
+
+test("AMT edge triggers require an actual sweep beyond VAL/VAH", () => {
+  const n = 30;
+  const highs = Array(n).fill(100.1);
+  const lows = Array(n).fill(99.9);
+  const closes = Array(n).fill(100);
+  const opens = Array(n).fill(100);
+  const volumes = Array(n).fill(1000);
+  const atr = Array(n).fill(1);
+  const timestamps = Array.from({ length: n }, (_, i) => Date.UTC(2026, 0, 2) + i * 60_000);
+  const i = n - 1;
+
+  // The candle recovers strongly but never sweeps the previous VAL. The old
+  // ±edge tolerance could classify this near miss as a VAL touch.
+  closes[i - 1] = 99.5;
+  closes[i] = 100.2;
+  opens[i] = 99.5;
+  highs[i] = 100.3;
+  lows[i] = 100.05;
+
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, timestamps, atr },
+    i,
+    {
+      minSessionBars: 8,
+      htfTrend: "SIDEWAYS",
+      amtMinBodyAtr: 0,
+      amtMinVolumeRatio: 0,
+      amtEdgePenetrationAtr: 0.1,
+    }
+  );
+  assert.notStrictEqual(r.reason, "val_bounce");
+});
+
+test("AMT live timeframe resolves the matching leg override", () => {
+  const n = 24;
+  const highs = [];
+  const lows = [];
+  const closes = [];
+  const opens = [];
+  const volumes = [];
+  const atr = Array(n).fill(1);
+  const timestamps = [];
+  const weekStart = Date.UTC(2026, 0, 5);
+  for (let i = 0; i < n; i++) {
+    const px = 100;
+    highs.push(px + 0.2);
+    lows.push(px - 0.2);
+    closes.push(px);
+    opens.push(px);
+    volumes.push(1000);
+    timestamps.push(weekStart + i * 4 * 3_600_000);
+  }
+  const i = n - 1;
+  closes[i - 1] = 99.5;
+  opens[i] = 99.5;
+  closes[i] = 100.2;
+  highs[i] = 100.3;
+  lows[i] = 99.8;
+
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, timestamps, atr },
+    i,
+    {
+      interval: "4h",
+      typeOverrides: {
+        Swing: { amtMinBodyAtr: 2, amtMinVolumeRatio: 0 },
+      },
+    }
+  );
+  assert.strictEqual(r.reason, "amt_body_too_small");
+  assert.strictEqual(r.meta?.amtTradeTier, "Swing");
+  assert.strictEqual(r.meta?.minBodyAtr, 2);
+});
+
+test("AMT parent Trend Surge config still inherits AMT leg thresholds", () => {
+  const n = 30;
+  const highs = Array(n).fill(100.1);
+  const lows = Array(n).fill(99.9);
+  const closes = Array(n).fill(100);
+  const opens = Array(n).fill(100);
+  const volumes = Array(n).fill(1000);
+  const atr = Array(n).fill(1);
+  const timestamps = Array.from({ length: n }, (_, j) => Date.UTC(2026, 0, 2) + j * 60_000);
+  const i = n - 1;
+  closes[i - 1] = 99.5;
+  opens[i] = 100;
+  closes[i] = 100.17; // passes the generic 0.15 ATR gate, fails AMT Scalping 0.2
+  highs[i] = 100.2;
+  lows[i] = 99.95;
+
+  const r = evaluateVolumeProfileEntry(
+    { highs, lows, closes, opens, volumes, timestamps, atr },
+    i,
+    {
+      interval: "5m",
+      minSessionBars: 8,
+      // Shape this like the live Trend Surge parent: no AMT-specific keys.
+      typeOverrides: { Scalping: { atrMinMult: 0.15 } },
+    }
+  );
+  assert.strictEqual(r.reason, "amt_body_too_small");
+  assert.strictEqual(r.meta?.amtTradeTier, "Scalping");
+  assert.strictEqual(r.meta?.minBodyAtr, 0.2);
+});
+
 test("AMT race entry fails closed without timestamps (no whole-history session)", () => {
   const n = 40;
   const highs = Array(n).fill(100.1);

@@ -925,9 +925,50 @@ STRATEGIES.AUCTION_MARKET_THEORY = {
   vwapTolerancePct: 0.005,
   minSessionBars: 20,
   minSessionBarsSwing: 6,
+  // A VWAP cross is only tradeable after closed-candle acceptance. These
+  // guards remove one-bar level touches/churn from all AMT entry paths.
+  amtEntryQualityGate: true,
+  amtHtfAlignGate: true,
+  amtMinBodyAtr: 0.15,
+  amtMinVolumeRatio: 0.8,
+  amtMinVwapDistanceAtr: 0.1,
+  amtEdgeAtrMult: 0.25,
+  // A valid auction edge must be swept, not merely approached. VAH fades are
+  // opt-in until a dedicated failed-auction detector is available.
+  amtEdgePenetrationAtr: 0.1,
+  amtVahRejectEnabled: false,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, amtSessionFilter: false },
+    Scalping: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
+      amtSessionFilter: false,
+      // BTC 5m AMT is fee-bound below this volatility floor; keep one
+      // auction attempt per UTC day instead of recycling the same session.
+      atrMinMult: 0.75,
+      maxTradesPerDay: 1,
+      amtMinBodyAtr: 0.2,
+      amtMinVolumeRatio: 1.0,
+    },
+    Intraday: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+      // The 15m edge needs enough range to pay Binance round-trip friction.
+      atrMinMult: 0.6,
+      maxTradesPerDay: 1,
+      amtMinBodyAtr: 0.15,
+      amtMinVolumeRatio: 0.9,
+    },
+    Swing: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
+      maxTradesPerDay: 1,
+      // Keep the empirically stable half-week context floor. A six-bar
+      // fallback admits too many early-week profiles and is fee-negative on
+      // the long-history BTC replay.
+      minSessionBars: 20,
+      // Weekly AMT needs a real displacement candle; low-body 4h touches were
+      // mostly fee drag and did not separate acceptance from noise.
+      amtMinBodyAtr: 1.0,
+      amtMinVolumeRatio: 0.8,
+    },
   },
 };
 STRATEGIES.SUPPLY_AND_DEMAND = {

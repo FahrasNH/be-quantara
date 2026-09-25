@@ -6,8 +6,10 @@
  * - Volume Profile: 20-bin histogram → POC + Value Area (70% volume).
  *
  * Sprint 12 architecture decision: race participant (independent signal
- * generator via VWAP reclaim / VA edge bounce). Precision helpers remain for
- * `tsCombinationMode: "gate"` rollback / A-B comparison.
+ * generator via VWAP reclaim / VA edge bounce). Race entries now require
+ * closed-candle acceptance, prior-volume participation and optional HTF
+ * alignment; VA levels are frozen at the previous completed candle. Precision
+ * helpers remain for `tsCombinationMode: "gate"` rollback / A-B comparison.
  */
 
 "use strict";
@@ -34,7 +36,83 @@ const DEFAULTS = {
   vwapTolerancePct: 0.005, // fallback when ATR unavailable (~0.5%)
   minSessionBars: 20, // Intraday UTC-day floor
   minSessionBarsSwing: 6, // Swing UTC-week floor (~1 day of 4h bars)
+
+  // AMT race-entry quality gates. A VWAP touch by itself is not acceptance;
+  // the closed candle must show directional follow-through and participation.
+  // These remain configurable because the valid volume/body scale differs by
+  // trade type, while the safe defaults apply to direct strategy callers too.
+  amtEntryQualityGate: true,
+  amtHtfAlignGate: true,
+  amtMinBodyAtr: 0.15,
+  amtMinVolumeRatio: 0.8,
+  amtMinVwapDistanceAtr: 0.1,
+  amtEdgeAtrMult: 0.25,
+  // A VA edge is only a rejection after price actually trades through the
+  // level. The previous `level ± tolerance` test treated a near miss as a
+  // touch, which inflated weak VAL/VAH signals in compressed ranges.
+  amtEdgePenetrationAtr: 0,
+  // VAH fades are disabled by the AMT production preset until a failed-auction
+  // detector is present. Keep the evaluator opt-in for A/B and research runs.
+  amtVahRejectEnabled: true,
 };
+
+const AMT_PRESET_KEYS = [
+  "bins",
+  "valueAreaPct",
+  "vwapAtrMult",
+  "vwapTolerancePct",
+  "minSessionBars",
+  "minSessionBarsSwing",
+  "amtEntryQualityGate",
+  "amtHtfAlignGate",
+  "amtMinBodyAtr",
+  "amtMinVolumeRatio",
+  "amtMinVwapDistanceAtr",
+  "amtEdgeAtrMult",
+  "amtEdgePenetrationAtr",
+  "amtVahRejectEnabled",
+];
+
+const AMT_TIER_KEYS = [
+  "minSessionBars",
+  "minSessionBarsSwing",
+  "amtSessionFilter",
+  "amtEntryQualityGate",
+  "amtHtfAlignGate",
+  "amtMinBodyAtr",
+  "amtMinVolumeRatio",
+  "amtMinVwapDistanceAtr",
+  "amtEdgeAtrMult",
+  "amtEdgePenetrationAtr",
+  "amtVahRejectEnabled",
+];
+
+function pickKeys(source, keys) {
+  const result = {};
+  for (const key of keys) {
+    if (source && Object.prototype.hasOwnProperty.call(source, key)) result[key] = source[key];
+  }
+  return result;
+}
+
+/**
+ * The live Trend Surge umbrella supplies its parent TS config, while the
+ * isolated AMT backtest supplies the AMT component config. Load the component
+ * preset lazily so both callers share the same AMT defaults without creating a
+ * module-level config cycle.
+ */
+function resolveAmtPreset(tier) {
+  try {
+    const { STRATEGIES } = require("../../../config/strategyDefaults");
+    const preset = STRATEGIES?.AUCTION_MARKET_THEORY;
+    return {
+      base: pickKeys(preset, AMT_PRESET_KEYS),
+      tier: pickKeys(preset?.typeOverrides?.[tier], AMT_TIER_KEYS),
+    };
+  } catch {
+    return { base: {}, tier: {} };
+  }
+}
 
 function inferBarMs(timestamps, lastIdx) {
   if (!Array.isArray(timestamps) || lastIdx < 1) return null;
@@ -234,6 +312,144 @@ function resolveVwapTolerance(indicators, lastIdx, cfg) {
   return { tolAbs: null, mode: "pct", atr: null, mult };
 }
 
+/** Resolve the leg used to select AMT-specific quality overrides. */
+function resolveAmtTradeTier(config = {}) {
+  if (config.tradeType) return String(config.tradeType);
+  if (Array.isArray(config.activeComponents) && config.activeComponents.length === 1) {
+    return String(config.activeComponents[0]);
+  }
+  if (Array.isArray(config.enabledComponents) && config.enabledComponents.length === 1) {
+    return String(config.enabledComponents[0]);
+  }
+
+  // Live Trend Surge calls normally carry the entry interval, not a backtest
+  // tradeType. Resolve the same leg preset from that timeframe so live AMT
+  // quality gates match the isolated Scalping/Intraday/Swing backtests.
+  const timeframe = String(config.entryTf || config.interval || config.entryTimeframe || "").toLowerCase();
+  if (["1m", "3m", "5m"].includes(timeframe)) return "Scalping";
+  if (["15m", "30m", "1h", "2h"].includes(timeframe)) return "Intraday";
+  if (["4h", "6h", "8h", "12h", "1d", "3d", "1w"].includes(timeframe)) return "Swing";
+
+  return null;
+}
+
+/**
+ * Resolve AMT config with per-leg overrides. Backtest typeConfig already
+ * flattens these fields, but live callers commonly keep them under
+ * typeOverrides, so both paths must produce the same decision.
+ */
+function resolveAmtConfig(config = {}) {
+  const tier = resolveAmtTradeTier(config);
+  const preset = resolveAmtPreset(tier);
+  const tierOverride = tier && config.typeOverrides?.[tier]
+    && typeof config.typeOverrides[tier] === "object"
+    ? config.typeOverrides[tier]
+    : {};
+  return {
+    ...DEFAULTS,
+    ...preset.base,
+    ...preset.tier,
+    ...(config.volumeProfile && typeof config.volumeProfile === "object" ? config.volumeProfile : {}),
+    ...config,
+    ...tierOverride,
+    amtTradeTier: tier,
+  };
+}
+
+function isCounterHtfTrend(signal, htfTrend) {
+  const trend = String(htfTrend || "").toUpperCase();
+  if (trend === "" || trend === "SIDEWAYS" || trend === "UNKNOWN") return false;
+  return (signal === "LONG" && trend === "BEARISH")
+    || (signal === "SHORT" && trend === "BULLISH");
+}
+
+/**
+ * Use the previous completed candle's volume SMA so the denominator does not
+ * contain the entry candle itself. If the caller did not precompute volSMA,
+ * derive the same 20-bar prior average locally.
+ */
+function resolvePriorVolumeRatio(indicators, volumes, lastIdx, lookback = 20) {
+  const volume = volumes?.[lastIdx];
+  if (volume == null || !Number.isFinite(volume) || volume <= 0) return null;
+
+  const previousSma = indicators?.volSMA?.[lastIdx - 1];
+  if (previousSma != null && Number.isFinite(previousSma) && previousSma > 0) {
+    return volume / previousSma;
+  }
+
+  const end = lastIdx - 1;
+  const start = Math.max(0, end - lookback + 1);
+  const prior = volumes
+    .slice(start, end + 1)
+    .filter((v) => v != null && Number.isFinite(v) && v > 0);
+  if (!prior.length) return null;
+  const average = prior.reduce((sum, v) => sum + v, 0) / prior.length;
+  return average > 0 ? volume / average : null;
+}
+
+function resolveEntryCandleQuality(indicators, lastIdx, signal, vwap, cfg) {
+  const closes = indicators?.closes || [];
+  const opens = indicators?.opens || [];
+  const volumes = indicators?.volumes || [];
+  const price = closes[lastIdx];
+  const prev = closes[lastIdx - 1];
+  const open = opens[lastIdx] != null && Number.isFinite(opens[lastIdx])
+    ? opens[lastIdx]
+    : prev;
+  const atr = indicators?.atr?.[lastIdx];
+  const body = price != null && open != null ? Math.abs(price - open) : null;
+  const bodyAtr = body != null && Number.isFinite(atr) && atr > 0 ? body / atr : null;
+  const volumeRatio = resolvePriorVolumeRatio(indicators, volumes, lastIdx);
+  const trend = String(cfg.htfTrend || "").toUpperCase();
+  const counterHtfTrend = isCounterHtfTrend(signal, trend);
+
+  const candleDirection = signal === "LONG"
+    ? price != null && open != null && price > open && price > prev
+    : price != null && open != null && price < open && price < prev;
+  const minBodyAtr = Number(cfg.amtMinBodyAtr);
+  const minVolumeRatio = Number(cfg.amtMinVolumeRatio);
+  const minVwapDistanceAtr = Number(cfg.amtMinVwapDistanceAtr);
+  const vwapDistanceAtr = price != null && vwap != null && Number.isFinite(atr) && atr > 0
+    ? (signal === "LONG" ? price - vwap : vwap - price) / atr
+    : null;
+
+  let rejection = null;
+  if (cfg.amtHtfAlignGate !== false && counterHtfTrend) {
+    rejection = "amt_htf_counter_trend";
+  } else if (cfg.amtEntryQualityGate !== false) {
+    // Missing quality inputs fail closed. Production backtest/live indicator
+    // snapshots always contain OHLCV, ATR and prior volume SMA; direct callers
+    // must opt out explicitly if they intentionally omit these fields.
+    if (!candleDirection) rejection = "amt_candle_confirmation";
+    else if (minBodyAtr > 0 && (bodyAtr == null || bodyAtr < minBodyAtr)) {
+      rejection = "amt_body_too_small";
+    } else if (minVolumeRatio > 0 && (volumeRatio == null || volumeRatio < minVolumeRatio)) {
+      rejection = "amt_volume_confirmation";
+    } else if (
+      minVwapDistanceAtr > 0
+      && (vwapDistanceAtr == null || vwapDistanceAtr < minVwapDistanceAtr)
+    ) {
+      rejection = "amt_vwap_acceptance_distance";
+    }
+  }
+
+  return {
+    allowed: rejection == null,
+    rejection,
+    open,
+    body,
+    bodyAtr,
+    volumeRatio,
+    candleDirection,
+    htfTrend: trend || null,
+    htfCounterTrend: counterHtfTrend,
+    vwapDistanceAtr,
+    minBodyAtr: Number.isFinite(minBodyAtr) ? minBodyAtr : 0,
+    minVolumeRatio: Number.isFinite(minVolumeRatio) ? minVolumeRatio : 0,
+    minVwapDistanceAtr: Number.isFinite(minVwapDistanceAtr) ? minVwapDistanceAtr : 0,
+  };
+}
+
 /**
  * Evaluate VWAP / Value Area entry precision for a proposed direction.
  *
@@ -263,8 +479,12 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
     };
   }
 
+  // Freeze VAH/VAL/POC at the previous completed candle. Including the entry
+  // candle in its own profile makes an extreme expand the range that is then
+  // used to declare that same candle a "bounce" or "rejection".
+  const profileIdx = lastIdx - 1;
   const profile = buildVolumeProfile(
-    highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
+    highs, lows, closes, volumes, startIdx, profileIdx, cfg.bins, cfg.valueAreaPct
   );
 
   const price = closes[lastIdx];
@@ -403,7 +623,7 @@ function hasUsableSessionTimestamps(timestamps, lastIdx) {
 }
 
 function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
-  const cfg = { ...DEFAULTS, ...config };
+  const cfg = resolveAmtConfig(config);
   const ablation = config.ablation || null;
   const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   _abl("evaluated");
@@ -447,6 +667,9 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const { vwap, bars, startIdx } = calculateSessionVwap(
     highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
+  const previousSession = calculateSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx - 1, session.periodMs
+  );
   if (bars < session.minSessionBars || vwap == null) {
     _abl("rejVwapBars");
     return {
@@ -464,8 +687,12 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     };
   }
 
+  // Freeze VAH/VAL/POC at the previous completed candle. Including the entry
+  // candle in its own profile makes an extreme expand the range that is then
+  // used to declare that same candle a "bounce" or "rejection".
+  const profileIdx = lastIdx - 1;
   const profile = buildVolumeProfile(
-    highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
+    highs, lows, closes, volumes, startIdx, profileIdx, cfg.bins, cfg.valueAreaPct
   );
   const price = closes[lastIdx];
   const prev = closes[lastIdx - 1];
@@ -486,6 +713,7 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const { tolAbs, mode, atr, mult } = resolveVwapTolerance(indicators, lastIdx, cfg);
   const metaBase = {
     vwap,
+    prevVwap: previousSession.vwap,
     poc: profile.poc,
     vah: profile.vah,
     val: profile.val,
@@ -499,63 +727,91 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     vwapAtrMult: mult,
     sessionMode: session.sessionMode,
     minSessionBars: session.minSessionBars,
+    amtTradeTier: cfg.amtTradeTier,
+    profileIdx,
   };
 
-  // VWAP reclaim / lose (primary AMT entry)
-  if (prev < vwap && price >= vwap) {
+  // VWAP reclaim / lose (primary AMT entry). Compare the previous close with
+  // the previous completed VWAP, not with the VWAP after the current candle's
+  // volume has been added. The old comparison made a moving-level mismatch
+  // look like a cross and was the main source of one-candle churn.
+  const vwapReclaim = previousSession.vwap != null
+    && prev < previousSession.vwap
+    && price >= vwap;
+  const vwapLose = previousSession.vwap != null
+    && prev > previousSession.vwap
+    && price <= vwap;
+
+  const evaluateCandidate = (signal, reason, { requireVwapDistance = true } = {}) => {
+    const quality = resolveEntryCandleQuality(indicators, lastIdx, signal, vwap, {
+      ...cfg,
+      amtMinVwapDistanceAtr: requireVwapDistance ? cfg.amtMinVwapDistanceAtr : 0,
+    });
+    const candidateMeta = {
+      ...metaBase,
+      ...quality,
+      triggerType: reason,
+    };
+    if (!quality.allowed) {
+      if (quality.rejection === "amt_htf_counter_trend") _abl("rejHtf");
+      else _abl("rejQuality");
+      return {
+        vote: "NEUTRAL",
+        signal: null,
+        confidence: 0,
+        reason: quality.rejection,
+        meta: candidateMeta,
+      };
+    }
     _abl("passed");
     return {
-      vote: "LONG",
-      signal: "LONG",
-      confidence: 0.72,
-      reason: "vwap_reclaim",
-      meta: metaBase,
+      vote: signal,
+      signal,
+      confidence: reason.startsWith("vwap_") ? 0.72 : 0.68,
+      reason,
+      meta: candidateMeta,
     };
-  }
-  if (prev > vwap && price <= vwap) {
-    _abl("passed");
-    return {
-      vote: "SHORT",
-      signal: "SHORT",
-      confidence: 0.72,
-      reason: "vwap_lose",
-      meta: metaBase,
-    };
-  }
+  };
+
+  if (vwapReclaim) return evaluateCandidate("LONG", "vwap_reclaim");
+  if (vwapLose) return evaluateCandidate("SHORT", "vwap_lose");
 
   // Value Area edge bounce / rejection
   const val = profile.val;
   const vah = profile.vah;
-  const edgeTol = tolAbs != null && tolAbs > 0
-    ? tolAbs
+  const edgeAtrMult = Number(cfg.amtEdgeAtrMult);
+  const edgePenetrationAtr = Number(cfg.amtEdgePenetrationAtr);
+  const edgeTol = atr != null && Number.isFinite(atr) && atr > 0 && edgeAtrMult > 0
+    ? atr * edgeAtrMult
     : Math.abs(vwap) * cfg.vwapTolerancePct;
+  const edgePenetration = atr != null && Number.isFinite(atr) && atr > 0 && edgePenetrationAtr > 0
+    ? atr * edgePenetrationAtr
+    : 0;
 
   if (val != null && Number.isFinite(val) && barLow != null) {
-    const touchedVal = barLow <= val + edgeTol;
+    // `edgeTol` is for close/acceptance proximity; it must not make a bar
+    // that stopped above VAL count as a VAL sweep.
+    const touchedVal = barLow <= val - edgePenetration;
     const closedAbove = price > val && (open == null || price >= open || price > prev);
     if (touchedVal && closedAbove && price >= vwap - edgeTol) {
-      _abl("passed");
+      const result = evaluateCandidate("LONG", "val_bounce", { requireVwapDistance: false });
       return {
-        vote: "LONG",
-        signal: "LONG",
-        confidence: 0.68,
-        reason: "val_bounce",
-        meta: { ...metaBase, edgeTol },
+        ...result,
+        meta: { ...result.meta, edgeTol, edgePenetration },
       };
     }
   }
 
-  if (vah != null && Number.isFinite(vah) && barHigh != null) {
-    const touchedVah = barHigh >= vah - edgeTol;
+  if (cfg.amtVahRejectEnabled === false) {
+    if (vah != null && Number.isFinite(vah) && barHigh != null) _abl("rejVahDisabled");
+  } else if (vah != null && Number.isFinite(vah) && barHigh != null) {
+    const touchedVah = barHigh >= vah + edgePenetration;
     const closedBelow = price < vah && (open == null || price <= open || price < prev);
     if (touchedVah && closedBelow && price <= vwap + edgeTol) {
-      _abl("passed");
+      const result = evaluateCandidate("SHORT", "vah_reject", { requireVwapDistance: false });
       return {
-        vote: "SHORT",
-        signal: "SHORT",
-        confidence: 0.68,
-        reason: "vah_reject",
-        meta: { ...metaBase, edgeTol },
+        ...result,
+        meta: { ...result.meta, edgeTol, edgePenetration },
       };
     }
   }

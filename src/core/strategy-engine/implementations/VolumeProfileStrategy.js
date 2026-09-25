@@ -38,8 +38,11 @@ class VolumeProfileStrategy extends StrategyBase {
       { key: "rejSession", label: "3. - Session timestamp gate" },
       { key: "rejVwapBars", label: "4. - Session VWAP bars" },
       { key: "rejProfile", label: "5. - Volume profile (POC/VAH/VAL)" },
-      { key: "rejVwap", label: "6. - VWAP reclaim/lose" },
-      { key: "rejValVahReject", label: "7. - VAL bounce / VAH reject" },
+      { key: "rejHtf", label: "6. - HTF counter-trend" },
+      { key: "rejQuality", label: "7. - Candle/volume acceptance" },
+      { key: "rejVwap", label: "8. - VWAP reclaim/lose" },
+      { key: "rejVahDisabled", label: "9. - VAH rejection disabled" },
+      { key: "rejValVahReject", label: "10. - VAL bounce / VAH reject" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
