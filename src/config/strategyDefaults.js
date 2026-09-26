@@ -948,11 +948,14 @@ STRATEGIES.AUCTION_MARKET_THEORY = {
   // opt-in until a dedicated failed-auction detector is available.
   amtEdgePenetrationAtr: 0.1,
   amtVahRejectEnabled: false,
+  // AMT Scalping is temporarily hidden across backtest, dry-run, and live.
+  amtScalpingShelved: true,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
     Scalping: {
       ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
       amtSessionFilter: false,
+      amtScalpingShelved: true,
       // BTC 5m AMT is fee-bound below this volatility floor; keep one
       // auction attempt per UTC day instead of recycling the same session.
       atrMinMult: 0.75,

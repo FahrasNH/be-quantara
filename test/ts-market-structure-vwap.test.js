@@ -476,7 +476,7 @@ test("AMT parent Trend Surge config still inherits AMT leg thresholds", () => {
   const i = n - 1;
   closes[i - 1] = 99.5;
   opens[i] = 100;
-  closes[i] = 100.17; // passes the generic 0.15 ATR gate, fails AMT Scalping 0.2
+  closes[i] = 100.17; // passes the generic 0.15 ATR gate, fails AMT Intraday 2.0
   highs[i] = 100.2;
   lows[i] = 99.95;
 
@@ -484,15 +484,15 @@ test("AMT parent Trend Surge config still inherits AMT leg thresholds", () => {
     { highs, lows, closes, opens, volumes, timestamps, atr },
     i,
     {
-      interval: "5m",
+      interval: "15m",
       minSessionBars: 8,
       // Shape this like the live Trend Surge parent: no AMT-specific keys.
-      typeOverrides: { Scalping: { atrMinMult: 0.15 } },
+      typeOverrides: { Intraday: { amtMinBodyAtr: 2, amtMinVolumeRatio: 0 } },
     }
   );
   assert.strictEqual(r.reason, "amt_body_too_small");
-  assert.strictEqual(r.meta?.amtTradeTier, "Scalping");
-  assert.strictEqual(r.meta?.minBodyAtr, 0.2);
+  assert.strictEqual(r.meta?.amtTradeTier, "Intraday");
+  assert.strictEqual(r.meta?.minBodyAtr, 2);
 });
 
 test("AMT race entry fails closed without timestamps (no whole-history session)", () => {

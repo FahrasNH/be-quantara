@@ -3655,6 +3655,7 @@ function normalizeTfGeometryKeys(strategyKey, cfg) {
 
 async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const { strategyKey, capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
+  const { filterDisabledTradeTypes } = require("../../../config/tradeTypeAvailability");
 
   const validation = strategyRegistry.validate(strategyKey);
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
@@ -3675,9 +3676,11 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
 
   // equally — TREND_FOLLOWING combined 0.03 → 1%/2%, MEAN_REVERSION combined 0.015 → 0.5%/1%.
 
-  const riskTypeOrder = Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
-    ? opts.naturalTypeOrder
-    : typeOrder;
+  const filteredTypeOrder = filterDisabledTradeTypes(strategyKey, typeOrder);
+  const riskTypeOrder = filterDisabledTradeTypes(strategyKey,
+    Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
+      ? opts.naturalTypeOrder
+      : filteredTypeOrder);
   // Mirror backtest.js TYPE_TF (Sprint 14 ladder: Scalping 5m/1h · Intraday
   // 15m/4h · Swing 4h/1w) so ADX weekly soft-cap + HTF directional gates know
   // which trend TF each leg uses.
@@ -3686,7 +3689,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     Intraday: "1h",
     Swing: "1w",
   };
-  for (const tradeType of typeOrder) {
+  for (const tradeType of filteredTypeOrder) {
 
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
     const legOv = cfg.typeOverrides?.[tradeType] ?? {};

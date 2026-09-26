@@ -275,16 +275,16 @@ console.log("\n=== Backtest Job Isolation Tests ===\n");
     assert.strictEqual(smcOnly.afCombinationMode, "smc_only");
   });
 
-  await test("AMT / AUCTION_MARKET_THEORY supports all 3 trade types; pins single-racer isolation", () => {
+  await test("AMT / AUCTION_MARKET_THEORY hides Scalping and pins single-racer isolation", () => {
     const {
       applyStrategyJobDefaults,
       MULTI_TYPE_STRATEGY_MAP,
     } = require("../src/server/services/runBacktestJob");
     const { STRATEGY_SUPPORTED_TYPES } = require("../src/constants/strategySupportedTypes");
 
-    // Sprint 14 factory reset: uniform 3 trade types across race components
-    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.AUCTION_MARKET_THEORY, ["Scalping", "Intraday", "Swing"]);
-    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.AUCTION_MARKET_THEORY, ["Scalping", "Intraday", "Swing"]);
+    // AMT Scalping is fee-negative and shelved across backtest, dry-run, and live.
+    assert.deepStrictEqual(STRATEGY_SUPPORTED_TYPES.AUCTION_MARKET_THEORY, ["Intraday", "Swing"]);
+    assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.AUCTION_MARKET_THEORY, ["Intraday", "Swing"]);
     assert.deepStrictEqual(MULTI_TYPE_STRATEGY_MAP.MARKET_STRUCTURE, ["Scalping", "Intraday", "Swing"]);
 
     const standalone = applyStrategyJobDefaults("AUCTION_MARKET_THEORY", {});

@@ -132,6 +132,8 @@ assert.equal(STRATEGIES.WYCKOFF.springLookback, 20);
 assert.equal(STRATEGIES.VOLUME_SPREAD_ANALYSIS.wideSpreadMult, 1.3);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.leftLook, 2);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.vwapAtrMult, 0.5);
+assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.amtScalpingShelved, true);
+assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.typeOverrides.Scalping.amtScalpingShelved, true);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.typeOverrides.Swing.minSessionBars, 20);
 assert.equal(STRATEGIES.SUPPLY_AND_DEMAND.mdSdConfluenceAtrMult, 0.75);
 assert.equal(STRATEGIES.STATISTICAL_ARBITRAGE.mdSaEntryZ, 2.0);

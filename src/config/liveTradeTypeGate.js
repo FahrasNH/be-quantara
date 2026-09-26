@@ -13,8 +13,10 @@
  * stays live-eligible.
  *
  * This gate is consulted ONLY on the real-live path (dryRun === false). Dry-run
- * still exercises every leg so users can observe them without risking funds.
- * Backtest does not import this module at all.
+ * normally exercises every eligible leg so users can observe them without
+ * risking funds; temporary strategy-wide shelves (such as AMT Scalping) are
+ * enforced separately by the runtime availability gate. Backtest does not
+ * import this module at all.
  *
  * To promote a leg to live: add its type to LIVE_ELIGIBLE_TYPES (globally or
  * per-strategy) once it clears walk-forward validation.
