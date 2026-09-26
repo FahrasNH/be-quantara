@@ -22,6 +22,7 @@ const {
   applyPairTierToBacktestParams,
   hasExplicitPairTier,
 } = require("../../../shared/backtest/applyPairTierToBacktestParams");
+const { filterDisabledTradeTypes } = require("../../../config/tradeTypeAvailability");
 
 const AF_SMC_KEYS = new Set([
   "SMART_MONEY_CONCEPTS", "ADAPTIVE_FUSION",
@@ -47,7 +48,7 @@ const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];
 const MULTI_TYPE_STRATEGY_MAP = {
   TREND_FOLLOWING: ALL_THREE_TYPES,
   MARKET_STRUCTURE: ALL_THREE_TYPES,
-  AUCTION_MARKET_THEORY: ALL_THREE_TYPES,
+  AUCTION_MARKET_THEORY: ["Intraday", "Swing"],
   MEAN_REVERSION: ALL_THREE_TYPES,
   SUPPLY_AND_DEMAND: ALL_THREE_TYPES,
   STATISTICAL_ARBITRAGE: ALL_THREE_TYPES,
@@ -393,6 +394,7 @@ async function runBacktestJob(job, userId, opts) {
     typeOrder = typeOrder.filter((t) => supportedForStrategy.includes(t));
     typeOrder = expandAllTypes(strategyKey, typeOrder);
     typeOrder = applyTypeFilter(typeOrder);
+    typeOrder = filterDisabledTradeTypes(strategyKey, typeOrder);
 
     const validation = validateTypeOrderForStrategy(strategyKey, typeOrder);
     if (!validation.valid) {

@@ -71,10 +71,10 @@ const STRATEGY_RECAP_CATALOG = {
     concept: "Balance vs imbalance; trade from value-area edges and session auction.",
     indicators: "Session VWAP, value-area proxy (Market Profile partial).",
     pdfTradeType: "Intraday",
-    runtimeTradeTypes: ["Scalping", "Intraday", "Swing"],
+    runtimeTradeTypes: ["Intraday", "Swing"],
     recapStatus: "partial",
     recapNotes:
-      "Sprint 14 factory reset: all 3 trade types (Scalping 5m/1h, Intraday 15m/4h, Swing 4h/1w) exposed in Advance backtest. Unproven legs are backtest-only (not auto-live) until 5-window walk-forward passes.",
+      "AMT Scalping is temporarily hidden across backtest, dry-run, and live after a fee-inclusive BTC validation showed negative net expectancy. Intraday and Swing remain available.",
   },
   MEAN_REVERSION: {
     pdfName: "Mean Reversion",

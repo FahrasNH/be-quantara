@@ -38,10 +38,11 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 - **`amtEdgeAtrMult`:** 0.25 — VA edge tolerance, separate from VWAP proximity tolerance
 - **`amtEdgePenetrationAtr`:** 0.1 — minimum sweep beyond VAL/VAH before an edge trigger is valid
 - **`amtVahRejectEnabled`:** false in the AMT preset — short VAH fades remain research opt-in until failed-auction confirmation is implemented
+- **`amtScalpingShelved`:** true — AMT Scalping is hidden in backtest, dry-run, and live
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `atrMinMult: 0.75`, `maxTradesPerDay: 1`, `amtSessionFilter: false`, body ≥ 0.2 ATR, volume ≥ 1.0×, RR 2.0
+- **Scalping:** **hidden/shelved** — no AMT candles, signals, or entries are exposed in any runtime mode
 - **Intraday:** `atrMinMult: 0.6`, `maxTradesPerDay: 1`, body ≥ 0.15 ATR, volume ≥ 0.9×
 - **Swing:** `atrMinMult: 0.8`, one trade/day, `minSessionBars: 20`, body ≥ 1.0 ATR, volume ≥ 0.8×
 
@@ -67,8 +68,8 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 ### Scalping
 
-- **Floor:** none
-- **Formula / components:** UTC-day session VWAP + VA profile; `minSessionBars` **20**
+- **Status:** **shelved** across backtest, dry-run, and live because the fee-inclusive BTC result was negative
+- **Reason code:** `amt_scalping_shelved`
 
 ### Intraday
 
@@ -88,12 +89,7 @@ Session **VWAP proximity** for precision helpers uses `vwapAtrMult` 0.5×ATR —
 
 ### Scalping
 
-- **Entry TF / HTF:** 5m / 1h
-- **SL method:** ATR × 1.5
-- **TP method:** ATR × 3.0
-- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
-- **Risk %:** **1%**
-- **Notes:** Relative ATR gate; session filter OFF; UTC-day session
+- **Status:** **not exposed** — no AMT Scalping position sizing or SL/TP path is reachable
 
 ### Intraday
 
@@ -136,7 +132,7 @@ Session **VWAP proximity** for precision helpers uses `vwapAtrMult` 0.5×ATR —
 
 ---
 **Limit:** ATR range gate
-**Value:** Scalping: relative 0.4–4.0; Intraday/Swing: absolute 0.4% / 0.8%
+**Value:** Intraday/Swing: absolute 0.4% / 0.8%
 **SSOT:** `entryRiskGates.js`
 
 ---
@@ -192,7 +188,7 @@ Precision helpers (`vwap_retest`, `poc_retest`) exist for rollback mode; race-mo
 - **`awaiting_amt_trigger`:** no trade
 - **Session filter:** **off** (`amtSessionFilter: false`)
 - **ATR gate:** per-leg overrides
-- **Live money:** Scalping blocked; Intraday + Swing allowed
+- **AMT Scalping:** blocked in backtest, dry-run, and live; Intraday + Swing remain allowed
 
 Swing uses UTC-week session (`minSessionBarsSwing: 6`) because 4h bars have ≤6 per UTC-day.
 
@@ -204,10 +200,9 @@ Swing uses UTC-week session (`minSessionBarsSwing: 6`) because 4h bars have ≤6
 
 ### Scalping
 
-- **Entry TF:** 5m
-- **Trend / HTF TF:** 1h
-- **Real money:** Blocked
-- **Dry-run / backtest:** Allowed
+- **Status:** **Hidden / shelved**
+- **Reason:** `amt_scalping_shelved`
+- **Scope:** no backtest, dry-run, or live AMT Scalping execution
 
 ### Intraday
 

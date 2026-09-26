@@ -21,6 +21,10 @@ const {
   applyNoTradeSessionFilter,
   scalpingSessionBlocked,
 } = require("../../risk-engine/entryRiskGates");
+const {
+  isAmtScalpingShelved,
+  resolveTradeType,
+} = require("../../../config/tradeTypeAvailability");
 
 /** Sprint 23: AMT / Volume Profile Scalping session filter (Asia block). */
 function applyAmtSessionFilter(timestamp, opts = {}) {
@@ -54,6 +58,7 @@ const DEFAULTS = {
   // VAH fades are disabled by the AMT production preset until a failed-auction
   // detector is present. Keep the evaluator opt-in for A/B and research runs.
   amtVahRejectEnabled: true,
+  amtScalpingShelved: true,
 };
 
 const AMT_PRESET_KEYS = [
@@ -71,6 +76,7 @@ const AMT_PRESET_KEYS = [
   "amtEdgeAtrMult",
   "amtEdgePenetrationAtr",
   "amtVahRejectEnabled",
+  "amtScalpingShelved",
 ];
 
 const AMT_TIER_KEYS = [
@@ -85,6 +91,7 @@ const AMT_TIER_KEYS = [
   "amtEdgeAtrMult",
   "amtEdgePenetrationAtr",
   "amtVahRejectEnabled",
+  "amtScalpingShelved",
 ];
 
 function pickKeys(source, keys) {
@@ -314,23 +321,7 @@ function resolveVwapTolerance(indicators, lastIdx, cfg) {
 
 /** Resolve the leg used to select AMT-specific quality overrides. */
 function resolveAmtTradeTier(config = {}) {
-  if (config.tradeType) return String(config.tradeType);
-  if (Array.isArray(config.activeComponents) && config.activeComponents.length === 1) {
-    return String(config.activeComponents[0]);
-  }
-  if (Array.isArray(config.enabledComponents) && config.enabledComponents.length === 1) {
-    return String(config.enabledComponents[0]);
-  }
-
-  // Live Trend Surge calls normally carry the entry interval, not a backtest
-  // tradeType. Resolve the same leg preset from that timeframe so live AMT
-  // quality gates match the isolated Scalping/Intraday/Swing backtests.
-  const timeframe = String(config.entryTf || config.interval || config.entryTimeframe || "").toLowerCase();
-  if (["1m", "3m", "5m"].includes(timeframe)) return "Scalping";
-  if (["15m", "30m", "1h", "2h"].includes(timeframe)) return "Intraday";
-  if (["4h", "6h", "8h", "12h", "1d", "3d", "1w"].includes(timeframe)) return "Swing";
-
-  return null;
+  return resolveTradeType(config);
 }
 
 /**
@@ -457,6 +448,15 @@ function resolveEntryCandleQuality(indicators, lastIdx, signal, vwap, cfg) {
  */
 function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
+  if (isAmtScalpingShelved(cfg)) {
+    return {
+      allowed: false,
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "amt_scalping_shelved",
+      meta: { amtTradeTier: "Scalping", amtScalpingShelved: true },
+    };
+  }
   const highs = indicators.highs || [];
   const lows = indicators.lows || [];
   const closes = indicators.closes || [];
@@ -555,6 +555,14 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
  */
 function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
+  if (isAmtScalpingShelved(cfg)) {
+    return {
+      vote: "NEUTRAL",
+      confidence: 0,
+      reason: "amt_scalping_shelved",
+      meta: { amtTradeTier: "Scalping", amtScalpingShelved: true },
+    };
+  }
   const highs = indicators.highs || [];
   const lows = indicators.lows || [];
   const closes = indicators.closes || [];
@@ -627,6 +635,17 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const ablation = config.ablation || null;
   const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   _abl("evaluated");
+
+  if (isAmtScalpingShelved(cfg)) {
+    _abl("rejScalpingShelved");
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "amt_scalping_shelved",
+      meta: { amtTradeTier: "Scalping", amtScalpingShelved: true },
+    };
+  }
 
   if (scalpingSessionBlocked(cfg, indicators, lastIdx, "amtSessionFilter", applyAmtSessionFilter, ablation)) {
     return { vote: "NEUTRAL", signal: null, confidence: 0, reason: "amt_session_block", meta: {} };
@@ -843,4 +862,5 @@ module.exports = {
   resolveSessionParams,
   hasUsableSessionTimestamps,
   utcWeekStartMs,
+  resolveAmtTradeTier,
 };

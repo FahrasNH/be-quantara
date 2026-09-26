@@ -2,9 +2,10 @@
  * STRATEGY_SUPPORTED_TYPES — which trade types each strategy supports.
  * Used for FE dropdown filtering and BE validation.
  *
- * Sprint 14 factory reset: EVERY strategy now exposes all 3 trade types
- * (Scalping / Intraday / Swing) uniformly, regardless of per-leg profitability
- * ("apapun hasilnya" — product decision for consistent UX). Legs that have not
+ * Sprint 14 factory reset: most strategies expose all 3 trade types
+ * (Scalping / Intraday / Swing) uniformly. AMT is temporarily restricted to
+ * Intraday + Swing because its BTC Scalping leg is fee-negative and shelved
+ * across all runtime modes. Legs that have not
  * passed the 5-window walk-forward gate are Advance-backtest-only and are NOT
  * auto-enabled for live tier packages — the live routing gate (liveTradeTypeGate.js)
  * restricts which of these types may actually trade real money.
@@ -14,6 +15,7 @@
  */
 
 const ALL_THREE_TYPES = ["Scalping", "Intraday", "Swing"];
+const AMT_ENABLED_TYPES = ["Intraday", "Swing"];
 
 const STRATEGY_SUPPORTED_TYPES = {
   SMART_MONEY_CONCEPTS: ALL_THREE_TYPES,
@@ -21,7 +23,7 @@ const STRATEGY_SUPPORTED_TYPES = {
   VOLUME_SPREAD_ANALYSIS: ALL_THREE_TYPES,
   TREND_FOLLOWING: ALL_THREE_TYPES,
   MARKET_STRUCTURE: ALL_THREE_TYPES,
-  AUCTION_MARKET_THEORY: ALL_THREE_TYPES,
+  AUCTION_MARKET_THEORY: AMT_ENABLED_TYPES,
   MEAN_REVERSION: ALL_THREE_TYPES,
   SUPPLY_AND_DEMAND: ALL_THREE_TYPES,
   STATISTICAL_ARBITRAGE: ALL_THREE_TYPES,

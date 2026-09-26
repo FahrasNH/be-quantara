@@ -34,15 +34,16 @@ class VolumeProfileStrategy extends StrategyBase {
   static get ABLATION_SCHEMA() {
     return [
       { key: "evaluated", label: "1. Bars evaluated" },
-      { key: "rejWarmup", label: "2. - Warmup insufficient" },
-      { key: "rejSession", label: "3. - Session timestamp gate" },
-      { key: "rejVwapBars", label: "4. - Session VWAP bars" },
-      { key: "rejProfile", label: "5. - Volume profile (POC/VAH/VAL)" },
-      { key: "rejHtf", label: "6. - HTF counter-trend" },
-      { key: "rejQuality", label: "7. - Candle/volume acceptance" },
-      { key: "rejVwap", label: "8. - VWAP reclaim/lose" },
-      { key: "rejVahDisabled", label: "9. - VAH rejection disabled" },
-      { key: "rejValVahReject", label: "10. - VAL bounce / VAH reject" },
+      { key: "rejScalpingShelved", label: "2. - Scalping leg shelved" },
+      { key: "rejWarmup", label: "3. - Warmup insufficient" },
+      { key: "rejSession", label: "4. - Session timestamp gate" },
+      { key: "rejVwapBars", label: "5. - Session VWAP bars" },
+      { key: "rejProfile", label: "6. - Volume profile (POC/VAH/VAL)" },
+      { key: "rejHtf", label: "7. - HTF counter-trend" },
+      { key: "rejQuality", label: "8. - Candle/volume acceptance" },
+      { key: "rejVwap", label: "9. - VWAP reclaim/lose" },
+      { key: "rejVahDisabled", label: "10. - VAH rejection disabled" },
+      { key: "rejValVahReject", label: "11. - VAL bounce / VAH reject" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }

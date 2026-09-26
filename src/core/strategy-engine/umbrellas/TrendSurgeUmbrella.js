@@ -19,6 +19,7 @@ const MarketStructureStrategy  = require("../implementations/MarketStructureStra
 const VolumeProfileStrategy    = require("../implementations/VolumeProfileStrategy");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 const { enrichMetaWithGradedScore } = require("../scoring/ComponentScoringEngine");
+const { isAmtScalpingShelved } = require("../../../config/tradeTypeAvailability");
 
 /** Race winner selection uses raw component confidence (0–1), not gradedScore. */
 function raceConfidenceFromMeta(meta, signal) {
@@ -64,19 +65,20 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
    */
   _resolveActiveRacers(config = {}) {
     const raw = config.tsActiveRacers || config.selectedComponents || config.activeStrategyComponents || null;
-    if (!Array.isArray(raw) || raw.length === 0) {
-      return new Set(RACER_PRIORITY);
-    }
     const active = new Set();
-    for (const c of raw) {
-      const k = normalizeStrategyKey(String(c || "").toUpperCase());
-      if (k === "TREND_FOLLOWING") active.add("TREND_FOLLOWING");
-      else if (k === "MARKET_STRUCTURE" || k === "DOW_THEORY" || k === "MARKET_STRUCTURE") active.add("MARKET_STRUCTURE");
-      else if (k === "AUCTION_MARKET_THEORY" || k === "AMT" || k === "AUCTION_MARKET_THEORY" || k === "VOLUME_PROFILE") {
-        active.add("AUCTION_MARKET_THEORY");
+    if (!Array.isArray(raw) || raw.length === 0) {
+      RACER_PRIORITY.forEach((key) => active.add(key));
+    } else {
+      for (const c of raw) {
+        const k = normalizeStrategyKey(String(c || "").toUpperCase());
+        if (k === "TREND_FOLLOWING") active.add("TREND_FOLLOWING");
+        else if (k === "MARKET_STRUCTURE" || k === "DOW_THEORY" || k === "MARKET_STRUCTURE") active.add("MARKET_STRUCTURE");
+        else if (k === "AUCTION_MARKET_THEORY" || k === "AMT" || k === "AUCTION_MARKET_THEORY" || k === "VOLUME_PROFILE") {
+          active.add("AUCTION_MARKET_THEORY");
+        }
       }
     }
-    if (active.size === 0) return new Set(RACER_PRIORITY);
+    if (isAmtScalpingShelved(config)) active.delete("AUCTION_MARKET_THEORY");
     return active;
   }
 
@@ -233,7 +235,8 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
    */
   _detectGateLayering(indicators, lastIdx, config = {}) {
     const useStructureGate = config.tsUseStructureGate !== false;
-    const useVwapPrecision = config.tsUseVwapPrecision !== false;
+    const useVwapPrecision = !isAmtScalpingShelved(config)
+      && config.tsUseVwapPrecision !== false;
 
     const trigger = this._tf.detectSignal(indicators, lastIdx, config);
     if (!trigger) {
@@ -319,7 +322,8 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
     let structure = null;
     let precision = null;
     const useStructure = config.tsUseStructureGate !== false;
-    const useVwap = config.tsUseVwapPrecision !== false;
+    const useVwap = !isAmtScalpingShelved(config)
+      && config.tsUseVwapPrecision !== false;
 
     if (useStructure) {
       structure = this._ms.evaluateGate(indicators, lastIdx, trigger, config);
