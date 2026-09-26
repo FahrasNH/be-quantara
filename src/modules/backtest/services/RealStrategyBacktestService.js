@@ -196,6 +196,38 @@ function mergeBacktestCfg(base, optsConfig, feeModel) {
   });
 }
 
+/**
+ * Resolve the effective exit mode for one backtest leg.
+ *
+ * `tpMode` from the FE is a run-level/user choice, while Wyckoff's
+ * `typeOverrides[leg].tpMode` is only a strategy default.  The explicit run
+ * choice must win; otherwise spreading the leg override after the base config
+ * silently turns Fixed TP back into the partial ladder.
+ *
+ * Internally the execution engines use `full` for a 100% TP exit.  The API/FE
+ * also use `fixed`, so normalize both names here and keep `partial` intact.
+ */
+function resolveEffectiveTpMode({ requestedTpMode, legTpMode, strategyTpMode, fallback = "full" } = {}) {
+  const normalize = (value) => {
+    const mode = String(value ?? "").trim().toLowerCase();
+    if (mode === "fixed" || mode === "full") return "full";
+    if (mode === "partial") return "partial";
+    return null;
+  };
+
+  return normalize(requestedTpMode)
+    ?? normalize(legTpMode)
+    ?? normalize(strategyTpMode)
+    ?? normalize(fallback)
+    ?? "full";
+}
+
+function getExplicitTpMode(config) {
+  return config && Object.prototype.hasOwnProperty.call(config, "tpMode")
+    ? config.tpMode
+    : undefined;
+}
+
 /** Normalize FE/BE AF component aliases to canonical racer keys. */
 function _normalizeAfRacerKeys(raw) {
   if (!Array.isArray(raw) || !raw.length) return [];
@@ -831,8 +863,8 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
   // (see checkPartialMilestones in runRealBacktest). Previously this multi-position
   // engine — the one SMART_MONEY_CONCEPTS/triple-type backtests actually use — had NO partial-TP
   // path at all: "Is Partial" was always false regardless of the FE tpMode toggle.
-  // Per-leg tpMode arrives via typeOverrides spread onto cfg in runTripleTypeBacktest
-  // (e.g. Scalping partial BE-trail while Intraday/Swing stay full TP runners).
+  // Per-leg tpMode is resolved onto cfg in runTripleTypeBacktest; an explicit
+  // run-level selection (Fixed/Partial) overrides the leg's strategy default.
   const tpModeCfg = cfg.tpMode ?? "full";
   const slPlusEnabled = tpModeCfg === "partial" && (cfg.slPlusEnabled ?? true);
   const slPlusPartial1Pct = cfg.slPlusPartial1Pct ?? 0.40;
@@ -1374,6 +1406,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const riskCfg = strategy.calculateRiskConfig(price, atr, signal, componentId, {
         marketCond,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
+        // Keep the strategy risk metadata aligned with the execution mode
+        // resolved on the per-leg config above (Fixed/Full must not fall back
+        // to Wyckoff's partial leg default).
+        tpMode: cfg.tpMode,
 
         // typeConfig → cfg). Merged from typeOverrides per componentId.
         // Undefined = strategy's SUB_STRATEGIES defaults, so live and non-overridden legs are unchanged.
@@ -2372,6 +2408,7 @@ async function runTripleTypeBacktest(opts = {}) {
   const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = resolveBacktestStrategyDefaults(strategyKey, opts.config);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
+  const requestedTpMode = getExplicitTpMode(opts.config);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
@@ -2407,6 +2444,11 @@ async function runTripleTypeBacktest(opts = {}) {
   };
   for (const tradeType of typeOrder) {
     const legOverrides = cfg.typeOverrides?.[tradeType];
+    const effectiveTpMode = resolveEffectiveTpMode({
+      requestedTpMode,
+      legTpMode: legOverrides?.tpMode,
+      strategyTpMode: cfg.tpMode,
+    });
     const typeConfig = {
       ...baseTypeConfig,
 
@@ -2414,6 +2456,8 @@ async function runTripleTypeBacktest(opts = {}) {
       // proven Swing leg keeps EXACT baseline behaviour. Ladder risk stays
       // authoritative (applied after the spread).
       ...(legOverrides ?? {}),
+      // Explicit FE/API selection wins over the leg's strategy default.
+      tpMode: effectiveTpMode,
       // Scope typeOverrides to the active leg only — prevents Intraday-only flags
       // (e.g. smcPivotStructure) from leaking into Scalping-only runs.
       typeOverrides: legOverrides ? { [tradeType]: legOverrides } : {},
@@ -3439,6 +3483,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       const rc = strategy.calculateRiskConfig(price, atr, signal, meta.component, {
         marketCond: meta.marketCond,
         strongTrendTPMult: cfg.strongTrendTPMult ?? 1,
+        tpMode: cfg.tpMode,
         slMultiplier: slMult,
         tpMultiplier: tpMult,
         breakoutLevel: meta.breakoutLevel,
@@ -3618,6 +3663,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const feeModel = resolveFeeModel({ ...opts, enableFees });
   const base = resolveBacktestStrategyDefaults(strategyKey, opts.config);
   const cfg = mergeBacktestCfg(base, opts.config, feeModel);
+  const requestedTpMode = getExplicitTpMode(opts.config);
   const feeRate = feeModel.feeRate;
   const slip    = enableSlippage ? (cfg.slippagePct ?? DEFAULT_SLIPPAGE) : 0;
 
@@ -3644,10 +3690,17 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
 
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
     const legOv = cfg.typeOverrides?.[tradeType] ?? {};
+    const effectiveTpMode = resolveEffectiveTpMode({
+      requestedTpMode,
+      legTpMode: legOv.tpMode,
+      strategyTpMode: cfg.tpMode,
+    });
     const typeConfig = normalizeTfGeometryKeys(strategyKey, {
       ...cfg,
 
       ...legOv,
+      // Explicit FE/API selection wins over the leg's strategy default.
+      tpMode: effectiveTpMode,
       higherTf: legOv.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
       riskPerTrade: applyLegRiskShare(
         riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01, cfg.typeRiskWeights),
@@ -3834,6 +3887,7 @@ module.exports = {
   runMultiTypeBacktest,
   mergeTypeOverrides,
   mergeBacktestCfg,
+  resolveEffectiveTpMode,
   resolveBacktestStrategyDefaults,
   _isVsaOnlyJob,
   _isWyckoffOnlyJob,

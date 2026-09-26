@@ -10,6 +10,7 @@ const assert = require("node:assert/strict");
 const {
   mergeTypeOverrides,
   mergeBacktestCfg,
+  resolveEffectiveTpMode,
   resolveBacktestStrategyDefaults,
 } = require("../src/modules/backtest/services/RealStrategyBacktestService");
 const { resolveStrategyDefaults } = require("../src/config/strategyDefaults");
@@ -80,6 +81,52 @@ describe("mergeBacktestCfg preserves SMC SSOT under FE/CLI poison payloads", () 
     assert.equal(cfg.typeOverrides.Scalping.atrGateRelative, true);
     assert.equal(cfg.typeOverrides.Intraday.atrMinMult, 0.4);
     assert.equal(cfg.typeOverrides.Swing.atrMinMult, 0.8);
+  });
+});
+
+describe("backtest tpMode precedence", () => {
+  test("explicit Fixed TP overrides Wyckoff partial leg default", () => {
+    assert.equal(resolveEffectiveTpMode({
+      requestedTpMode: "fixed",
+      legTpMode: "partial",
+      strategyTpMode: undefined,
+    }), "full");
+  });
+
+  test("explicit Partial mode remains partial", () => {
+    assert.equal(resolveEffectiveTpMode({
+      requestedTpMode: "partial",
+      legTpMode: "partial",
+      strategyTpMode: "full",
+    }), "partial");
+  });
+
+  test("without an explicit run mode, Wyckoff keeps its partial leg default", () => {
+    assert.equal(resolveEffectiveTpMode({
+      requestedTpMode: undefined,
+      legTpMode: "partial",
+      strategyTpMode: undefined,
+    }), "partial");
+  });
+
+  test("the per-leg resolved config is full for Fixed TP", () => {
+    const base = resolveStrategyDefaults("WYCKOFF");
+    const cfg = mergeBacktestCfg(base, { tpMode: "fixed" }, { makerFeeRate: 0.0002, fundingRate8h: 0 });
+    for (const legName of ["Scalping", "Intraday", "Swing"]) {
+      const leg = cfg.typeOverrides[legName];
+      const typeConfig = {
+        ...cfg,
+        ...leg,
+        tpMode: resolveEffectiveTpMode({
+          requestedTpMode: "fixed",
+          legTpMode: leg.tpMode,
+          strategyTpMode: cfg.tpMode,
+        }),
+      };
+
+      assert.equal(leg.tpMode, "partial", `${legName} strategy default remains partial`);
+      assert.equal(typeConfig.tpMode, "full", `${legName} Fixed TP is execution mode`);
+    }
   });
 });
 
