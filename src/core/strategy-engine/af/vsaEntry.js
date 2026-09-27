@@ -72,6 +72,15 @@ function resolveVsaIntradayGateFlags(config = {}) {
   const ov = config.typeOverrides?.Intraday || {};
   return {
     vsaHtfAlignGate: config.vsaHtfAlignGate ?? ov.vsaHtfAlignGate ?? false,
+    vsaHtfHardAlignGate: config.vsaHtfHardAlignGate ?? ov.vsaHtfHardAlignGate ?? false,
+    vsaIntradayBlockHtfSideways: config.vsaIntradayBlockHtfSideways
+      ?? ov.vsaIntradayBlockHtfSideways ?? false,
+    vsaIntradayBlockDailyChop: config.vsaIntradayBlockDailyChop
+      ?? ov.vsaIntradayBlockDailyChop ?? false,
+    vsaMinConfidenceIntraday: config.vsaMinConfidenceIntraday
+      ?? ov.vsaMinConfidenceIntraday ?? null,
+    vsaMaxConfidenceIntraday: config.vsaMaxConfidenceIntraday
+      ?? ov.vsaMaxConfidenceIntraday ?? null,
     /** Confidence multiplier removed on LONG×BEARISH (0.5 = halve confidence). */
     vsaHtfCounterPenalty: config.vsaHtfCounterPenalty ?? ov.vsaHtfCounterPenalty ?? 0.5,
     /** Sprint 23 Fix #2: Intraday London block (NOT Asia — session profile inverted). */
@@ -169,6 +178,30 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
           },
         };
       }
+      if (
+        intradayFlags.vsaIntradayBlockHtfSideways === true
+        && htfTrend === "SIDEWAYS"
+      ) {
+        _abl("rejHtfSideways");
+        return {
+          vote: "NEUTRAL",
+          confidence: 0,
+          reason: "vsa_intraday_htf_sideways",
+          meta: { ...(gated.meta || {}), htfTrend, htfSideways: true },
+        };
+      }
+      if (
+        intradayFlags.vsaIntradayBlockDailyChop === true
+        && config.dailyRegime === "CHOP"
+      ) {
+        _abl("rejDailyChop");
+        return {
+          vote: "NEUTRAL",
+          confidence: 0,
+          reason: "vsa_intraday_daily_chop",
+          meta: { ...(gated.meta || {}), dailyRegime: config.dailyRegime },
+        };
+      }
     }
   }
 
@@ -193,7 +226,11 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
     const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
     const graded = enriched?.gradedScore ?? Math.round((gated.confidence || 0) * 100);
     const minConf = swingFlags.vsaMinConfidenceSwing;
-    const stoppingBypass = isStoppingVolumeReason(gated.reason);
+    // A stopping-volume signal is not exempt from an explicitly configured
+    // Swing quality floor. The old implicit bypass allowed weak reversals to
+    // enter below the same quality standard as other VSA patterns.
+    const stoppingBypass = isStoppingVolumeReason(gated.reason)
+      && swingFlags.vsaMinConfidenceSwing == null;
     if (minConf != null && graded < minConf && !stoppingBypass) {
       _abl("rejMinConfidence");
       return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_conf_below_floor" };
@@ -223,6 +260,21 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   };
   const enriched = enrichMetaWithGradedScore(metaBase, "VOLUME_SPREAD_ANALYSIS");
   const graded = enriched?.gradedScore ?? Math.round((gated.confidence || 0) * 100);
+  const isSequenceSignal = gated.meta?.vsaSequence === true
+    || gated.meta?.vsaDetectorMode === "sequence";
+  if (tradeTier === "Intraday" && isSequenceSignal) {
+    const intradayFlags = resolveVsaIntradayGateFlags(config);
+    if (intradayFlags.vsaMinConfidenceIntraday != null
+      && graded < intradayFlags.vsaMinConfidenceIntraday) {
+      _abl("rejMinConfidenceIntraday");
+      return { vote: "NEUTRAL", confidence: 0, reason: "vsa_intraday_conf_below_floor" };
+    }
+    if (intradayFlags.vsaMaxConfidenceIntraday != null
+      && graded > intradayFlags.vsaMaxConfidenceIntraday) {
+      _abl("rejMaxConfidenceIntraday");
+      return { vote: "NEUTRAL", confidence: 0, reason: "vsa_intraday_conf_above_ceiling" };
+    }
+  }
   return {
     ...gated,
     confidence: graded / 100,

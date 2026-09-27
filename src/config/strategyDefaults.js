@@ -139,6 +139,15 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     // Absolute 0.4% floor restored; pre-fix WF was mixed but survivable (+0.7/−38/−26%).
     // CONTEXT_ONLY overlay — flags counter-HTF in meta; no hard directional block (HTF_Mode).
     vsaHtfAlignGate: true,
+    vsaHtfHardAlignGate: true,
+    vsaHtfHardAlignGate: true,
+    // VSA sequence is a reversal setup; HTF sideways has no directional
+    // context and was the weakest 10-year bucket (PF 0.71).
+    vsaIntradayBlockHtfSideways: true,
+    vsaIntradayBlockDailyChop: true,
+    // Sequence scorer quality band: avoid weak tests and blow-off extremes.
+    vsaMinConfidenceIntraday: 50,
+    vsaMaxConfidenceIntraday: 69,
     vsaHtfCounterPenalty: 0.5,
     // Session filter OFF — London block removed
     vsaSessionFilter: false,
@@ -149,7 +158,11 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
     vsaSessionFilter: false,
     vsaSwingLongOnly: true,
-    vsaMinConfidenceSwing: 60,
+    vsaSwingHtfAlignGate: false,
+    // Keep opt-in until a Swing-specific WF proves the weekly counter-trend
+    // gate does not collapse the already sparse leg to zero trades.
+    vsaSwingHtfAlignGate: false,
+    vsaMinConfidenceSwing: 70,
   },
 });
 

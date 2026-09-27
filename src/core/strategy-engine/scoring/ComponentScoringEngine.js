@@ -267,6 +267,34 @@ function scoreWyckoff(f) {
 }
 
 function scoreVsa(f) {
+  const isSequence = Boolean(f.vsaSequence || f.vsaTestRelVolume != null || f.vsaClimaxRelVolume != null);
+  if (isSequence) {
+    const signal = String(f.signal || "").toUpperCase();
+    const testClv = Number(f.vsaTestClv);
+    const climaxClv = Number(f.vsaClimaxClv);
+    const directionalTestClv = Number.isFinite(testClv)
+      ? (signal === "SHORT" ? 1 - testClv : testClv)
+      : null;
+    const directionalClimaxClv = Number.isFinite(climaxClv)
+      ? (signal === "SHORT" ? 1 - climaxClv : climaxClv)
+      : null;
+    return finalizeBreakdown({
+      // A valid test should show reduced participation after the climax.
+      testVolumeContraction: inverseLinearPts(f.vsaTestRelVolume, 0.1, 0.9, 20),
+      climaxVolume: sweetSpotPts(f.vsaClimaxRelVolume, {
+        peak: 2.0, inner: 1.2, outer: 4.0, maxPts: 20, floor: 2,
+      }),
+      climaxSpread: sweetSpotPts(f.vsaClimaxSpreadRatio, {
+        peak: 1.5, inner: 0.8, outer: 3.5, maxPts: 15, floor: 2,
+      }),
+      testDirectionalClose: linearPts(directionalTestClv, 0.45, 0.95, 15),
+      climaxDirectionalClose: linearPts(directionalClimaxClv, 0.45, 0.95, 10),
+      patternStrength: enumPts(f.vsaPatternType, {
+        NO_SUPPLY: 1, NO_DEMAND: 1,
+      }, 10),
+      testSwingProximity: inverseLinearPts(f.vsaTestSwingDistance, 0, 5, 10),
+    });
+  }
   const volRatio = f.vsaAvgVolume > 0 && f.vsaVolume != null
     ? f.vsaVolume / f.vsaAvgVolume
     : null;
@@ -285,7 +313,9 @@ function scoreVsa(f) {
     patternStrength: enumPts(f.vsaPatternType, {
       STOPPING_VOLUME: 1, NO_SUPPLY: 0.85, NO_DEMAND: 0.85,
     }, 15),
-    swingProximity: inverseLinearPts(f.vsaSwingProximity, 0.002, 0.04, 10),
+    swingProximity: f.vsaSwingDistance != null
+      ? inverseLinearPts(f.vsaSwingDistance, 0, 5, 10)
+      : inverseLinearPts(f.vsaSwingProximity, 0.002, 0.04, 10),
     backgroundContext: booleanPts(f.vsaReversal, 10),
   };
   return finalizeBreakdown(breakdown);

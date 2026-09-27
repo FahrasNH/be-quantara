@@ -94,6 +94,7 @@ function buildPatternContext(candles, idx, cfg) {
     idx,
     cfg.atrPeriod ?? 14,
   );
+  const avgVolume = smaAt(candles.volumes, idx, cfg.volumeSmaPeriod);
   const nearSwing = checkSwingProximity(
     candles.highs,
     candles.lows,
@@ -130,6 +131,7 @@ function buildPatternContext(candles, idx, cfg) {
     clv,
     spreadType,
     nearSwing,
+    avgVolume,
     candle: { open, high, low, close, volume: vol },
     mid: (high + low) / 2,
   };
@@ -275,8 +277,24 @@ function detectSequencePattern(candles, lastIdx, cfg, config, ablation) {
       reason: `${testCtx.signal.reason}_after_climax`,
       meta: {
         vsaDetectorMode: "sequence",
+        vsaSequence: true,
         climaxBarIdx: i,
         testBarIdx: lastIdx,
+        vsaClimaxRelVolume: climax.relVol,
+        vsaClimaxClv: climax.clv,
+        vsaClimaxSpreadRatio: climax.spreadType.avgSpread > 0
+          ? climax.spreadType.spread / climax.spreadType.avgSpread
+          : null,
+        vsaTestRelVolume: testCtx.relVol,
+        vsaTestClv: testCtx.clv,
+        vsaTestSpreadRatio: testCtx.spreadType.avgSpread > 0
+          ? testCtx.spreadType.spread / testCtx.spreadType.avgSpread
+          : null,
+        vsaTestSwingDistance: testCtx.nearSwing.distance,
+        vsaSpread: testCtx.spreadType.spread,
+        vsaVolume: testCtx.candle.volume,
+        vsaAvgSpread: testCtx.spreadType.avgSpread,
+        vsaAvgVolume: testCtx.avgVolume,
         climax,
         test: testCtx,
       },
