@@ -38,7 +38,11 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ov.Scalping.vsaSessionFilter, false);
     assert.equal(ov.Swing.vsaSwingLongOnly, true);
     assert.equal(ov.Swing.vsaSwingHtfAlignGate, false);
-    assert.equal(ov.Swing.vsaMinConfidenceSwing, 60);
+    assert.equal(ov.Swing.vsaMinConfidenceSwing, 70);
+    assert.equal(ov.Intraday.vsaIntradayBlockHtfSideways, true);
+    assert.equal(ov.Intraday.vsaIntradayBlockDailyChop, true);
+    assert.equal(ov.Intraday.vsaMinConfidenceIntraday, 50);
+    assert.equal(ov.Intraday.vsaMaxConfidenceIntraday, 69);
     assert.equal(ov.Swing.vsaSessionFilter, false);
     assert.equal(ov.Swing.noTradeSessions, undefined);
   });
@@ -185,6 +189,55 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ov.Intraday.vsaIntradayDetectorMode, "sequence");
   });
 
+  test("Intraday VSA blocks daily CHOP after HTF direction is valid", () => {
+    const gated = applyVsaEntryGates(
+      {
+        vote: "LONG",
+        confidence: 0.8,
+        reason: "vsa_no_supply_after_climax",
+        meta: { vsaSequence: true },
+      },
+      {
+        config: {
+          tradeType: "Intraday",
+          htfTrend: "BULLISH",
+          dailyRegime: "CHOP",
+          typeOverrides: STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides,
+        },
+      },
+    );
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_intraday_daily_chop");
+  });
+
+  test("Intraday sequence rejects a low-quality score", () => {
+    const gated = applyVsaEntryGates(
+      {
+        vote: "LONG",
+        confidence: 0.8,
+        reason: "vsa_no_supply_after_climax",
+        meta: {
+          vsaSequence: true,
+          vsaTestRelVolume: 1.0,
+          vsaTestClv: 0.5,
+          vsaClimaxRelVolume: 1.2,
+          vsaClimaxSpreadRatio: 0.8,
+          vsaTestSwingDistance: 5,
+        },
+      },
+      {
+        config: {
+          tradeType: "Intraday",
+          htfTrend: "BULLISH",
+          dailyRegime: "TRANSITION",
+          typeOverrides: STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides,
+        },
+      },
+    );
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_intraday_conf_below_floor");
+  });
+
   test("Swing VSA rejects LONG reversal against bearish HTF context", () => {
     const ablation = { rejSwingHtfCounter: 0 };
     const gated = applyVsaEntryGates(
@@ -203,7 +256,7 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ablation.rejSwingHtfCounter, 1);
   });
 
-  test("Swing stopping-volume path remains tradeable under the existing explicit bypass", () => {
+  test("Swing stopping-volume below the new quality floor is rejected", () => {
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.52, reason: "vsa_stopping_volume_low" },
       {
@@ -213,7 +266,8 @@ describe("VSA Sprint 23 gates", () => {
         },
       },
     );
-    assert.equal(gated.vote, "LONG");
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_swing_conf_below_floor");
   });
 
   test("Intraday absolute ATR gate restored (Fix #4 reverted post-WF BLOCK)", () => {

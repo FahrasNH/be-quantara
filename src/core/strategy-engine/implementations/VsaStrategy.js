@@ -46,9 +46,13 @@ class VsaStrategy extends StrategyBase {
       { key: "rejHtfShortBullish", label: "11. - Intraday HTF SHORT×BULLISH block" },
       { key: "rejHtfStoppingCounter", label: "12. - Intraday HTF stopping-volume counter" },
       { key: "rejHtfLongBearishPenalty", label: "13. - Intraday HTF LONG×BEARISH penalty" },
-      { key: "rejSwingShort", label: "14. - Swing LONG-only gate" },
-      { key: "rejSwingHtfCounter", label: "15. - Swing HTF counter-trend gate" },
-      { key: "rejMinConfidence", label: "16. - Swing graded conf floor" },
+      { key: "rejHtfSideways", label: "14. - Intraday HTF sideways block" },
+      { key: "rejDailyChop", label: "15. - Intraday daily CHOP block" },
+      { key: "rejMinConfidenceIntraday", label: "16. - Intraday score below floor" },
+      { key: "rejMaxConfidenceIntraday", label: "17. - Intraday score above ceiling" },
+      { key: "rejSwingShort", label: "18. - Swing LONG-only gate" },
+      { key: "rejSwingHtfCounter", label: "19. - Swing HTF counter-trend gate" },
+      { key: "rejMinConfidence", label: "20. - Swing graded conf floor" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
@@ -101,6 +105,8 @@ class VsaStrategy extends StrategyBase {
     );
     const nested = result.meta || {};
     const spreadType = nested.spreadType || {};
+    const sequenceTest = nested.test || {};
+    const testSpreadType = sequenceTest.spreadType || {};
     const reason = String(result.reason || "");
     let patternType = null;
     if (reason.includes("stopping_volume")) patternType = "STOPPING_VOLUME";
@@ -110,11 +116,12 @@ class VsaStrategy extends StrategyBase {
     // Sprint 15: flat vsa* ML fields
     const vsaFields = {
       vsaPatternType: patternType,
-      vsaSpread: spreadType.spread ?? null,
-      vsaVolume: nested.volume ?? null,
-      vsaAvgSpread: spreadType.avgSpread ?? null,
-      vsaAvgVolume: nested.avgVolume ?? nested.volSMA ?? null,
-      vsaSwingProximity: nearSwing.distancePct ?? nearSwing.proximity ?? null,
+      vsaSpread: nested.vsaSpread ?? spreadType.spread ?? testSpreadType.spread ?? null,
+      vsaVolume: nested.vsaVolume ?? nested.volume ?? sequenceTest.candle?.volume ?? null,
+      vsaAvgSpread: nested.vsaAvgSpread ?? spreadType.avgSpread ?? testSpreadType.avgSpread ?? null,
+      vsaAvgVolume: nested.vsaAvgVolume ?? nested.avgVolume ?? nested.volSMA ?? sequenceTest.avgVolume ?? null,
+      vsaSwingProximity: nested.vsaTestSwingDistance
+        ?? nearSwing.distancePct ?? nearSwing.proximity ?? sequenceTest.nearSwing?.distance ?? null,
       vsaReversal: patternType === "STOPPING_VOLUME" || reason.includes("stopping_volume"),
     };
     this._lastSignalMeta = {

@@ -273,6 +273,10 @@ function extractAfVsaEnrichment(meta) {
   if (!meta) return {};
   const nested = meta.meta && typeof meta.meta === "object" ? meta.meta : {};
   const spreadType = nested.spreadType || meta.spreadType || {};
+  const sequenceTest = nested.test || {};
+  const sequenceClimax = nested.climax || {};
+  const testSpreadType = sequenceTest.spreadType || {};
+  const climaxSpreadType = sequenceClimax.spreadType || {};
   const reason = String(meta.reason || nested.reason || "");
   let patternType = meta.vsaPatternType ?? null;
   if (!patternType && reason) {
@@ -286,7 +290,34 @@ function extractAfVsaEnrichment(meta) {
     vsaSpread: _num(meta.vsaSpread ?? spreadType.spread ?? nested.spread),
     vsaVolume: _num(meta.vsaVolume ?? nested.volume ?? meta.volume),
     vsaAvgSpread: _num(meta.vsaAvgSpread ?? nested.avgSpread ?? spreadType.avgSpread),
-    vsaAvgVolume: _num(meta.vsaAvgVolume ?? nested.avgVolume ?? nested.volSMA),
+    vsaAvgVolume: _num(
+      meta.vsaAvgVolume
+      ?? nested.avgVolume
+      ?? nested.volSMA
+      ?? meta.avgVolume
+      ?? meta.volSMA,
+    ),
+    vsaSwingDistance: _num(
+      meta.vsaSwingDistance
+      ?? nested.nearSwing?.distance
+      ?? nearSwing.distance,
+    ),
+    vsaSequence: Boolean(meta.vsaSequence ?? nested.vsaSequence),
+    vsaTestRelVolume: _num(meta.vsaTestRelVolume ?? nested.testRelVol ?? sequenceTest.relVol),
+    vsaTestClv: _num(meta.vsaTestClv ?? nested.testClv ?? sequenceTest.clv),
+    vsaTestSpreadRatio: _num(
+      meta.vsaTestSpreadRatio
+      ?? (testSpreadType.avgSpread > 0 ? testSpreadType.spread / testSpreadType.avgSpread : null),
+    ),
+    vsaTestSwingDistance: _num(meta.vsaTestSwingDistance ?? sequenceTest.nearSwing?.distance),
+    vsaClimaxRelVolume: _num(meta.vsaClimaxRelVolume ?? nested.climaxRelVol ?? sequenceClimax.relVol),
+    vsaClimaxClv: _num(meta.vsaClimaxClv ?? nested.climaxClv ?? sequenceClimax.clv),
+    vsaClimaxSpreadRatio: _num(
+      meta.vsaClimaxSpreadRatio
+      ?? (climaxSpreadType.avgSpread > 0
+        ? climaxSpreadType.spread / climaxSpreadType.avgSpread
+        : null),
+    ),
     vsaSwingProximity: _num(
       meta.vsaSwingProximity
       ?? nearSwing.distancePct
