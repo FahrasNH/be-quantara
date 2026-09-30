@@ -393,7 +393,9 @@ const STRATEGIES = {
     atrMinMult:    0.5,
     atrMaxMult:    8.0,
 
-    higherTf:      "1h",
+    // A 4h regime is materially less noisy than 1h for the low-TF legs.
+    // The middle layer remains 1h via the per-leg overrides below.
+    higherTf:      "4h",
     htfEmaFast:    9,
     htfEmaSlow:    21,
     sidewaysThresholdPct: 0.25,
@@ -421,15 +423,57 @@ const STRATEGIES = {
     // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
-      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, tsSessionFilter: false },
+      Scalping: {
+        ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
+        tsSessionFilter: false,
+        // Edge repair: do not chase the breakout close. Wait for a causal
+        // 1-ATR pullback into the breakout zone, then use a wider 2/4 ATR
+        // geometry so 5m noise does not dominate the 4h trend signal.
+        higherTf: "4h",
+        tfMtfInterval: "1h",
+        tfRequireStrongTrend: true,
+        adxMinStrength: 30,
+        retestEntryEnabled: true,
+        retestPullbackAtr: 1.0,
+        retestTtlBars: 12,
+        slAtrMult: 2.0,
+        tpAtrMult: 4.0,
+        makerEntry: true,
+      },
+      Intraday: {
+        ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+        // Same stack as Scalping, with a shallower retest and stricter ADX
+        // because 15m entries otherwise admit too many late breakouts.
+        higherTf: "4h",
+        tfMtfInterval: "1h",
+        tfRequireStrongTrend: true,
+        adxMinStrength: 35,
+        retestEntryEnabled: true,
+        retestPullbackAtr: 0.5,
+        retestTtlBars: 12,
+        slAtrMult: 1.5,
+        tpAtrMult: 3.0,
+        makerEntry: true,
+      },
       Swing: { ...STANDARD_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
+
+    // A retest fill is routed through the post-only/maker path in live mode;
+    // the backtest uses the same maker fee schedule for the resting entry.
+    entryMode:      "maker",
 
     adxMinStrength:    25,
     donchianPeriod:    20,
     htfRatio:          12,
     mtfRatio:          3,
     minVolRatio:       1.0,
+    // Only the first close crossing of a Donchian channel is tradeable.
+    // Set false only for a controlled ablation/backward-compatibility run.
+    tfRequireFreshBreakout: true,
+    // Causal MTF layer is enabled by default; set false only for an ablation.
+    tfMtfLayerEnabled: true,
+    // Optional candle-quality control; zero preserves the base breakout rule.
+    tfMinBreakoutBodyAtr: 0,
     tfHtfLayerEnabled: true,
 
     tsCombinationMode: "race",
@@ -946,9 +990,51 @@ STRATEGIES.MARKET_STRUCTURE = {
   minSwingPairs: 2,
   entryPullbackPct: 0.35,
   entryAtrMult: 0.75,
+  // DOW is a trend-following pullback model: do not enter while the
+  // configured HTF is SIDEWAYS, and require the entry candle to retest HL/LH.
+  msAllowHtfSideways: false,
+  msRequireLevelRetest: true,
+  msLevelTouchAtrMult: 0.5,
+  // A newly confirmed fractal is not yet a mature continuation setup. The
+  // Intraday leg waits one additional closed HTF bar after confirmation and
+  // requires entry-TF trend acceptance. Values remain per-leg so research can
+  // ablate them without changing the shared DOW component contract.
+  msMinBarsAfterConfirmation: 0,
+  msRequireLocalTrendAlignment: false,
+  msLocalTrendSlopeLookback: 1,
+  msUseStructureStop: false,
+  msStructureBufferAtr: 0.25,
+  msMinStopAtr: 0.75,
+  msMaxStopAtr: 2.5,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, msSessionFilter: false },
+    Scalping: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
+      msSessionFilter: false,
+      msAllowHtfSideways: false,
+      msRequireLevelRetest: true,
+      // Full-tape research shows negative gross expectancy before fees; keep
+      // DOW Scalping out of live/backtest defaults until a separate 5m edge is
+      // proven. Override msEnabled=true only for controlled research runs.
+      msEnabled: false,
+    },
+    Intraday: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+      msAllowHtfSideways: false,
+      msRequireLevelRetest: true,
+      msMinBarsAfterConfirmation: 1,
+      msRequireLocalTrendAlignment: true,
+      msLocalTrendSlopeLookback: 2,
+      msUseStructureStop: true,
+      msStructureBufferAtr: 0.25,
+      msMinStopAtr: 0.75,
+      msMaxStopAtr: 2.5,
+    },
+    Swing: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
+      msAllowHtfSideways: false,
+      msRequireLevelRetest: true,
+    },
   },
 };
 STRATEGIES.AUCTION_MARKET_THEORY = {

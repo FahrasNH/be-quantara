@@ -30,16 +30,27 @@ const AF_SMC_KEYS = new Set([
 ]);
 
 // Trade-type → timeframe ladder (Sprint 14 factory reset).
-// Scalping is now a GENUINE low-TF leg (5m/1h), distinct from Intraday (15m/1h).
-// Previously Scalping and Intraday were both 15m/4h (100% overlap) — the leg
-// labelled "Scalping" was really a 15m intraday leg. Now: 5m → 15m → 1h → 1w.
-// NOTE: this table is GLOBAL (shared by every umbrella). Moving Scalping to 5m
-// moves the Scalping leg for MD_*/BS_* too — intended (uniform 3-type ladder).
+// The generic ladder remains shared by the other umbrellas. TREND_FOLLOWING
+// uses a strategy-owned HTF below because its low-TF edge depends on a quieter
+// 4h regime; applying that change globally would silently alter unrelated
+// strategies.
 const TYPE_TF = {
   Scalping: { entry: "5m",  trend: "1h" },
   Intraday: { entry: "15m", trend: "1h" },
   Swing:    { entry: "4h",  trend: "1w" },
 };
+
+const TREND_FOLLOWING_TYPE_TF = Object.freeze({
+  Scalping: { entry: "5m",  trend: "4h" },
+  Intraday: { entry: "15m", trend: "4h" },
+  Swing:    { entry: "4h",  trend: "1w" },
+});
+
+function timeframeForStrategy(strategyKey, tradeType) {
+  return strategyKey === "TREND_FOLLOWING"
+    ? (TREND_FOLLOWING_TYPE_TF[tradeType] || TYPE_TF[tradeType])
+    : TYPE_TF[tradeType];
+}
 
 // Sprint 14: every umbrella runs all 3 trade types (Scalping/Intraday/Swing).
 // AF_* route via Object.keys(TYPE_TF); TS_*/MD_*/BS_* route via this map. All
@@ -402,7 +413,7 @@ async function runBacktestJob(job, userId, opts) {
     }
 
     for (const type of typeOrder) {
-      const tfs = TYPE_TF[type];
+      const tfs = timeframeForStrategy(strategyKey, type);
       if (abortSignal.aborted) throw new Error("Cancelled");
 
       job.progress({ phase: "fetch", type, timeframe: tfs.entry, message: `Fetching ${type} candles (${tfs.entry})…`, pct: 0 });
@@ -559,7 +570,8 @@ async function runBacktestJob(job, userId, opts) {
     const modeLabel = typeOrder.map((t) => {
       const di = dataInfo[t] || {};
       const skipped = di.error || !di.entryBars || di.entryBars < 60;
-      return `${t} (${TYPE_TF[t].entry}/${TYPE_TF[t].trend})${skipped ? " — SKIPPED, no data" : ""}`;
+      const tfs = timeframeForStrategy(strategyKey, t);
+      return `${t} (${tfs.entry}/${tfs.trend})${skipped ? " — SKIPPED, no data" : ""}`;
     }).join(" + ");
 
     job.done({
@@ -719,6 +731,8 @@ module.exports = {
   assertHeapHeadroom,
   heapUsedMb,
   TYPE_TF,
+  TREND_FOLLOWING_TYPE_TF,
+  timeframeForStrategy,
   TYPE_MAX_PERIOD,
   TYPE_MAX_BARS,
   MULTI_TYPE_STRATEGY_MAP,

@@ -47,6 +47,16 @@ class MeanReversionStrategy extends StrategyBase {
       mdFvgMinGapPct: 0.002,
       mdObLookback: 20,
       mdObDispMult: 1.5,
+      // Typed legs treat an extreme as a setup and wait for causal re-entry
+      // confirmation. Untyped direct calls stay backward-compatible in the
+      // evaluator unless the caller supplies a trade type or interval.
+      mrRequireRsiTurn: true,
+      mrBlockStrongTrend: true,
+      mrChopRiskMultiplier: 0.5,
+      mrTransitionRiskMultiplier: 0.5,
+      // FVG/BB target overrides must not compress reward below this floor.
+      mrMinRiskRewardA: 2.0,
+      mrMinRiskRewardB: 2.0,
       maxTradesPerDay: 5,
       minVotes: 1,
       maxConcurrentTrades: 3,
@@ -66,8 +76,9 @@ class MeanReversionStrategy extends StrategyBase {
       { key: "rejVolume", label: "4. - Volume floor" },
       { key: "rejBb", label: "5. - Bollinger not computable" },
       { key: "rejTrigger", label: "6. - No A/B trigger (RSI+BB+VWAP)" },
-      { key: "rejAdxRegime", label: "7. - ADX regime gate" },
-      { key: "rejObFvg", label: "8. - OB/FVG refine" },
+      { key: "rejConfirmation", label: "7. - Reversal confirmation" },
+      { key: "rejAdxRegime", label: "8. - ADX regime gate" },
+      { key: "rejObFvg", label: "9. - OB/FVG refine" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
@@ -119,14 +130,27 @@ class MeanReversionStrategy extends StrategyBase {
     const tpMultiplier = isComponentA ? this.config.tpMultiplierA : this.config.tpMultiplierB;
     let tpDist = opts.tpMultiplier != null ? atr * opts.tpMultiplier : slDist * tpMultiplier;
     let tpSource = "rr";
+    const minRiskReward = Number(opts.minRiskReward
+      ?? (isComponentA ? this.config.mrMinRiskRewardA : this.config.mrMinRiskRewardB)
+      ?? 0);
 
     const meta = this._lastSignalMeta;
     if (meta?.tpOverride != null && Number.isFinite(meta.tpOverride)) {
       const overrideDist = Math.abs(meta.tpOverride - entryPrice);
-      if (overrideDist >= slDist * 0.5 && overrideDist >= tpDist * 0.5) {
+      if (overrideDist >= slDist * 0.5
+          && overrideDist >= tpDist * 0.5
+          && (!Number.isFinite(minRiskReward) || minRiskReward <= 0 || overrideDist / slDist >= minRiskReward)) {
         tpDist = overrideDist;
         tpSource = meta.tpSource || "override";
       }
+    }
+
+    // Do not let a nearby FVG/BB midpoint silently turn a nominal 2R trade
+    // into a 1R trade. The floor is deliberately a research guardrail, not a
+    // tuned profit target.
+    if (Number.isFinite(minRiskReward) && minRiskReward > 0 && tpDist / slDist < minRiskReward) {
+      tpDist = slDist * minRiskReward;
+      tpSource = "min_rr_floor";
     }
 
     let stopLoss, takeProfit;
@@ -138,7 +162,7 @@ class MeanReversionStrategy extends StrategyBase {
       takeProfit = entryPrice - tpDist;
     }
 
-    if (tpSource !== "rr" && meta?.tpOverride != null) {
+    if (tpSource !== "rr" && tpSource !== "min_rr_floor" && meta?.tpOverride != null) {
       const ok =
         (side === "LONG" && meta.tpOverride > entryPrice) ||
         (side === "SHORT" && meta.tpOverride < entryPrice);
@@ -152,6 +176,7 @@ class MeanReversionStrategy extends StrategyBase {
       slDistance: slDist,
       tpDistance: tpDist,
       component: isComponentA ? "Scalping" : "Intraday",
+      minRiskReward,
       trailingStopMult: isComponentA ? this.config.trailingStopAtrMultA : this.config.trailingStopAtrMultB,
       tpSource,
     };

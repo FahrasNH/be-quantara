@@ -76,6 +76,55 @@ function resolveAdx(indicators, lastIdx, config, adxCacheRef) {
 }
 
 /**
+ * Resolve the mean-reversion leg that is allowed to emit a signal.
+ *
+ * The old evaluator always checked Component A before Component B, even when
+ * the caller was running an isolated Intraday leg. That made per-type
+ * backtests ambiguous and let the stricter/higher-frequency component win on
+ * the wrong timeframe. A bare strategy instance keeps the legacy dual-mode
+ * behaviour; a typed backtest/live bot is isolated by tradeType or interval.
+ */
+function resolveMrComponentScope(config = {}) {
+  const explicit = config.mrComponent || config.tradeType || config.tradeTypeName;
+  const raw = String(explicit || "").trim().toUpperCase();
+  if (raw === "A" || raw === "SCALPING") return "Scalping";
+  if (raw === "B" || raw === "INTRADAY") return "Intraday";
+  // Mean Reversion has no separate C rule. Swing uses the slower B geometry,
+  // but remains attributed to Swing by the backtest/live execution layer.
+  if (raw === "C" || raw === "SWING") return "Intraday";
+
+  const interval = String(config.entryTf || config.interval || "").trim().toLowerCase();
+  if (interval === "5m") return "Scalping";
+  if (interval === "15m" || interval === "1h" || interval === "4h") return "Intraday";
+  return null;
+}
+
+function confirmReversal({
+  direction,
+  setupIdx,
+  lastIdx,
+  closes,
+  rsiValues,
+  bbSetup,
+  requireRsiTurn,
+}) {
+  const setupClose = closes[setupIdx];
+  const currentClose = closes[lastIdx];
+  const setupRsi = rsiValues[setupIdx];
+  const currentRsi = rsiValues[lastIdx];
+  if (![setupClose, currentClose, setupRsi, currentRsi].every(Number.isFinite)) return false;
+
+  if (direction === "LONG") {
+    return currentClose > setupClose
+      && currentClose >= bbSetup.lower
+      && (!requireRsiTurn || currentRsi > setupRsi);
+  }
+  return currentClose < setupClose
+    && currentClose <= bbSetup.upper
+    && (!requireRsiTurn || currentRsi < setupRsi);
+}
+
+/**
  * Main MEAN_REVERSION entry evaluation at lastIdx.
  *
  * @returns {{ signal: 'LONG'|'SHORT'|null, meta: object|null, bbLevels: object|null }}
@@ -129,7 +178,10 @@ function evaluateMeanReversionEntry({
 
   const bbA = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevA, lastIdx);
   const bbB = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevB, lastIdx);
-  if (!bbA || !bbB) {
+  const setupIdx = lastIdx - 1;
+  const bbASetup = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevA, setupIdx);
+  const bbBSetup = calculateBollingerBands(closes, cfg.bbPeriod, cfg.bbStdDevB, setupIdx);
+  if (!bbA || !bbB || !bbASetup || !bbBSetup) {
     _abl("rejBb");
     return { signal: null, meta: null, bbLevels: null };
   }
@@ -137,25 +189,82 @@ function evaluateMeanReversionEntry({
   const vwap = indicators.vwap?.[lastIdx] ?? close;
   const bbLevels = { bbA, bbB, vwap };
 
-  const isCompALong =
-    rsiNow < cfg.rsiOversoldA &&
-    close < bbA.lower &&
-    close < vwap;
+  const componentScope = resolveMrComponentScope(cfg);
+  const allowScalping = componentScope == null || componentScope === "Scalping";
+  const allowIntraday = componentScope == null || componentScope === "Intraday";
+  // Typed runs default to causal confirmation; untyped unit/integration calls
+  // remain backward-compatible unless the caller explicitly opts in.
+  const requireReversal = cfg.mrRequireReversalConfirmation ?? componentScope != null;
+  const requireRsiTurn = cfg.mrRequireRsiTurn !== false;
+  const conditionIdx = requireReversal ? setupIdx : lastIdx;
+  const conditionRsi = rsiValues[conditionIdx];
+  const conditionClose = closes[conditionIdx];
+  const conditionVwap = indicators.vwap?.[conditionIdx] ?? conditionClose;
+  const conditionBbA = requireReversal ? bbASetup : bbA;
+  const conditionBbB = requireReversal ? bbBSetup : bbB;
 
-  const isCompAShort =
-    rsiNow > cfg.rsiOverboughtA &&
-    close > bbA.upper &&
-    close > vwap;
+  const isCompASetupLong =
+    allowScalping &&
+    conditionRsi < cfg.rsiOversoldA &&
+    conditionClose < conditionBbA.lower &&
+    conditionClose < conditionVwap;
 
-  const isCompBLong =
-    rsiNow < cfg.rsiOversoldB &&
-    close < bbB.lower &&
-    close < vwap;
+  const isCompASetupShort =
+    allowScalping &&
+    conditionRsi > cfg.rsiOverboughtA &&
+    conditionClose > conditionBbA.upper &&
+    conditionClose > conditionVwap;
 
-  const isCompBShort =
-    rsiNow > cfg.rsiOverboughtB &&
-    close > bbB.upper &&
-    close > vwap;
+  const isCompBSetupLong =
+    allowIntraday &&
+    conditionRsi < cfg.rsiOversoldB &&
+    conditionClose < conditionBbB.lower &&
+    conditionClose < conditionVwap;
+
+  const isCompBSetupShort =
+    allowIntraday &&
+    conditionRsi > cfg.rsiOverboughtB &&
+    conditionClose > conditionBbB.upper &&
+    conditionClose > conditionVwap;
+
+  const isCompALong = isCompASetupLong && (!requireReversal || confirmReversal({
+    direction: "LONG",
+    setupIdx,
+    lastIdx,
+    closes,
+    rsiValues,
+    bbSetup: bbASetup,
+    requireRsiTurn,
+  }));
+  const isCompAShort = isCompASetupShort && (!requireReversal || confirmReversal({
+    direction: "SHORT",
+    setupIdx,
+    lastIdx,
+    closes,
+    rsiValues,
+    bbSetup: bbASetup,
+    requireRsiTurn,
+  }));
+  const isCompBLong = isCompBSetupLong && (!requireReversal || confirmReversal({
+    direction: "LONG",
+    setupIdx,
+    lastIdx,
+    closes,
+    rsiValues,
+    bbSetup: bbBSetup,
+    requireRsiTurn,
+  }));
+  const isCompBShort = isCompBSetupShort && (!requireReversal || confirmReversal({
+    direction: "SHORT",
+    setupIdx,
+    lastIdx,
+    closes,
+    rsiValues,
+    bbSetup: bbBSetup,
+    requireRsiTurn,
+  }));
+
+  const rawSetup = isCompASetupLong || isCompASetupShort || isCompBSetupLong || isCompBSetupShort;
 
   let signal = null;
   let component = null;
@@ -165,20 +274,20 @@ function evaluateMeanReversionEntry({
 
   if (isCompALong) {
     signal = "LONG"; component = "Scalping"; confidence = 65; bbForTp = bbA;
-    reason = `Scalping: RSI ${rsiNow.toFixed(1)} < ${cfg.rsiOversoldA}, BB(1.5σ) touch, below VWAP`;
+    reason = `Scalping: setup RSI ${conditionRsi.toFixed(1)} < ${cfg.rsiOversoldA}, BB(1.5σ) extreme, ${requireReversal ? "reversal confirmed" : "legacy extreme entry"}`;
   } else if (isCompAShort) {
     signal = "SHORT"; component = "Scalping"; confidence = 65; bbForTp = bbA;
-    reason = `Scalping: RSI ${rsiNow.toFixed(1)} > ${cfg.rsiOverboughtA}, BB(1.5σ) touch, above VWAP`;
+    reason = `Scalping: setup RSI ${conditionRsi.toFixed(1)} > ${cfg.rsiOverboughtA}, BB(1.5σ) extreme, ${requireReversal ? "reversal confirmed" : "legacy extreme entry"}`;
   } else if (isCompBLong) {
     signal = "LONG"; component = "Intraday"; confidence = 60; bbForTp = bbB;
-    reason = `Intraday: RSI ${rsiNow.toFixed(1)} < ${cfg.rsiOversoldB}, BB(2.0σ) touch, below VWAP`;
+    reason = `Intraday: setup RSI ${conditionRsi.toFixed(1)} < ${cfg.rsiOversoldB}, BB(2.0σ) extreme, ${requireReversal ? "reversal confirmed" : "legacy extreme entry"}`;
   } else if (isCompBShort) {
     signal = "SHORT"; component = "Intraday"; confidence = 60; bbForTp = bbB;
-    reason = `Intraday: RSI ${rsiNow.toFixed(1)} > ${cfg.rsiOverboughtB}, BB(2.0σ) touch, above VWAP`;
+    reason = `Intraday: setup RSI ${conditionRsi.toFixed(1)} > ${cfg.rsiOverboughtB}, BB(2.0σ) extreme, ${requireReversal ? "reversal confirmed" : "legacy extreme entry"}`;
   }
 
   if (!signal) {
-    _abl("rejTrigger");
+    _abl(rawSetup && requireReversal ? "rejConfirmation" : "rejTrigger");
     return { signal: null, meta: null, bbLevels };
   }
 
@@ -233,6 +342,10 @@ function evaluateMeanReversionEntry({
   const vwapDev = vwap > 0 ? ((close - vwap) / vwap) * 100 : null;
   const mrFields = {
     mrRsiValue: rsiNow ?? null,
+    mrSetupRsiValue: conditionRsi ?? null,
+    mrSetupIdx: setupIdx,
+    mrConfirmationRequired: requireReversal,
+    mrConfirmation: requireReversal ? "reentry_and_rsi_turn" : "legacy_extreme_entry",
     mrBbMidLevel: bbForLevels?.middle ?? null,
     mrBbUpperLevel: bbForLevels?.upper ?? null,
     mrBbLowerLevel: bbForLevels?.lower ?? null,
@@ -269,5 +382,6 @@ function evaluateMeanReversionEntry({
 module.exports = {
   DEFAULTS,
   calculateBollingerBands,
+  resolveMrComponentScope,
   evaluateMeanReversionEntry,
 };

@@ -12,8 +12,10 @@
 const BotEngine = require("./BotEngine");
 const PositionManager = require("../../../core/position-engine/PositionManager");
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
-const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcADX } = require("../../../core/analytics-engine/indicators");
+const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcADX, calcRSI, calcSMA } = require("../../../core/analytics-engine/indicators");
 const { isMeanReversionKey, stratLabel } = require("../../../core/execution-engine");
+const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
+const { applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency");
 const {
   buildAtrBaseline,
@@ -339,17 +341,25 @@ class AdaptiveStrategyEngine extends BotEngine {
       //     (REQUIRED_ALIGN) karena bentrok dengan htfTrend versi engine.
       let htfTrendStrength = null;
       if (htfCandlesCache?.length >= 30) {
-        const hLast   = htfCandlesCache.length - 1;
+        // detectHTFTrend intentionally excludes the currently forming candle;
+        // structure/ATR inputs must use the same last closed HTF bar.
+        const hLast   = htfCandlesCache.length - 2;
         const hCloses = htfCandlesCache.map(c => c.close);
         const hHighs  = htfCandlesCache.map(c => c.high);
         const hLows   = htfCandlesCache.map(c => c.low);
+        const hOpens  = htfCandlesCache.map(c => c.open);
+        const hTimestamps = htfCandlesCache.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
         const hEmaF = calcEMA(hCloses, this.config.htfEmaFast)[hLast];
         const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
-        const hAtr  = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
+        const hAtrArr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14);
+        const hAtr  = hAtrArr[hLast];
         if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
         indicators.highsHTF  = hHighs;
         indicators.lowsHTF   = hLows;
         indicators.closesHTF = hCloses;
+        indicators.opensHTF  = hOpens;
+        indicators.timestampsHTF = hTimestamps;
+        indicators.atrHTF = hAtrArr;
       }
 
       // 6e. PARITY BotEngine._tick(): MEAN_REVERSION ADX regime gate (MD-SUB-01)
@@ -378,7 +388,7 @@ class AdaptiveStrategyEngine extends BotEngine {
         trend_strength: this.lastTrendStrength,
         htfTrend:       this.state.htfTrend,
         htfTrendStrength,
-        htfIdx:         htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 1 : undefined,
+        htfIdx:         htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 2 : undefined,
         dailyRegime:    this.state.dailyRegime,
         // FEE-01/01b: knob entry-quality AF — diteruskan dari config bot/strategi
         // agar anti-chase & conviction-veto bisa di-tune live tanpa ubah kode.
@@ -398,6 +408,50 @@ class AdaptiveStrategyEngine extends BotEngine {
       if (!signal) {
         if (instrument) this._logNoSignalAblation();
         return;
+      }
+
+      if (isMeanReversionKey(this.strategyKey) || isMeanReversionKey(this.config.signalType)) {
+        const dailyGate = applyRegimeGate({
+          signal,
+          strategyKey: this.strategyKey || this.config.signalType,
+          regime: this.state.dailyRegime,
+          riskPerTrade: this.config.riskPerTrade ?? 0.01,
+          blockStrongTrend: this.config.mrBlockStrongTrend !== false,
+          blockTransition: this.config.mrBlockTransition === true,
+          mrChopRiskMultiplier: this.config.mrChopRiskMultiplier,
+          mrTransitionRiskMultiplier: this.config.mrTransitionRiskMultiplier,
+        });
+        if (!dailyGate.allow) {
+          this._log("info", `[MR] Daily regime ${this.state.dailyRegime} diblok — ${dailyGate.reason}`);
+          return;
+        }
+
+        if (htfCandlesCache?.length >= 30) {
+          // Use the last completed HTF candle; the last fetched candle is
+          // still forming and must not influence the regime decision.
+          const hLast = htfCandlesCache.length - 2;
+          const hCloses = htfCandlesCache.map(c => c.close);
+          const hHighs = htfCandlesCache.map(c => c.high);
+          const hLows = htfCandlesCache.map(c => c.low);
+          const atrArr = calcATR(hHighs, hLows, hCloses, 14);
+          const atrBaselineArr = calcSMA(atrArr.map(v => (v == null ? 0 : v)), 20);
+          const htfCheck = meanReversionRegimeFilter({
+            direction: signal,
+            htfData: {
+              emaFast: calcEMA(hCloses, 9)[hLast],
+              emaSlow: calcEMA(hCloses, 21)[hLast],
+              rsi: calcRSI(hCloses, 14)[hLast],
+              close: hCloses[hLast],
+              atr: atrArr[hLast],
+              atrBaseline: atrBaselineArr[hLast],
+            },
+            blockStrongTrend: this.config.mrBlockStrongTrend !== false,
+          });
+          if (!htfCheck.allowed) {
+            this._log("info", `[MR] HTF regime ${htfCheck.regime} diblok — ${htfCheck.reason}`);
+            return;
+          }
+        }
       }
 
       // Expose for MultiStrategyCoordinator.evaluate() / getPendingSignal()

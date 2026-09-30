@@ -70,9 +70,12 @@ function classifyHTFRegime(htfData) {
  * @param {Object} params
  * @param {'LONG' | 'SHORT'} params.direction  - Arah entry yang akan dieksekusi
  * @param {Object} params.htfData              - Data HTF (lihat classifyHTFRegime)
+ * @param {boolean} [params.blockStrongTrend=false] - Block both sides when the
+ *   HTF is a confirmed trend. Production MR callers enable this explicitly;
+ *   false preserves the legacy directional-filter contract for isolated tests.
  * @returns {{ allowed: boolean, reason: string, regime: string }}
  */
-function meanReversionRegimeFilter({ direction, htfData }) {
+function meanReversionRegimeFilter({ direction, htfData, blockStrongTrend = false }) {
   const { atr, atrBaseline } = htfData;
   const regime = classifyHTFRegime(htfData);
 
@@ -81,6 +84,14 @@ function meanReversionRegimeFilter({ direction, htfData }) {
     return {
       allowed: false,
       reason: `ATR ${(atr / atrBaseline).toFixed(2)}x baseline — volatility terlalu tinggi untuk Mean Reversion`,
+      regime,
+    };
+  }
+
+  if (blockStrongTrend && (regime === 'strong_bull' || regime === 'strong_bear')) {
+    return {
+      allowed: false,
+      reason: `HTF ${regime} — MEAN_REVERSION hanya aktif pada ranging/transition regime`,
       regime,
     };
   }

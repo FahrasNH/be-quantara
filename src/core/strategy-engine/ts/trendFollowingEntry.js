@@ -24,6 +24,11 @@ const DEFAULTS = {
   donchianPeriod: 20,
   adxMinStrength: 25,
   minVolRatio: 1.0,
+  tfRequireFreshBreakout: true,
+  tfMtfLayerEnabled: true,
+  // Optional breakout quality filter. Zero keeps the historical behaviour;
+  // positive values require a directional candle body measured in ATR.
+  tfMinBreakoutBodyAtr: 0,
 };
 
 function freshTrendState() {
@@ -32,6 +37,7 @@ function freshTrendState() {
     htfTrendDirection: null,
     htfAdxStrength: 0,
     donchianBroken: false,
+    lastDonchianBreakoutKey: null,
     barsInTrend: 0,
   };
 }
@@ -61,16 +67,84 @@ function detectHTFTrend(htfClosesLast, emaFastHTF, emaMidHTF, emaSlowHTF, adxHTF
   return null;
 }
 
-function isDonchianBroken(closesEntry, donchianUpper, donchianLower, direction) {
+/**
+ * Confirm a Donchian breakout.
+ *
+ * `donchianUpper`/`donchianLower` must be the channel calculated from bars
+ * before the current close.  When the preceding channel is supplied, require
+ * a *fresh* crossing: the previous close must not already have been outside
+ * that preceding channel.  This prevents the same trend leg from generating
+ * a new signal on every bar that remains above/below the channel.
+ *
+ * The previous-channel arguments are optional for backwards compatibility
+ * with callers that only need the legacy point-in-time check.
+ */
+function isDonchianBroken(
+  closesEntry,
+  donchianUpper,
+  donchianLower,
+  direction,
+  previousDonchianUpper = null,
+  previousDonchianLower = null,
+) {
   const n = closesEntry?.length || 0;
   if (n < 2) return false;
 
   const closeCurr = closesEntry[n - 1];
+  const closePrev = closesEntry[n - 2];
 
   if (direction === "LONG") {
-    return closeCurr > donchianUpper;
+    if (!(closeCurr > donchianUpper)) return false;
+    return previousDonchianUpper == null || closePrev <= previousDonchianUpper;
   }
-  return closeCurr < donchianLower;
+  if (!(closeCurr < donchianLower)) return false;
+  return previousDonchianLower == null || closePrev >= previousDonchianLower;
+}
+
+/**
+ * Reject weak/indecisive breakout candles when explicitly configured.
+ *
+ * The breakout candle is the completed MTF candle when the causal MTF layer is
+ * present, otherwise the current entry candle.  The filter is deliberately
+ * opt-in: it is a research control until it demonstrates out-of-sample value.
+ */
+function checkBreakoutQuality({
+  open,
+  close,
+  atr,
+  channel,
+  direction,
+  minBodyAtr = 0,
+  maxExtensionAtr = Infinity,
+} = {}) {
+  const minBody = Number(minBodyAtr);
+  const maxExtension = Number(maxExtensionAtr);
+  const qualityEnabled = (Number.isFinite(minBody) && minBody > 0)
+    || (Number.isFinite(maxExtension) && maxExtension >= 0);
+  if (!qualityEnabled) return { valid: true, bodyAtr: null, extensionAtr: null };
+
+  if (![open, close, atr, channel].every(Number.isFinite) || !(atr > 0)) {
+    return { valid: false, bodyAtr: null, extensionAtr: null, reason: "Breakout quality inputs unavailable" };
+  }
+
+  const directional = direction === "LONG" ? close > open : close < open;
+  const bodyAtr = Math.abs(close - open) / atr;
+  const extensionAtr = direction === "LONG"
+    ? (close - channel) / atr
+    : (channel - close) / atr;
+  const bodyValid = !(Number.isFinite(minBody) && minBody > 0)
+    || (directional && bodyAtr >= minBody);
+  const extensionValid = !(Number.isFinite(maxExtension) && maxExtension >= 0)
+    || extensionAtr <= maxExtension;
+
+  return {
+    valid: bodyValid && extensionValid,
+    bodyAtr,
+    extensionAtr,
+    reason: bodyValid
+      ? (extensionValid ? "Breakout quality passed" : "Breakout too extended")
+      : "Breakout body too weak or counter-directional",
+  };
 }
 
 function checkLongEntry(
@@ -171,7 +245,20 @@ function resolveDonchian(indicators, lastIdx, config, donchianCache) {
   return {
     upper: dc.upper?.[lastIdx - 1],
     lower: dc.lower?.[lastIdx - 1],
+    previousUpper: dc.upper?.[lastIdx - 2],
+    previousLower: dc.lower?.[lastIdx - 2],
   };
+}
+
+/**
+ * The entry checks only need the current and previous close.  Keeping this
+ * as a two-value view avoids copying the entire history on every evaluated
+ * candle (the old slice made long 5m backtests O(n²)).
+ */
+function lastTwo(values, lastIdx) {
+  if (!Array.isArray(values) || lastIdx < 0) return [];
+  if (lastIdx === 0) return [values[0]];
+  return [values[lastIdx - 1], values[lastIdx]];
 }
 
 /**
@@ -204,8 +291,8 @@ function evaluateTrendFollowingEntry({
     return { signal: null, trendState: state, entryChecklist: null };
   }
 
-  const closesEntry = (indicators.closes || []).slice(0, lastIdx + 1);
-  const volumesEntry = (indicators.volumes || []).slice(0, lastIdx + 1);
+  const closesEntry = lastTwo(indicators.closes || [], lastIdx);
+  const volumesEntry = lastTwo(indicators.volumes || [], lastIdx);
   const atr = indicators.atr?.[lastIdx];
   const volumeCurrentEntry = volumesEntry[volumesEntry.length - 1];
   const volumeSMAEntry = indicators.volSMA?.[lastIdx] || 0;
@@ -216,11 +303,20 @@ function evaluateTrendFollowingEntry({
   }
 
   const hasHTF = Array.isArray(indicators.closesHTF);
-  const hasMTF = Array.isArray(indicators.macd15m);
+  // The MTF breakout layer is defined by its close series + Donchian channel.
+  // Requiring `macd15m` here silently forced every caller onto the entry-TF
+  // fallback because the project does not use MACD as a TF entry condition.
+  const hasMTF = Array.isArray(indicators.closes15m)
+    && indicators.donchian15m
+    && typeof indicators.donchian15m === "object";
   const idxHTF = Number.isInteger(config.htfIdx)
     ? config.htfIdx
     : (hasHTF ? Math.floor(lastIdx / (cfg.htfRatio || 12)) : lastIdx);
-  const idxMTF = hasMTF ? Math.floor(lastIdx / (cfg.mtfRatio || 3)) : lastIdx;
+  const idxMTF = hasMTF
+    ? (Number.isInteger(config.mtfIdx)
+      ? config.mtfIdx
+      : Math.floor(lastIdx / (cfg.mtfRatio || 3)))
+    : lastIdx;
 
   const htfClose = indicators.closesHTF?.[idxHTF] ?? closesEntry[closesEntry.length - 1];
   const htfEmaFast = indicators.emaFastHTF?.[idxHTF] ?? indicators.emaFast?.[lastIdx] ?? null;
@@ -245,20 +341,83 @@ function evaluateTrendFollowingEntry({
   let donchianBroken = false;
   let donchianUpperMTF = null;
   let donchianLowerMTF = null;
+  let breakoutQuality = { valid: true, bodyAtr: null, extensionAtr: null };
+  let breakoutQualityRejected = false;
+  const requireFreshBreakout = config.tfRequireFreshBreakout !== false
+    && cfg.tfRequireFreshBreakout !== false;
 
-  if (hasMTF && indicators.donchian15m) {
+  if (hasMTF) {
     const dc = indicators.donchian15m;
-    donchianUpperMTF = dc.upper?.[idxMTF];
-    donchianLowerMTF = dc.lower?.[idxMTF];
-    const mtfCloses = (indicators.closes15m || []).slice(0, idxMTF + 1);
+    // calcDonchian() includes the bar at its output index.  Use the prior
+    // completed MTF bar's channel for the current close, and the channel one
+    // bar earlier to test whether this is a new breakout.
+    const channelIdx = idxMTF - 1;
+    donchianUpperMTF = dc.upper?.[channelIdx];
+    donchianLowerMTF = dc.lower?.[channelIdx];
+    const previousUpperMTF = dc.upper?.[channelIdx - 1];
+    const previousLowerMTF = dc.lower?.[channelIdx - 1];
+    const mtfCloses = lastTwo(indicators.closes15m || [], idxMTF);
     if (mtfCloses.length > 0) {
-      donchianBroken = isDonchianBroken(mtfCloses, donchianUpperMTF, donchianLowerMTF, htfTrend);
+      donchianBroken = isDonchianBroken(
+        mtfCloses,
+        donchianUpperMTF,
+        donchianLowerMTF,
+        htfTrend,
+        requireFreshBreakout ? previousUpperMTF : null,
+        requireFreshBreakout ? previousLowerMTF : null,
+      );
     }
   } else {
     const dc = resolveDonchian(indicators, lastIdx, cfg, cache);
     donchianUpperMTF = dc.upper;
     donchianLowerMTF = dc.lower;
-    donchianBroken = isDonchianBroken(closesEntry, donchianUpperMTF, donchianLowerMTF, htfTrend);
+    donchianBroken = isDonchianBroken(
+      closesEntry,
+      donchianUpperMTF,
+      donchianLowerMTF,
+      htfTrend,
+      requireFreshBreakout ? dc.previousUpper : null,
+      requireFreshBreakout ? dc.previousLower : null,
+    );
+  }
+
+  if (donchianBroken) {
+    const breakoutIdx = hasMTF ? idxMTF : lastIdx;
+    const breakoutOpen = hasMTF
+      ? indicators.opens15m?.[breakoutIdx]
+      : indicators.opens?.[breakoutIdx];
+    const breakoutClose = hasMTF
+      ? indicators.closes15m?.[breakoutIdx]
+      : indicators.closes?.[breakoutIdx];
+    const breakoutAtr = hasMTF
+      ? (indicators.atr15m?.[breakoutIdx] ?? atr)
+      : atr;
+    const breakoutChannel = htfTrend === "LONG" ? donchianUpperMTF : donchianLowerMTF;
+    breakoutQuality = checkBreakoutQuality({
+      open: breakoutOpen,
+      close: breakoutClose,
+      atr: breakoutAtr,
+      channel: breakoutChannel,
+      direction: htfTrend,
+      minBodyAtr: config.tfMinBreakoutBodyAtr ?? cfg.tfMinBreakoutBodyAtr,
+      maxExtensionAtr: config.tfMaxBreakoutExtensionAtr ?? cfg.tfMaxBreakoutExtensionAtr,
+    });
+    if (!breakoutQuality.valid) {
+      donchianBroken = false;
+      breakoutQualityRejected = true;
+    }
+  }
+
+  // A completed MTF breakout remains visible for every lower-TF candle until
+  // the next MTF close.  Emit it only once, so a single breakout cannot churn
+  // a new position after each SL/TP on the lower timeframe.
+  if (donchianBroken && hasMTF) {
+    const breakoutKey = `${htfTrend}:${idxMTF}`;
+    if (state.lastDonchianBreakoutKey === breakoutKey) {
+      donchianBroken = false;
+    } else {
+      state.lastDonchianBreakoutKey = breakoutKey;
+    }
   }
 
   state.htfTrendConfirmed = true;
@@ -291,6 +450,8 @@ function evaluateTrendFollowingEntry({
         volRatio,
         adxMinStrength,
         donchianPeriod,
+        breakoutBodyAtr: breakoutQuality.bodyAtr,
+        breakoutExtensionAtr: breakoutQuality.extensionAtr,
       },
     };
   }
@@ -316,11 +477,13 @@ function evaluateTrendFollowingEntry({
         volRatio,
         adxMinStrength,
         donchianPeriod,
+        breakoutBodyAtr: breakoutQuality.bodyAtr,
+        breakoutExtensionAtr: breakoutQuality.extensionAtr,
       },
     };
   }
 
-  _abl(donchianBroken ? "rejChecklist" : "rejBreakout");
+  _abl(donchianBroken ? "rejChecklist" : (breakoutQualityRejected ? "rejBreakoutQuality" : "rejBreakout"));
   return { signal: null, trendState: state, entryChecklist: null };
 }
 
@@ -331,5 +494,6 @@ module.exports = {
   isDonchianBroken,
   checkLongEntry,
   checkShortEntry,
+  checkBreakoutQuality,
   evaluateTrendFollowingEntry,
 };

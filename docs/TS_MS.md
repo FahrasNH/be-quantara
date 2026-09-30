@@ -1,11 +1,11 @@
 # MARKET_STRUCTURE — Entry Triggers (AS-IS)
 
 **Scope**: What triggers a MARKET_STRUCTURE entry and the signal labels emitted on fill.  
-**Strategy key**: `MARKET_STRUCTURE` (`MarketStructureStrategy`, v2.0) — label: **Dow Theory**  
+**Strategy key**: `MARKET_STRUCTURE` (`MarketStructureStrategy`, v2.3) — label: **Dow Theory**
 **Engine SSOT**: `marketStructureEntry.js` → `evaluateMarketStructureEntry`  
 **Config SSOT**: `strategyDefaults.js` → `MARKET_STRUCTURE` (inherits `TS_COMPONENT_BASE`)  
 **Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
-**Doc date**: 2026-07-25
+**Doc date**: 2026-09-26
 
 ---
 
@@ -29,12 +29,20 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 - **`minSwingPairs`:** 2 (pair) — Minimum HH/HL or LH/LL pairs
 - **`entryPullbackPct`:** 0.35 (fraksi) — Pullback vs last swing span
 - **`entryAtrMult`:** 0.75 (× ATR) — Pullback tolerance (ATR preferred)
+- **`msAllowHtfSideways`:** false — No-trade saat HTF belum memiliki arah
+- **`msRequireLevelRetest`:** true — Candle entry wajib menguji kembali HL/LH
+- **`msLevelTouchAtrMult`:** 0.5 (× entry-TF ATR) — Toleransi wick terhadap HL/LH
+- **Intraday maturity gate:** menunggu satu closed HTF bar setelah pivot terkonfirmasi
+- **Intraday local acceptance:** harga dan slope EMA50 entry-TF harus searah DOW
+- **Intraday structural risk:** SL berada di luar HL/LH dengan buffer ATR terbatas
+- **Scalping:** disabled by default (`msEnabled: false`) sampai edge 5m lolos walk-forward
+- **Causal swing order:** bullish pair requires prior HH before the latest HL; bearish pair requires prior LL before the latest LH
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `msSessionFilter: false`, RR 2.0
-- **Intraday:** `atrMinMult: 0.4`
-- **Swing:** `atrMinMult: 0.8`
+- **Scalping:** DOW component disabled by default; enable only for controlled research
+- **Intraday:** `atrMinMult: 0.4`, HTF sideways blocked, level retest required, maturity gate, local alignment, structural SL
+- **Swing:** `atrMinMult: 0.8`, HTF sideways blocked, level retest required
 
 ---
 
@@ -56,23 +64,23 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 ### Scalping
 
 - **Floor:** none
-- **Formula / components:** HTF structure classify → pullback within `entryAtrMult`×ATR → same-bar bounce/reject
+- **Formula / components:** HTF structure classify → entry-TF range retests HL/LH → close-side bounce/reject → signal
 
 ### Intraday
 
 - **Floor:** none
-- **Formula / components:** same Dow HH/HL / LH/LL path
+- **Formula / components:** same Dow HH/HL / LH/LL path with entry-TF level retest and confirmation after structure maturity and local-trend alignment
 
 ### Swing
 
 - **Floor:** none
-- **Formula / components:** same; wider session/week context only affects gates
+- **Formula / components:** same; weekly HTF must be directional and entry candle must retest the level
 
 ---
 
 ## Risk & SL/TP (per Trade Type)
 
-Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) — distinct from **stop-loss** distance in `calculateRiskConfig`. Entry structure gates: [How Entry Works](#how-entry-works).
+Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×HTF ATR. The entry candle must also retest HL/LH within `msLevelTouchAtrMult` 0.5×entry-TF ATR. Intraday SL uses the structural invalidation level plus `msStructureBufferAtr`, bounded by `msMinStopAtr`/`msMaxStopAtr`; other legs retain ATR geometry. Entry structure gates: [How Entry Works](#how-entry-works).
 
 ### Scalping
 
@@ -81,14 +89,14 @@ Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×ATR (entry module) �
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; session filter OFF
+- **Notes:** Disabled by default; enable only for controlled research
 
 ### Intraday
 
 - **Entry TF / HTF:** 15m / 1h
-- **SL method:** ATR × 1.5
-- **TP method:** ATR × 3.0
-- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **SL method:** latest HL/LH invalidation + 0.25×HTF ATR buffer, bounded to 0.75–2.5×entry ATR
+- **TP method:** preserves configured 2R from the actual structural risk
+- **ATR mult / R:R:** fallback 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
 - **Notes:** Abs ATR floor 0.4%
 
@@ -146,21 +154,30 @@ Trades **pullbacks to established swing structure** on the HTF series.
 ### Entry sequence
 
 ```
-Classify Structure (uptrend/downtrend) → Pullback to HL/LH zone → Bounce/Reject confirm → signal
+Classify Structure (uptrend/downtrend) → HTF direction gate → Entry-TF HL/LH retest → Bounce/Reject confirm → signal
 ```
 
-1. **Swing structure** — HH/HL (uptrend) or LH/LL (downtrend) from pivot swings
-2. **Pullback tolerance** — price within `entryPullbackPct` / ATR of last swing low (LONG) or high (SHORT)
-3. **Entry confirm** on current bar:
+1. **Swing structure** — HH/HL (uptrend) or LH/LL (downtrend) from pivot swings. The latest confirmed high and low must point in the same direction; a latest LL/LH cannot be masked by an older vote majority.
+2. **HTF regime** — `SIDEWAYS` is rejected by default because Dow is a trend-following model; directional counter-trend signals remain blocked by `HTF_Mode.REQUIRED_ALIGN`.
+3. **Structure maturity** — Intraday waits one additional closed HTF bar after the pivot's causal `confirmedAt`.
+4. **Local acceptance** — Intraday requires entry-TF price and EMA50 slope to agree with the HTF direction.
+5. **Pullback + retest** — entry-TF close within `entryPullbackPct` / HTF ATR of last swing low (LONG) or high (SHORT), while the candle low/high reaches the level within `msLevelTouchAtrMult` × entry-TF ATR.
+6. **Entry confirm** on the current entry-TF bar:
    - LONG: `dow_hl_pullback_bounce`
    - SHORT: `dow_lh_rally_reject`
+
+The current close must remain on the valid side of HL/LH. A wick through the level is allowed only when the candle closes back through it. A candle that is merely inside the broad HTF zone, without a level retest, is rejected. A closed HTF candle can produce at most one signal; subsequent entry-TF bars are deduplicated until the HTF index advances. Intraday risk uses the HL/LH invalidation plus a bounded ATR buffer; if that structural risk is too tight or too wide, the trade is rejected rather than replaced with an entry-TF stop.
 
 Awaiting states do not open trades.
 
 ### Gate funnel
 
 - **Structure classification:** hard gate
+- **HTF sideways regime:** hard gate (`htf_sideways_regime`)
+- **Structure maturity:** Intraday hard gate (`structure_not_mature`)
+- **Local trend:** Intraday hard gate (`local_trend_misaligned`)
 - **Pullback to swing:** hard gate (no separate label)
+- **HL/LH retest:** hard gate (`awaiting_hl_retest`)
 - **Bounce/reject bar:** entry trigger
 - **Session filter:** **off** (`msSessionFilter: false`)
 - **ATR gate:** per-leg overrides
@@ -215,6 +232,7 @@ Pullback step has no separate label.
 ## AS-IS quirks
 
 - **Trend Surge umbrella**: MS wins stamp `winningComponent: "MARKET_STRUCTURE"`.
+- **Causal data contract**: backtest daily regime uses the prior closed daily candle; live/backtest HTF structure uses the last closed HTF candle.
 - **HH/HL Pattern label** same text for uptrend and downtrend structure.
 
 ---

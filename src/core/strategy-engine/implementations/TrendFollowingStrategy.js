@@ -72,7 +72,8 @@ class TrendFollowingStrategy extends StrategyBase {
       { key: "rejIndicators", label: "3. - Indicators unavailable" },
       { key: "rejHtfTrend", label: "4. - HTF trend gate" },
       { key: "rejBreakout", label: "5. - No Donchian breakout" },
-      { key: "rejChecklist", label: "6. - Entry checklist (ADX/vol)" },
+      { key: "rejBreakoutQuality", label: "6. - Breakout quality filter" },
+      { key: "rejChecklist", label: "7. - Entry checklist (ADX/vol)" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }

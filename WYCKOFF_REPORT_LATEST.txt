@@ -1,6 +1,6 @@
 WYCKOFF backtest report (latest — single file)
 
-C:\Users\USER\Documents\Development\be-quantara\backtest-reports\wyckoff\2026-08-19T04-47-31_BTCUSDT_12m_real_Scalping-Intraday-Swing_balanced.txt
+/Users/fahras/Documents/Homework/Bot Trading/be-bot-trading/backtest-reports/wyckoff/2026-09-25T17-51-38_BTCUSDT_12m_mock_Intraday_balanced.txt
 
-Trades : 157
-Generated : 2026-08-19T04:47:31.428Z
+Trades : 42
+Generated : 2026-09-25T17:51:38.449Z
