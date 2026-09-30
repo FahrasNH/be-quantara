@@ -57,9 +57,10 @@ describe("VSA Sprint 23 gates", () => {
 
   test("resolveVsaSwingGateFlags reads long-only + conf floor", () => {
     const flags = resolveVsaSwingGateFlags({
-      typeOverrides: { Swing: { vsaSwingLongOnly: true, vsaMinConfidenceSwing: 60 } },
+      typeOverrides: { Swing: { vsaSwingLongOnly: true, vsaSwingHtfAlignGate: true, vsaMinConfidenceSwing: 60 } },
     });
     assert.equal(flags.vsaSwingLongOnly, true);
+    assert.equal(flags.vsaSwingHtfAlignGate, true);
     assert.equal(flags.vsaMinConfidenceSwing, 60);
   });
 
@@ -130,36 +131,35 @@ describe("VSA Sprint 23 gates", () => {
     assert.equal(ablation.passed, 0);
   });
 
-  test("Intraday HTF overlay: flag SHORT×BULLISH (no hard block)", () => {
+  test("Intraday HTF alignment blocks SHORT×BULLISH", () => {
     const ablation = { rejHtfShortBullish: 0, passed: 0 };
     const gated = applyVsaEntryGates(
       { vote: "SHORT", confidence: 0.8, reason: "vsa_no_demand" },
       {
-        config: { tradeType: "Intraday", htfTrend: "BULLISH", vsaHtfAlignGate: true },
+        config: { tradeType: "Intraday", htfTrend: "BULLISH", vsaHtfAlignGate: true, vsaHtfHardAlignGate: true },
         ablation,
       },
     );
-    assert.equal(gated.vote, "SHORT");
-    assert.equal(gated.meta?.htfCounterTrend, true);
-    assert.equal(gated.meta?.vsaHtfConfidenceFlag, true);
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_intraday_htf_counter_trend");
     assert.equal(ablation.rejHtfShortBullish, 1);
   });
 
-  test("Intraday HTF overlay: flag STOPPING_VOLUME counter-trend (no block)", () => {
+  test("Intraday HTF alignment blocks LONG×BEARISH", () => {
     const ablation = { rejHtfStoppingCounter: 0 };
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.9, reason: "vsa_stopping_volume_low" },
       {
-        config: { tradeType: "Intraday", htfTrend: "BEARISH", vsaHtfAlignGate: true },
+        config: { tradeType: "Intraday", htfTrend: "BEARISH", vsaHtfAlignGate: true, vsaHtfHardAlignGate: true },
         ablation,
       },
     );
-    assert.equal(gated.vote, "LONG");
-    assert.equal(gated.meta?.htfCounterTrend, true);
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_intraday_htf_counter_trend");
     assert.equal(ablation.rejHtfStoppingCounter, 1);
   });
 
-  test("Intraday HTF overlay: flag LONG×BEARISH (no confidence penalty)", () => {
+  test("Intraday HTF alignment blocks LONG×BEARISH for non-climax tests", () => {
     const ablation = { rejHtfLongBearishPenalty: 0 };
     const gated = applyVsaEntryGates(
       { vote: "LONG", confidence: 0.8, reason: "vsa_no_supply" },
@@ -168,20 +168,21 @@ describe("VSA Sprint 23 gates", () => {
           tradeType: "Intraday",
           htfTrend: "BEARISH",
           vsaHtfAlignGate: true,
+          vsaHtfHardAlignGate: true,
           vsaHtfCounterPenalty: 0.5,
         },
         ablation,
       },
     );
-    assert.equal(gated.vote, "LONG");
-    assert.equal(gated.meta?.htfCounterTrend, true);
-    assert.equal(gated.meta?.vsaHtfConfidenceFlag, true);
+    assert.equal(gated.vote, "NEUTRAL");
+    assert.equal(gated.reason, "vsa_intraday_htf_counter_trend");
     assert.equal(ablation.rejHtfLongBearishPenalty, 1);
   });
 
   test("Intraday defaults enable HTF align gate; session filter OFF", () => {
     const ov = STRATEGIES.VOLUME_SPREAD_ANALYSIS.typeOverrides;
     assert.equal(ov.Intraday.vsaHtfAlignGate, true);
+    assert.equal(ov.Intraday.vsaHtfHardAlignGate, true);
     assert.equal(ov.Intraday.vsaHtfCounterPenalty, 0.5);
     assert.equal(ov.Intraday.vsaSessionFilter, false);
     assert.equal(ov.Intraday.noTradeSessions, undefined);

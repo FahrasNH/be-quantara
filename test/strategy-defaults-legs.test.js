@@ -33,6 +33,8 @@ const NON_SMC_KEYS = MULTI_LEG_KEYS.filter((k) => k !== "SMART_MONEY_CONCEPTS");
 
 const TF_PARENT_ONLY = [
   "donchianPeriod", "adxMinStrength", "htfRatio", "mtfRatio", "minVolRatio",
+  "tfRequireFreshBreakout",
+  "tfMtfLayerEnabled", "tfMinBreakoutBodyAtr",
   "tfHtfLayerEnabled", "tsCombinationMode", "tsUseStructureGate", "tsUseVwapPrecision",
   "tpMode", "grokConfirmMinEntry", "grokConfirmMinTp",
 ];
@@ -99,8 +101,13 @@ for (const key of MULTI_LEG_KEYS) {
   assert.ok(cfg.typeOverrides?.Intraday?.atrMinMult != null, `${key} Intraday atrMinMult`);
   assert.ok(cfg.typeOverrides?.Swing?.atrMinMult != null, `${key} Swing atrMinMult`);
   const scalp = cfg.typeOverrides.Scalping;
-  assert.equal(scalp.slAtrMult, SCALP_GEOMETRY.slAtrMult, `${key} Scalping slAtrMult`);
-  assert.equal(scalp.tpAtrMult, SCALP_GEOMETRY.tpAtrMult, `${key} Scalping tpAtrMult`);
+  if (key === "TREND_FOLLOWING") {
+    assert.equal(scalp.slAtrMult, 2.0, `${key} Scalping slAtrMult`);
+    assert.equal(scalp.tpAtrMult, 4.0, `${key} Scalping tpAtrMult`);
+  } else {
+    assert.equal(scalp.slAtrMult, SCALP_GEOMETRY.slAtrMult, `${key} Scalping slAtrMult`);
+    assert.equal(scalp.tpAtrMult, SCALP_GEOMETRY.tpAtrMult, `${key} Scalping tpAtrMult`);
+  }
   assert.equal(scalp.maxHoldHours, undefined, `${key} Scalping TIME_STOP OFF`);
   const intraday = cfg.typeOverrides.Intraday;
   assert.equal(intraday.maxHoldHours, undefined, `${key} Intraday TIME_STOP OFF`);
@@ -131,6 +138,12 @@ assert.equal(STRATEGIES.WYCKOFF.entryModel, "balanced");
 assert.equal(STRATEGIES.WYCKOFF.springLookback, 20);
 assert.equal(STRATEGIES.VOLUME_SPREAD_ANALYSIS.wideSpreadMult, 1.3);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.leftLook, 2);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.msMinBarsAfterConfirmation, 0);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Scalping.msEnabled, false);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msMinBarsAfterConfirmation, 1);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msRequireLocalTrendAlignment, true);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msUseStructureStop, true);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msMaxStopAtr, 2.5);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.vwapAtrMult, 0.5);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.amtScalpingShelved, true);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.typeOverrides.Scalping.amtScalpingShelved, true);
@@ -145,15 +158,25 @@ assert.equal(STRATEGIES.LIQUIDATION_SQUEEZE.bsLsWickLookback, 20);
 
 // ── Parents retain their specific knobs ──────────────────────────────────────
 assert.equal(STRATEGIES.TREND_FOLLOWING.donchianPeriod, 20);
+assert.equal(STRATEGIES.TREND_FOLLOWING.tfMtfLayerEnabled, true);
+assert.equal(STRATEGIES.TREND_FOLLOWING.tfMinBreakoutBodyAtr, 0);
+assert.equal(STRATEGIES.TREND_FOLLOWING.higherTf, "4h");
+assert.equal(STRATEGIES.TREND_FOLLOWING.entryMode, "maker");
+assert.equal(STRATEGIES.TREND_FOLLOWING.typeOverrides.Scalping.tfMtfInterval, "1h");
+assert.equal(STRATEGIES.TREND_FOLLOWING.typeOverrides.Scalping.adxMinStrength, 30);
+assert.equal(STRATEGIES.TREND_FOLLOWING.typeOverrides.Scalping.retestEntryEnabled, true);
+assert.equal(STRATEGIES.TREND_FOLLOWING.typeOverrides.Intraday.tfMtfInterval, "1h");
+assert.equal(STRATEGIES.TREND_FOLLOWING.typeOverrides.Intraday.adxMinStrength, 35);
+assert.equal(STRATEGIES.TREND_FOLLOWING.typeOverrides.Intraday.retestEntryEnabled, true);
 assert.equal(STRATEGIES.MEAN_REVERSION.mdAdxGateEnabled, true);
 assert.equal(STRATEGIES.BREAKOUT_RETEST.lookbackBars, 20);
 
 const smc = STRATEGIES.SMART_MONEY_CONCEPTS;
 assert.equal(smc.enabledComponents?.join(","), "Scalping,Intraday,Swing");
-assert.equal(smc.typeOverrides.Scalping.smcMinConfidenceA, 40);
+assert.equal(smc.typeOverrides.Scalping.smcMinConfidenceA, 50);
 assert.equal(smc.typeOverrides.Scalping.smcSweepVolMult, 1.2);
-assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceB, 80);
-assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceIntraday, 80);
+assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceB, 60);
+assert.equal(smc.typeOverrides.Intraday.smcMinConfidenceIntraday, 60);
 assert.equal(smc.typeOverrides.Intraday.smcPivotStructure, true);
 assert.equal(smc.typeOverrides.Intraday.smcBlockAllInChop, true);
 assert.equal(smc.typeOverrides.Intraday.smcSessionFilter, false);

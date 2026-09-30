@@ -84,8 +84,11 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
     // Sprint 16 edge discovery: absolute ATR% floor (also enforced atop relative gate)
     atrMinMult: 0.287,
-    smcMinConfidenceScalping: 40,
-    smcMinConfidenceA: 40,
+    // Use the canonical graded score, but keep a viable research sample. A
+    // 75+ floor was too sparse on the current BTC tape; calibration must be
+    // done walk-forward rather than by forcing the leg to zero trades.
+    smcMinConfidenceScalping: 50,
+    smcMinConfidenceA: 50,
     smcSweepVolMult: 1.2,
     // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0
     slAtrMult: 1.5,
@@ -94,13 +97,23 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     smcSessionFilter: false,
     smcBlockLongInChop: true,
     smcRequireObRetest: true,
+    // A reversal setup is invalid when it fights the confirmed 1h direction.
+    smcHtfHardBlock: true,
+    // A close inside an FVG is not a reversal confirmation. Require the
+    // entry candle to reject the mitigation level and close back in direction.
+    smcRejectionEntry: true,
+    smcRejectionWickRatio: 0.5,
+    // Require complete 5m sweep/CHoCH/displacement structure before entry.
+    validateEntryTFStructure: true,
   },
   Intraday: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,
     ...INTRADAY_HOLD,
-    // Sprint 22: BNB 2-window threshold sweep — edge robust only at conf≥80 (PF 1.33/1.33)
-    smcMinConfidenceIntraday: 80,
-    smcMinConfidenceB: 80,
+    // Canonical graded-score gate. The former 80 floor was calibrated on the
+    // pre-canonical sequence score and becomes effectively no-trade after the
+    // score alignment; 60 keeps a testable sample for walk-forward validation.
+    smcMinConfidenceIntraday: 60,
+    smcMinConfidenceB: 60,
     // Sprint 22: enable pivot-structure OB leg (was default false → OB confluence 100% dead)
     smcPivotStructure: true,
     // Explicit geometry — Planned RR ~2.0 (matches ~1.8 realized structure-SL on BNB)
@@ -110,14 +123,29 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     smcSessionFilter: false,
     // Sprint 22: both sides lose in CHOP on Intraday — block all entries (not Scalping LONG-only)
     smcBlockAllInChop: true,
+    smcHtfHardBlock: true,
+    // Use the same causal rejection confirmation as Scalping. Without this,
+    // Intraday still enters while price is slicing through the FVG.
+    smcRejectionEntry: true,
+    smcRejectionWickRatio: 0.4,
+    // The shared sequence is too permissive for 15m. Require directional 1h
+    // regime and an independent slower 15m structure confirmation.
+    regimeMappingStrict: true,
+    structureConfirmValidate: true,
     // smcSweepVolMult intentionally unset — Scalping floor (1.2) hurts Intraday PF (Sprint 22 ablation)
   },
   Swing: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Swing,
     ...SWING_HOLD,
+    // Full-history forensics: Swing's VOLATILE entry-TF bucket had PF 0.77
+    // and contributed the majority of the 10y loss. Keep the leg focused on
+    // NORMAL/STRONG_TREND until a volatility-specific entry model exists.
+    smcBlockVolatile: true,
     // Explicit geometry — Planned RR ~3.0 (longer hold needs larger payoff)
     slAtrMult: 1.2,
     tpAtrMult: 3.6,
+    // Reject 4h entries that never retest the structural OB/FVG zone.
+    smcRequireObRetest: true,
   },
 });
 
@@ -137,9 +165,7 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     // Fix #4 REVERTED (Sprint 23 post-WF): relative gate unlocked 4–7× trades on
     // sub-0.4% ATR quiet legs with no gross edge — fees drove −89% NET (0/3 BLOCK).
     // Absolute 0.4% floor restored; pre-fix WF was mixed but survivable (+0.7/−38/−26%).
-    // CONTEXT_ONLY overlay — flags counter-HTF in meta; no hard directional block (HTF_Mode).
     vsaHtfAlignGate: true,
-    vsaHtfHardAlignGate: true,
     vsaHtfHardAlignGate: true,
     // VSA sequence is a reversal setup; HTF sideways has no directional
     // context and was the weakest 10-year bucket (PF 0.71).
@@ -151,14 +177,13 @@ const VSA_LEG_TYPE_OVERRIDES = Object.freeze({
     vsaHtfCounterPenalty: 0.5,
     // Session filter OFF — London block removed
     vsaSessionFilter: false,
-    // Fix #3: confirmation-bar detector v2 (alt: htf_proximity | sequence | hvsa | legacy)
-    vsaIntradayDetectorMode: "confirmation",
+    // V3: require a stopping-volume climax followed by a named VSA test.
+    vsaIntradayDetectorMode: "sequence",
   },
   Swing: {
     ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
     vsaSessionFilter: false,
     vsaSwingLongOnly: true,
-    vsaSwingHtfAlignGate: false,
     // Keep opt-in until a Swing-specific WF proves the weekly counter-trend
     // gate does not collapse the already sparse leg to zero trades.
     vsaSwingHtfAlignGate: false,
@@ -368,7 +393,9 @@ const STRATEGIES = {
     atrMinMult:    0.5,
     atrMaxMult:    8.0,
 
-    higherTf:      "1h",
+    // A 4h regime is materially less noisy than 1h for the low-TF legs.
+    // The middle layer remains 1h via the per-leg overrides below.
+    higherTf:      "4h",
     htfEmaFast:    9,
     htfEmaSlow:    21,
     sidewaysThresholdPct: 0.25,
@@ -396,15 +423,57 @@ const STRATEGIES = {
     // Spread DEFAULT (incl. Scalping atrGateRelative) — do not hardcode absolute-only floors.
     typeOverrides: {
       ...STANDARD_LEG_TYPE_OVERRIDES,
-      Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, tsSessionFilter: false },
+      Scalping: {
+        ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
+        tsSessionFilter: false,
+        // Edge repair: do not chase the breakout close. Wait for a causal
+        // 1-ATR pullback into the breakout zone, then use a wider 2/4 ATR
+        // geometry so 5m noise does not dominate the 4h trend signal.
+        higherTf: "4h",
+        tfMtfInterval: "1h",
+        tfRequireStrongTrend: true,
+        adxMinStrength: 30,
+        retestEntryEnabled: true,
+        retestPullbackAtr: 1.0,
+        retestTtlBars: 12,
+        slAtrMult: 2.0,
+        tpAtrMult: 4.0,
+        makerEntry: true,
+      },
+      Intraday: {
+        ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+        // Same stack as Scalping, with a shallower retest and stricter ADX
+        // because 15m entries otherwise admit too many late breakouts.
+        higherTf: "4h",
+        tfMtfInterval: "1h",
+        tfRequireStrongTrend: true,
+        adxMinStrength: 35,
+        retestEntryEnabled: true,
+        retestPullbackAtr: 0.5,
+        retestTtlBars: 12,
+        slAtrMult: 1.5,
+        tpAtrMult: 3.0,
+        makerEntry: true,
+      },
       Swing: { ...STANDARD_LEG_TYPE_OVERRIDES.Swing, adxMinStrength: 20 },
     },
+
+    // A retest fill is routed through the post-only/maker path in live mode;
+    // the backtest uses the same maker fee schedule for the resting entry.
+    entryMode:      "maker",
 
     adxMinStrength:    25,
     donchianPeriod:    20,
     htfRatio:          12,
     mtfRatio:          3,
     minVolRatio:       1.0,
+    // Only the first close crossing of a Donchian channel is tradeable.
+    // Set false only for a controlled ablation/backward-compatibility run.
+    tfRequireFreshBreakout: true,
+    // Causal MTF layer is enabled by default; set false only for an ablation.
+    tfMtfLayerEnabled: true,
+    // Optional candle-quality control; zero preserves the base breakout rule.
+    tfMinBreakoutBodyAtr: 0,
     tfHtfLayerEnabled: true,
 
     tsCombinationMode: "race",
@@ -921,9 +990,51 @@ STRATEGIES.MARKET_STRUCTURE = {
   minSwingPairs: 2,
   entryPullbackPct: 0.35,
   entryAtrMult: 0.75,
+  // DOW is a trend-following pullback model: do not enter while the
+  // configured HTF is SIDEWAYS, and require the entry candle to retest HL/LH.
+  msAllowHtfSideways: false,
+  msRequireLevelRetest: true,
+  msLevelTouchAtrMult: 0.5,
+  // A newly confirmed fractal is not yet a mature continuation setup. The
+  // Intraday leg waits one additional closed HTF bar after confirmation and
+  // requires entry-TF trend acceptance. Values remain per-leg so research can
+  // ablate them without changing the shared DOW component contract.
+  msMinBarsAfterConfirmation: 0,
+  msRequireLocalTrendAlignment: false,
+  msLocalTrendSlopeLookback: 1,
+  msUseStructureStop: false,
+  msStructureBufferAtr: 0.25,
+  msMinStopAtr: 0.75,
+  msMaxStopAtr: 2.5,
   typeOverrides: {
     ...STANDARD_LEG_TYPE_OVERRIDES,
-    Scalping: { ...STANDARD_LEG_TYPE_OVERRIDES.Scalping, msSessionFilter: false },
+    Scalping: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Scalping,
+      msSessionFilter: false,
+      msAllowHtfSideways: false,
+      msRequireLevelRetest: true,
+      // Full-tape research shows negative gross expectancy before fees; keep
+      // DOW Scalping out of live/backtest defaults until a separate 5m edge is
+      // proven. Override msEnabled=true only for controlled research runs.
+      msEnabled: false,
+    },
+    Intraday: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Intraday,
+      msAllowHtfSideways: false,
+      msRequireLevelRetest: true,
+      msMinBarsAfterConfirmation: 1,
+      msRequireLocalTrendAlignment: true,
+      msLocalTrendSlopeLookback: 2,
+      msUseStructureStop: true,
+      msStructureBufferAtr: 0.25,
+      msMinStopAtr: 0.75,
+      msMaxStopAtr: 2.5,
+    },
+    Swing: {
+      ...STANDARD_LEG_TYPE_OVERRIDES.Swing,
+      msAllowHtfSideways: false,
+      msRequireLevelRetest: true,
+    },
   },
 };
 STRATEGIES.AUCTION_MARKET_THEORY = {

@@ -16,7 +16,17 @@ const {
 } = require("../ts/marketStructureEntry");
 
 function structureConfigFrom(config = {}) {
-  const src = { ...DEFAULTS, ...(config.marketStructure || {}), ...config };
+  const base = { ...DEFAULTS, ...(config.marketStructure || {}), ...config };
+  const inferredTradeType = {
+    "5m": "Scalping",
+    "15m": "Intraday",
+    "4h": "Swing",
+  }[String(base.entryTf || base.interval || "").toLowerCase()];
+  const tradeType = base.tradeType || base.tradeTypeName || inferredTradeType;
+  // Live bots usually keep leg settings nested under typeOverrides, while
+  // the multi-TF backtest flattens the active leg onto cfg. Resolve both
+  // shapes here so DOW's maturity/local-trend/shelving gates stay in parity.
+  const src = { ...base, ...(base.typeOverrides?.[tradeType] || {}) };
   return {
     leftLook: src.leftLook,
     rightLook: src.rightLook,
@@ -24,6 +34,16 @@ function structureConfigFrom(config = {}) {
     minSwingPairs: src.minSwingPairs,
     entryPullbackPct: src.entryPullbackPct,
     entryAtrMult: src.entryAtrMult,
+    requireLevelRetest: src.msRequireLevelRetest ?? src.requireLevelRetest,
+    levelTouchAtrMult: src.msLevelTouchAtrMult ?? src.levelTouchAtrMult,
+    allowHtfSideways: src.msAllowHtfSideways ?? src.allowHtfSideways,
+    htfTrend: src.htfTrend,
+    requireStructureIntegrity: src.requireStructureIntegrity,
+    enabled: src.msEnabled ?? src.enabled,
+    minBarsAfterConfirmation: src.msMinBarsAfterConfirmation ?? src.minBarsAfterConfirmation,
+    requireLocalTrendAlignment: src.msRequireLocalTrendAlignment ?? src.requireLocalTrendAlignment,
+    localTrendSlopeLookback: src.msLocalTrendSlopeLookback ?? src.localTrendSlopeLookback,
+    tradeType,
   };
 }
 
@@ -34,11 +54,12 @@ class MarketStructureStrategy extends StrategyBase {
       label: "Dow Theory",
       description:
         "TS race participant: Dow Theory HH/HL pullback entries on HTF structure (independent of Trend Following).",
-      version: "2.0.0",
+      version: "2.3.0",
       enabled: true,
       ...config,
     });
     this._lastSignalMeta = null;
+    this._lastSignalHtfIdx = null;
     this._ablation = null;
   }
 
@@ -48,8 +69,14 @@ class MarketStructureStrategy extends StrategyBase {
       { key: "rejWarmup", label: "2. - Warmup insufficient" },
       { key: "rejStructure", label: "3. - Structure unclassified" },
       { key: "rejPrice", label: "4. - Price invalid" },
-      { key: "rejPullback", label: "5. - Pullback tolerance" },
-      { key: "rejBounceReject", label: "6. - HL bounce / LH rejection" },
+      { key: "rejHtfRegime", label: "5. - HTF sideways regime" },
+      { key: "rejDisabled", label: "6. - Component disabled" },
+      { key: "rejFreshStructure", label: "7. - Structure not mature" },
+      { key: "rejLocalTrend", label: "8. - Local trend misaligned" },
+      { key: "rejInvalidation", label: "9. - Structure invalidated" },
+      { key: "rejDuplicate", label: "10. - Duplicate HTF signal" },
+      { key: "rejPullback", label: "11. - Pullback tolerance" },
+      { key: "rejBounceReject", label: "12. - HL bounce / LH rejection" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
@@ -90,13 +117,50 @@ class MarketStructureStrategy extends StrategyBase {
     const lows = indicators.lowsHTF || indicators.lows || [];
     const closes = indicators.closesHTF || indicators.closes || [];
     const idx = Number.isInteger(config.htfIdx) ? config.htfIdx : lastIdx;
+    // HTF structure must use HTF volatility. Falling back to the entry-TF ATR
+    // is only valid when this strategy is genuinely running without HTF data;
+    // using entry-TF ATR at an HTF index distorts the pullback tolerance.
     const atrVal = indicators.atrHTF?.[idx] ?? indicators.atr?.[lastIdx] ?? null;
-    const result = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+    const usingHtfStructure = Array.isArray(indicators.highsHTF);
+    const entryCloses = indicators.closes || closes;
+    const entryOpens = indicators.opens || [];
+    const entryTimestamps = indicators.timestamps || [];
+    let result = evaluateMarketStructureEntry(highs, lows, closes, idx, {
       ...structureConfigFrom(config),
       atr: atrVal,
-      opens: indicators.opensHTF || indicators.opens || [],
+      // HTF highs/lows/closes remain the structural source; entry-TF close
+      // and open provide the live pullback bounce/rejection confirmation.
+      entryCloses: usingHtfStructure ? entryCloses : undefined,
+      entryOpens: usingHtfStructure ? entryOpens : undefined,
+      entryHighs: usingHtfStructure ? indicators.highs : undefined,
+      entryLows: usingHtfStructure ? indicators.lows : undefined,
+      entryAtr: usingHtfStructure ? indicators.atr?.[lastIdx] : undefined,
+      entryEmaTrend: indicators.emaTrend,
+      entryLastIdx: usingHtfStructure ? lastIdx : undefined,
+      htfTrend: config.htfTrend,
+      timestamps: entryTimestamps,
       ablation: this._ablation,
     });
+    // One HTF structure candle may span many entry-TF bars. Once a signal has
+    // fired for that closed HTF index, do not emit the same setup again on
+    // every bullish/bearish entry candle until structure advances.
+    if (result.signal && usingHtfStructure && this._lastSignalHtfIdx === idx) {
+      if (this._ablation) {
+        if (this._ablation.passed > 0) this._ablation.passed -= 1;
+        if (Object.prototype.hasOwnProperty.call(this._ablation, "rejDuplicate")) {
+          this._ablation.rejDuplicate += 1;
+        }
+      }
+      result = {
+        ...result,
+        vote: "NEUTRAL",
+        signal: null,
+        confidence: 0,
+        reason: "duplicate_htf_structure_signal",
+      };
+    } else if (result.signal && usingHtfStructure) {
+      this._lastSignalHtfIdx = idx;
+    }
     const nested = result.meta || {};
     const lastSH = nested.lastSwingHigh;
     const lastSL = nested.lastSwingLow;
@@ -144,6 +208,11 @@ class MarketStructureStrategy extends StrategyBase {
     return this._lastSignalMeta;
   }
 
+  resetSignalState() {
+    this._lastSignalHtfIdx = null;
+    this._lastSignalMeta = null;
+  }
+
   getRiskConfig() {
     return { riskPerTrade: 0.015, maxTradesPerDay: 3, slMultiplier: 1.5, tpMultiplier: 3.0 };
   }
@@ -151,14 +220,58 @@ class MarketStructureStrategy extends StrategyBase {
   calculateRiskConfig(entryPrice, atr, signal, _component, opts = {}) {
     const slMult = opts.slMultiplier ?? 1.5;
     const tpMult = opts.tpMultiplier ?? 3.0;
-    const slDist = atr * slMult;
-    const tpDist = atr * tpMult;
+    const fallbackSlDist = atr * slMult;
+    const useStructureStop = opts.msUseStructureStop === true;
+    const structureMeta = opts.structureMeta || opts.entryMeta || null;
+    const structuralLevel = signal === "LONG"
+      ? structureMeta?.lastSwingLow?.price
+      : structureMeta?.lastSwingHigh?.price;
+    const structureAtr = Number.isFinite(opts.structureAtr) && opts.structureAtr > 0
+      ? opts.structureAtr
+      : atr;
+    const structureBufferAtr = Math.max(0, Number(opts.msStructureBufferAtr ?? 0.25));
+    const structuralStop = signal === "LONG"
+      ? structuralLevel - structureAtr * structureBufferAtr
+      : structuralLevel + structureAtr * structureBufferAtr;
+    const structuralDist = signal === "LONG"
+      ? entryPrice - structuralStop
+      : structuralStop - entryPrice;
+    const minStopAtr = Math.max(0, Number(opts.msMinStopAtr ?? 0));
+    const maxStopAtr = Number.isFinite(opts.msMaxStopAtr)
+      ? Math.max(minStopAtr, Number(opts.msMaxStopAtr))
+      : Infinity;
+    const hasStructuralStopCandidate = useStructureStop
+      && Number.isFinite(structuralLevel)
+      && Number.isFinite(structuralStop)
+      && Number.isFinite(structuralDist)
+      && structuralDist > 0;
+
+    // Once a structural level is available, do not silently replace an
+    // invalidation stop with a tighter entry-ATR stop. That would recreate the
+    // exact HTF-vs-entry-TF geometry mismatch this risk path is meant to fix.
+    if (
+      hasStructuralStopCandidate
+      && (structuralDist < atr * minStopAtr || structuralDist > atr * maxStopAtr)
+    ) {
+      return null;
+    }
+    const hasValidStructuralStop = hasStructuralStopCandidate;
+
+    // Use the structural invalidation only when it is available and within a
+    // bounded ATR envelope. If no structural level is available, retain the
+    // legacy ATR geometry for backward-compatible callers.
+    const slDist = hasValidStructuralStop ? structuralDist : fallbackSlDist;
+    const tpDist = slDist * (tpMult / slMult);
     return {
-      stopLoss: signal === "LONG" ? entryPrice - slDist : entryPrice + slDist,
+      stopLoss: hasValidStructuralStop
+        ? structuralStop
+        : signal === "LONG" ? entryPrice - slDist : entryPrice + slDist,
       takeProfit: signal === "LONG" ? entryPrice + tpDist : entryPrice - tpDist,
       slDistance: slDist,
       tpDistance: tpDist,
-      riskReward: tpMult / slMult,
+      riskReward: slDist > 0 ? tpDist / slDist : 0,
+      stopSource: hasValidStructuralStop ? "market_structure" : "entry_atr",
+      structuralLevel: Number.isFinite(structuralLevel) ? structuralLevel : null,
     };
   }
 

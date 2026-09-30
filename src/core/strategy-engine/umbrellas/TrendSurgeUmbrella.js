@@ -409,6 +409,12 @@ class TrendSurgeUmbrella extends UmbrellaStrategy {
     if (this._tf && typeof this._tf.resetTrendState === "function") {
       this._tf.resetTrendState();
     }
+    if (this._ms && typeof this._ms.resetSignalState === "function") {
+      this._ms.resetSignalState();
+    }
+    if (this._vp && typeof this._vp.resetSignalState === "function") {
+      this._vp.resetSignalState();
+    }
   }
 
   calculateRiskConfig(entryPrice, atr, signal, component, opts) {

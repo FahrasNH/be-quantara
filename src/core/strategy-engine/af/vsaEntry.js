@@ -64,6 +64,7 @@ function resolveVsaSwingGateFlags(config = {}) {
     vsaSessionFilter: config.vsaSessionFilter ?? ov.vsaSessionFilter ?? false,
     noTradeSessions: config.noTradeSessions ?? ov.noTradeSessions ?? null,
     vsaSwingLongOnly: config.vsaSwingLongOnly ?? ov.vsaSwingLongOnly ?? false,
+    vsaSwingHtfAlignGate: config.vsaSwingHtfAlignGate ?? ov.vsaSwingHtfAlignGate ?? false,
     vsaMinConfidenceSwing: config.vsaMinConfidenceSwing ?? ov.vsaMinConfidenceSwing ?? null,
   };
 }
@@ -160,13 +161,26 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
   if (tradeTier === "Intraday") {
     const intradayFlags = resolveVsaIntradayGateFlags(config);
     const htfTrend = config.htfTrend ?? null;
-    // CONTEXT_ONLY: vsaHtfAlignGate = overlay flag only — no hard counter-trend block.
     if (intradayFlags.vsaHtfAlignGate === true && htfTrend) {
       const counter = isVsaCounterTrend(gated.vote, htfTrend);
       if (counter) {
         if (gated.vote === "SHORT" && htfTrend === "BULLISH") _abl("rejHtfShortBullish");
         if (isStoppingVolumeReason(gated.reason) && counter) _abl("rejHtfStoppingCounter");
         if (gated.vote === "LONG" && htfTrend === "BEARISH") _abl("rejHtfLongBearishPenalty");
+        if (intradayFlags.vsaHtfHardAlignGate === true) {
+          return {
+            vote: "NEUTRAL",
+            confidence: 0,
+            reason: "vsa_intraday_htf_counter_trend",
+            meta: {
+              ...(gated.meta || {}),
+              htfTrend,
+              htfCounterTrend: true,
+              htfOverlayOnly: false,
+              vsaHtfConfidenceFlag: true,
+            },
+          };
+        }
         gated = {
           ...gated,
           meta: {
@@ -207,6 +221,16 @@ function applyVsaEntryGates(result, { config = {}, candles = {}, ablation = null
 
   if (tradeTier === "Swing") {
     const swingFlags = resolveVsaSwingGateFlags(config);
+    const htfTrend = config.htfTrend ?? null;
+    if (swingFlags.vsaSwingHtfAlignGate === true && isVsaCounterTrend(gated.vote, htfTrend)) {
+      _abl("rejSwingHtfCounter");
+      return {
+        vote: "NEUTRAL",
+        confidence: 0,
+        reason: "vsa_swing_htf_counter_trend",
+        meta: { htfTrend, htfCounterTrend: true },
+      };
+    }
     if (swingFlags.vsaSwingLongOnly === true && gated.vote === "SHORT") {
       _abl("rejSwingShort");
       return { vote: "NEUTRAL", confidence: 0, reason: "vsa_swing_long_only" };

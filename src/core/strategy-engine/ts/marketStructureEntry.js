@@ -33,6 +33,28 @@ const DEFAULTS = {
   entryPullbackPct: 0.35,
   // Prefer ATR when available; fallback uses entryPullbackPct × swing span.
   entryAtrMult: 0.75,
+  // A Dow pullback is only actionable when the execution candle actually
+  // retests the structural level. Without this, any bullish/bearish close
+  // inside the broad HTF zone can masquerade as a bounce/rejection.
+  requireLevelRetest: true,
+  levelTouchAtrMult: 0.5,
+  // Trend-following structure has no positive expectancy in an unconfirmed
+  // HTF range. Keep the flag configurable for research/legacy callers, but
+  // the project default is fail-closed when an HTF label is present.
+  allowHtfSideways: false,
+  // A pullback is invalid once the current candle closes through the
+  // structural level. A wick through the level is still allowed when the
+  // candle reclaims it by close.
+  requireStructureIntegrity: true,
+  // A confirmed fractal is not automatically a mature continuation setup.
+  // `confirmedAt` is causal: the pivot is only usable after rightLook bars
+  // have closed, and this gate can require an additional closed HTF bar.
+  minBarsAfterConfirmation: 0,
+  // Optional entry-TF acceptance gate. It is deliberately opt-in so legacy
+  // callers and isolated unit tests retain the pure Dow structure behavior.
+  requireLocalTrendAlignment: false,
+  localTrendSlopeLookback: 1,
+  enabled: true,
 };
 
 /**
@@ -125,14 +147,30 @@ function classifyMarketStructure(highs, lows, lastIdx, config = {}) {
   const upVotes = hh + hl;
   const downVotes = lh + ll;
   const total = upVotes + downVotes;
+  const latestHigh = recentHighs[recentHighs.length - 1];
+  const priorHigh = recentHighs[recentHighs.length - 2];
+  const latestLow = recentLows[recentLows.length - 1];
+  const priorLow = recentLows[recentLows.length - 2];
+  // Dow structure is defined by the latest confirmed swing pair, not only by
+  // a majority vote across older swings. A latest LL must not be masked by
+  // older HH/HL votes (and vice versa).
+  const latestHighUp = latestHigh?.price > priorHigh?.price;
+  const latestHighDown = latestHigh?.price < priorHigh?.price;
+  const latestLowUp = latestLow?.price > priorLow?.price;
+  const latestLowDown = latestLow?.price < priorLow?.price;
+  // A Dow pair also needs causal ordering. A higher low must form after the
+  // prior high, and a lower high must form after the prior low. Price-only
+  // voting can otherwise combine two unrelated pivots from a noisy sequence.
+  const bullishSequence = priorHigh?.idx < latestLow?.idx;
+  const bearishSequence = priorLow?.idx < latestHigh?.idx;
 
   let structure = "unclear";
   let confidence = 0;
   if (total > 0) {
-    if (hh >= 1 && hl >= 1 && upVotes > downVotes) {
+    if (hh >= 1 && hl >= 1 && latestHighUp && latestLowUp && bullishSequence) {
       structure = "uptrend";
       confidence = upVotes / total;
-    } else if (lh >= 1 && ll >= 1 && downVotes > upVotes) {
+    } else if (lh >= 1 && ll >= 1 && latestHighDown && latestLowDown && bearishSequence) {
       structure = "downtrend";
       confidence = downVotes / total;
     } else {
@@ -151,6 +189,10 @@ function classifyMarketStructure(highs, lows, lastIdx, config = {}) {
       ll,
       lastSwingHigh: recentHighs[recentHighs.length - 1],
       lastSwingLow: recentLows[recentLows.length - 1],
+      priorSwingHigh: priorHigh,
+      priorSwingLow: priorLow,
+      bullishSequence,
+      bearishSequence,
     },
   };
 }
@@ -279,13 +321,25 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
   const _abl = (k) => { if (ablation && Object.prototype.hasOwnProperty.call(ablation, k)) ablation[k] += 1; };
   _abl("evaluated");
 
-  if (scalpingSessionBlocked(cfg, { timestamps: cfg.timestamps }, lastIdx, "msSessionFilter", applyMsSessionFilter, ablation)) {
+  const entryIdx = Number.isInteger(config.entryLastIdx) ? config.entryLastIdx : lastIdx;
+  if (scalpingSessionBlocked(cfg, { timestamps: cfg.timestamps }, entryIdx, "msSessionFilter", applyMsSessionFilter, ablation)) {
     return {
       vote: "NEUTRAL",
       signal: null,
       confidence: 0,
       reason: "ms_session_block",
       meta: {},
+    };
+  }
+
+  if (config.htfTrend === "SIDEWAYS" && cfg.allowHtfSideways === false) {
+    _abl("rejHtfRegime");
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "htf_sideways_regime",
+      meta: { htfTrend: config.htfTrend },
     };
   }
 
@@ -313,9 +367,55 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
     };
   }
 
-  const price = closes?.[lastIdx];
-  const prev = closes?.[lastIdx - 1];
-  const open = config.opens?.[lastIdx];
+  if (cfg.enabled === false) {
+    _abl("rejDisabled");
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "market_structure_disabled",
+      meta: { ...meta, structure },
+    };
+  }
+
+  const structuralPivot = structure === "uptrend"
+    ? meta?.lastSwingLow
+    : meta?.lastSwingHigh;
+  const barsSinceConfirmation = structuralPivot?.confirmedAt != null
+    ? lastIdx - structuralPivot.confirmedAt
+    : null;
+  const minBarsAfterConfirmation = Math.max(
+    0,
+    Number(cfg.minBarsAfterConfirmation ?? DEFAULTS.minBarsAfterConfirmation),
+  );
+  if (
+    minBarsAfterConfirmation > 0
+    && (barsSinceConfirmation == null || barsSinceConfirmation < minBarsAfterConfirmation)
+  ) {
+    _abl("rejFreshStructure");
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: "structure_not_mature",
+      meta: {
+        ...meta,
+        structure,
+        structuralPivot,
+        barsSinceConfirmation,
+        minBarsAfterConfirmation,
+      },
+    };
+  }
+
+  // Structure is classified on the HTF series, but confirmation must come
+  // from the current entry-TF candle. Using the last HTF close here lets a
+  // signal fire repeatedly on later entry bars at a stale price while the
+  // position is opened at a different market price.
+  const priceCloses = config.entryCloses || closes;
+  const price = priceCloses?.[entryIdx];
+  const prev = priceCloses?.[entryIdx - 1];
+  const open = config.entryOpens?.[entryIdx] ?? config.opens?.[lastIdx];
   if (price == null || !Number.isFinite(price)) {
     _abl("rejPrice");
     return {
@@ -326,6 +426,14 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
       meta: { ...meta, structure },
     };
   }
+
+  const entryHigh = config.entryHighs?.[entryIdx];
+  const entryLow = config.entryLows?.[entryIdx];
+  const entryAtr = config.entryAtr;
+  const hasEntryRange = Number.isFinite(entryHigh) && Number.isFinite(entryLow);
+  const touchTol = Number.isFinite(entryAtr) && entryAtr > 0
+    ? entryAtr * (cfg.levelTouchAtrMult ?? DEFAULTS.levelTouchAtrMult)
+    : 0;
 
   const lastSH = meta?.lastSwingHigh;
   const lastSL = meta?.lastSwingLow;
@@ -338,7 +446,7 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
       signal: null,
       confidence: 0,
       reason: "no_pullback_tolerance",
-      meta: { ...meta, structure },
+      meta: { ...meta, structure, structuralPivot, barsSinceConfirmation },
     };
   }
 
@@ -347,20 +455,85 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
   const reject = (open != null && Number.isFinite(open) && price < open)
     || (prev != null && Number.isFinite(prev) && price < prev);
 
+  const entryEmaTrend = config.entryEmaTrend;
+  const slopeLookback = Math.max(
+    1,
+    Number(cfg.localTrendSlopeLookback ?? DEFAULTS.localTrendSlopeLookback),
+  );
+  const localEma = entryEmaTrend?.[entryIdx];
+  const priorLocalEma = entryEmaTrend?.[entryIdx - slopeLookback];
+  const localEmaSlope = Number.isFinite(localEma) && Number.isFinite(priorLocalEma)
+    ? localEma - priorLocalEma
+    : null;
+  const localTrendAvailable = Number.isFinite(localEma) && Number.isFinite(localEmaSlope);
+  const localTrendAligned = structure === "uptrend"
+    ? localTrendAvailable && price >= localEma && localEmaSlope >= 0
+    : localTrendAvailable && price <= localEma && localEmaSlope <= 0;
+  if (cfg.requireLocalTrendAlignment === true && !localTrendAligned) {
+    _abl("rejLocalTrend");
+    return {
+      vote: "NEUTRAL",
+      signal: null,
+      confidence: 0,
+      reason: localTrendAvailable ? "local_trend_misaligned" : "local_trend_unavailable",
+      meta: {
+        ...meta,
+        structure,
+        structuralPivot,
+        barsSinceConfirmation,
+        localEma,
+        localEmaSlope,
+        localTrendAligned: false,
+      },
+    };
+  }
+
+  const entryMeta = {
+    ...meta,
+    structure,
+    structuralPivot,
+    barsSinceConfirmation,
+    localEma,
+    localEmaSlope,
+    localTrendAligned: localTrendAvailable ? localTrendAligned : null,
+  };
+
   if (structure === "uptrend" && lastSL?.price != null) {
-    const dist = Math.abs(price - lastSL.price);
+    // Do not treat a close below the latest HL as a pullback. The previous
+    // implementation used abs(price - HL), which admitted falling-knife
+    // longs after the bullish structure had already failed. A wick below HL
+    // is intentionally allowed when the close reclaims the level.
+    if (cfg.requireStructureIntegrity !== false && price < lastSL.price) {
+      _abl("rejInvalidation");
+      return {
+        vote: "NEUTRAL",
+        signal: null,
+        confidence: 0,
+        reason: "structure_invalidated_below_hl",
+        meta: {
+          ...entryMeta,
+          invalidationLevel: lastSL.price,
+          dist: price - lastSL.price,
+          lastSwingLow: lastSL,
+        },
+      };
+    }
+    const dist = price - lastSL.price;
     const prevDist = prev != null ? Math.abs(prev - lastSL.price) : Infinity;
     const near = dist <= tol;
+    const retest = !hasEntryRange || cfg.requireLevelRetest === false
+      ? true
+      : entryLow <= lastSL.price + touchTol;
     // Edge: enter the HL zone this bar, or bounce while already near.
     const edge = near && (prevDist > tol || bounce);
-    if (edge && bounce) {
+    if (edge && bounce && retest) {
       _abl("passed");
       return {
         vote: "LONG",
         signal: "LONG",
         confidence: Math.min(1, 0.55 + confidence * 0.4),
         reason: "dow_hl_pullback_bounce",
-        meta: { ...meta, structure, tol, dist, lastSwingLow: lastSL },
+        meta: { ...entryMeta, tol, dist, lastSwingLow: lastSL },
       };
     }
     _abl("rejBounceReject");
@@ -368,24 +541,44 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
       vote: "NEUTRAL",
       signal: null,
       confidence: 0,
-      reason: near ? "awaiting_hl_bounce" : "awaiting_hl_pullback",
-      meta: { ...meta, structure, tol, dist },
+      reason: !retest ? "awaiting_hl_retest" : (near ? "awaiting_hl_bounce" : "awaiting_hl_pullback"),
+      meta: { ...entryMeta, tol, dist, touchTol, retest },
     };
   }
 
   if (structure === "downtrend" && lastSH?.price != null) {
-    const dist = Math.abs(price - lastSH.price);
+    // Symmetric guard for bearish structure: a close above the latest LH is
+    // no longer a valid rally/rejection setup.
+    if (cfg.requireStructureIntegrity !== false && price > lastSH.price) {
+      _abl("rejInvalidation");
+      return {
+        vote: "NEUTRAL",
+        signal: null,
+        confidence: 0,
+        reason: "structure_invalidated_above_lh",
+        meta: {
+          ...entryMeta,
+          invalidationLevel: lastSH.price,
+          dist: lastSH.price - price,
+          lastSwingHigh: lastSH,
+        },
+      };
+    }
+    const dist = lastSH.price - price;
     const prevDist = prev != null ? Math.abs(prev - lastSH.price) : Infinity;
     const near = dist <= tol;
+    const retest = !hasEntryRange || cfg.requireLevelRetest === false
+      ? true
+      : entryHigh >= lastSH.price - touchTol;
     const edge = near && (prevDist > tol || reject);
-    if (edge && reject) {
+    if (edge && reject && retest) {
       _abl("passed");
       return {
         vote: "SHORT",
         signal: "SHORT",
         confidence: Math.min(1, 0.55 + confidence * 0.4),
         reason: "dow_lh_rally_reject",
-        meta: { ...meta, structure, tol, dist, lastSwingHigh: lastSH },
+        meta: { ...entryMeta, tol, dist, lastSwingHigh: lastSH },
       };
     }
     _abl("rejBounceReject");
@@ -393,8 +586,8 @@ function evaluateMarketStructureEntry(highs, lows, closes, lastIdx, config = {})
       vote: "NEUTRAL",
       signal: null,
       confidence: 0,
-      reason: near ? "awaiting_lh_reject" : "awaiting_lh_rally",
-      meta: { ...meta, structure, tol, dist },
+      reason: !retest ? "awaiting_lh_retest" : (near ? "awaiting_lh_reject" : "awaiting_lh_rally"),
+      meta: { ...entryMeta, tol, dist, touchTol, retest },
     };
   }
 

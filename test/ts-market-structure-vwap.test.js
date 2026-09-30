@@ -7,6 +7,7 @@
 const assert = require("assert");
 const {
   classifyMarketStructure,
+  findConfirmedSwingLows,
   evaluateMarketStructureGate,
   evaluateMarketStructureComponent,
   evaluateMarketStructureEntry,
@@ -20,6 +21,7 @@ const {
 } = require("#core/strategy-engine/ts/volumeProfileEntry.js");
 const { getActiveComponentsForTier, isActiveComponent } = require("../src/config/strategies");
 const TrendSurgeUmbrella = require("#core/strategy-engine/umbrellas/TrendSurgeUmbrella.js");
+const MarketStructureStrategy = require("#core/strategy-engine/implementations/MarketStructureStrategy.js");
 
 function test(name, fn) {
   try {
@@ -96,6 +98,36 @@ test("classifies downtrend LH+LL", () => {
   assert.strictEqual(r.structure, "downtrend");
 });
 
+test("latest lower low prevents an uptrend classification", () => {
+  const base = buildUptrendSeries();
+  const idx = base.highs.length - 1;
+  const initial = classifyMarketStructure(base.highs, base.lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const latestLowIdx = initial.meta.lastSwingLow.idx;
+  const lows = [...base.lows];
+  lows[latestLowIdx] = initial.meta.lastSwingLow.price - 20;
+  const swings = findConfirmedSwingLows(lows, idx, 2, 2, 120);
+  assert.ok(swings.length >= 2);
+  const r = classifyMarketStructure(base.highs, lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  assert.notStrictEqual(r.structure, "uptrend");
+});
+
+test("rejects price-vote structure when the swing sequence is out of order", () => {
+  const highs = [10, 12, 11, 13, 12, 14, 13, 15, 14, 16, 15, 17, 16, 18, 17];
+  const lows =  [8,  9,  7, 10,  8, 11,  9, 12, 10, 13, 11, 14, 12, 15, 13];
+  // Make the latest confirmed low older than the prior confirmed high. The
+  // price comparisons still look bullish, but the pivot sequence is not a
+  // causal HH → HL setup.
+  lows[10] = 12.5;
+  const r = classifyMarketStructure(highs, lows, highs.length - 1, {
+    leftLook: 1, rightLook: 1, scanBars: 20, minSwingPairs: 2,
+  });
+  assert.notStrictEqual(r.structure, "uptrend");
+});
+
 test("insufficient swings → unclear classification, gate passthrough", () => {
   const highs = [1, 2, 1.5, 2.2];
   const lows = [0.5, 1, 0.8, 1.1];
@@ -161,6 +193,252 @@ test("race entry fires LONG on HL pullback bounce", () => {
   });
   assert.strictEqual(r.signal, "LONG");
   assert.ok(r.reason.includes("hl_pullback") || r.reason.includes("bounce"));
+});
+
+test("rejects LONG after a close below the latest HL", () => {
+  const base = buildUptrendSeries();
+  const highs = [...base.highs];
+  const lows = [...base.lows];
+  const closes = [...base.closes];
+  const idx = closes.length - 1;
+  const classified = classifyMarketStructure(highs, lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const hl = classified.meta.lastSwingLow.price;
+  closes[idx - 1] = hl + 5;
+  closes[idx] = hl - 0.2;
+  highs[idx] = hl + 1;
+  lows[idx] = hl - 1;
+  const r = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+    atr: 2,
+    opens: closes.map((c, i) => (i === idx ? hl - 1 : c)),
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "structure_invalidated_below_hl");
+});
+
+test("rejects SHORT after a close above the latest LH", () => {
+  const base = buildDowntrendSeries();
+  const highs = [...base.highs];
+  const lows = [...base.lows];
+  const closes = highs.map((h, i) => (h + lows[i]) / 2);
+  const idx = closes.length - 1;
+  const classified = classifyMarketStructure(highs, lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const lh = classified.meta.lastSwingHigh.price;
+  closes[idx - 1] = lh - 5;
+  closes[idx] = lh + 0.2;
+  highs[idx] = lh + 1;
+  lows[idx] = lh - 1;
+  const r = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+    atr: 2,
+    opens: closes.map((c, i) => (i === idx ? lh + 1 : c)),
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "structure_invalidated_above_lh");
+});
+
+test("MarketStructureStrategy uses HTF structure, HTF ATR, and entry-TF confirmation", () => {
+  const base = buildUptrendSeries();
+  const highs = [...base.highs];
+  const lows = [...base.lows];
+  const htfCloses = [...base.closes];
+  const entryCloses = [...base.closes];
+  const idx = entryCloses.length - 1;
+  const classified = classifyMarketStructure(highs, lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const hl = classified.meta.lastSwingLow.price;
+  entryCloses[idx - 1] = hl + 5;
+  entryCloses[idx] = hl + 0.2;
+  highs[idx] = hl + 1;
+  lows[idx] = hl - 0.2;
+  const entryOpens = entryCloses.map((c, i) => (i === idx ? hl - 1 : c));
+  const strategy = new MarketStructureStrategy();
+  const indicators = {
+    highsHTF: highs,
+    lowsHTF: lows,
+    closesHTF: htfCloses,
+    // Deliberately provide a misleading HTF open; confirmation must use entry TF.
+    opensHTF: Array(htfCloses.length).fill(hl + 100),
+    closes: entryCloses,
+    opens: entryOpens,
+    highs: entryCloses.map((c, i) => (i === idx ? hl + 2 : c + 1)),
+    lows: entryCloses.map((c, i) => (i === idx ? hl - 1 : c - 1)),
+    timestamps: entryCloses.map((_, i) => Date.UTC(2026, 0, 1) + i * 3_600_000),
+    // Entry-TF ATR is deliberately unusable; the HTF ATR must win.
+    atr: Array(entryCloses.length).fill(0.01),
+    atrHTF: Array(htfCloses.length).fill(2),
+  };
+  const config = {
+    htfIdx: idx,
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  };
+  const signal = strategy.detectSignal(indicators, idx, config);
+  assert.strictEqual(signal, "LONG");
+  assert.strictEqual(strategy.getLastSignalMeta().atr, 2);
+  assert.strictEqual(strategy.detectSignal(indicators, idx, config), null);
+  assert.strictEqual(strategy.getLastSignalMeta().reason, "duplicate_htf_structure_signal");
+  strategy.resetSignalState();
+  assert.strictEqual(strategy.detectSignal(indicators, idx, config), "LONG");
+});
+
+test("DOW rejects HTF sideways and requires an entry-candle retest", () => {
+  const base = buildUptrendSeries();
+  const idx = base.closes.length - 1;
+  const classified = classifyMarketStructure(base.highs, base.lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const hl = classified.meta.lastSwingLow.price;
+  const strategy = new MarketStructureStrategy();
+  const indicators = {
+    highsHTF: [...base.highs],
+    lowsHTF: [...base.lows],
+    closesHTF: [...base.closes],
+    highs: [...base.highs],
+    lows: [...base.lows],
+    closes: [...base.closes],
+    opens: [...base.closes],
+    atr: Array(idx + 1).fill(2),
+    atrHTF: Array(idx + 1).fill(2),
+  };
+  indicators.closes[idx - 1] = hl + 5;
+  indicators.closes[idx] = hl + 1.5;
+  indicators.opens[idx] = hl;
+  indicators.highs[idx] = hl + 2;
+  indicators.lows[idx] = hl + 1.2;
+  assert.strictEqual(strategy.detectSignal(indicators, idx, { htfIdx: idx, htfTrend: "SIDEWAYS" }), null);
+  assert.strictEqual(strategy.getLastSignalMeta().reason, "htf_sideways_regime");
+
+  strategy.resetSignalState();
+  assert.strictEqual(strategy.detectSignal(indicators, idx, { htfIdx: idx, htfTrend: "BULLISH" }), null);
+  assert.strictEqual(strategy.getLastSignalMeta().reason, "awaiting_hl_retest");
+
+  indicators.lows[idx] = hl - 0.2;
+  assert.strictEqual(strategy.detectSignal(indicators, idx, { htfIdx: idx, htfTrend: "BULLISH" }), "LONG");
+});
+
+test("DOW blocks a freshly confirmed structure when maturity is required", () => {
+  const base = buildUptrendSeries();
+  const idx = base.closes.length - 1;
+  const classified = classifyMarketStructure(base.highs, base.lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const barsSince = idx - classified.meta.lastSwingLow.confirmedAt;
+  const r = evaluateMarketStructureEntry([...base.highs], [...base.lows], [...base.closes], idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+    atr: 2,
+    minBarsAfterConfirmation: barsSince + 1,
+  });
+  assert.strictEqual(r.signal, null);
+  assert.strictEqual(r.reason, "structure_not_mature");
+  assert.strictEqual(r.meta.barsSinceConfirmation, barsSince);
+});
+
+test("DOW local acceptance blocks counter-trend entry and accepts aligned entry", () => {
+  const base = buildUptrendSeries();
+  const highs = [...base.highs];
+  const lows = [...base.lows];
+  const closes = [...base.closes];
+  const idx = closes.length - 1;
+  const classified = classifyMarketStructure(highs, lows, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+  });
+  const hl = classified.meta.lastSwingLow.price;
+  closes[idx - 1] = hl + 5;
+  closes[idx] = hl + 0.2;
+  highs[idx] = hl + 1;
+  lows[idx] = hl - 0.1;
+  const ema = Array(closes.length).fill(hl + 10);
+  ema[idx - 2] = hl + 12;
+  const blocked = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+    atr: 2,
+    entryHighs: highs,
+    entryLows: lows,
+    entryOpens: closes.map((c, i) => (i === idx ? hl - 0.05 : c)),
+    entryEmaTrend: ema,
+    requireLocalTrendAlignment: true,
+    localTrendSlopeLookback: 2,
+  });
+  assert.strictEqual(blocked.signal, null);
+  assert.strictEqual(blocked.reason, "local_trend_misaligned");
+
+  ema[idx] = hl - 1;
+  ema[idx - 2] = hl - 2;
+  const accepted = evaluateMarketStructureEntry(highs, lows, closes, idx, {
+    leftLook: 2, rightLook: 2, scanBars: 120, minSwingPairs: 2,
+    atr: 2,
+    entryHighs: highs,
+    entryLows: lows,
+    entryOpens: closes.map((c, i) => (i === idx ? hl - 0.05 : c)),
+    entryEmaTrend: ema,
+    requireLocalTrendAlignment: true,
+    localTrendSlopeLookback: 2,
+  });
+  assert.strictEqual(accepted.signal, "LONG");
+  assert.strictEqual(accepted.meta.localTrendAligned, true);
+});
+
+test("DOW uses structural invalidation for Intraday risk when the stop is bounded", () => {
+  const strategy = new MarketStructureStrategy();
+  const risk = strategy.calculateRiskConfig(105, 2, "LONG", "Intraday", {
+    slMultiplier: 1.5,
+    tpMultiplier: 3,
+    msUseStructureStop: true,
+    msStructureBufferAtr: 0.25,
+    msMinStopAtr: 0.75,
+    msMaxStopAtr: 2.5,
+    structureMeta: { lastSwingLow: { price: 102 } },
+    structureAtr: 4,
+  });
+  assert.strictEqual(risk.stopSource, "market_structure");
+  assert.strictEqual(risk.stopLoss, 101);
+  assert.strictEqual(risk.slDistance, 4);
+  assert.strictEqual(risk.tpDistance, 8);
+  assert.strictEqual(risk.riskReward, 2);
+
+  const rejected = strategy.calculateRiskConfig(105, 2, "LONG", "Intraday", {
+    slMultiplier: 1.5,
+    tpMultiplier: 3,
+    msUseStructureStop: true,
+    msStructureBufferAtr: 0.25,
+    msMinStopAtr: 0.75,
+    msMaxStopAtr: 2.5,
+    structureMeta: { lastSwingLow: { price: 90 } },
+    structureAtr: 4,
+  });
+  assert.strictEqual(rejected, null);
+});
+
+test("DOW can explicitly shelve the Scalping leg", () => {
+  const base = buildUptrendSeries();
+  const strategy = new MarketStructureStrategy();
+  const indicators = {
+    highsHTF: [...base.highs],
+    lowsHTF: [...base.lows],
+    closesHTF: [...base.closes],
+    highs: [...base.highs],
+    lows: [...base.lows],
+    closes: [...base.closes],
+    opens: [...base.closes],
+    atr: Array(base.closes.length).fill(2),
+    atrHTF: Array(base.closes.length).fill(2),
+  };
+  const idx = base.closes.length - 1;
+  assert.strictEqual(
+    strategy.detectSignal(indicators, idx, {
+      htfIdx: idx,
+      htfTrend: "BULLISH",
+      tradeType: "Scalping",
+      typeOverrides: { Scalping: { msEnabled: false } },
+    }),
+    null,
+  );
+  assert.strictEqual(strategy.getLastSignalMeta().reason, "market_structure_disabled");
 });
 
 console.log("\n═══ Auction Market Theory / VWAP (TS-SUB-02) ═══");

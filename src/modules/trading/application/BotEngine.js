@@ -9,11 +9,12 @@ const { createExchangeClient, getExchangeInfo } = require("../../../infrastructu
 const { fetchCandlesWithCache, LTF_CACHE_TTL, HTF_CACHE_TTL } = require("../../../infrastructure/exchange/candleFetch");
 const { isRateLimitError } = require("../../../infrastructure/exchange/exchangeRateGate");
 const cfg = require("../../../config/env");
-const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getBreakoutRetestMeta, getBreakoutRetestInstance, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA, calcADX } = require("../../../core/analytics-engine/indicators");
+const { calcIndicators, detectSignal, detectHTFTrend, calcPositionSize, detectSidewaysBreakout, getAdaptiveFusionMeta, getBreakoutRetestMeta, getBreakoutRetestInstance, getTrendFollowingInstance, calcEMA, calcRSI, calcATR, calcSMA, calcADX, calcDonchian } = require("../../../core/analytics-engine/indicators");
+const { buildTrendFollowingMtfContext } = require("../../../core/strategy-engine/ts/trendFollowingMtf");
 // ── Quantara Patch v1.0 ─────────────────────────────────────────────────────
 const { isDuplicate } = require("../../../core/signal-engine/signalIdempotency");
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
-const { computeDailyTrendStrength, getRegimeForDate } = require("../../../core/signal-engine/dailyRegimeGate");
+const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const { getStrategy } = require("#config/strategyDefaults.js");
 const {
   requiresHtfFailClosed,
@@ -307,6 +308,10 @@ class BotEngine extends EventEmitter {
       capital:       0,
       startCapital:  0,
       lastSignal:    null,
+      // Trend Following retest state. A signal is held until a later closed
+      // candle touches the causal pullback level; it is never chased on the
+      // breakout close.
+      tfPendingOrder: null,
       checkCount:    0,
       errors:        0,
       lastTick:      null,
@@ -605,6 +610,13 @@ class BotEngine extends EventEmitter {
       closedTrades:   this.state.trades.length,
       openTradeCount: this.state.openPositions.length,
       lastSignal:     this.state.lastSignal,
+      tfPendingOrder:  this.state.tfPendingOrder
+        ? {
+            side: this.state.tfPendingOrder.side,
+            limit: this.state.tfPendingOrder.limit,
+            expiresAt: this.state.tfPendingOrder.expiresAt,
+          }
+        : null,
       checkCount:    this.state.checkCount,
       errors:        this.state.errors,
       lastTick:      this.state.lastTick,
@@ -698,6 +710,7 @@ class BotEngine extends EventEmitter {
     this.state.trades        = [];
     this.state.openPositions = [];
     this.state.lastSignal    = null;
+    this.state.tfPendingOrder = null;
     this.state.checkCount    = 0;
     this.state.errors        = 0;
 
@@ -1248,6 +1261,8 @@ class BotEngine extends EventEmitter {
         }
       }
 
+      const lastIdx  = candles.length - 2;
+
       // Daily regime (ADX-proxy on 1d) — SA TRANSITION gate + CSV export parity
       await this._refreshDailyRegime(candles[lastIdx]?.timestamp ?? Date.now());
 
@@ -1257,13 +1272,56 @@ class BotEngine extends EventEmitter {
         this.state.sidewaysBreakout = null;
       }
 
-      const lastIdx  = candles.length - 2;
       const price    = candles[lastIdx].close;
       const emaF     = indicators.emaFast[lastIdx];
       const emaS     = indicators.emaSlow[lastIdx];
       const emaTrend = this.config.emaTrend > 0 && indicators.emaTrend ? indicators.emaTrend[lastIdx] : null;
       const rsi      = indicators.rsi[lastIdx];
       const atr      = indicators.atr[lastIdx];
+
+      // Populate the Trend Following middle layer from closed entry candles.
+      // For the normal 5m TF bot this resamples 5m → 15m; 15m and 4h bots use
+      // their closed entry bars as the MTF layer.  The evaluator receives the
+      // last completed MTF index, never the currently forming bucket.
+      let tfMtfContext = null;
+      const normalizedStrategyKey = normalizeStrategyKey(
+        String(this.config.strategyKey || this.config.signalType || "").toUpperCase(),
+      );
+      if (normalizedStrategyKey === "TREND_FOLLOWING"
+          && this.config.tfMtfLayerEnabled !== false
+          && this.config.interval) {
+        const entryTf = this.config.entryTf || this.config.interval;
+        const tfLegOverride = this._resolveTrendFollowingLeg() || {};
+        const mtfInterval = this.config.tfMtfInterval
+          || tfLegOverride.tfMtfInterval
+          || (String(entryTf).toLowerCase() === "5m" ? "15m" : entryTf);
+        const closedCandles = candles.slice(0, lastIdx + 1);
+        tfMtfContext = buildTrendFollowingMtfContext(closedCandles, {
+          entryInterval: entryTf,
+          mtfInterval,
+        });
+        if (tfMtfContext?.candles?.length >= (this.config.donchianPeriod ?? 20) + 2) {
+          const mtf = tfMtfContext.candles;
+          indicators.closes15m = mtf.map(c => c.close);
+          indicators.highs15m = mtf.map(c => c.high);
+          indicators.lows15m = mtf.map(c => c.low);
+          indicators.opens15m = mtf.map(c => c.open);
+          indicators.volumes15m = mtf.map(c => c.volume || 0);
+          indicators.atr15m = calcATR(
+            indicators.highs15m,
+            indicators.lows15m,
+            indicators.closes15m,
+            this.config.atrPeriod || 14,
+          );
+          indicators.donchian15m = calcDonchian(
+            indicators.highs15m,
+            indicators.lows15m,
+            this.config.donchianPeriod ?? 20,
+          );
+        } else {
+          tfMtfContext = null;
+        }
+      }
 
       this.state.lastPrice = price;
 
@@ -1282,6 +1340,16 @@ class BotEngine extends EventEmitter {
       }
 
       await this._monitorOpenPositions(candles, price, atr);
+
+      // A pending Trend Following retest owns the entry slot until it fills or
+      // expires. This prevents the engine from chasing a second breakout while
+      // the first setup is still waiting for its pullback.
+      const tfPendingResult = await this._processTrendFollowingPending(
+        candles,
+        lastIdx,
+        price,
+        atr,
+      );
 
       // Lapor risk ke koordinator akun tiap tick (#5) — termasuk saat memegang
       // posisi — agar gate daily-loss agregat lintas-bot selalu pakai data segar.
@@ -1321,7 +1389,7 @@ class BotEngine extends EventEmitter {
         if (this._shouldLogDecision()) {
           this._log("info", "⏸ Legacy monitor-only — tidak buka posisi baru");
         }
-      } else if (this.state.openPositions.length < this.config.maxPositions) {
+      } else if (!tfPendingResult.active && this.state.openPositions.length < this.config.maxPositions) {
         // ── STEP 1: Risk gates (daily loss, cooldown, max trades, ATR, HTF) ──
         const atrLegOv = resolveAtrLegOverride(this.config, null);
         const atrBaselineArr = atrLegOv.atrGateRelative === true || this.config.atrGateRelative === true
@@ -1357,21 +1425,29 @@ class BotEngine extends EventEmitter {
 
             let htfTrendStrength = null;
             if (htfCandlesCache?.length >= 30) {
-              const hLast = htfCandlesCache.length - 1;
+              // Keep structure/ATR aligned with detectHTFTrend, which excludes
+              // the currently forming HTF candle from its decision.
+              const hLast = htfCandlesCache.length - 2;
               const hCloses = htfCandlesCache.map(c => c.close);
               const hHighs = htfCandlesCache.map(c => c.high);
               const hLows = htfCandlesCache.map(c => c.low);
+              const hOpens = htfCandlesCache.map(c => c.open);
+              const hTimestamps = htfCandlesCache.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
               const hEmaF = calcEMA(hCloses, this.config.htfEmaFast)[hLast];
               const hEmaS = calcEMA(hCloses, this.config.htfEmaSlow)[hLast];
-              const hAtr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14)[hLast];
+              const hAtrArr = calcATR(hHighs, hLows, hCloses, this.config.atrPeriod || 14);
+              const hAtr = hAtrArr[hLast];
               if (hAtr > 0) htfTrendStrength = Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
               // TS structure gate reads highsHTF/lowsHTF + htfIdx (closed HTF bar).
               indicators.highsHTF = hHighs;
               indicators.lowsHTF = hLows;
               indicators.closesHTF = hCloses;
+              indicators.opensHTF = hOpens;
+              indicators.timestampsHTF = hTimestamps;
+              indicators.atrHTF = hAtrArr;
             }
 
-            const signal = detectSignal(indicators, lastIdx, {
+            let signal = detectSignal(indicators, lastIdx, {
               ...this.config,
               rsiOverbought:    this.config.rsiOverbought,
               rsiOversold:      this.config.rsiOversold,
@@ -1397,7 +1473,8 @@ class BotEngine extends EventEmitter {
               htfTrendStrengthMin:  this.config.htfTrendStrengthMin,
               pairTier:             this.config.pairTier,
               tierOverrides:        this.config.tierOverrides,
-              htfIdx: htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 1 : undefined,
+              htfIdx: htfCandlesCache?.length >= 30 ? htfCandlesCache.length - 2 : undefined,
+              mtfIdx: tfMtfContext?.indexByEntry?.[lastIdx],
               tsCombinationMode:    this.config.tsCombinationMode || "race",
               tsUseStructureGate:   this.config.tsUseStructureGate,
               tsUseVwapPrecision:   this.config.tsUseVwapPrecision,
@@ -1405,6 +1482,20 @@ class BotEngine extends EventEmitter {
               selectedComponents:   this.config.selectedComponents || this.config.activeStrategyComponents,
               dailyRegime:          this.state.dailyRegime,
             });
+
+            // Backtest/live parity: low-TF Trend Following only trades when
+            // the lagged daily regime is a confirmed trend. Unknown remains
+            // fail-open here because the existing HTF availability gate below
+            // is the authoritative data-safety guard.
+            const tfLegOverride = this._resolveTrendFollowingLeg();
+            if (signal && tfLegOverride?.tfRequireStrongTrend === true
+                && this.state.dailyRegime !== "STRONG_TREND") {
+              this._log("info",
+                `[TF] ${signal} diblok — daily regime ${this.state.dailyRegime}, `
+                + "requires STRONG_TREND"
+              );
+              signal = null;
+            }
 
 
             // MR tanpa filter akan counter-trend terus saat strong bull/bear →
@@ -1416,20 +1507,28 @@ class BotEngine extends EventEmitter {
               try {
                 const htf = htfCandlesCache || await this._fetchHtfCandles();
                 if (htf && htf.length >= 30) {
+                  // Binance feeds include the currently forming HTF candle at
+                  // the tail. MR regime classification must use the last
+                  // completed candle, matching detectHTFTrend and backtest.
+                  const hLast = htf.length - 2;
                   const hCloses = htf.map(c => c.close);
                   const hHighs  = htf.map(c => c.high);
                   const hLows   = htf.map(c => c.low);
-                  const lastNN  = (a) => { for (let k = a.length - 1; k >= 0; k--) if (a[k] != null) return a[k]; return null; };
                   const atrArr  = calcATR(hHighs, hLows, hCloses, 14);
+                  const atrBaselineArr = calcSMA(atrArr.map(v => (v == null ? 0 : v)), 20);
                   const htfData = {
-                    emaFast:     lastNN(calcEMA(hCloses, 9)),
-                    emaSlow:     lastNN(calcEMA(hCloses, 21)),
-                    rsi:         lastNN(calcRSI(hCloses, 14)),
-                    close:       hCloses[hCloses.length - 1],
-                    atr:         lastNN(atrArr),
-                    atrBaseline: lastNN(calcSMA(atrArr.map(v => (v == null ? 0 : v)), 20)),
+                    emaFast:     calcEMA(hCloses, 9)[hLast],
+                    emaSlow:     calcEMA(hCloses, 21)[hLast],
+                    rsi:         calcRSI(hCloses, 14)[hLast],
+                    close:       hCloses[hLast],
+                    atr:         atrArr[hLast],
+                    atrBaseline: atrBaselineArr[hLast],
                   };
-                  const regimeCheck = meanReversionRegimeFilter({ direction: signal, htfData });
+                  const regimeCheck = meanReversionRegimeFilter({
+                    direction: signal,
+                    htfData,
+                    blockStrongTrend: this.config.mrBlockStrongTrend !== false,
+                  });
                   if (!regimeCheck.allowed) {
                     mrSignal = null;
                     this._log("info", `[MR] Entry diblokir (${regimeCheck.regime}): ${regimeCheck.reason}`);
@@ -1437,6 +1536,28 @@ class BotEngine extends EventEmitter {
                 }
               } catch (e) {
                 this._log("warn", `[MR] HTF regime check gagal — fail-open: ${e.message}`);
+              }
+            }
+
+            // Daily regime is a separate safety layer from the directional HTF
+            // filter. Mean Reversion must not fade a confirmed daily trend.
+            let mrRiskPerTradeOverride = null;
+            if (mrSignal && (isMeanReversionKey(this.config.strategyKey) || isMeanReversionKey(this.config.signalType))) {
+              const mrRegime = applyRegimeGate({
+                signal: mrSignal,
+                strategyKey: this.config.signalType || this.config.strategyKey,
+                regime: this.state.dailyRegime,
+                riskPerTrade: this.config.riskPerTrade ?? 0.01,
+                blockStrongTrend: this.config.mrBlockStrongTrend !== false,
+                blockTransition: this.config.mrBlockTransition === true,
+                mrChopRiskMultiplier: this.config.mrChopRiskMultiplier,
+                mrTransitionRiskMultiplier: this.config.mrTransitionRiskMultiplier,
+              });
+              if (!mrRegime.allow) {
+                mrSignal = null;
+                this._log("info", `[MR] Daily regime ${this.state.dailyRegime} diblok — ${mrRegime.reason}`);
+              } else {
+                mrRiskPerTradeOverride = mrRegime.riskPerTrade;
               }
             }
 
@@ -1582,7 +1703,43 @@ class BotEngine extends EventEmitter {
 
               // P1: For ADAPTIVE_FUSION, use component-aware SL/TP
               let signalOptions = {};
-              if (this.config.signalType === "ADAPTIVE_FUSION") {
+              const strategyMeta = typeof this.strategy?.getLastSignalMeta === "function"
+                ? this.strategy.getLastSignalMeta()
+                : null;
+              const marketStructureWinner = strategyMeta?.winningComponent === "MARKET_STRUCTURE";
+              if (marketStructureWinner && typeof this.strategy?.calculateRiskConfig === "function") {
+                // DOW's thesis is the HTF swing invalidation, not an arbitrary
+                // entry-TF ATR distance. Keep live risk geometry aligned with
+                // the structural stop used by the real backtest.
+                const msLeg = this._resolveTrendFollowingLeg?.()
+                  || { ...(this.config.typeOverrides?.[this.config.tradeType] || {}) };
+                const riskCfg = this.strategy.calculateRiskConfig(price, atr, filteredSignal, "MARKET_STRUCTURE", {
+                  marketCond: strategyMeta.marketCond || "NORMAL",
+                  slMultiplier: msLeg.slAtrMult ?? this.config.slAtrMult,
+                  tpMultiplier: msLeg.tpAtrMult ?? this.config.tpAtrMult,
+                  msUseStructureStop: msLeg.msUseStructureStop ?? this.config.msUseStructureStop,
+                  msStructureBufferAtr: msLeg.msStructureBufferAtr ?? this.config.msStructureBufferAtr,
+                  msMinStopAtr: msLeg.msMinStopAtr ?? this.config.msMinStopAtr,
+                  msMaxStopAtr: msLeg.msMaxStopAtr ?? this.config.msMaxStopAtr,
+                  structureMeta: strategyMeta,
+                  structureAtr: strategyMeta.atr ?? atr,
+                });
+                if (!riskCfg || !(riskCfg.slDistance > 0) || !(riskCfg.tpDistance > 0)) {
+                  this._log("info", `[DOW] ${filteredSignal} diblok — structural risk tidak valid`);
+                  filteredSignal = null;
+                } else {
+                  signalOptions.slDist = riskCfg.slDistance;
+                  signalOptions.tpDist = riskCfg.tpDistance;
+                  indicatorSnapshot.msStopSource = riskCfg.stopSource;
+                  indicatorSnapshot.msStructuralLevel = riskCfg.structuralLevel;
+                  indicatorSnapshot.msBarsSinceConfirmation = strategyMeta.barsSinceConfirmation ?? null;
+                  indicatorSnapshot.msLocalTrendAligned = strategyMeta.localTrendAligned ?? null;
+                  this._log("info",
+                    `[DOW] ${filteredSignal} | stop=${riskCfg.stopSource} | `
+                    + `RR 1:${riskCfg.riskReward.toFixed(2)}`
+                  );
+                }
+              } else if (this.config.signalType === "ADAPTIVE_FUSION") {
                 const meta = getAdaptiveFusionMeta();
                 if (meta) {
                   const SmartMoneyConceptsStrategy = require("../../../core/strategy-engine/implementations/SmartMoneyConceptsStrategy");
@@ -1633,6 +1790,38 @@ class BotEngine extends EventEmitter {
                   `[BR] RR 1:${riskCfg.riskReward} | SL×${riskCfg.slMultiplier} TP×${riskCfg.tpMultiplier}` +
                   ` | wait ${brMeta.barsSinceBreakout ?? "?"} bars | tpMode ${signalOptions.tpMode}`
                 );
+              } else if (isMeanReversionKey(this.config.signalType) || isMeanReversionKey(this.config.strategyKey)) {
+                const mrMeta = typeof this.strategy.getLastSignalMeta === "function"
+                  ? this.strategy.getLastSignalMeta()
+                  : null;
+                const component = mrMeta?.component || this.config.tradeType || this.config.tradeTypeName || "Intraday";
+                const typeOverride = this.config.typeOverrides?.[component] || {};
+                const riskCfg = typeof this.strategy.calculateRiskConfig === "function"
+                  ? this.strategy.calculateRiskConfig(price, atr, filteredSignal, component, {
+                    marketCond: mrMeta?.marketCond,
+                    slMultiplier: typeOverride.slAtrMult ?? this.config.slAtrMult,
+                    tpMultiplier: typeOverride.tpAtrMult ?? this.config.tpAtrMult,
+                    minRiskReward: typeOverride.minRiskReward
+                      ?? this.config.mrMinRiskReward
+                      ?? (component === "Scalping" ? this.config.mrMinRiskRewardA : this.config.mrMinRiskRewardB),
+                  })
+                  : null;
+                if (riskCfg && riskCfg.slDistance > 0 && riskCfg.tpDistance > 0) {
+                  signalOptions.slDist = riskCfg.slDistance;
+                  signalOptions.tpDist = riskCfg.tpDistance;
+                  indicatorSnapshot.mrComponent = component;
+                  indicatorSnapshot.mrMarketCond = mrMeta?.marketCond ?? null;
+                  indicatorSnapshot.mrConfirmation = mrMeta?.mrConfirmation ?? null;
+                  this._log(
+                    "info",
+                    `[MR] Component ${component} | RR 1:${riskCfg.riskReward} | ` +
+                    `TP source ${riskCfg.tpSource}`,
+                  );
+                }
+              }
+
+              if (mrRiskPerTradeOverride != null) {
+                signalOptions.riskPerTrade = mrRiskPerTradeOverride;
               }
 
               if (signalOptions.slDist == null) {
@@ -1667,7 +1856,17 @@ class BotEngine extends EventEmitter {
               if (dup) {
                 this._log("warn", `Duplicate signal dibuang — ${filteredSignal} @candle ${candleOpenTime}`);
               } else {
-                await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
+                const queuedRetest = this._queueTrendFollowingRetest(
+                  filteredSignal,
+                  price,
+                  atr,
+                  indicatorSnapshot,
+                  signalOptions,
+                  candleOpenTime,
+                );
+                if (!queuedRetest) {
+                  await this._handleSignal(filteredSignal, price, atr, indicatorSnapshot, signalOptions);
+                }
                 this.state.lastSignal = filteredSignal;
               }
             } else if (!filteredSignal) {
@@ -1795,8 +1994,13 @@ class BotEngine extends EventEmitter {
       });
       const dateMap = new Map();
       for (let i = 0; i < dailyCandles.length; i++) {
-        dateMap.set(new Date(dailyCandles[i].timestamp).toISOString().split("T")[0], i);
+        if (i > 0) {
+          dateMap.set(new Date(dailyCandles[i].timestamp).toISOString().split("T")[0], i - 1);
+        }
       }
+      const dailyLast = new Date(dailyCandles.at(-1).timestamp);
+      dailyLast.setUTCDate(dailyLast.getUTCDate() + 1);
+      dateMap.set(dailyLast.toISOString().split("T")[0], dailyCandles.length - 1);
       this._dailyTrendCache = { dailyTrend, dateMap };
       const entryDate = new Date(timestamp).toISOString().split("T")[0];
       this.state.dailyRegime = getRegimeForDate(entryDate, this._dailyTrendCache);
@@ -1822,6 +2026,150 @@ class BotEngine extends EventEmitter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Resolve the active Trend Following leg for the standalone live engine.
+   * Multi-type backtests already set `tradeType`; a single live bot usually
+   * exposes only its entry interval, so infer the leg from 5m/15m/4h.
+   */
+  _resolveTrendFollowingLeg() {
+    const strategyKey = normalizeStrategyKey(
+      String(this.config.strategyKey || "").toUpperCase(),
+    );
+    const signalKey = normalizeStrategyKey(
+      String(this.config.signalType || "").toUpperCase(),
+    );
+    const isTrendFollowing = strategyKey === "TREND_FOLLOWING"
+      || signalKey === "TREND_FOLLOWING"
+      || strategyKey === "TREND_SURGE";
+    if (!isTrendFollowing) return null;
+
+    const interval = String(this.config.entryTf || this.config.interval || "")
+      .toLowerCase();
+    const inferred = {
+      "5m": "Scalping",
+      "15m": "Intraday",
+      "4h": "Swing",
+    }[interval] || "Scalping";
+    const leg = this.config.tradeType
+      || this.config.tradeTypeName
+      || inferred;
+    return {
+      name: leg,
+      ...(this.config.typeOverrides?.[leg] || {}),
+    };
+  }
+
+  _trendFollowingIntervalMs() {
+    const interval = String(this.config.entryTf || this.config.interval || "5m")
+      .toLowerCase();
+    const minutes = {
+      "1m": 1,
+      "3m": 3,
+      "5m": 5,
+      "15m": 15,
+      "30m": 30,
+      "1h": 60,
+      "4h": 240,
+      "1d": 1440,
+    }[interval] || 5;
+    return minutes * 60_000;
+  }
+
+  /**
+   * Process a queued Trend Following retest against the latest CLOSED candle.
+   * The live path uses market-on-touch (optionally routed through the existing
+   * post-only maker helper); it never pretends that a historical limit fill is
+   * guaranteed. A drift guard cancels a stale touch instead of chasing price.
+   */
+  async _processTrendFollowingPending(candles, lastIdx, currentPrice, currentAtr) {
+    const pending = this.state.tfPendingOrder;
+    if (!pending) return { active: false, filled: false };
+
+    const candle = candles?.[lastIdx];
+    const candleTs = Number(candle?.timestamp ?? candle?.openTime ?? candle?.time);
+    if (!Number.isFinite(candleTs)) return { active: true, filled: false };
+
+    // Do not fill on the same candle that generated the breakout signal.
+    if (candleTs <= pending.signalCandleTimestamp) {
+      return { active: true, filled: false };
+    }
+
+    if (candleTs > pending.expiresAt) {
+      this.state.tfPendingOrder = null;
+      this.state.lastSignal = null;
+      this._log("info", `[TF-RETEST] ${pending.side} expired — no pullback, no chase`);
+      return { active: false, filled: false };
+    }
+
+    const touched = pending.side === "LONG"
+      ? Number(candle.low) <= pending.limit
+      : Number(candle.high) >= pending.limit;
+    if (!touched) return { active: true, filled: false };
+
+    const marketPrice = Number(this.state.lastPrice ?? currentPrice ?? pending.limit);
+    const fillPrice = this.config.dryRun ? pending.limit : marketPrice;
+    const drift = Math.abs(fillPrice - pending.limit);
+    const maxDrift = pending.atr * (pending.maxLiveEntryDriftAtr ?? 0.25);
+
+    if (!this.config.dryRun && (!Number.isFinite(fillPrice) || !(fillPrice > 0)
+        || !(maxDrift > 0) || drift > maxDrift)) {
+      this.state.tfPendingOrder = null;
+      this.state.lastSignal = null;
+      this._log("info",
+        `[TF-RETEST] ${pending.side} touched but moved ${pending.atr > 0
+          ? (drift / pending.atr).toFixed(2) : "?"} ATR from limit — cancelled`
+      );
+      return { active: false, filled: false };
+    }
+
+    // Clear before awaiting order placement so a slow exchange response cannot
+    // re-enter the same pending order on the next tick.
+    this.state.tfPendingOrder = null;
+    await this._handleSignal(
+      pending.side,
+      fillPrice,
+      pending.atr || currentAtr,
+      pending.indicatorSnapshot,
+      {
+        ...(pending.signalOptions || {}),
+        retestFill: true,
+        retestLimit: pending.limit,
+      },
+    );
+    return { active: false, filled: this.state.openPositions.length > 0 };
+  }
+
+  _queueTrendFollowingRetest(signal, price, atr, indicatorSnapshot, signalOptions, candleTimestamp) {
+    const leg = this._resolveTrendFollowingLeg();
+    if (!leg?.retestEntryEnabled || !(atr > 0) || !(price > 0)) return false;
+
+    const pullback = (Number(leg.retestPullbackAtr) || 0.5) * atr;
+    const limit = signal === "LONG" ? price - pullback : price + pullback;
+    const ttlBars = Math.max(1, Number(leg.retestTtlBars) || 12);
+    const ts = Number(candleTimestamp);
+    if (!(limit > 0) || !Number.isFinite(ts)) return false;
+
+    this.state.tfPendingOrder = {
+      side: signal,
+      limit,
+      atr,
+      signalCandleTimestamp: ts,
+      expiresAt: ts + ttlBars * this._trendFollowingIntervalMs(),
+      maxLiveEntryDriftAtr: Number(leg.maxLiveEntryDriftAtr) || 0.25,
+      indicatorSnapshot: {
+        ...(indicatorSnapshot || {}),
+        tfRetest: true,
+        tfRetestLimit: limit,
+      },
+      signalOptions: { ...(signalOptions || {}) },
+    };
+    this._log("info",
+      `[TF-RETEST] ${signal} queued @ $${fmtPx(limit)} `
+      + `(${leg.retestPullbackAtr ?? 0.5}×ATR pullback, ${ttlBars} bars TTL)`
+    );
+    return true;
   }
 
   /** Multi-TF candles untuk Grok AI prompt builder. */
@@ -2856,7 +3204,9 @@ class BotEngine extends EventEmitter {
         // lama merusak trigger price koin murah (mis. XPL → SL/TP jadi $0.09).
         // FEE-02: entryMode="maker" → rute limit post-only (fee maker) dengan
         // fallback taker bila tak ke-fill. Default taker → jalur lama identik.
+        const tfLeg = this._resolveTrendFollowingLeg();
         const useMaker = this.config.entryMode === "maker" &&
+          (!tfLeg || tfLeg.makerEntry === true) &&
           typeof this.client.openPositionMaker === "function";
         const order = useMaker
           ? await this.client.openPositionMaker(this.config.symbol, side, finalSize, "USDT", sl, tp)
@@ -2882,6 +3232,7 @@ class BotEngine extends EventEmitter {
 
         const pos = {
           id: order?.orderId, side: signal, entry: price, sl, tp, size: finalSize, openTime, atr, manualSLTP: false,
+          makerEntry: useMaker,
           marginReserved: finalMargin,
           tpMode: options.tpMode ?? this.config.tpMode ?? "full",
           slPlusPartial1Pct: options.slPlusPartial1Pct ?? this.config.slPlusPartial1Pct,
@@ -4496,10 +4847,10 @@ class BotEngine extends EventEmitter {
    * Fee Bitget dihitung atas notional penuh (harga × size), bukan margin.
    * Inilah penyebab gap "Net PnL gross" vs balance riil: fee tak pernah dikurangi.
    */
-  _estimateFee(entryPrice, exitPrice, size) {
+  _estimateFee(entryPrice, exitPrice, size, entryModeOverride = undefined) {
     return estimateRoundTripFee(entryPrice, exitPrice, size, {
       feeRate: this.config.feeRate,
-      entryMode: this.config.entryMode,
+      entryMode: entryModeOverride ?? this.config.entryMode,
       makerFeeRate: this.config.makerFeeRate,
     });
   }
@@ -4511,7 +4862,12 @@ class BotEngine extends EventEmitter {
    * @returns {Promise<number>} fee absolut (≥0)
    */
   async _resolveFee(pos, exitPrice, size) {
-    const estimate = this._estimateFee(pos.entry, exitPrice, size);
+    const entryMode = pos?.makerEntry === true
+      ? "maker"
+      : pos?.makerEntry === false
+        ? "taker"
+        : undefined;
+    const estimate = this._estimateFee(pos.entry, exitPrice, size, entryMode);
     if (this.config.dryRun || !this.client?.getRecentFillFee) return estimate;
     try {
       const openedAt = typeof pos.openTime === "number"

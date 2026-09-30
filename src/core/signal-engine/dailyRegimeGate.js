@@ -3,10 +3,11 @@
 //
 // Detects whether daily timeframe is in a strong trend or choppy/sideways regime.
 // Used by BOTH backtest engine (RealStrategyBacktestService) and live engine
-// (BotEngine) to gate momentum strategies (TREND_FOLLOWING, BREAKOUT_RETEST) and reduce size on choppy days.
+// (BotEngine) to gate momentum strategies and protect Mean Reversion from
+// strong-trend continuation risk.
 //
 // Principle: ADX-proxy = |EMA9−EMA21| / ATR
-//   - Strong trend (>0.8): full trading, all strategies active
+//   - Strong trend (>0.8): full trading for directional strategies; MR blocked
 //   - Chop (<0.5): TF & BR disabled, SMC size −50%
 //   - Transition (0.5-0.8): gradual degradation (not yet implemented; TBD)
 //
@@ -99,10 +100,23 @@ function getRegimeForDate(date, cache) {
  *   - blockLongInChop: Sprint 13 — when true, block LONG in CHOP for structure strategies
  *     (SHORT still allowed). Fail-open when false/undefined.
  *   - blockAllInChop: Sprint 22 — when true, block ALL sides in CHOP (Intraday tier).
+ *   - blockStrongTrend: Mean Reversion safety gate; defaults to true for MR.
+ *   - blockTransition: optional Mean Reversion transition gate.
  * @returns {Object} { allow: boolean, riskPerTrade: adjusted%, reason: string }
  */
 function applyRegimeGate(params) {
-  const { signal, strategyKey, regime, riskPerTrade, blockLongInChop, blockAllInChop } = params;
+  const {
+    signal,
+    strategyKey,
+    regime,
+    riskPerTrade,
+    blockLongInChop,
+    blockAllInChop,
+    blockStrongTrend,
+    blockTransition,
+    mrChopRiskMultiplier,
+    mrTransitionRiskMultiplier,
+  } = params;
 
   if (!signal || regime === "UNKNOWN") {
     return { allow: true, riskPerTrade, reason: "no_signal_or_unknown_regime" };
@@ -113,13 +127,27 @@ function applyRegimeGate(params) {
     || key === "BREAKOUT_RETEST" || key === "ICT_STYLE_TRADING" || key === "LIQUIDATION_SQUEEZE"
     || key === "BREAKOUT_STORM";
   const isStructure = key === "SMART_MONEY_CONCEPTS" || key === "WYCKOFF" || key === "VOLUME_SPREAD_ANALYSIS";
+  const isMeanReversion = key === "MEAN_REVERSION";
 
   if (regime === "STRONG_TREND") {
-    // Full trading, all strategies enabled
+    if (isMeanReversion && blockStrongTrend !== false) {
+      return { allow: false, riskPerTrade: 0, reason: "strong_trend_mean_reversion_blocked" };
+    }
+    // Full trading for strategies whose edge is directional.
     return { allow: true, riskPerTrade, reason: "strong_trend_full_size" };
   }
 
   if (regime === "CHOP") {
+    if (isMeanReversion) {
+      const multiplier = Number.isFinite(mrChopRiskMultiplier)
+        ? Math.max(0, mrChopRiskMultiplier)
+        : 0.5;
+      return {
+        allow: true,
+        riskPerTrade: riskPerTrade * multiplier,
+        reason: `chop_mean_reversion_${multiplier}x_size`,
+      };
+    }
     if (isMomentum) {
       // TF & BR disabled during chop (false breakout risk too high)
       return { allow: false, riskPerTrade: 0, reason: "chop_momentum_blocked" };
@@ -142,8 +170,13 @@ function applyRegimeGate(params) {
   }
 
   if (regime === "TRANSITION") {
-    // Gradual degradation: 75% of base risk (TBD — not yet in use; keep conservative)
-    return { allow: true, riskPerTrade: riskPerTrade * 0.75, reason: "transition_gradual" };
+    if (isMeanReversion && blockTransition === true) {
+      return { allow: false, riskPerTrade: 0, reason: "transition_mean_reversion_blocked" };
+    }
+    const multiplier = isMeanReversion && Number.isFinite(mrTransitionRiskMultiplier)
+      ? Math.max(0, mrTransitionRiskMultiplier)
+      : 0.75;
+    return { allow: true, riskPerTrade: riskPerTrade * multiplier, reason: "transition_gradual" };
   }
 
   return { allow: true, riskPerTrade, reason: "unknown_regime_fallback" };

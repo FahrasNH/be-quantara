@@ -24,6 +24,8 @@ describe("TrendFollowingStrategy", () => {
       expect(strategy.config.entryInterval).toBe("5m");
       expect(strategy.config.adxPeriod).toBe(14);
       expect(strategy.config.donchianPeriod).toBe(20);
+      expect(strategy.config.tfRequireFreshBreakout).toBe(true);
+      expect(strategy.config.tfMinBreakoutBodyAtr).toBe(0);
     });
 
     test("Strategy has required methods", () => {
@@ -187,6 +189,110 @@ describe("TrendFollowingStrategy", () => {
     // — TREND_FOLLOWING could never produce a signal, in live OR backtest, regardless of
     // data. Fixed by comparing against the PRIOR bar's channel.
     const { calcIndicators } = require("#core/analytics-engine/indicators.js");
+    const { calcDonchian } = require("#core/analytics-engine/indicators.js");
+    const {
+      isDonchianBroken,
+      checkBreakoutQuality,
+      evaluateTrendFollowingEntry,
+    } = require("#core/strategy-engine/ts/trendFollowingEntry.js");
+
+    test("requires a fresh crossing when the prior channel is available", () => {
+      expect(isDonchianBroken([100, 106], 105, 95, "LONG", 101, 96)).toBe(true);
+      // The current close is still above the channel, but the previous close
+      // had already broken the preceding channel: do not re-enter the same leg.
+      expect(isDonchianBroken([106, 107], 105, 95, "LONG", 101, 96)).toBe(false);
+      expect(isDonchianBroken([100, 94], 105, 95, "SHORT", 104, 99)).toBe(true);
+      expect(isDonchianBroken([94, 93], 105, 95, "SHORT", 104, 99)).toBe(false);
+    });
+
+    test("can disable the fresh-cross guard for controlled ablation", () => {
+      const candles = genRegimeCandles(1200, 17);
+      const indicators = calcIndicators(candles, {
+        emaFast: 9, emaSlow: 21, emaTrend: 50, rsiPeriod: 14, atrPeriod: 14,
+      });
+      let currentOnlySignals = 0;
+      for (let i = 50; i < candles.length; i++) {
+        if (strategy.detectSignal(indicators, i, { tfRequireFreshBreakout: false })) {
+          currentOnlySignals += 1;
+        }
+      }
+      expect(currentOnlySignals).toBeGreaterThan(0);
+    });
+
+    test("breakout quality filter accepts directional body and rejects weak/extended candles", () => {
+      expect(checkBreakoutQuality({
+        open: 100,
+        close: 102,
+        atr: 4,
+        channel: 100,
+        direction: "LONG",
+        minBodyAtr: 0.4,
+        maxExtensionAtr: 1,
+      }).valid).toBe(true);
+      expect(checkBreakoutQuality({
+        open: 101,
+        close: 102,
+        atr: 4,
+        channel: 100,
+        direction: "LONG",
+        minBodyAtr: 0.4,
+      }).valid).toBe(false);
+      expect(checkBreakoutQuality({
+        open: 100,
+        close: 106,
+        atr: 4,
+        channel: 100,
+        direction: "LONG",
+        maxExtensionAtr: 1,
+      }).valid).toBe(false);
+      expect(checkBreakoutQuality({
+        open: 102,
+        close: 100,
+        atr: 4,
+        channel: 100,
+        direction: "SHORT",
+        minBodyAtr: 0.4,
+      }).valid).toBe(true);
+    });
+
+    test("uses prior completed channel in the explicit MTF path", () => {
+      const candles = Array.from({ length: 60 }, (_, i) => ({
+        close: 100 + i * 0.1,
+        high: 100.2 + i * 0.1,
+        low: 99.8 + i * 0.1,
+        volume: 1000,
+      }));
+      const base = calcIndicators(candles, { emaFast: 2, emaSlow: 3, emaTrend: 5, atrPeriod: 2 });
+      const mtfCloses = [...Array(50).fill(100), 110];
+      const mtfHighs = mtfCloses.map((v) => v + 0.2);
+      const mtfLows = mtfCloses.map((v) => v - 0.2);
+      const dc = calcDonchian(mtfHighs, mtfLows, 20);
+      const indicators = {
+        ...base,
+        closesHTF: [100, 101, 102],
+        emaFastHTF: [99, 100, 101],
+        emaMidHTF: [98, 99, 100],
+        emaSlowHTF: [97, 98, 99],
+        adxHTF: [30, 30, 30],
+        closes15m: mtfCloses,
+        donchian15m: dc,
+      };
+      const result = evaluateTrendFollowingEntry({
+        indicators,
+        lastIdx: 50,
+        config: { htfIdx: 2, mtfRatio: 1, adxMinStrength: 25, minVolRatio: 0 },
+        trendState: null,
+      });
+      expect(result.signal).toBe("LONG");
+
+      const repeated = evaluateTrendFollowingEntry({
+        indicators,
+        lastIdx: 51,
+        config: { htfIdx: 2, mtfIdx: 50, adxMinStrength: 25, minVolRatio: 0 },
+        trendState: result.trendState,
+      });
+      expect(repeated.signal).toBeNull();
+    });
 
     // Regime-cycling generator (oscillates trend/pullback so RSI/volume gates can
     // stay inside their healthy bands, unlike a straight monotonic line which

@@ -26,7 +26,8 @@
 
 const fs = require("fs");
 const path = require("path");
-const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX } = require("../../../core/analytics-engine/indicators");
+const { calcIndicators, detectHTFTrend, calcEMA, calcATR, calcRSI, calcSMA, calcADX, calcDonchian } = require("../../../core/analytics-engine/indicators");
+const { buildTrendFollowingMtfContext } = require("../../../core/strategy-engine/ts/trendFollowingMtf");
 
 /**
  * O(1) HTF trend at closed HTF index j — parity with detectHTFTrend(htfCandles.slice(0, j + 1)).
@@ -86,6 +87,15 @@ const {
 
 const TRADE_LEG_NAMES = new Set(["Scalping", "Intraday", "Swing", "A", "B", "C"]);
 const LEG_ABC = Object.freeze({ A: "Scalping", B: "Intraday", C: "Swing" });
+
+// Trend Following's middle layer is 1h for low/intraday legs and the entry
+// 4h bar for Swing.  The backtest receives only the entry + HTF series, so the
+// middle layer is resampled causally from the entry candles below.
+const TF_MTF_INTERVAL_BY_TYPE = Object.freeze({
+  Scalping: "1h",
+  Intraday: "1h",
+  Swing: "4h",
+});
 
 /** Resolve Scalping/Intraday/Swing for typeOverrides (TIME_STOP, fees). position.component is the winning racer key, not the leg. */
 function resolvePositionTradeLeg(position, cfg = {}) {
@@ -436,6 +446,26 @@ function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null, tradeT
   const leg = tradeType ?? meta.tradeType ?? (
     TRADE_LEG_NAMES.has(meta.component) ? meta.component : null
   );
+
+  // SMC multi-leg detection already calculates the canonical graded score
+  // before applying the per-leg confidence floor. Preserve that exact score
+  // here. Re-scoring the merged meta loses sequence-only fields and produced
+  // a different (usually lower) score in CSV/RAG than the entry gate used.
+  const canonicalByLeg = meta.gradedConfidence || meta.gradedScores;
+  const canonicalScore = leg && canonicalByLeg
+    ? Number(canonicalByLeg[leg] ?? canonicalByLeg[leg === "Scalping" ? "A" : leg === "Intraday" ? "B" : "C"])
+    : NaN;
+  if (Number.isFinite(canonicalScore)) {
+    return {
+      ...meta,
+      winningComponent: key,
+      tradeType: leg,
+      component: leg ?? (TRADE_LEG_NAMES.has(meta.component) ? meta.component : key),
+      gradedScore: canonicalScore,
+      componentConfidence: canonicalScore,
+      scoringStrategyKey: key,
+    };
+  }
   return enrichMetaWithGradedScore({
     ...meta,
     winningComponent: key,
@@ -766,12 +796,19 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       low: dailyLows,
     });
 
-    // Build dateMap for quick lookup
+    // Build a causal dateMap: an intraday bar on date D may only use the
+    // previous fully closed daily candle (D-1). Mapping D to its own daily
+    // index leaks that day's final close/high/low into an intraday decision.
     const dailyDateMap = new Map();
-    for (let i = 0; i < opts.dailyCandles.length; i++) {
+    for (let i = 1; i < opts.dailyCandles.length; i++) {
       const dateStr = new Date(opts.dailyCandles[i].timestamp).toISOString().split("T")[0];
-      dailyDateMap.set(dateStr, i);
+      dailyDateMap.set(dateStr, i - 1);
     }
+    // If the feed has not published the current day's candle yet, allow the
+    // next calendar date to use the last fully closed candle as well.
+    const dailyLast = new Date(opts.dailyCandles.at(-1).timestamp);
+    dailyLast.setUTCDate(dailyLast.getUTCDate() + 1);
+    dailyDateMap.set(dailyLast.toISOString().split("T")[0], opts.dailyCandles.length - 1);
 
     dailyTrendCache = { dailyTrend, dateMap: dailyDateMap };
   }
@@ -2442,6 +2479,9 @@ async function runTripleTypeBacktest(opts = {}) {
     Intraday: "1h",
     Swing: "1w",
   };
+  const strategyTypeHtf = strategyKey === "TREND_FOLLOWING"
+    ? { Scalping: "4h", Intraday: "4h", Swing: "1w" }
+    : TYPE_TF_HTF;
   for (const tradeType of typeOrder) {
     const legOverrides = cfg.typeOverrides?.[tradeType];
     const effectiveTpMode = resolveEffectiveTpMode({
@@ -2463,7 +2503,7 @@ async function runTripleTypeBacktest(opts = {}) {
       typeOverrides: legOverrides ? { [tradeType]: legOverrides } : {},
       enabledComponents: [tradeType],
       smcEnabledComponents: [tradeType],
-      higherTf: legOverrides?.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
+      higherTf: legOverrides?.higherTf || strategyTypeHtf[tradeType] || cfg.higherTf,
       // Per-leg riskMult / riskPerTrade (typeOverrides) — scale one leg without
       // changing sibling shares from typeRiskWeights.
       riskPerTrade: applyLegRiskShare(
@@ -2745,6 +2785,39 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  // TREND_FOLLOWING declares an HTF → MTF → entry-TF stack.  Previously the
+  // real backtest populated only the HTF arrays, so the entry evaluator always
+  // fell back to an entry-TF Donchian channel.  Build the MTF layer from the
+  // supplied entry candles and expose only the last completed MTF index per
+  // entry bar; no forming MTF candle can leak into a signal.
+  let tfMtfContext = null;
+  if (isTFKey(strategyKey) && cfg.tfMtfLayerEnabled !== false && cfg.entryTf) {
+    const mtfInterval = cfg.tfMtfInterval
+      || TF_MTF_INTERVAL_BY_TYPE[cfg.tradeType]
+      || cfg.entryTf;
+    tfMtfContext = buildTrendFollowingMtfContext(entryCandles, {
+      entryInterval: cfg.entryTf,
+      mtfInterval,
+    });
+    if (tfMtfContext?.candles?.length >= (cfg.donchianPeriod ?? 20) + 2) {
+      const mtf = tfMtfContext.candles;
+      indicators.closes15m = mtf.map(c => c.close);
+      indicators.highs15m = mtf.map(c => c.high);
+      indicators.lows15m = mtf.map(c => c.low);
+      indicators.opens15m = mtf.map(c => c.open);
+      indicators.volumes15m = mtf.map(c => c.volume || 0);
+      indicators.atr15m = calcATR(
+        indicators.highs15m,
+        indicators.lows15m,
+        indicators.closes15m,
+        cfg.atrPeriod ?? 14,
+      );
+      indicators.donchian15m = calcDonchian(indicators.highs15m, indicators.lows15m, cfg.donchianPeriod ?? 20);
+    } else {
+      tfMtfContext = null;
+    }
+  }
+
   if (isSaKey(strategyKey) && opts.btcEntryCandles?.length) {
     const sym = String(opts.symbol || "").toUpperCase();
     if (sym && sym !== "BTCUSDT") {
@@ -2775,6 +2848,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     const htfCloses = htfCandles.map(c => c.close);
     const htfHighs  = htfCandles.map(c => c.high);
     const htfLows   = htfCandles.map(c => c.low);
+    const htfOpens  = htfCandles.map(c => c.open);
+    const htfTimestamps = htfCandles.map(c => c.timestamp ?? c.openTime ?? c.time ?? null);
     const htfAtrArr = calcATR(htfHighs, htfLows, htfCloses, 14);
     const htfAtrSma = calcSMA(htfAtrArr.filter(v => v != null), 20);
     // calcADX returns { adx, plusDI, minusDI } — keep only the adx ARRAY.
@@ -2789,6 +2864,8 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       atrSma: htfAtrSma, // rolling SMA of ATR for ratio check
       adx: htfAdx,
       close: htfCloses,
+      open: htfOpens,
+      timestamps: htfTimestamps,
     };
 
     // (TrendFollowingStrategy.detectSignal reads closesHTF, emaFastHTF, emaMidHTF,
@@ -2799,6 +2876,9 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       indicators.closesHTF = htfCloses;
       indicators.highsHTF = htfHighs;
       indicators.lowsHTF = htfLows;
+      indicators.opensHTF = htfOpens;
+      indicators.timestampsHTF = htfTimestamps;
+      indicators.atrHTF = htfAtrArr;
       indicators.emaFastHTF = htfIndicators.emaFast;
       indicators.emaMidHTF = htfIndicators.emaSlow;
       indicators.emaSlowHTF = calcEMA(htfCloses, 50); // 50-bar EMA for HTF slow
@@ -2846,10 +2926,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       high: opts.dailyCandles.map(c => c.high),
       low: opts.dailyCandles.map(c => c.low),
     });
+    // Causal mapping: date D is evaluated with the last closed daily candle,
+    // not with D's final OHLC values (which are unavailable intraday).
     const dMap = new Map();
-    for (let di = 0; di < opts.dailyCandles.length; di++) {
-      dMap.set(new Date(opts.dailyCandles[di].timestamp).toISOString().split("T")[0], di);
+    for (let di = 1; di < opts.dailyCandles.length; di++) {
+      dMap.set(new Date(opts.dailyCandles[di].timestamp).toISOString().split("T")[0], di - 1);
     }
+    const dLast = new Date(opts.dailyCandles.at(-1).timestamp);
+    dLast.setUTCDate(dLast.getUTCDate() + 1);
+    dMap.set(dLast.toISOString().split("T")[0], opts.dailyCandles.length - 1);
     dailyTrendCache = { dailyTrend: dTrend, dateMap: dMap };
   }
 
@@ -3299,6 +3384,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
       // so Layer 1 reads the previous (closed) bar. -1 when no closed bar yet →
       // strategy degrades to entry-TF fallback for the warmup bars.
       htfIdx: tfHtfLayer && htfPtr ? Math.max((htfPtr[i] ?? 0) - 1, -1) : undefined,
+      mtfIdx: tfMtfContext?.indexByEntry?.[i],
 
       // Sprint 12 TS race — selectedComponents = active racers; gate flags only
       // apply when tsCombinationMode is "gate"/"hybrid".
@@ -3372,11 +3458,19 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     // Apply daily regime gate — block momentum strategies during chop, reduce size for structure
+    const isMR = isMRKey(strategyKey);
     const regimeResult = applyRegimeGate({
       signal,
       strategyKey,
       regime: dailyRegime,
       riskPerTrade: cfg.riskPerTrade ?? 0.01,
+      // Mean Reversion is a fade model: a confirmed daily trend is a
+      // no-trade regime, not a full-size regime. Keep the override explicit
+      // so other strategy families retain their existing behaviour.
+      blockStrongTrend: isMR && cfg.mrBlockStrongTrend !== false,
+      blockTransition: isMR && cfg.mrBlockTransition === true,
+      mrChopRiskMultiplier: cfg.mrChopRiskMultiplier,
+      mrTransitionRiskMultiplier: cfg.mrTransitionRiskMultiplier,
     });
     if (!regimeResult.allow) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
@@ -3395,9 +3489,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
 
     // ── 5b. MEAN_REVERSION regime gate (REGIME_GATE — mirror BotEngine MR filter)
-    const isMR = isMRKey(strategyKey);
     if (isMR && htfIndicators && htfPtr) {
-      const j = htfPtr[i];
+      // htfPtr points at the HTF candle that is forming at entry time. The
+      // MR filter must consume the preceding closed candle, otherwise its
+      // final close/EMA/RSI leaks future information into the backtest.
+      const j = (htfPtr[i] ?? 0) - 1;
       if (j >= 0 && j < htfIndicators.emaFast.length) {
         // Assemble HTF data at bar j (aligned to entry bar i via htfPtr)
         const lastNonNull = (arr) => { for (let k = arr.length - 1; k >= 0; k--) if (arr[k] != null) return arr[k]; return null; };
@@ -3409,7 +3505,11 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
           atr: htfIndicators.atr[j],
           atrBaseline: htfIndicators.atrSma ?? lastNonNull(htfIndicators.atr.slice(0, j)),
         };
-        const mrCheck = meanReversionRegimeFilter({ direction: signal, htfData: htfDataAtJ });
+        const mrCheck = meanReversionRegimeFilter({
+          direction: signal,
+          htfData: htfDataAtJ,
+          blockStrongTrend: cfg.mrBlockStrongTrend !== false,
+        });
         if (!mrCheck.allowed) {
           diag.htfDirBlock += 1;
           equity.push({ date: isoOf(c), value: round2(capital) });
@@ -3486,6 +3586,15 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
         tpMode: cfg.tpMode,
         slMultiplier: slMult,
         tpMultiplier: tpMult,
+        minRiskReward: cfg.mrMinRiskReward ?? (
+          meta.component === "Scalping" ? cfg.mrMinRiskRewardA : cfg.mrMinRiskRewardB
+        ),
+        msUseStructureStop: typeOverride.msUseStructureStop ?? cfg.msUseStructureStop,
+        msStructureBufferAtr: typeOverride.msStructureBufferAtr ?? cfg.msStructureBufferAtr,
+        msMinStopAtr: typeOverride.msMinStopAtr ?? cfg.msMinStopAtr,
+        msMaxStopAtr: typeOverride.msMaxStopAtr ?? cfg.msMaxStopAtr,
+        structureMeta: meta,
+        structureAtr: meta?.atr ?? atr,
         breakoutLevel: meta.breakoutLevel,
         retestExtreme: meta.retestExtreme,
       });
@@ -3689,6 +3798,9 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
     Intraday: "1h",
     Swing: "1w",
   };
+  const strategyTypeHtf = strategyKey === "TREND_FOLLOWING"
+    ? { Scalping: "4h", Intraday: "4h", Swing: "1w" }
+    : TYPE_TF_HTF;
   for (const tradeType of filteredTypeOrder) {
 
     // typeOverrides[leg] (atrMult/riskReward) also reach slAtrMult/tpAtrMult.
@@ -3704,7 +3816,7 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
       ...legOv,
       // Explicit FE/API selection wins over the leg's strategy default.
       tpMode: effectiveTpMode,
-      higherTf: legOv.higherTf || TYPE_TF_HTF[tradeType] || cfg.higherTf,
+      higherTf: legOv.higherTf || strategyTypeHtf[tradeType] || cfg.higherTf,
       riskPerTrade: applyLegRiskShare(
         riskShareForType(tradeType, riskTypeOrder, cfg.riskPerTrade ?? 0.01, cfg.typeRiskWeights),
         legOv,

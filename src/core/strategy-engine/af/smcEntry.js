@@ -169,6 +169,8 @@ function resolveSmcSessionGateFlags(config = {}, tradeTier) {
 function resolveSwingGateFlags(config = {}) {
   const ov = config.typeOverrides?.Swing || {};
   return {
+    smcBlockVolatile:
+      config.smcBlockVolatile ?? ov.smcBlockVolatile ?? false,
     smcRequireObRetest:
       config.smcRequireObRetestSwing ?? ov.smcRequireObRetest ?? config.smcRequireObRetest ?? false,
     // Prefer Swing-specific keys — null = TIME_STOP OFF

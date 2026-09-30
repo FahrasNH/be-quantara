@@ -1,0 +1,1 @@
+/Users/fahras/Documents/Homework/Bot Trading/be-bot-trading/backtest-reports/mean-reversion/2026-09-30T12-19-43_BTCUSDT_10y_binance-spot_mean-reversion.txt

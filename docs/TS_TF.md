@@ -5,7 +5,7 @@
 **Engine SSOT**: `trendFollowingEntry.js` / `TrendFollowingStrategy.js` → `detectSignal`  
 **Config SSOT**: `strategyDefaults.js` → `TREND_FOLLOWING` + `STANDARD_LEG_TYPE_OVERRIDES`  
 **Live gate SSOT**: `liveTradeTypeGate.js` → default `["Intraday","Swing"]`  
-**Doc date**: 2026-07-25
+**Doc date**: 2026-09-26
 
 ---
 
@@ -25,9 +25,12 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 
 ### Entry thresholds (3-layer checklist)
 
-- **`adxMinStrength`:** 25 (ADX) — Floor trend strength (HTF)
+- **`adxMinStrength`:** 25 (parent fallback) — low-TF legs override this to 30/35
 - **`donchianPeriod`:** 20 (bar) — Channel breakout window
 - **`minVolRatio`:** 1.0 (× vol SMA) — Volume minimum on entry TF
+- **`tfRequireFreshBreakout`:** `true` — one fresh Donchian crossing per trend leg
+- **`tfMtfLayerEnabled`:** `true` — causal middle layer is populated by the live/backtest adapters
+- **`tfMinBreakoutBodyAtr`:** `0` — optional research filter; `0` keeps the base rule
 - **`tfHtfLayerEnabled`:** `true` (bool) — HTF trend + ADX layer active
 - **`htfRatio` / `mtfRatio`:** 12 / 3 (×) — Multi-TF stack ratios
 - **`tsUseStructureGate`:** `false` (bool) — Dow structure overlay (MARKET_STRUCTURE)
@@ -36,8 +39,8 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 
 ### Per trade type overrides
 
-- **Scalping:** `atrGateRelative: true`, `tsSessionFilter: false`, RR 2.0
-- **Intraday:** `atrMinMult: 0.4`
+- **Scalping:** `5m → 1h MTF → 4h HTF`, ADX ≥ 30, `tfRequireStrongTrend: true`, 1-ATR retest, SL/TP 2/4 ATR, maker entry
+- **Intraday:** `15m → 1h MTF → 4h HTF`, ADX ≥ 35, `tfRequireStrongTrend: true`, 0.5-ATR retest, SL/TP 1.5/3 ATR, maker entry
 - **Swing:** `atrMinMult: 0.8`, `adxMinStrength: 20`
 
 ---
@@ -84,21 +87,21 @@ Per-leg SL/TP: [`STANDARD_LEG_TYPE_OVERRIDES`](#risk--sltp-per-trade-type) + `Tr
 
 ### Scalping
 
-- **Entry TF / HTF:** 5m / 1h
-- **SL method:** ATR × 1.5 (`slAtrMult`)
-- **TP method:** ATR × 3.0 (`tpAtrMult`)
-- **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
+- **Entry TF / MTF / HTF:** 5m / 1h / 4h
+- **SL method:** ATR × 2.0 (`slAtrMult`)
+- **TP method:** ATR × 4.0 (`tpAtrMult`)
+- **ATR mult / R:R:** 2.0 / 4.0 → **RR 2.0**
 - **Risk %:** **1%**
-- **Notes:** Relative ATR gate; session filter OFF
+- **Notes:** Relative ATR gate; session filter OFF; wait up to 12 bars for a 1-ATR pullback
 
 ### Intraday
 
-- **Entry TF / HTF:** 15m / 1h
+- **Entry TF / MTF / HTF:** 15m / 1h / 4h
 - **SL method:** ATR × 1.5
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%
+- **Notes:** Abs ATR floor 0.4%; ADX ≥ 35; wait up to 12 bars for a 0.5-ATR pullback
 
 ### Swing
 
@@ -156,22 +159,25 @@ Three-layer trend-following checklist — every layer must pass.
 ### Layer sequence
 
 ```
-HTF Trend Align → Donchian Breakout → Entry-TF Pullback (EMA9 retest + ADX + volume) → signal
+HTF Trend Align → causal MTF Donchian Breakout → Entry-TF volume confirmation → retest fill
 ```
 
 1. **HTF trend** — EMA stack + ADX ≥ `adxMinStrength` on higher timeframe
-2. **Donchian breakout** — close breaks prior Donchian upper (LONG) or lower (SHORT) in HTF direction
+2. **Causal MTF breakout** — close breaks the prior completed MTF Donchian upper (LONG) or lower (SHORT) in HTF direction. The same completed MTF breakout is emitted once only; `tfRequireFreshBreakout` prevents re-entry while the preceding close is already outside its channel.
 3. **Entry-TF confirmation**:
    - ADX strength on HTF
-   - EMA9 retest held
    - Volume ≥ `minVolRatio`
-   - RSI not extreme against trend
+4. **Retest execution** — low-TF legs place a bounded pullback order after the
+   breakout. If price does not touch within `retestTtlBars`, the setup expires;
+   the engine does not chase the move.
+
+The current entry evaluator does not require an EMA9 retest or RSI band. `tfMinBreakoutBodyAtr` can optionally require a directional breakout candle body, but remains disabled by default until walk-forward validation supports a non-zero value.
 
 ### Gate funnel
 
 - **HTF trend + ADX:** hard gate
 - **Donchian break:** hard gate
-- **EMA9 retest + volume + RSI:** hard gate
+- **Retest + volume + ADX:** hard gate
 - **Session filter:** **off** (`tsSessionFilter: false`)
 - **ATR gate:** per-leg overrides (Swing ADX floor 20)
 - **Live money:** Scalping blocked; Intraday + Swing allowed
@@ -187,14 +193,14 @@ All checklist flags set **true** on every fill → label variance minimal.
 ### Scalping
 
 - **Entry TF:** 5m
-- **Trend / HTF TF:** 1h
+- **Middle / Trend TF:** 1h / 4h
 - **Real money:** Blocked
 - **Dry-run / backtest:** Allowed
 
 ### Intraday
 
 - **Entry TF:** 15m
-- **Trend / HTF TF:** 1h
+- **Middle / Trend TF:** 1h / 4h
 - **Real money:** Allowed
 - **Dry-run / backtest:** Allowed
 
@@ -205,7 +211,8 @@ All checklist flags set **true** on every fill → label variance minimal.
 - **Real money:** Allowed
 - **Dry-run / backtest:** Allowed
 
-Default live interval: `5m` (bot config); backtest uses `TYPE_TF` entry TF per leg.
+Default live interval: `5m` (bot config); backtest uses the strategy-owned
+Trend Following ladder (`5m/4h`, `15m/4h`, `4h/1w`) per leg.
 
 ---
 
@@ -213,7 +220,7 @@ Default live interval: `5m` (bot config); backtest uses `TYPE_TF` entry TF per l
 
 - **`interval`:** `5m` (TF)
 - **`checkInterval`:** `60_000` (ms)
-- **`higherTf`:** `1h` (HTF)
+- **`higherTf`:** `4h` (HTF)
 
 ---
 
