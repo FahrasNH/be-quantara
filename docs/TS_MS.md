@@ -34,14 +34,14 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 - **`msLevelTouchAtrMult`:** 0.5 (× entry-TF ATR) — Toleransi wick terhadap HL/LH
 - **Intraday maturity gate:** menunggu satu closed HTF bar setelah pivot terkonfirmasi
 - **Intraday local acceptance:** harga dan slope EMA50 entry-TF harus searah DOW
-- **Intraday structural risk:** SL berada di luar HL/LH dengan buffer ATR terbatas
+- **Intraday structural risk:** tersedia sebagai mode riset opt-in; default tetap entry-ATR sampai lolos walk-forward
 - **Scalping:** disabled by default (`msEnabled: false`) sampai edge 5m lolos walk-forward
 - **Causal swing order:** bullish pair requires prior HH before the latest HL; bearish pair requires prior LL before the latest LH
 
 ### Per trade type overrides
 
 - **Scalping:** DOW component disabled by default; enable only for controlled research
-- **Intraday:** `atrMinMult: 0.4`, HTF sideways blocked, level retest required, maturity gate, local alignment, structural SL
+- **Intraday:** `atrMinMult: 0.4`, HTF sideways blocked, level retest required, maturity gate, local alignment; structural SL opt-in
 - **Swing:** `atrMinMult: 0.8`, HTF sideways blocked, level retest required
 
 ---
@@ -80,12 +80,12 @@ Per-leg SL/TP: `MarketStructureStrategy.calculateRiskConfig` (default 1.5 / 3.0)
 
 ## Risk & SL/TP (per Trade Type)
 
-Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×HTF ATR. The entry candle must also retest HL/LH within `msLevelTouchAtrMult` 0.5×entry-TF ATR. Intraday SL uses the structural invalidation level plus `msStructureBufferAtr`, bounded by `msMinStopAtr`/`msMaxStopAtr`; other legs retain ATR geometry. Entry structure gates: [How Entry Works](#how-entry-works).
+Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×HTF ATR. The entry candle must also retest HL/LH within `msLevelTouchAtrMult` 0.5×entry-TF ATR. Intraday defaults to entry-TF ATR geometry; setting `msUseStructureStop: true` enables the structural invalidation level plus `msStructureBufferAtr`, bounded by `msMinStopAtr`/`msMaxStopAtr`, for controlled research. Entry structure gates: [How Entry Works](#how-entry-works).
 
 ### Scalping
 
 - **Entry TF / HTF:** 5m / 1h
-- **SL method:** ATR × 1.5
+- **SL method:** entry-TF ATR × 1.5 (default)
 - **TP method:** ATR × 3.0
 - **ATR mult / R:R:** 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **1%**
@@ -94,11 +94,11 @@ Pullback **entry zone** tolerance uses `entryAtrMult` 0.75×HTF ATR. The entry c
 ### Intraday
 
 - **Entry TF / HTF:** 15m / 1h
-- **SL method:** latest HL/LH invalidation + 0.25×HTF ATR buffer, bounded to 0.75–2.5×entry ATR
-- **TP method:** preserves configured 2R from the actual structural risk
+- **SL method:** entry-TF ATR × 1.5 by default; optional latest HL/LH invalidation + 0.25×HTF ATR buffer, bounded to 0.75–2.5×entry ATR
+- **TP method:** preserves configured 2R from the active SL geometry
 - **ATR mult / R:R:** fallback 1.5 / 3.0 → **RR 2.0**
 - **Risk %:** **2%**
-- **Notes:** Abs ATR floor 0.4%
+- **Notes:** Abs ATR floor 0.4%; structural stop is research opt-in
 
 ### Swing
 
@@ -166,7 +166,7 @@ Classify Structure (uptrend/downtrend) → HTF direction gate → Entry-TF HL/LH
    - LONG: `dow_hl_pullback_bounce`
    - SHORT: `dow_lh_rally_reject`
 
-The current close must remain on the valid side of HL/LH. A wick through the level is allowed only when the candle closes back through it. A candle that is merely inside the broad HTF zone, without a level retest, is rejected. A closed HTF candle can produce at most one signal; subsequent entry-TF bars are deduplicated until the HTF index advances. Intraday risk uses the HL/LH invalidation plus a bounded ATR buffer; if that structural risk is too tight or too wide, the trade is rejected rather than replaced with an entry-TF stop.
+The current close must remain on the valid side of HL/LH. A wick through the level is allowed only when the candle closes back through it. A candle that is merely inside the broad HTF zone, without a level retest, is rejected. A closed HTF candle can produce at most one signal; subsequent entry-TF bars are deduplicated until the HTF index advances. When `msUseStructureStop` is enabled, Intraday risk uses the HL/LH invalidation plus a bounded ATR buffer; if that structural risk is too tight or too wide, the trade is rejected rather than replaced with an entry-TF stop.
 
 Awaiting states do not open trades.
 

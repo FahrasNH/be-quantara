@@ -1025,7 +1025,11 @@ STRATEGIES.MARKET_STRUCTURE = {
       msMinBarsAfterConfirmation: 1,
       msRequireLocalTrendAlignment: true,
       msLocalTrendSlopeLookback: 2,
-      msUseStructureStop: true,
+      // Structural-stop wiring is available for controlled research, but the
+      // corrected full-tape replay did not validate it as an edge improvement.
+      // Keep live/default Intraday on the proven entry-ATR geometry until a
+      // walk-forward run supports promoting the structural stop.
+      msUseStructureStop: false,
       msStructureBufferAtr: 0.25,
       msMinStopAtr: 0.75,
       msMaxStopAtr: 2.5,

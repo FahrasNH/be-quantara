@@ -142,7 +142,7 @@ assert.equal(STRATEGIES.MARKET_STRUCTURE.msMinBarsAfterConfirmation, 0);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Scalping.msEnabled, false);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msMinBarsAfterConfirmation, 1);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msRequireLocalTrendAlignment, true);
-assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msUseStructureStop, true);
+assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msUseStructureStop, false);
 assert.equal(STRATEGIES.MARKET_STRUCTURE.typeOverrides.Intraday.msMaxStopAtr, 2.5);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.vwapAtrMult, 0.5);
 assert.equal(STRATEGIES.AUCTION_MARKET_THEORY.amtScalpingShelved, true);
