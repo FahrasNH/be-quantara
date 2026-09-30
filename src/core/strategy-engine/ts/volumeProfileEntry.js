@@ -189,6 +189,29 @@ function sessionStartIdx(timestamps, lastIdx, periodMs = MS_DAY) {
 }
 
 /**
+ * Locate the immediately preceding completed UTC day/week session.
+ *
+ * The old caller used `calculateSessionVwap(..., lastIdx - 1, periodMs)` and
+ * called that result `previousSession`. That is only a previous *snapshot* of
+ * the current session. AMT's documented previous levels are the last fully
+ * completed session, so resolve that window explicitly from the current
+ * session boundary.
+ */
+function previousSessionRange(timestamps, lastIdx, periodMs = MS_DAY) {
+  const currentStartIdx = sessionStartIdx(timestamps, lastIdx, periodMs);
+  const endIdx = currentStartIdx - 1;
+  if (endIdx < 0) {
+    return { startIdx: -1, endIdx: -1, sessionFound: false };
+  }
+  const startIdx = sessionStartIdx(timestamps, endIdx, periodMs);
+  return {
+    startIdx,
+    endIdx,
+    sessionFound: startIdx >= 0 && endIdx >= startIdx,
+  };
+}
+
+/**
  * Session-anchored VWAP up to lastIdx (inclusive).
  * Typical price = (H+L+C)/3.
  * @returns {{ vwap: number|null, bars: number, startIdx: number }}
@@ -210,6 +233,43 @@ function calculateSessionVwap(highs, lows, closes, volumes, timestamps, lastIdx,
   }
   if (vol <= 0) return { vwap: null, bars: 0, startIdx: start };
   return { vwap: pv / vol, bars: lastIdx - start + 1, startIdx: start };
+}
+
+/**
+ * VWAP for the immediately preceding completed UTC day/week.
+ * `sessionFound` distinguishes a real prior session from a short standalone
+ * fixture/initial history; callers may use a causal current-session fallback
+ * only when no completed session exists at all.
+ */
+function calculatePreviousSessionVwap(
+  highs,
+  lows,
+  closes,
+  volumes,
+  timestamps,
+  lastIdx,
+  periodMs = MS_DAY,
+) {
+  const range = previousSessionRange(timestamps, lastIdx, periodMs);
+  if (!range.sessionFound) {
+    return {
+      vwap: null,
+      bars: 0,
+      startIdx: range.startIdx,
+      endIdx: range.endIdx,
+      sessionFound: false,
+    };
+  }
+  const result = calculateSessionVwap(
+    highs,
+    lows,
+    closes,
+    volumes,
+    timestamps,
+    range.endIdx,
+    periodMs,
+  );
+  return { ...result, endIdx: range.endIdx, sessionFound: true };
 }
 
 /**
@@ -467,6 +527,9 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
   const { vwap, bars, startIdx } = calculateSessionVwap(
     highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
+  const previousSession = calculatePreviousSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs,
+  );
 
   if (bars < session.minSessionBars || vwap == null) {
     // Early session: do not block entries (insufficient VWAP/profile data).
@@ -479,12 +542,13 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
     };
   }
 
-  // Freeze VAH/VAL/POC at the previous completed candle. Including the entry
+  // Freeze VAH/VAL/POC at the previous completed session. Including the entry
   // candle in its own profile makes an extreme expand the range that is then
   // used to declare that same candle a "bounce" or "rejection".
-  const profileIdx = lastIdx - 1;
+  const profileStartIdx = previousSession.sessionFound ? previousSession.startIdx : startIdx;
+  const profileIdx = previousSession.sessionFound ? previousSession.endIdx : lastIdx - 1;
   const profile = buildVolumeProfile(
-    highs, lows, closes, volumes, startIdx, profileIdx, cfg.bins, cfg.valueAreaPct
+    highs, lows, closes, volumes, profileStartIdx, profileIdx, cfg.bins, cfg.valueAreaPct
   );
 
   const price = closes[lastIdx];
@@ -509,6 +573,10 @@ function evaluateVolumeProfilePrecision(indicators, lastIdx, direction, config =
     nearPoc,
     bars,
     startIdx,
+    previousSessionVwap: previousSession.vwap,
+    previousSessionStartIdx: previousSession.startIdx,
+    previousSessionEndIdx: previousSession.endIdx,
+    previousSessionSource: previousSession.sessionFound ? "completed" : "current_session_snapshot",
     tolMode: mode,
     tolAbs,
     atr,
@@ -572,6 +640,9 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
   const { vwap, bars, startIdx } = calculateSessionVwap(
     highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
+  const previousSession = calculatePreviousSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs,
+  );
   if (vwap == null || bars < session.minSessionBars) {
     return {
       vote: "NEUTRAL",
@@ -580,8 +651,10 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
       meta: { bars, vwap, sessionMode: session.sessionMode },
     };
   }
+  const profileStartIdx = previousSession.sessionFound ? previousSession.startIdx : startIdx;
+  const profileEndIdx = previousSession.sessionFound ? previousSession.endIdx : lastIdx;
   const profile = buildVolumeProfile(
-    highs, lows, closes, volumes, startIdx, lastIdx, cfg.bins, cfg.valueAreaPct
+    highs, lows, closes, volumes, profileStartIdx, profileEndIdx, cfg.bins, cfg.valueAreaPct
   );
   const price = closes[lastIdx];
   if (price == null) {
@@ -597,7 +670,15 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
       vote: "NEUTRAL",
       confidence: 0,
       reason: "outside_liquidity_zones",
-      meta: { vwap, poc: profile.poc, vah: profile.vah, val: profile.val, price },
+      meta: {
+        vwap,
+        previousSessionVwap: previousSession.vwap,
+        poc: profile.poc,
+        vah: profile.vah,
+        val: profile.val,
+        price,
+        previousSessionSource: previousSession.sessionFound ? "completed" : "current_session_snapshot",
+      },
     };
   }
   if (price >= vwap) {
@@ -605,7 +686,15 @@ function evaluateVolumeProfileComponent(indicators, lastIdx, config = {}) {
       vote: "LONG",
       confidence: 0.6,
       reason: "above_vwap",
-      meta: { vwap, poc: profile.poc, vah: profile.vah, val: profile.val, price },
+      meta: {
+        vwap,
+        previousSessionVwap: previousSession.vwap,
+        poc: profile.poc,
+        vah: profile.vah,
+        val: profile.val,
+        price,
+        previousSessionSource: previousSession.sessionFound ? "completed" : "current_session_snapshot",
+      },
     };
   }
   return {
@@ -686,9 +775,15 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const { vwap, bars, startIdx } = calculateSessionVwap(
     highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs
   );
-  const previousSession = calculateSessionVwap(
-    highs, lows, closes, volumes, timestamps, lastIdx - 1, session.periodMs
+  const previousSession = calculatePreviousSessionVwap(
+    highs, lows, closes, volumes, timestamps, lastIdx, session.periodMs,
   );
+  // Short direct fixtures may contain only one session. Keep their behavior
+  // deterministic by falling back to the previous closed candle snapshot;
+  // real backtests/live history use the completed-session branch above.
+  const previousReference = previousSession.sessionFound
+    ? previousSession
+    : calculateSessionVwap(highs, lows, closes, volumes, timestamps, lastIdx - 1, session.periodMs);
   if (bars < session.minSessionBars || vwap == null) {
     _abl("rejVwapBars");
     return {
@@ -706,12 +801,13 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     };
   }
 
-  // Freeze VAH/VAL/POC at the previous completed candle. Including the entry
+  // Freeze VAH/VAL/POC at the previous completed session. Including the entry
   // candle in its own profile makes an extreme expand the range that is then
   // used to declare that same candle a "bounce" or "rejection".
-  const profileIdx = lastIdx - 1;
+  const profileStartIdx = previousSession.sessionFound ? previousSession.startIdx : startIdx;
+  const profileIdx = previousSession.sessionFound ? previousSession.endIdx : lastIdx - 1;
   const profile = buildVolumeProfile(
-    highs, lows, closes, volumes, startIdx, profileIdx, cfg.bins, cfg.valueAreaPct
+    highs, lows, closes, volumes, profileStartIdx, profileIdx, cfg.bins, cfg.valueAreaPct
   );
   const price = closes[lastIdx];
   const prev = closes[lastIdx - 1];
@@ -732,7 +828,12 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
   const { tolAbs, mode, atr, mult } = resolveVwapTolerance(indicators, lastIdx, cfg);
   const metaBase = {
     vwap,
-    prevVwap: previousSession.vwap,
+    prevVwap: previousReference.vwap,
+    previousSessionVwap: previousSession.vwap,
+    previousSessionBars: previousSession.bars,
+    previousSessionStartIdx: previousSession.startIdx,
+    previousSessionEndIdx: previousSession.endIdx,
+    previousSessionSource: previousSession.sessionFound ? "completed" : "current_session_snapshot",
     poc: profile.poc,
     vah: profile.vah,
     val: profile.val,
@@ -748,17 +849,18 @@ function evaluateVolumeProfileEntry(indicators, lastIdx, config = {}) {
     minSessionBars: session.minSessionBars,
     amtTradeTier: cfg.amtTradeTier,
     profileIdx,
+    profileStartIdx,
   };
 
   // VWAP reclaim / lose (primary AMT entry). Compare the previous close with
   // the previous completed VWAP, not with the VWAP after the current candle's
   // volume has been added. The old comparison made a moving-level mismatch
   // look like a cross and was the main source of one-candle churn.
-  const vwapReclaim = previousSession.vwap != null
-    && prev < previousSession.vwap
+  const vwapReclaim = previousReference.vwap != null
+    && prev < previousReference.vwap
     && price >= vwap;
-  const vwapLose = previousSession.vwap != null
-    && prev > previousSession.vwap
+  const vwapLose = previousReference.vwap != null
+    && prev > previousReference.vwap
     && price <= vwap;
 
   const evaluateCandidate = (signal, reason, { requireVwapDistance = true } = {}) => {
@@ -853,7 +955,9 @@ module.exports = {
   MS_DAY,
   MS_WEEK,
   sessionStartIdx,
+  previousSessionRange,
   calculateSessionVwap,
+  calculatePreviousSessionVwap,
   buildVolumeProfile,
   evaluateVolumeProfilePrecision,
   evaluateVolumeProfileComponent,

@@ -20,6 +20,10 @@
 - **`maxConsecLoss`:** 3 (loss) — Consecutive-loss stop
 - **`leverage`:** 2 (×) — Default leverage
 
+Scalping is hidden from execution, but remains in the natural 1:2:2 risk
+denominator; Intraday and Swing therefore stay at 2% each instead of being
+silently reallocated to 2.5%.
+
 Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 
 ### Entry thresholds (Auction Market Theory)
@@ -37,6 +41,7 @@ Per-leg SL/TP: `VolumeProfileStrategy.calculateRiskConfig` (1.5 / 3.0).
 - **`amtMinVwapDistanceAtr`:** 0.1 — minimum close distance beyond VWAP for cross entries
 - **`amtEdgeAtrMult`:** 0.25 — VA edge tolerance, separate from VWAP proximity tolerance
 - **`amtEdgePenetrationAtr`:** 0.1 — minimum sweep beyond VAL/VAH before an edge trigger is valid
+- **`minEdgeFeeMultiple`:** 5 — planned reward must clear 5× round-trip fee + slippage
 - **`amtVahRejectEnabled`:** false in the AMT preset — short VAH fades remain research opt-in until failed-auction confirmation is implemented
 - **`amtScalpingShelved`:** true — AMT Scalping is hidden in backtest, dry-run, and live
 
