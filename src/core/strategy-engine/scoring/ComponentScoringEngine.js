@@ -75,6 +75,10 @@ function resolveSmcRubric(f, opts = {}) {
 }
 
 function buildSmcBreakdown(f, rubric) {
+  // confHtfAlignment is signed: positive means aligned, negative means
+  // counter-trend. Using Math.abs() here rewarded knife-catching entries with
+  // the same points as trend-aligned entries, defeating the HTF filter.
+  const signedHtfAlignment = Number(f.confHtfAlignment ?? 0);
   return {
     sweepQuality: sweetSpotPts(f.sweepStrength, {
       peak: 1.5, inner: 0.35, outer: 2.5,
@@ -94,7 +98,7 @@ function buildSmcBreakdown(f, rubric) {
     obConfluence: proximityPts(f.obDistanceAtr, 1.5, rubric.obConfluence.proximityMax)
       + booleanPts(f.confObConfluence ?? f.obConfluence, rubric.obConfluence.booleanMax),
     htfAlignment: linearPts(f.htfAdx, 15, 35, rubric.htfAlignment.adxMax)
-      + linearPts(Math.abs(f.confHtfAlignment ?? 0), 0, 15, rubric.htfAlignment.alignMax),
+      + linearPts(Math.max(0, signedHtfAlignment), 0, 15, rubric.htfAlignment.alignMax),
     liquidityFreshness: linearPts(
       f.confMitigationDepth ?? f.mitigationDepth,
       0.15,

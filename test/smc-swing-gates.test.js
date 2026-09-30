@@ -23,6 +23,7 @@ test("SWING-FLAGS: resolveSwingGateFlags defaults + typeOverrides", () => {
   const flags = resolveSwingGateFlags({
     typeOverrides: {
       Swing: {
+        smcBlockVolatile: true,
         smcRequireObRetest: true,
         maxHoldHours: 120,
         smcFundingGuard: true,
@@ -32,6 +33,7 @@ test("SWING-FLAGS: resolveSwingGateFlags defaults + typeOverrides", () => {
       },
     },
   });
+  assert.equal(flags.smcBlockVolatile, true);
   assert.equal(flags.smcRequireObRetest, true);
   assert.equal(flags.maxHoldHours, 120);
   assert.equal(flags.smcFundingGuard, true);
@@ -97,6 +99,7 @@ test("SWING-RR: SUB_STRATEGIES PRD aspirational 1.2/4.0; calculateRiskConfig hon
   if (ov && ov.slAtrMult != null) {
     assert.equal(ov.slAtrMult, 1.2);
     assert.equal(ov.tpAtrMult, 3.6);
+    assert.equal(ov.smcBlockVolatile, true);
     assert.equal(ov.maxHoldHours, undefined, "TIME_STOP OFF");
   }
 });

@@ -84,8 +84,11 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     ...DEFAULT_LEG_TYPE_OVERRIDES.Scalping,
     // Sprint 16 edge discovery: absolute ATR% floor (also enforced atop relative gate)
     atrMinMult: 0.287,
-    smcMinConfidenceScalping: 40,
-    smcMinConfidenceA: 40,
+    // Use the canonical graded score, but keep a viable research sample. A
+    // 75+ floor was too sparse on the current BTC tape; calibration must be
+    // done walk-forward rather than by forcing the leg to zero trades.
+    smcMinConfidenceScalping: 50,
+    smcMinConfidenceA: 50,
     smcSweepVolMult: 1.2,
     // SL 1.5×ATR (fee-drag lever vs 1.0) / TP 3.0×ATR → Planned RR 2.0
     slAtrMult: 1.5,
@@ -94,15 +97,23 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     smcSessionFilter: false,
     smcBlockLongInChop: true,
     smcRequireObRetest: true,
+    // A reversal setup is invalid when it fights the confirmed 1h direction.
+    smcHtfHardBlock: true,
+    // A close inside an FVG is not a reversal confirmation. Require the
+    // entry candle to reject the mitigation level and close back in direction.
+    smcRejectionEntry: true,
+    smcRejectionWickRatio: 0.5,
     // Require complete 5m sweep/CHoCH/displacement structure before entry.
     validateEntryTFStructure: true,
   },
   Intraday: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Intraday,
     ...INTRADAY_HOLD,
-    // Sprint 22: BNB 2-window threshold sweep — edge robust only at conf≥80 (PF 1.33/1.33)
-    smcMinConfidenceIntraday: 80,
-    smcMinConfidenceB: 80,
+    // Canonical graded-score gate. The former 80 floor was calibrated on the
+    // pre-canonical sequence score and becomes effectively no-trade after the
+    // score alignment; 60 keeps a testable sample for walk-forward validation.
+    smcMinConfidenceIntraday: 60,
+    smcMinConfidenceB: 60,
     // Sprint 22: enable pivot-structure OB leg (was default false → OB confluence 100% dead)
     smcPivotStructure: true,
     // Explicit geometry — Planned RR ~2.0 (matches ~1.8 realized structure-SL on BNB)
@@ -112,6 +123,11 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
     smcSessionFilter: false,
     // Sprint 22: both sides lose in CHOP on Intraday — block all entries (not Scalping LONG-only)
     smcBlockAllInChop: true,
+    smcHtfHardBlock: true,
+    // Use the same causal rejection confirmation as Scalping. Without this,
+    // Intraday still enters while price is slicing through the FVG.
+    smcRejectionEntry: true,
+    smcRejectionWickRatio: 0.4,
     // The shared sequence is too permissive for 15m. Require directional 1h
     // regime and an independent slower 15m structure confirmation.
     regimeMappingStrict: true,
@@ -121,6 +137,10 @@ const SMC_LEG_TYPE_OVERRIDES = Object.freeze({
   Swing: {
     ...DEFAULT_LEG_TYPE_OVERRIDES.Swing,
     ...SWING_HOLD,
+    // Full-history forensics: Swing's VOLATILE entry-TF bucket had PF 0.77
+    // and contributed the majority of the 10y loss. Keep the leg focused on
+    // NORMAL/STRONG_TREND until a volatility-specific entry model exists.
+    smcBlockVolatile: true,
     // Explicit geometry — Planned RR ~3.0 (longer hold needs larger payoff)
     slAtrMult: 1.2,
     tpAtrMult: 3.6,

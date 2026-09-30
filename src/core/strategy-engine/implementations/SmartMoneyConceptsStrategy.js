@@ -25,8 +25,10 @@ const {
   resolveIntradayGateFlags,
   resolveSwingGateFlags,
   sweetSpotPts,
+  buildSmcEntryFeatures,
 } = require("../af/smcEntry");
 const { normalizeSmcParams } = require("../af/smcParamCompat");
+const { enrichMetaWithGradedScore } = require("../scoring/ComponentScoringEngine");
 
 const EPSILON = 1e-9;
 
@@ -108,6 +110,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       { key: "rejByChoch", label: "5. - 5m CHoCH validation" },
       { key: "rejBySession", label: "5b. - UTC session filter" },
       { key: "rejByConf", label: "6. - Confidence floor" },
+      { key: "rejByVolatile", label: "6b. - Volatile entry-TF block" },
       { key: "passed", label: "= PASSED (tradeable signals)" },
     ];
   }
@@ -123,6 +126,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
       rejBySession: 0,   // Sprint 13: UTC session filter (now surfaced in the funnel)
       rejByIntradayStructure: 0, // Intraday remap gate (kept a real counter, not NaN)
       rejByConf: 0,      // rawA killed by confidence floor
+      rejByVolatile: 0,  // Swing killed by entry-TF VOLATILE regime
       passed: 0,         // survived ALL gates → a tradeable Scalping signal
     };
     return this._ablation;
@@ -962,20 +966,25 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
         const hi = highs[lastIdx] ?? cl;
         const lo = lows[lastIdx] ?? cl;
         const body = Math.abs(cl - op);
+        const range = Math.max(hi - lo, EPSILON);
+        const closeLocation = (cl - lo) / range;
         const wickRatio = config.smcRejectionWickRatio ?? 0.8; // wick ≥ 0.8× body
         if (isLong) {
           const lowerWick = Math.min(op, cl) - lo;
           const wickedIntoZone = lo <= fvg.midpoint;           // touched discount
-          const closedBullish  = cl >= op;                     // rejected upward
+          // A pullback can close red and still reject the level if it closes
+          // in the upper part of its range. Using candle colour alone made
+          // valid 5m/15m mitigations disappear during orderly pullbacks.
+          const closedBullish  = cl >= op || closeLocation >= 0.65;
           const heldZone       = cl >= fvg.bottom;             // not broken below
-          const strongReject   = lowerWick >= body * wickRatio;
+          const strongReject   = lowerWick >= body * wickRatio || closeLocation >= 0.65;
           if (!(wickedIntoZone && closedBullish && heldZone && strongReject)) { this._abl("rejByRejection"); continue; }
         } else {
           const upperWick = hi - Math.max(op, cl);
           const wickedIntoZone = hi >= fvg.midpoint;           // touched premium
-          const closedBearish  = cl <= op;                     // rejected downward
+          const closedBearish  = cl <= op || closeLocation <= 0.35;
           const heldZone       = cl <= fvg.top;                // not broken above
-          const strongReject   = upperWick >= body * wickRatio;
+          const strongReject   = upperWick >= body * wickRatio || closeLocation <= 0.35;
           if (!(wickedIntoZone && closedBearish && heldZone && strongReject)) { this._abl("rejByRejection"); continue; }
         }
       }
@@ -1595,7 +1604,7 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   // actual holding duration (avg 3-8h at 15m ≈ 12-32 bars, vs Scalping's ~20/5
   // bars tuned for its own much shorter holds) so it filters on genuinely
   // slower structure instead of re-detecting Scalping's fast setups.
-  _detectIntradayStructureConfirm(indicators, lastIdx, config = {}) {
+  _detectIntradayStructureConfirm(indicators, lastIdx, signal, config = {}) {
     const { highs, lows, closes } = indicators;
     const window = config.intradayStructureWindow ?? 40;      // ~10h of 15m candles
     const multiWindow = config.intradayMultiWindow ?? 10;      // ~2.5h of 15m candles
@@ -1628,13 +1637,21 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const mHighs = highs.slice(mStart, endIdx);
     const mLows = lows.slice(mStart, endIdx);
     if (mHighs.length < 3) return false;
-    let reversalStrength = 0;
+    let bullishStrength = 0;
+    let bearishStrength = 0;
     for (let i = 1; i < mHighs.length; i++) {
-      const isReversal = (mHighs[i] > mHighs[i - 1] && mLows[i] > mLows[i - 1]) ||
-                          (mHighs[i] < mHighs[i - 1] && mLows[i] < mLows[i - 1]);
-      if (isReversal) reversalStrength++;
+      const isBullishStep = mHighs[i] > mHighs[i - 1] && mLows[i] > mLows[i - 1];
+      const isBearishStep = mHighs[i] < mHighs[i - 1] && mLows[i] < mLows[i - 1];
+      if (isBullishStep) bullishStrength++;
+      if (isBearishStep) bearishStrength++;
     }
-    return reversalStrength >= reversalMin;
+
+    // A generic "there was movement" check is not directional confirmation.
+    // Require the recent structure to agree with the actual signal direction;
+    // otherwise bearish steps could validate a LONG and vice versa.
+    if (signal === "LONG") return bullishStrength >= reversalMin;
+    if (signal === "SHORT") return bearishStrength >= reversalMin;
+    return false;
   }
 
 
@@ -1689,6 +1706,26 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
   _validateScalpingEntryTFStructure(indicators, lastIdx, signal, config = {}) {
     const { closes, highs, lows, volumes, volSMA } = indicators;
     if (!closes || !highs || !lows || lastIdx < 30) return true; // Allow if insufficient data
+
+    // The sequence engine already found the causal sweep → CHoCH →
+    // displacement chain. Re-detecting a sweep on the *entry bar* here was a
+    // false second requirement: valid setups sweep several bars before the
+    // FVG mitigation, so this gate silently rejected every otherwise-valid
+    // Scalping signal. Validate the sequence metadata instead.
+    const sequenceMeta = config.sequenceMeta;
+    if (sequenceMeta) {
+      const { sweepIdx, chochIdx, dispIdx, fvg } = sequenceMeta;
+      const ordered = Number.isInteger(sweepIdx)
+        && Number.isInteger(chochIdx)
+        && Number.isInteger(dispIdx)
+        && sweepIdx <= chochIdx
+        && chochIdx <= dispIdx
+        && dispIdx < lastIdx;
+      const directionMatches = signal === "LONG"
+        ? String(fvg?.type || "").toLowerCase().includes("bull")
+        : String(fvg?.type || "").toLowerCase().includes("bear");
+      return ordered && directionMatches;
+    }
 
     // Scalping 5m structure gate: ensure complete structure before entry
     // Checks: sweep + CHoCH + displacement (all on 5m entry TF)
@@ -1785,15 +1822,26 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     if (useSequence) {
       // Sprint 22: pivot-structure OB leg — Intraday only (not Scalping/Swing legs).
-      const seqConfig = (config.tradeType === "Intraday" || config.smcPivotStructure === true)
-        && typeOverrides.Intraday?.smcPivotStructure === true
-        ? { ...config, smcPivotStructure: true }
-        : config;
+      const activeTradeType = config.tradeType || null;
+      const activeTypeOverrides = activeTradeType
+        ? (typeOverrides[activeTradeType] || {})
+        : {};
+      const seqConfig = {
+        ...config,
+        ...activeTypeOverrides,
+        ...((activeTradeType === "Intraday" || config.smcPivotStructure === true)
+          && typeOverrides.Intraday?.smcPivotStructure === true
+          ? { smcPivotStructure: true }
+          : {}),
+      };
       const seq = this._detectSMCSequence(indicators, lastIdx, seqConfig);
       const sig = seq.signal;
       const score = seq.meta?.score ?? 0;
       this._lastSequenceMeta = seq.meta; // structural levels for SL placement
-      if (wantA && sig) this._abl("seqSignal");
+      // Count a sequence signal for whichever leg is active. The old counter
+      // only checked Scalping, making Intraday/Swing funnels report zero
+      // signals even while their leg was opening trades.
+      if (sig && (wantA || wantB || wantC)) this._abl("seqSignal");
       rawA = wantA ? sig : null; confA = rawA ? score : 0;
       rawB = wantB ? sig : null; confB = rawB ? score : 0;
       rawC = wantC ? sig : null; confC = rawC ? score : 0;
@@ -1812,6 +1860,16 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const scalpGates = resolveScalpingGateFlags(config);
     const intradayGates = resolveIntradayGateFlags(config);
     const swingGates = resolveSwingGateFlags(config);
+
+    // Full-history forensics show the Swing sequence has no edge in the
+    // entry-TF VOLATILE bucket (PF 0.77), while NORMAL/STRONG_TREND remain
+    // positive before this bucket is mixed in. Block that regime at signal
+    // time so live and backtest share the same causal rule.
+    if (rawC && swingGates.smcBlockVolatile && marketCond === "VOLATILE") {
+      this._abl("rejByVolatile");
+      rawC = null;
+      confC = 0;
+    }
 
     // Sprint 13: UTC session filter (default on for Scalping via typeOverrides).
     // Sprint 16: full Asia block (Sydney+Tokyo) when noTradeSessions configured.
@@ -1897,7 +1955,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // above for root-cause rationale). Off by default — enable via
     // typeOverrides.Intraday.structureConfirmValidate.
     if (rawB && typeOverrides.Intraday?.structureConfirmValidate === true) {
-      if (!this._detectIntradayStructureConfirm(indicators, lastIdx, { ...config, ...typeOverrides.Intraday })) {
+      if (!this._detectIntradayStructureConfirm(
+        indicators,
+        lastIdx,
+        rawB,
+        { ...config, ...typeOverrides.Intraday },
+      )) {
         this._abl("rejByIntradayStructure");
         rawB = null;
         confB = 0;
@@ -1910,7 +1973,12 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     // prevents entries during incomplete structure moves, which often reverse.
     // Disabled by default; enable via typeOverrides.Scalping.validateEntryTFStructure = true
     if (rawA && typeOverrides.Scalping?.validateEntryTFStructure === true) {
-      if (!this._validateScalpingEntryTFStructure(indicators, lastIdx, rawA, config)) {
+      if (!this._validateScalpingEntryTFStructure(
+        indicators,
+        lastIdx,
+        rawA,
+        { ...config, sequenceMeta: this._lastSequenceMeta },
+      )) {
         rawA = null;
         confA = Math.max(0, confA - 30);  // Heavy penalty for invalid structure
       }
@@ -1937,17 +2005,33 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     const strictAlign = config.smcHtfHardBlock === true;
     const hardRegimeBlock = config.tierOverrides?.regimeFilterRequired === true
       || strictAlign;
+    const hardAlignA = hardRegimeBlock || typeOverrides.Scalping?.smcHtfHardBlock === true;
+    const hardAlignB = hardRegimeBlock || typeOverrides.Intraday?.smcHtfHardBlock === true;
+    const hardAlignC = hardRegimeBlock || typeOverrides.Swing?.smcHtfHardBlock === true;
     let htfAlignPts = 0;
-    if (hardRegimeBlock) {
-      if (rawA && this._htfDirectionBlocked(rawA, htfTrend, strictAlign)) { this._abl("rejByRegime"); rawA = null; confA = 0; htfAlignPts = -100; }
-      if (rawB && this._htfDirectionBlocked(rawB, htfTrend, strictAlign)) { rawB = null; confB = 0; }
-      if (rawC && this._htfDirectionBlocked(rawC, htfTrend, strictAlign)) { rawC = null; confC = 0; }
-      if (rawA) htfAlignPts = 10; // survived hard align
-    } else {
+    if (rawA && hardAlignA && this._htfDirectionBlocked(rawA, htfTrend, true)) {
+      this._abl("rejByRegime"); rawA = null; confA = 0; htfAlignPts = -100;
+    }
+    if (rawB && hardAlignB && this._htfDirectionBlocked(rawB, htfTrend, true)) {
+      rawB = null; confB = 0;
+    }
+    if (rawC && hardAlignC && this._htfDirectionBlocked(rawC, htfTrend, true)) {
+      rawC = null; confC = 0;
+    }
+    if (rawA && hardAlignA) {
+      htfAlignPts = 10; // survived hard align
+    }
+    if (!hardAlignA && !hardAlignB && !hardAlignC) {
       if (rawA && this._htfDirectionBlocked(rawA, htfTrend)) { confA = Math.max(0, confA - 15); htfAlignPts = -15; }
       else if (rawA) htfAlignPts = 5;
       if (rawB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
       if (rawC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
+    } else {
+      // A leg with a hard direction block has already been handled above;
+      // other legs retain the legacy soft penalty unless they opted in too.
+      if (rawA && !hardAlignA && this._htfDirectionBlocked(rawA, htfTrend)) confA = Math.max(0, confA - 15);
+      if (rawB && !hardAlignB && this._htfDirectionBlocked(rawB, htfTrend)) confB = Math.max(0, confB - 15);
+      if (rawC && !hardAlignC && this._htfDirectionBlocked(rawC, htfTrend)) confC = Math.max(0, confC - 15);
     }
     if (this._lastSequenceMeta?.confidenceComponents) {
       this._lastSequenceMeta.confidenceComponents.htfAlignment = htfAlignPts;
@@ -2020,7 +2104,56 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
     if (rawB && !passesAdx(typeOverrides.Intraday?.minAdx)) { rawB = null; confB = 0; }
     if (rawC && !passesAdx(typeOverrides.Swing?.minAdx)) { rawC = null; confC = 0; }
 
+    // Canonical confidence gate: use the same graded score exported to CSV and
+    // consumed by RAG. Previously the entry gate used _scoreSequence() while
+    // post-trade analysis used ComponentScoringEngine, so a configured floor of
+    // 80 did not mean Graded Score >= 80. This helper is intentionally causal:
+    // it only reads the current bar and the already-built sequence metadata.
+    const gradeSignal = (signal, tradeType, fallbackScore) => {
+      if (!signal || !this._lastSequenceMeta) return fallbackScore;
+      const seqMeta = this._lastSequenceMeta;
+      // Unit/legacy callers may not provide ATR. Preserve the raw sequence
+      // score in that case; production backtests always provide ATR and use
+      // the canonical graded score path below.
+      const atr = indicators.atr?.[lastIdx];
+      if (!(Number.isFinite(atr) && atr > 0)) return fallbackScore;
+      const features = buildSmcEntryFeatures(indicators, lastIdx, seqMeta, {
+        atr,
+        timestamp: indicators.timestamps?.[lastIdx] ?? config.candleTimestamp ?? null,
+        htfAdx: indicators.adx?.[lastIdx] ?? null,
+        confidenceComponents: seqMeta.confidenceComponents || null,
+      });
+      const graded = enrichMetaWithGradedScore({
+        ...features,
+        sequenceMeta: seqMeta,
+        confidenceComponents: seqMeta.confidenceComponents || null,
+        signal,
+        tradeType,
+        component: tradeType,
+        winningComponent: "SMART_MONEY_CONCEPTS",
+      }, "SMART_MONEY_CONCEPTS");
+      return Number.isFinite(graded?.gradedScore)
+        ? graded.gradedScore
+        : fallbackScore;
+    };
+
+    const rawConfidence = {
+      Scalping: confA,
+      Intraday: confB,
+      Swing: confC,
+    };
+    const gradedConfidence = {
+      Scalping: gradeSignal(rawA, "Scalping", confA),
+      Intraday: gradeSignal(rawB, "Intraday", confB),
+      Swing: gradeSignal(rawC, "Swing", confC),
+    };
+    confA = gradedConfidence.Scalping;
+    confB = gradedConfidence.Intraday;
+    confC = gradedConfidence.Swing;
+
     if (rawA) { if (confA >= effMinConfA) this._abl("passed"); else this._abl("rejByConf"); }
+    if (rawB) { if (confB >= effMinConf.B) this._abl("passed"); else this._abl("rejByConf"); }
+    if (rawC) { if (confC >= effMinConf.C) this._abl("passed"); else this._abl("rejByConf"); }
     const sigScalping = (rawA && confA >= effMinConfA) ? rawA : null;
     const sigIntraday = (rawB && confB >= effMinConf.B) ? rawB : null;
     let sigSwing      = (rawC && confC >= effMinConf.C) ? rawC : null;
@@ -2044,6 +2177,18 @@ class SmartMoneyConceptsStrategy extends StrategyBase {
 
     result.meta = {
       confidence: { Scalping: confA, Intraday: confB, Swing: confC, A: confA, B: confB, C: confC },
+      rawSequenceConfidence: {
+        ...rawConfidence,
+        A: rawConfidence.Scalping,
+        B: rawConfidence.Intraday,
+        C: rawConfidence.Swing,
+      },
+      gradedConfidence: {
+        ...gradedConfidence,
+        A: gradedConfidence.Scalping,
+        B: gradedConfidence.Intraday,
+        C: gradedConfidence.Swing,
+      },
       aggregateConfidence: Math.round(aggConf),
       // Always set — Market Cond = entry-TF vol/trend bucket (≠ dailyRegime).
       marketCond: marketCond || "NORMAL",

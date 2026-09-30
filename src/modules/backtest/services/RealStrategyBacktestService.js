@@ -436,6 +436,26 @@ function resolveEnrichedSignalMeta(strategy, strategyKey, rawMeta = null, tradeT
   const leg = tradeType ?? meta.tradeType ?? (
     TRADE_LEG_NAMES.has(meta.component) ? meta.component : null
   );
+
+  // SMC multi-leg detection already calculates the canonical graded score
+  // before applying the per-leg confidence floor. Preserve that exact score
+  // here. Re-scoring the merged meta loses sequence-only fields and produced
+  // a different (usually lower) score in CSV/RAG than the entry gate used.
+  const canonicalByLeg = meta.gradedConfidence || meta.gradedScores;
+  const canonicalScore = leg && canonicalByLeg
+    ? Number(canonicalByLeg[leg] ?? canonicalByLeg[leg === "Scalping" ? "A" : leg === "Intraday" ? "B" : "C"])
+    : NaN;
+  if (Number.isFinite(canonicalScore)) {
+    return {
+      ...meta,
+      winningComponent: key,
+      tradeType: leg,
+      component: leg ?? (TRADE_LEG_NAMES.has(meta.component) ? meta.component : key),
+      gradedScore: canonicalScore,
+      componentConfidence: canonicalScore,
+      scoringStrategyKey: key,
+    };
+  }
   return enrichMetaWithGradedScore({
     ...meta,
     winningComponent: key,

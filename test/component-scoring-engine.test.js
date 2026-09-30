@@ -182,6 +182,32 @@ test("gradedConfidenceFromMeta returns 0-1 scale", () => {
   assert.ok(conf >= 0 && conf <= 1);
 });
 
+test("SMC graded score does not reward counter-HTF alignment", () => {
+  const aligned = scoreComponent("SMART_MONEY_CONCEPTS", {
+    tradeType: "Intraday",
+    sweepStrength: 1.5,
+    fvgSizeAtr: 0.7,
+    displacementPct: 1.2,
+    htfAdx: 30,
+    confHtfAlignment: 15,
+    confMitigationDepth: 0.5,
+    confObConfluence: true,
+    sweepAgeBars: 5,
+  }).total;
+  const counterTrend = scoreComponent("SMART_MONEY_CONCEPTS", {
+    tradeType: "Intraday",
+    sweepStrength: 1.5,
+    fvgSizeAtr: 0.7,
+    displacementPct: 1.2,
+    htfAdx: 30,
+    confHtfAlignment: -15,
+    confMitigationDepth: 0.5,
+    confObConfluence: true,
+    sweepAgeBars: 5,
+  }).total;
+  assert.ok(aligned > counterTrend);
+});
+
 test("buildFeaturesFromMeta merges Sprint 15 ML extractors", () => {
   const features = buildFeaturesFromMeta({
     winningComponent: "BREAKOUT_RETEST",
