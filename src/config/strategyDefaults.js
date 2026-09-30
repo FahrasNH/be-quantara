@@ -1051,6 +1051,9 @@ STRATEGIES.AUCTION_MARKET_THEORY = {
   minSessionBarsSwing: 6,
   // A VWAP cross is only tradeable after closed-candle acceptance. These
   // guards remove one-bar level touches/churn from all AMT entry paths.
+  // The planned reward must also clear a conservative round-trip cost multiple
+  // in both backtest and live execution.
+  minEdgeFeeMultiple: 5,
   amtEntryQualityGate: true,
   amtHtfAlignGate: true,
   amtMinBodyAtr: 0.15,

@@ -22,7 +22,10 @@ const {
   applyPairTierToBacktestParams,
   hasExplicitPairTier,
 } = require("../../../shared/backtest/applyPairTierToBacktestParams");
-const { filterDisabledTradeTypes } = require("../../../config/tradeTypeAvailability");
+const {
+  filterDisabledTradeTypes,
+  resolveNaturalRiskTypeOrder,
+} = require("../../../config/tradeTypeAvailability");
 
 const AF_SMC_KEYS = new Set([
   "SMART_MONEY_CONCEPTS", "ADAPTIVE_FUSION",
@@ -503,8 +506,11 @@ async function runBacktestJob(job, userId, opts) {
       htfCandles,
       dailyCandles,
       btcEntryCandles,
-      naturalTypeOrder: STRATEGY_SUPPORTED_TYPES[strategyKey]
-        || (isAF ? ["Scalping", "Swing"] : multiTypeOrder),
+      naturalTypeOrder: resolveNaturalRiskTypeOrder(
+        strategyKey,
+        STRATEGY_SUPPORTED_TYPES[strategyKey]
+          || (isAF ? ["Scalping", "Swing"] : multiTypeOrder),
+      ),
       strategyKey,
       capital: Number(capital) || 1000,
       enableFees: enableFees !== false,

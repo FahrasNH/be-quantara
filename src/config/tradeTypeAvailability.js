@@ -18,6 +18,11 @@ const TRADE_TYPE_ALIASES = Object.freeze({
   SWING: "Swing",
 });
 
+// Keep the natural risk budget stable when a leg is shelved. A disabled leg
+// must disappear from execution/data fetching, but it must not silently donate
+// its risk share to the remaining legs.
+const NATURAL_TRADE_TYPE_ORDER = Object.freeze(["Scalping", "Intraday", "Swing"]);
+
 // AMT Scalping is negative net of fees in the validated BTC replay. Keep the
 // switch hard-closed across backtest, dry-run, and live until revalidated.
 const AMT_SCALPING_SHELVED = true;
@@ -70,11 +75,26 @@ function filterDisabledTradeTypes(strategyKey, typeOrder) {
   return typeOrder.filter((type) => normalizeTradeType(type) !== "Scalping");
 }
 
+/**
+ * Resolve the denominator used by the per-type risk ladder.
+ *
+ * AMT deliberately has only Intraday + Swing in its executable catalog, but
+ * its combined risk cap was calibrated against the original 3-leg ladder.
+ * Keep Scalping in that denominator while leaving it absent from execution.
+ */
+function resolveNaturalRiskTypeOrder(strategyKey, requestedOrder) {
+  if (isAmtStrategyKey(strategyKey)) return [...NATURAL_TRADE_TYPE_ORDER];
+  if (Array.isArray(requestedOrder) && requestedOrder.length) return [...requestedOrder];
+  return [...NATURAL_TRADE_TYPE_ORDER];
+}
+
 module.exports = {
   AMT_SCALPING_SHELVED,
+  NATURAL_TRADE_TYPE_ORDER,
   normalizeTradeType,
   resolveTradeType,
   isAmtScalpingShelved,
   isAmtStrategyKey,
   filterDisabledTradeTypes,
+  resolveNaturalRiskTypeOrder,
 };

@@ -351,6 +351,55 @@ function checkAtrRangeGate(atr, price, config = {}) {
   return { ok: true };
 }
 
+/**
+ * Fee/slippage-aware minimum edge gate shared by live and backtest paths.
+ *
+ * `tpDistance` is the planned favorable move in price units. The gate is a
+ * conservative pre-entry filter: the planned reward must be several times
+ * larger than the round-trip execution cost, otherwise a positive gross
+ * outcome can still be structurally negative after fees.
+ */
+function evaluateFeeEdgeGate({
+  price,
+  tpDistance,
+  minEdgeFeeMultiple = 0,
+  perSideFee = 0,
+  perSideSlippage = 0,
+} = {}) {
+  const multiple = Number(minEdgeFeeMultiple);
+  const px = Number(price);
+  const tp = Number(tpDistance);
+  const fee = Number(perSideFee);
+  const slippage = Number(perSideSlippage);
+  if (!(multiple > 0) || !(px > 0) || !(tp > 0)) {
+    return { ok: true, reason: null };
+  }
+
+  const perSideCost = Math.max(0, Number.isFinite(fee) ? fee : 0)
+    + Math.max(0, Number.isFinite(slippage) ? slippage : 0);
+  const roundtripCost = perSideCost * 2;
+  const tpFraction = tp / px;
+  const minTpFraction = multiple * roundtripCost;
+  if (tpFraction + 1e-12 < minTpFraction) {
+    return {
+      ok: false,
+      reason: "fee_edge_too_thin",
+      tpFraction,
+      minTpFraction,
+      roundtripCost,
+      multiple,
+    };
+  }
+  return {
+    ok: true,
+    reason: null,
+    tpFraction,
+    minTpFraction,
+    roundtripCost,
+    multiple,
+  };
+}
+
 module.exports = {
   checkEntryRiskGates,
   checkAtrRangeGate,
@@ -358,6 +407,7 @@ module.exports = {
   applyNoTradeSessionFilter,
   scalpingSessionBlocked,
   evaluateAtrEntryGate,
+  evaluateFeeEdgeGate,
   buildAtrBaseline,
   resolveAtrLegOverride,
   detectMarketSession,

@@ -57,6 +57,7 @@ const {
   checkEntryRiskGates,
   checkAtrRangeGate,
   resolveAtrLegOverride,
+  evaluateFeeEdgeGate,
 } = require("../../../core/risk-engine/entryRiskGates");
 const { applyBsBrSnapshotFields } = require("../../../shared/csv/strategyMlEnrichment");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
@@ -2767,13 +2768,18 @@ class BotEngine extends EventEmitter {
       const perSideFee     = this.config.entryMode === "maker"
         ? (this.config.makerFeeRate ?? 0.0002)
         : (this.config.feeRate ?? 0.0006);
-      const roundtripFee   = 2 * perSideFee;
-      const tpFrac         = tpDist / price;
-      if (tpFrac < minEdgeMult * roundtripFee) {
+      const feeEdge = evaluateFeeEdgeGate({
+        price,
+        tpDistance: tpDist,
+        minEdgeFeeMultiple: minEdgeMult,
+        perSideFee,
+        perSideSlippage: this.config.slippagePct ?? 0,
+      });
+      if (!feeEdge.ok) {
         this._log("warn",
           `[FEE-GATE] Edge terlalu tipis vs fee — sinyal ${signal} diabaikan. ` +
-          `TP=${(tpFrac * 100).toFixed(3)}% < ${minEdgeMult}× fee roundtrip ` +
-          `(${(minEdgeMult * roundtripFee * 100).toFixed(2)}% minimum)`
+          `TP=${(feeEdge.tpFraction * 100).toFixed(3)}% < ${minEdgeMult}× fee roundtrip ` +
+          `(${(feeEdge.minTpFraction * 100).toFixed(2)}% minimum)`
         );
         return;
       }
@@ -3478,6 +3484,7 @@ class BotEngine extends EventEmitter {
     const afStrategy = new SmartMoneyConceptsStrategy();
     const { resolveScalpingGateFlags, resolveIntradayGateFlags, resolveSwingGateFlags, applySmcSideRegimeGate, applySmcFundingGuard } = require("../../../core/strategy-engine/af/smcEntry");
     const { checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
+    const runtimeStrategyKey = this.config.signalType || this.config.strategyKey || this.config.name;
 
     // Map legacy letters → type names for typeOverrides lookup
     const typeName = { A: "Scalping", B: "Intraday", C: "Swing" }[componentId] || componentId;
@@ -3488,8 +3495,7 @@ class BotEngine extends EventEmitter {
     // exercises every leg. Skip-only: cannot enable anything, only blocks.
     if (this.config.dryRun === false) {
       const { isTypeLiveEligible } = require("../../../config/liveTradeTypeGate");
-      const stratKey = this.config.signalType || this.config.strategyKey || this.config.name;
-      if (!isTypeLiveEligible(stratKey, typeName)) {
+      if (!isTypeLiveEligible(runtimeStrategyKey, typeName)) {
         this._log("info", `[Multi-AF:${componentId}] ${typeName} leg skipped — backtest-only, not live-eligible (Sprint 14)`);
         return;
       }
@@ -3635,6 +3641,8 @@ class BotEngine extends EventEmitter {
       this.config.enabledComponents ||
       this.config.smcEnabledComponents ||
       ["Scalping", "Intraday", "Swing"];
+    const { resolveNaturalRiskTypeOrder } = require("../../../config/tradeTypeAvailability");
+    const riskTypeOrder = resolveNaturalRiskTypeOrder(runtimeStrategyKey, enabledComponents);
     const legOverrides =
       this.config.typeOverrides?.[typeName] ||
       this.config.typeOverrides?.[componentId] ||
@@ -3642,7 +3650,7 @@ class BotEngine extends EventEmitter {
     const riskPerTrade = applyLegRiskShare(
       riskShareForType(
         componentId,
-        enabledComponents,
+        riskTypeOrder,
         this.config.riskPerTrade || 0.01,
         this.config.typeRiskWeights,
       ),

@@ -57,7 +57,11 @@ const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcPara
 const { meanReversionRegimeFilter } = require("../../../core/signal-engine/htfRegimeFilter");
 const { computeStatisticalArbitrageZ } = require("../../../core/strategy-engine/md/statisticalArbitrageEntry");
 const { riskShareForType, applyLegRiskShare } = require("../../../core/risk-engine/typeRiskLadder");
-const { buildAtrBaseline, checkNoTradeSessionGate } = require("../../../core/risk-engine/entryRiskGates");
+const {
+  buildAtrBaseline,
+  checkNoTradeSessionGate,
+  evaluateFeeEdgeGate,
+} = require("../../../core/risk-engine/entryRiskGates");
 const { computeDailyTrendStrength, getRegimeForDate, applyRegimeGate } = require("../../../core/signal-engine/dailyRegimeGate");
 const {
   resolveScalpingGateFlags,
@@ -868,6 +872,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     rejDailyLoss: 0,   // maxDailyLossPct (incl floating) reached
     rejAtrGate: 0,     // ATR relative/absolute range gate
     rejSlTp: 0,        // sl/tp not finite
+    rejFeeEdge: 0,     // planned reward too small versus fee + slippage
     rejSize: 0,        // computed position size <= 0
     opened: 0,         // positions.set(...) actually executed
   };
@@ -1473,6 +1478,18 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
       const tp = signal === "LONG" ? price + tpDist : price - tpDist;
 
       if (!Number.isFinite(sl) || !Number.isFinite(tp)) { execAbl.rejSlTp += 1; continue; }
+
+      const makerEntry = typeOverride.makerEntry === true
+        || cfg.makerEntry === true
+        || cfg.entryMode === "maker";
+      const feeEdge = evaluateFeeEdgeGate({
+        price,
+        tpDistance: tpDist,
+        minEdgeFeeMultiple: cfg.minEdgeFeeMultiple,
+        perSideFee: makerEntry ? (cfg.makerFeeRate ?? 0.0002) : feeRate,
+        perSideSlippage: slip,
+      });
+      if (!feeEdge.ok) { execAbl.rejFeeEdge += 1; continue; }
 
       // Calculate position size — risk-based: the loss when SL is hit must equal
       // riskAmt. size = riskAmt / slDist. Dividing by the FULL SL→TP span (as
@@ -2992,7 +3009,7 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
   const diag = {
     barsEvaluated: 0, htfUnknownSkip: 0, signalNull: 0, htfDirBlock: 0,
     cooldownBlock: 0, consecLossBlock: 0, maxTradesBlock: 0, dailyLossBlock: 0,
-    atrGateBlock: 0, validateBlock: 0, sessionBlock: 0, opened: 0,
+    atrGateBlock: 0, validateBlock: 0, sessionBlock: 0, feeEdgeBlock: 0, opened: 0,
   };
 
   // SL+ Trailing Partial Take Profit (mirrors BotEngine._checkSLPlusMilestones).
@@ -3618,6 +3635,20 @@ async function _runSinglePositionBacktest(opts, strategy, cfg, feeRate, slip, en
     }
     if (!(slDist > 0)) { equity.push({ date: isoOf(c), value: round2(capital) }); continue; }
 
+    const makerEntry = cfg.makerEntry === true || cfg.entryMode === "maker";
+    const feeEdge = evaluateFeeEdgeGate({
+      price,
+      tpDistance: tpDist,
+      minEdgeFeeMultiple: cfg.minEdgeFeeMultiple,
+      perSideFee: makerEntry ? (cfg.makerFeeRate ?? 0.0002) : feeRate,
+      perSideSlippage: slip,
+    });
+    if (!feeEdge.ok) {
+      diag.feeEdgeBlock += 1;
+      equity.push({ date: isoOf(c), value: round2(capital) });
+      continue;
+    }
+
 
     // chasing the breakout close. Latest signal replaces any unfilled pending.
     if (cfg.retestEntryEnabled) {
@@ -3764,7 +3795,10 @@ function normalizeTfGeometryKeys(strategyKey, cfg) {
 
 async function runMultiTypeBacktest(opts = {}, typeOrder) {
   const { strategyKey, capital: startCapital = 1000, enableFees = true, enableSlippage = false } = opts;
-  const { filterDisabledTradeTypes } = require("../../../config/tradeTypeAvailability");
+  const {
+    filterDisabledTradeTypes,
+    resolveNaturalRiskTypeOrder,
+  } = require("../../../config/tradeTypeAvailability");
 
   const validation = strategyRegistry.validate(strategyKey);
   if (!validation.valid) throw new Error(`Invalid strategy "${strategyKey}": ${validation.error}`);
@@ -3786,10 +3820,16 @@ async function runMultiTypeBacktest(opts = {}, typeOrder) {
   // equally — TREND_FOLLOWING combined 0.03 → 1%/2%, MEAN_REVERSION combined 0.015 → 0.5%/1%.
 
   const filteredTypeOrder = filterDisabledTradeTypes(strategyKey, typeOrder);
-  const riskTypeOrder = filterDisabledTradeTypes(strategyKey,
+  // Keep the full natural denominator even when a leg is intentionally
+  // shelved. Filtering here made AMT Intraday/Swing jump from 40% to 50% of
+  // the combined cap after Scalping was hidden, changing both sizing and
+  // daily-loss behavior without an explicit risk decision.
+  const riskTypeOrder = resolveNaturalRiskTypeOrder(
+    strategyKey,
     Array.isArray(opts.naturalTypeOrder) && opts.naturalTypeOrder.length
       ? opts.naturalTypeOrder
-      : filteredTypeOrder);
+      : filteredTypeOrder,
+  );
   // Mirror backtest.js TYPE_TF (Sprint 14 ladder: Scalping 5m/1h · Intraday
   // 15m/4h · Swing 4h/1w) so ADX weekly soft-cap + HTF directional gates know
   // which trend TF each leg uses.
