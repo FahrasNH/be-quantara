@@ -11,6 +11,8 @@
  *
  * GROK_AI_TRADING — experimental VAULT bonus (LLM entry engine). Registered
  * but NOT part of any tier race pool. Prefer GrokConfirm overlay in production.
+ * GROK_NEWS_TRADING — dry-run-only macro-news experiment, outside every live
+ * tier pool.
  *
  * Legacy aliases ensure bots created before the v2.0 migration continue to
  * work while the DB migration is applied in the background.
@@ -21,6 +23,7 @@ const TrendSurgeUmbrella     = require("./umbrellas/TrendSurgeUmbrella");
 const MeanDriftUmbrella      = require("./umbrellas/MeanDriftUmbrella");
 const BreakoutStormUmbrella  = require("./umbrellas/BreakoutStormUmbrella");
 const GrokAiTradingStrategy  = require("./implementations/GrokAiTradingStrategy");
+const GrokNewsTradingStrategy = require("./implementations/GrokNewsTradingStrategy");
 
 const { normalizeStrategyKey } = require("../../config/strategies");
 
@@ -39,6 +42,7 @@ class StrategyRegistry {
     const md = new MeanDriftUmbrella();
     const bs = new BreakoutStormUmbrella();
     const ga = new GrokAiTradingStrategy();
+    const gn = new GrokNewsTradingStrategy();
 
     this.register("SMART_MONEY_CONCEPTS",          af);
     this.register("TREND_FOLLOWING",           ts);
@@ -46,6 +50,8 @@ class StrategyRegistry {
     this.register("BREAKOUT_RETEST",           bs);
     // Experimental — VAULT bonus; see config/strategies.js EXPERIMENTAL_STRATEGIES
     this.register("GROK_AI_TRADING", ga);
+    // Dry-run-only — selected by the central dry-run execution policy.
+    this.register("GROK_NEWS_TRADING", gn);
 
     // ── Component keys → same umbrella instances (race pools) ─────────────
     this.strategies.set("WYCKOFF", af);

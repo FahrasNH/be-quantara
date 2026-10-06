@@ -16,6 +16,10 @@ const MultiStrategyCoordinator = require("../application/MultiStrategyCoordinato
 const AccountCoordinator = require("#modules/trading/domain/AccountCoordinator.js");
 const { getStrategy } = require("#config/strategyDefaults.js");
 const { ingressNormalizeStrategyKey } = require("#config/strategyKeyNormalizer.js");
+const {
+  DRY_RUN_NEWS_STRATEGY_KEY,
+  resolveDryRunStrategies,
+} = require("../config/dryRunNewsStrategy");
 const { mergeBotStartOverrides } = require("../modules/trading/services/botConfigMerge");
 const { createExchangeClient } = require("../infrastructure/exchange");
 const db     = require("../infrastructure/db/database");
@@ -394,6 +398,7 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   }
 
   const accountCoordinator = getCoordinator(userId);
+  const effectiveStrategies = resolveDryRunStrategies(opts.strategies, opts.dryRun);
 
   // Klasifikasi tier pair → ambil override SL & ukuran posisi (lihat engineConfig).
 
@@ -468,7 +473,7 @@ async function createMultiStrategyInstance(userId, symbol, opts = {}) {
   const coordinator = new MultiStrategyCoordinator({
     userId,
     symbol,
-    strategies:   opts.strategies,
+    strategies:   effectiveStrategies,
     totalCapital: opts.capital,
     engineFactory,
     accountCoordinator,
@@ -873,7 +878,21 @@ async function _resumeOneBotAttempt(bot, prisma) {
     }
   }
 
-  if (Array.isArray(strategies) && strategies.length > 0) {
+  // Existing paper bots may have been created before the news-only policy.
+  // Normalize them on resume and keep the DB representation single-strategy.
+  if (bot.dryRun) {
+    strategies = [DRY_RUN_NEWS_STRATEGY_KEY];
+    if (bot.strategyKey !== DRY_RUN_NEWS_STRATEGY_KEY || (bot.strategyGroup || []).length > 0) {
+      await prisma.bot.update({
+        where: { id: bot.id },
+        data: { strategyGroup: [], strategyKey: DRY_RUN_NEWS_STRATEGY_KEY },
+      }).catch(() => {});
+      bot.strategyKey = DRY_RUN_NEWS_STRATEGY_KEY;
+      bot.strategyGroup = [];
+    }
+  }
+
+  if (!bot.dryRun && Array.isArray(strategies) && strategies.length > 0) {
     const pc = pairClassifier.classify(bot.symbol);
     if (pc.tier === "VOLATILE") {
       const filtered = strategies.filter((s) => !pc.blockedStrategies.includes(s));
@@ -889,7 +908,7 @@ async function _resumeOneBotAttempt(bot, prisma) {
     }
   }
 
-  const useMulti = MULTI_STRATEGY_ENABLED && strategies && strategies.length > 0;
+  const useMulti = MULTI_STRATEGY_ENABLED && !bot.dryRun && strategies && strategies.length > 0;
 
   let accountOpenCap = 0;
   try {

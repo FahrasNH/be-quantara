@@ -58,7 +58,7 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     const coord = new MultiStrategyCoordinator({
       userId: "u1", symbol: "BTCUSDT",
       strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
-      totalCapital: 90, engineFactory: factory, accountCoordinator: ac, dryRun: true,
+      totalCapital: 90, engineFactory: factory, accountCoordinator: ac, dryRun: false,
     });
 
     await coord.start();
@@ -91,7 +91,7 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     const coord = new MultiStrategyCoordinator({
       userId: "u2", symbol: "SOLUSDT",
       strategies: ["ADAPTIVE_FUSION"], totalCapital: 50, engineFactory: factory,
-      accountCoordinator: ac, dryRun: true,
+      accountCoordinator: ac, dryRun: false,
     });
     await coord.start();
     t("FOUNDRY: 1 engine spawned", Object.keys(engines).length === 1);
@@ -107,7 +107,7 @@ console.log("\n🔗 Multi-Strategy Integration Tests\n");
     const coord = new MultiStrategyCoordinator({
       userId: "u3", symbol: "ETHUSDT",
       strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"], totalCapital: 40,
-      engineFactory: factory, accountCoordinator: ac, dryRun: true,
+      engineFactory: factory, accountCoordinator: ac, dryRun: false,
     });
     await coord.start();
     t("AF SHORT → boleh", engines.ADAPTIVE_FUSION.tryEnter("SHORT").ok === true);

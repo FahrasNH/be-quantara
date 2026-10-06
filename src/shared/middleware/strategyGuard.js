@@ -33,6 +33,7 @@ const DRY_RUN_ONLY_STRATEGIES = new Set([
   'BREAKOUT_TRADING',
   'BREAKOUT_RETEST',
   'BREAKOUT_STORM',
+  'GROK_NEWS_TRADING',
 ]);
 
 /**
@@ -76,9 +77,11 @@ function strategyGuard(req, res, next) {
     return res.status(403).json({
       ok: false,
       statusCode: 403,
-      message: `Strategi "${strategy}" di-HALT (Sprint 14: expectancy negatif pada backtest 5 window). ` +
-               `Hanya tersedia Dry Run / backtest sampai re-test gate lolos. ` +
-               `Set STRATEGY_OVERRIDE=${upper} di .env hanya untuk validasi staging.`,
+      message: canonical === 'GROK_NEWS_TRADING'
+        ? `Strategi "${strategy}" hanya tersedia untuk Dry Run karena news/Grok entry belum disetujui untuk live trading.`
+        : `Strategi "${strategy}" di-HALT (Sprint 14: expectancy negatif pada backtest 5 window). ` +
+          `Hanya tersedia Dry Run / backtest sampai re-test gate lolos. ` +
+          `Set STRATEGY_OVERRIDE=${upper} di .env hanya untuk validasi staging.`,
       code: 'STRATEGY_DRYRUN_ONLY',
       strategy,
     });

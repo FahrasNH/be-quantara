@@ -64,6 +64,25 @@ const cfg = {
   // Izinkan Grok live trading tanpa tier VAULT (dev/staging)
   GROK_TRADING_OPEN:               process.env.GROK_TRADING_OPEN === "true",
 
+  // ── Dry-run macro-news strategy ───────────────────────────────────────────
+  // The dry-run execution policy routes every paper bot to GROK_NEWS_TRADING.
+  // Keep the feature explicitly opt-in so a missing xAI/news configuration is
+  // visible as "no signal" rather than silently generating technical trades.
+  GROK_NEWS_TRADING_ENABLED:        process.env.GROK_NEWS_TRADING_ENABLED === "true",
+  GROK_NEWS_MIN_CONFIDENCE_ENTRY:  parseInt(process.env.GROK_NEWS_MIN_CONFIDENCE_ENTRY, 10) || 8,
+  GROK_NEWS_MIN_CONFIDENCE_TP_SL:   parseInt(process.env.GROK_NEWS_MIN_CONFIDENCE_TP_SL, 10) || 7,
+  GROK_NEWS_MAX_TOKENS:             parseInt(process.env.GROK_NEWS_MAX_TOKENS, 10) || 2200,
+  GROK_NEWS_TEMPERATURE:            parseFloat(process.env.GROK_NEWS_TEMPERATURE) || 0.2,
+  GROK_NEWS_CYCLE_MS:               parseInt(process.env.GROK_NEWS_CYCLE_MS, 10) || 300_000,
+  GROK_NEWS_MAX_AGE_MINUTES:        parseInt(process.env.GROK_NEWS_MAX_AGE_MINUTES, 10) || 180,
+  GROK_NEWS_MAX_ARTICLES:           parseInt(process.env.GROK_NEWS_MAX_ARTICLES, 10) || 20,
+  GROK_NEWS_CACHE_TTL_MS:           parseInt(process.env.GROK_NEWS_CACHE_TTL_MS, 10) || 120_000,
+  GROK_NEWS_ATR_MIN_MULT:           parseFloat(process.env.GROK_NEWS_ATR_MIN_MULT) || 1.0,
+  GROK_NEWS_MIN_RISK_REWARD:        parseFloat(process.env.GROK_NEWS_MIN_RISK_REWARD) || 1.5,
+  CRYPTO_NEWS_ENABLED:              process.env.CRYPTO_NEWS_ENABLED !== "false",
+  CRYPTO_NEWS_API_BASE_URL:         process.env.CRYPTO_NEWS_API_BASE_URL || "https://cryptocurrency.cv/api",
+  CRYPTO_NEWS_TIMEOUT_MS:           parseInt(process.env.CRYPTO_NEWS_TIMEOUT_MS, 10) || 15_000,
+
   // ── Grok Confirm Gate + TP Adjust (Mode B — AF/TM/MR/BR) ─────────────────
   GROK_CONFIRM_ENABLED:              process.env.GROK_CONFIRM_ENABLED === "true",
   GROK_CONFIRM_MIN_CONFIDENCE_ENTRY: parseInt(process.env.GROK_CONFIRM_MIN_CONFIDENCE_ENTRY, 10) || 8,

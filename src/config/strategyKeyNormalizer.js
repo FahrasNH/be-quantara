@@ -5,7 +5,7 @@
  *   Internal code MUST use Gen2 canonical full-word keys: SMART_MONEY_CONCEPTS,
  *   TREND_FOLLOWING, MEAN_REVERSION, BREAKOUT_RETEST, race components
  *   (WYCKOFF, MARKET_STRUCTURE, …), umbrellas (ADAPTIVE_FUSION, TREND_SURGE,
- *   MEAN_DRIFT, BREAKOUT_STORM), GROK_AI_TRADING.
+ *   MEAN_DRIFT, BREAKOUT_STORM), GROK_AI_TRADING, GROK_NEWS_TRADING.
  *
  *   Deprecated Gen2 abbrev keys (AF_SMC, TS_TF, MD_MR, BS_BR, …) and Gen1
  *   legacy keys (SAC, TF, TM, MR, BR) are accepted ONLY at ingress via
@@ -209,6 +209,7 @@ const STRATEGY_ABBREV = Object.freeze({
   ICT_STYLE_TRADING: "BS",
   LIQUIDATION_SQUEEZE: "BS",
   GROK_AI_TRADING: "GA",
+  GROK_NEWS_TRADING: "GN",
   ADAPTIVE_FUSION: "AF",
   TREND_SURGE: "TS",
   MEAN_DRIFT: "MD",
@@ -222,6 +223,7 @@ const ABBREV_TO_ENGINE = Object.freeze({
   MD: "MEAN_REVERSION",
   BS: "BREAKOUT_RETEST",
   GA: "GROK_AI_TRADING",
+  GN: "GROK_NEWS_TRADING",
   SAC: "SMART_MONEY_CONCEPTS",
   TM: "TREND_FOLLOWING",
   MR: "MEAN_REVERSION",

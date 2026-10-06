@@ -1,6 +1,7 @@
 "use strict";
 
 const { applyDryRunStrategyRelaxations } = require("../../../config/dryRunStrategyRelaxations");
+const { resolveRuntimeStrategyKey } = require("../../../config/dryRunNewsStrategy");
 
 /**
  * Merge Bot.configOverrides (ParameterDeployService) into engine start config.
@@ -74,6 +75,16 @@ function mergeBotStartOverrides({ dbConfigOverrides, strategyKey, explicit = {} 
   if (capital != null) merged.capital = capital;
   if (dryRun != null) merged.dryRun = dryRun;
   if (tpMode != null) merged.tpMode = tpMode;
+
+  // Do this at the final config boundary as well as in BotEngine. This keeps
+  // resume/start callers from persisting or passing a legacy paper strategy.
+  // An omitted dryRun is intentionally left unspecified here: the multi-engine
+  // factory supplies the mode on cfg2, and treating omission as paper mode
+  // would silently turn every live engine into GROK_NEWS_TRADING.
+  const requestedStrategyKey = merged.strategyKey ?? merged.strategy ?? strategyKey;
+  merged.strategyKey = merged.dryRun !== undefined
+    ? resolveRuntimeStrategyKey(requestedStrategyKey, merged.dryRun)
+    : String(requestedStrategyKey || "SMART_MONEY_CONCEPTS").toUpperCase();
 
   return applyDryRunStrategyRelaxations(merged);
 }

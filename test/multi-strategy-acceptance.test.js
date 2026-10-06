@@ -101,7 +101,7 @@ console.log("\n📋 Multi-Strategy Acceptance Tests (TC-001..TC-008)\n");
     const coord = new MultiStrategyCoordinator({
       userId: "tc7", symbol: "BTCUSDT",
       strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION"],
-      totalCapital: 90, engineFactory: factory, accountCoordinator: ac, dryRun: true,
+      totalCapital: 90, engineFactory: factory, accountCoordinator: ac, dryRun: false,
     });
     await coord.start();
     t("TC-007: awal 3 engine (MINT)", coord.engines.size === 3);

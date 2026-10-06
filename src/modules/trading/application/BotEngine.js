@@ -25,6 +25,7 @@ const db       = require("../../../infrastructure/db/database");
 const { persistBotLog } = require("../../../infrastructure/db/botLogRepository");
 const notifier = require("../../../infrastructure/notifications/TelegramNotifier");
 const GrokTradingService = require("../../research/services/GrokTradingService");
+const GrokNewsTradingService = require("../../research/services/GrokNewsTradingService");
 const GrokConfirmService = require("../../research/services/GrokConfirmService");
 const { onEngineTradeOpen, onEngineTradeClose } = require("../../ml/services/BotEngineMlHook");
 const MLGateService = require("../../ml/services/MLGateService");
@@ -61,6 +62,11 @@ const {
 } = require("../../../core/risk-engine/entryRiskGates");
 const { applyBsBrSnapshotFields } = require("../../../shared/csv/strategyMlEnrichment");
 const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+const {
+  DRY_RUN_NEWS_STRATEGY_KEY,
+  isDryRunMode,
+  resolveRuntimeStrategyKey,
+} = require("../../../config/dryRunNewsStrategy");
 
 /** Legacy PDF sideways handlers in _checkSidewaysEntry (Strat A/B/C). */
 const LEGACY_PDF_SIDEWAYS_SIGNAL_TYPES = new Set([
@@ -76,6 +82,7 @@ const MODERN_SIGNAL_TYPES = new Set([
   "SMART_MONEY_CONCEPTS",
   "ADAPTIVE_FUSION",
   "TREND_FOLLOWING",
+  "GROK_NEWS_TRADING",
 ]);
 
 // ── Per-user Telegram chat ID helper ─────────────────────────────────────────
@@ -115,8 +122,16 @@ class BotEngine extends EventEmitter {
 
     const exchangeType = (configOverrides.exchangeType || "bitget").toLowerCase();
     const ei   = getExchangeInfo(exchangeType);
+    // Dry-run is a single controlled news experiment. Resolve this before loading
+    // strategy defaults so an old DB strategy cannot leak into a paper bot.
+    const runtimeDryRun = isDryRunMode(configOverrides.dryRun);
+    const requestedStrategyKey = resolveRuntimeStrategyKey(
+      configOverrides.strategyKey || configOverrides.strategy,
+      runtimeDryRun,
+    );
     // Strategi dari DB (configOverrides.strategyKey/strategy); getStrategy fallback ke SMART_MONEY_CONCEPTS
-    const strat = getStrategy(configOverrides.strategyKey || configOverrides.strategy);
+    const strat = getStrategy(requestedStrategyKey);
+    const runtimeStrategyKey = strat.name || requestedStrategyKey;
 
     // ── Resolve API credentials: DB key (dari Settings) > env var ──────────────
     // configOverrides.apiKey diisi oleh route start-bot setelah decrypt dari DB.
@@ -125,7 +140,17 @@ class BotEngine extends EventEmitter {
     const resolvedPassphrase = configOverrides.passphrase || cfg.BITGET_PASSPHRASE  || "";
 
     // Hapus dari configOverrides agar tidak bocor ke this.config (keamanan)
-    const { apiKey: _k, apiSecret: _s, passphrase: _p, exchangeType: _et, ...safeOverrides } = configOverrides;
+    const {
+      apiKey: _k,
+      apiSecret: _s,
+      passphrase: _p,
+      exchangeType: _et,
+      strategyKey: _strategyKey,
+      strategy: _strategy,
+      signalType: _signalType,
+      strategyLabel: _strategyLabel,
+      ...safeOverrides
+    } = configOverrides;
 
     const STRAT_UI_META = new Set(["trades", "winrate", "risk"]);
     const stratKnobs = Object.fromEntries(
@@ -145,7 +170,7 @@ class BotEngine extends EventEmitter {
       // Default aman jika tidak ada override
       symbol:  "BTCUSDT",
       capital: 500,
-      dryRun:  true,  // default dry-run; DB override via configOverrides.dryRun
+      dryRun:  runtimeDryRun,
 
       // ── Indikator teknikal (dari strategy definition) ─────────────────────
       emaFast:       strat.emaFast,
@@ -214,7 +239,7 @@ class BotEngine extends EventEmitter {
       checkInterval: strat.checkInterval || 60_000,
 
       // ── Strategy info ─────────────────────────────────────────────────────
-      strategyKey:   strat.name,
+      strategyKey:   runtimeStrategyKey,
       strategyLabel: strat.label,
       signalType:    strat.signalType,
 
@@ -300,6 +325,12 @@ class BotEngine extends EventEmitter {
     const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
     const { applyDryRunStrategyRelaxations } = require("../../../config/dryRunStrategyRelaxations");
     this.config = applyDryRunStrategyRelaxations(normalizeSmcParams(this.config));
+    if (runtimeDryRun) {
+      this.config.dryRun = true;
+      this.config.strategyKey = DRY_RUN_NEWS_STRATEGY_KEY;
+      this.config.strategyLabel = strat.label;
+      this.config.signalType = strat.signalType;
+    }
 
     this.state = {
       running:       false,
@@ -353,6 +384,8 @@ class BotEngine extends EventEmitter {
     });
     this._interval = null;
     this._reportInterval = null;
+    this._lastGrokNewsCallAt = 0;
+    this._newsTradeKeys = new Set();
   }
 
   /**
@@ -1384,7 +1417,9 @@ class BotEngine extends EventEmitter {
         ).catch(() => {});
       }
 
-      if (this.config.strategyKey === "GROK_AI_TRADING") {
+      if (this.config.strategyKey === DRY_RUN_NEWS_STRATEGY_KEY) {
+        await this._tickGrokNewsAi(price, indicators, lastIdx, htfCandlesCache);
+      } else if (this.config.strategyKey === "GROK_AI_TRADING") {
         await this._tickGrokAi(price, indicators, lastIdx, htfCandlesCache);
       } else if (this.config.legacyMonitorOnly) {
         if (this._shouldLogDecision()) {
@@ -1597,6 +1632,7 @@ class BotEngine extends EventEmitter {
             // ── MULTI-POSITION MODE (v3.0): ADAPTIVE_FUSION independent components ──
             // Sprint 8: use AdaptiveFusionUmbrella (SMC + Wyckoff + VSA voting).
             if (this.config.strategyKey === "ADAPTIVE_FUSION" && this.state.positions) {
+              const indicatorSnapshot = {};
               const { strategyRegistry } = require("../../../core/strategy-engine/index");
               let afInstance = strategyRegistry.get("SMART_MONEY_CONCEPTS");
               if (!afInstance || typeof afInstance.detectSignalMulti !== "function") {
@@ -2195,6 +2231,139 @@ class BotEngine extends EventEmitter {
   }
 
   /**
+   * Siklus dry-run Grok berbasis news makro.
+   *
+   * News adalah prerequisite keras. Tidak ada artikel FOMC/Fed minutes/CPI/NFP
+   * yang masih fresh berarti tidak ada request trade dan tidak ada paper entry.
+   * Jalur ini sengaja tidak pernah mengirim order live, bahkan bila ada bot lama
+   * yang salah tersimpan dengan strategyKey ini.
+   */
+  async _tickGrokNewsAi(price, indicators, lastIdx, htfCandlesCache) {
+    const cycleMs = cfg.GROK_NEWS_CYCLE_MS;
+    const now = Date.now();
+    if (this._lastGrokNewsCallAt && now - this._lastGrokNewsCallAt < cycleMs) return;
+    this._lastGrokNewsCallAt = now;
+
+    if (this.config.dryRun !== true) {
+      this._log("error", `[GROK NEWS] Strategi dry-run ditolak pada mode live — tidak ada order dikirim`);
+      return;
+    }
+    if (this.config.legacyMonitorOnly || this.state.openPositions.length > 0) return;
+    if (!GrokNewsTradingService.isEnabled() || !GrokNewsTradingService.client.isConfigured) {
+      this._log("info", "[GROK NEWS] Menunggu konfigurasi GROK_NEWS_TRADING_ENABLED, XAI_API_KEY, dan news API");
+      return;
+    }
+
+    const atr = Number(indicators?.atr?.[lastIdx]);
+    if (!(atr > 0) || !(Number(price) > 0)) {
+      this._log("info", "[GROK NEWS] Menunggu ATR/harga yang valid");
+      return;
+    }
+
+    let news;
+    try {
+      news = await GrokNewsTradingService.newsClient.getHighImpactNews({
+        symbol: this.config.symbol,
+      });
+    } catch (err) {
+      this._log("warn", `[GROK NEWS] News API gagal — fail-closed: ${err.message}`);
+      return;
+    }
+    if (!Array.isArray(news) || news.length === 0) {
+      this._log("info", `[GROK NEWS] Tidak ada news makro fresh untuk ${this.config.symbol} — skip entry`);
+      return;
+    }
+
+    let currentPrice = Number(price);
+    try {
+      const ticker = await this.client.getTicker(this.config.symbol);
+      if (Number(ticker?.last) > 0) currentPrice = Number(ticker.last);
+    } catch (err) {
+      this._log("warn", `[GROK NEWS] Ticker gagal — gunakan candle terkonfirmasi: ${err.message}`);
+    }
+    this.state.lastPrice = currentPrice;
+
+    const gate = this._checkRiskGates(atr, currentPrice);
+    if (!gate.ok) {
+      if (this._shouldLogDecision()) this._log("info", `[GROK NEWS] Entry ditahan — ${gate.reason}`);
+      return;
+    }
+
+    let multiTfCandles = {};
+    try {
+      multiTfCandles = await this._fetchMultiTfCandles(["5m", "15m", "1h", "4h"]);
+    } catch (err) {
+      this._log("warn", `[GROK NEWS] Gagal fetch multi-TF: ${err.message}`);
+    }
+    if (htfCandlesCache?.length && !multiTfCandles["1h"]) {
+      multiTfCandles["1h"] = htfCandlesCache;
+    }
+
+    const grokCtx = {
+      symbol: this.config.symbol,
+      price: currentPrice,
+      indicators,
+      lastIdx,
+      multiTfCandles,
+      htfCandles: htfCandlesCache,
+      news,
+      minConfidenceEntry: cfg.GROK_NEWS_MIN_CONFIDENCE_ENTRY,
+      minConfidenceTpSl: cfg.GROK_NEWS_MIN_CONFIDENCE_TP_SL,
+      atrMinMult: cfg.GROK_NEWS_ATR_MIN_MULT,
+      minRiskReward: cfg.GROK_NEWS_MIN_RISK_REWARD,
+      atr,
+      leverage: this.config.leverage,
+      riskPerTrade: this.config.riskPerTrade,
+      maxConcurrentPositions: this.config.maxPositions,
+      account: {
+        balance: this.state.capital,
+        openPositions: [],
+        unrealizedPnl: 0,
+      },
+      hasOpenPosition: false,
+      botId: this.config.botId,
+      userId: this.config.userId,
+    };
+
+    try {
+      const decision = await GrokNewsTradingService.requestTradeDecision(grokCtx);
+      if (!decision || !decision.valid) {
+        if (decision?.rejected) this._log("info", `[GROK NEWS] Sinyal ditolak — ${decision.rejected}`);
+        return;
+      }
+      if (!decision.entryAllowed) {
+        this._log("info", `[GROK NEWS] TP/SL valid, entry ditolak — confidence ${decision.confidence}/${grokCtx.minConfidenceEntry}`);
+        return;
+      }
+      if (decision.newsId && this._newsTradeKeys.has(String(decision.newsId))) {
+        this._log("info", `[GROK NEWS] News ${decision.newsId} sudah pernah diperdagangkan — skip duplicate`);
+        return;
+      }
+
+      const opened = await this._openPositionWithExplicitTpSl(decision, currentPrice, atr, {
+        source: "GROK_NEWS",
+        eventType: decision.eventType,
+        newsId: decision.newsId,
+        news,
+      });
+      if (opened === true && decision.newsId) {
+        this._newsTradeKeys.add(String(decision.newsId));
+        while (this._newsTradeKeys.size > 100) {
+          this._newsTradeKeys.delete(this._newsTradeKeys.values().next().value);
+        }
+        this.state.lastSignal = decision.side;
+        this._log(
+          "trade",
+          `[GROK NEWS] ${decision.side} ${this.config.symbol} | ${decision.eventType} | `
+          + `conf ${decision.confidence}/10 | TP ${decision.take_profit} | SL ${decision.stop_loss}`,
+        );
+      }
+    } catch (err) {
+      this._log("error", `[GROK NEWS] Request trade gagal — fail-closed: ${err.message}`);
+    }
+  }
+
+  /**
    * Siklus Grok AI — evaluasi posisi terbuka + entry baru dengan TP/SL eksplisit.
    */
   async _tickGrokAi(price, indicators, lastIdx, htfCandlesCache) {
@@ -2304,23 +2473,31 @@ class BotEngine extends EventEmitter {
   /**
    * Buka posisi dengan TP/SL absolut dari respons Grok (bukan ATR×RR default).
    */
-  async _openPositionWithExplicitTpSl(decision, price, atr) {
+  async _openPositionWithExplicitTpSl(decision, price, atr, context = {}) {
     const { side, take_profit, stop_loss, confidence, reasoning } = decision;
     const slDist = Math.abs(price - stop_loss);
     const tpDist = Math.abs(take_profit - price);
 
     const indicatorSnapshot = {
-      source: "GROK_AI",
+      source: context.source || "GROK_AI",
       confidence,
       reasoning,
       grokTp: take_profit,
       grokSl: stop_loss,
+      newsEventType: context.eventType ?? null,
+      newsId: context.newsId ?? null,
+      news: Array.isArray(context.news) ? context.news.slice(0, 20) : null,
       htfTrend: this.state.htfTrend ?? null,
       strategy: this.config.strategyKey,
       atr: atr != null ? parseFloat(Number(atr).toFixed(4)) : null,
     };
 
-    await this._handleSignal(side, price, atr, indicatorSnapshot, { slDist, tpDist });
+    return this._handleSignal(side, price, atr, indicatorSnapshot, {
+      slDist,
+      tpDist,
+      slPrice: stop_loss,
+      tpPrice: take_profit,
+    });
   }
 
   /**
@@ -2727,13 +2904,22 @@ class BotEngine extends EventEmitter {
     // Pair-tier SL override: VOLATILE 1.5× / STABLE 1.1× / LIQUID 1.0×. Memperlebar
     // SL agar tidak ter-stop oleh noise di koin volatil; sizing berbasis-risk otomatis
     // memperkecil posisi saat SL lebih lebar (risk $ tetap). Default 1 bila tak diset.
-    const pairSlMult = this.config.pairSlMultiplier || 1;
+    // Grok News supplies absolute TP/SL; those prices are authoritative and must not
+    // be silently moved by pair-tier multipliers.
+    const hasAbsoluteSlTp = options.slPrice != null && options.tpPrice != null;
+    const pairSlMult = hasAbsoluteSlTp ? 1 : (this.config.pairSlMultiplier || 1);
     const baseSlDist = options.slDist != null ? options.slDist : atr * this.config.atrMultiplier;
-    const slDist = baseSlDist * pairSlMult;
+    const derivedSlDist = baseSlDist * pairSlMult;
     // tpDist can be overridden independently (used by ADAPTIVE_FUSION per-component RR)
-    const tpDist = options.tpDist != null ? options.tpDist * pairSlMult : slDist * this.config.riskReward;
-    const sl = signal === "LONG" ? price - slDist : price + slDist;
-    const tp = signal === "LONG" ? price + tpDist : price - tpDist;
+    const derivedTpDist = options.tpDist != null ? options.tpDist * pairSlMult : derivedSlDist * this.config.riskReward;
+    const sl = hasAbsoluteSlTp
+      ? Number(options.slPrice)
+      : (signal === "LONG" ? price - derivedSlDist : price + derivedSlDist);
+    const tp = hasAbsoluteSlTp
+      ? Number(options.tpPrice)
+      : (signal === "LONG" ? price + derivedTpDist : price - derivedTpDist);
+    const slDist = hasAbsoluteSlTp ? Math.abs(price - sl) : derivedSlDist;
+    const tpDist = hasAbsoluteSlTp ? Math.abs(tp - price) : derivedTpDist;
 
     // BUG-08: Hard guard — SL/TP harus finite, positif, dan berada di sisi yang benar.
     // Sinyal dengan SL/TP invalid tidak boleh membuka posisi (unlimited-loss risk).
@@ -3172,6 +3358,7 @@ class BotEngine extends EventEmitter {
       if (s.rsi != null)         why.push(`RSI ${s.rsi}`);
       if (s.volumeRatio != null) why.push(`volume ${s.volumeRatio}× SMA`);
       if (s.afComponent)         why.push(`komponen ${s.afComponent}`);
+      if (s.newsEventType)       why.push(`news ${s.newsEventType}`);
     }
     const slMult = enrichedSnapshot.slMultiplier;
     const tpMult = enrichedSnapshot.tpMultiplier;
@@ -3190,6 +3377,12 @@ class BotEngine extends EventEmitter {
       );
       if (grok.reasoning) entryLines.push(`Konfirmasi : ${grok.reasoning}`);
       if (grok.tp_note) entryLines.push(`TP Grok    : ${grok.tp_note}`);
+    }
+    if (indicatorSnapshot?.newsEventType) {
+      entryLines.push(
+        `News       : ${indicatorSnapshot.newsEventType}`
+        + (indicatorSnapshot.newsId ? ` · ${indicatorSnapshot.newsId}` : ""),
+      );
     }
     entryLines.push(`Entry      : $${fmtPx(price)}`);
     entryLines.push(`SL / TP    : $${fmtPx(sl)} / $${fmtPx(tp)}${slMult ? `  (${slMult}×/${tpMult}× ATR)` : ""}`);
@@ -3364,6 +3557,7 @@ class BotEngine extends EventEmitter {
             capital:     this.state.capital,
             pairTier:    mlEntry.pairTier,
             entryContext: mlEntry.entryContext,
+            dryRun:      false,
           });
         }
 
@@ -3379,6 +3573,7 @@ class BotEngine extends EventEmitter {
           leverage:   this.config.leverage,
           dryRun:     false,
         });
+        return true;
       } catch (err) {
         this._log("error", `Gagal buka posisi: ${err.message}`);
         // Roll back optimistic reserve so peer engines are not blocked forever.
@@ -3455,6 +3650,7 @@ class BotEngine extends EventEmitter {
           capital:     this.state.capital,
           pairTier:    mlEntry.pairTier,
           entryContext: mlEntry.entryContext,
+          dryRun:      true,
         });
       }
 
@@ -3470,6 +3666,7 @@ class BotEngine extends EventEmitter {
         leverage:   this.config.leverage,
         dryRun:     true,
       });
+      return true;
     }
   }
 
@@ -4161,6 +4358,7 @@ class BotEngine extends EventEmitter {
           openTime:    pos.openTime,
           leverage:    this.config.leverage,
           capital:     this.state.capital,
+          dryRun:      this.config.dryRun,
         });
         onEngineTradeClose(partialDbId, pnl);
       } catch (e) { this._log("warn", `Gagal catat partial-close di DB: ${e.message}`); }
