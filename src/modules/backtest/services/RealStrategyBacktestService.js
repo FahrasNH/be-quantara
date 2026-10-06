@@ -51,6 +51,15 @@ function htfTrendAtIndex(j, htfCandles, htfEmaFastArr, htfEmaSlowArr, cfg = {}) 
   if (ef < es && price < ef) return "BEARISH";
   return "SIDEWAYS";
 }
+
+/** Strength at the same completed candle used by htfTrendAtIndex. */
+function htfStrengthAtIndex(formingIndex, emaFast, emaSlow, atr) {
+  const j = formingIndex - 1;
+  if (j < 0) return null;
+  const fast = emaFast?.[j], slow = emaSlow?.[j], range = atr?.[j];
+  if (fast == null || slow == null || range == null || range <= 0) return null;
+  return Math.min(Math.abs(fast - slow) / range, 1.0);
+}
 const { strategyRegistry } = require("../../../core/strategy-engine/index");
 const { STRATEGIES, resolveStrategyDefaults } = require("#config/strategyDefaults.js");
 const { normalizeSmcParams } = require("../../../core/strategy-engine/af/smcParamCompat");
@@ -543,7 +552,10 @@ function estimateFundingCost(entryPrice, size, openTs, closeTs, enabled, funding
   return periods * rate * entryPrice * size;
 }
 
-/** Map an entry-bar timestamp → index of last CLOSED htf candle at/just before it. */
+/** Map an entry-bar open time to the HTF candle forming at that time.
+ * Consumers must subtract one to use a completed HTF candle. HTF direction
+ * already does so inside htfTrendAtIndex; strength must use the same index.
+ */
 function buildHtfIndexPointer(entryCandles, htfCandles) {
   const out = new Array(entryCandles.length).fill(-1);
   let j = 0;
@@ -763,6 +775,10 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
     atrPeriod: cfg.atrPeriod ?? 14,
   });
 
+  // Replay candles are immutable and this cache belongs to one job/leg only.
+  // Reuse overlapping event calculations without changing the signal rules.
+  indicators.wyckoffEventCache = { entries: new Map(), signature: null };
+
   // Session / hour filters (Wyckoff Scalping blockedUtcHours, AMT VWAP) need bar times.
   if (!indicators.timestamps) {
     indicators.timestamps = entryCandles.map((c) => c.timestamp ?? c.openTime ?? c.time ?? null);
@@ -819,13 +835,7 @@ async function _runMultiPositionBacktest(opts, strategy, cfg, feeRate, slip, ent
 
   function htfStrengthAt(i) {
     if (!htfPtr || !htfEmaFastArr) return null;
-    const j = htfPtr[i];
-    if (j < 0) return null;
-    const hEmaF = htfEmaFastArr[j];
-    const hEmaS = htfEmaSlowArr[j];
-    const hAtr  = htfAtrArr[j];
-    if (hEmaF == null || hEmaS == null || hAtr == null || hAtr <= 0) return null;
-    return Math.min(Math.abs(hEmaF - hEmaS) / hAtr, 1.0);
+    return htfStrengthAtIndex(htfPtr[i], htfEmaFastArr, htfEmaSlowArr, htfAtrArr);
   }
 
   function htfTrendAt(i) {
@@ -4037,6 +4047,7 @@ function buildStats(trades, startCapital, endCapital) {
 }
 
 module.exports = {
+  htfStrengthAtIndex,
   runRealBacktest,
   runTripleTypeBacktest,
   runMultiTypeBacktest,

@@ -1008,6 +1008,9 @@ function mapExportRow(row) {
     htfTrend:    ind?.htfTrend ?? NA,
     dailyRegime: ind?.dailyRegime ?? NA,
     component:   ind?.winningComponent ?? ind?.component ?? NA,
+    // Internal ML/RAG validation needs the entry-time feature snapshot. Older
+    // rows may not have one; callers must treat null as missing data.
+    entryContext: row.entry_context ? safeParseJSON(row.entry_context) : null,
     atr:         ind?.atr ?? row.atr ?? NA,
     dryRun:      row.dry_run === 1,
     mode:        row.mode ?? null,

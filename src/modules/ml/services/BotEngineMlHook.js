@@ -71,6 +71,12 @@ function onEngineTradeOpen(dbId, enrichedSnapshot, meta = {}) {
       strategyKey: meta.strategyKey,
       symbol:      meta.symbol,
       regime:      entryContext.regime ?? entryContext.htfRegime,
+      // Preserve the engine execution mode all the way into MLShadowLog.
+      // Without this, both live and dry-run hooks were persisted as
+      // `unknown`, making the staging promotion gate unable to distinguish
+      // validation data from real-money outcomes.
+      dryRun:      meta.dryRun,
+      mode:        meta.mode,
     });
   }).catch(() => {});
 }

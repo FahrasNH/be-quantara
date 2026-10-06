@@ -587,11 +587,16 @@ model MLShadowLog {
   strategyKey   String?
   symbol        String?
   regime        String?
+  // Captures the source mode so staging validation never mixes live trades
+  // into the promotion gate. Existing rows are backfilled by the migration.
+  mode          String?
   createdAt     DateTime @default(now())
 
   @@index([tradeId])
   @@index([createdAt])
   @@index([strategyKey, symbol])
+  @@index([mode, createdAt])
+  @@index([mode, strategyKey, symbol])
 }
 
 // ── Sprint 16 — Research Dataset SSOT ────────────────────────────────────────
