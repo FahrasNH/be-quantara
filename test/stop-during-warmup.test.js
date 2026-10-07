@@ -68,7 +68,7 @@ console.log("\n🛑 Stop-during-warm-up regression\n");
     const c = new MultiStrategyCoordinator({
       userId: "u1", symbol: "ETHUSDT",
       strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
-      totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
+      totalCapital: 1000, engineFactory: factory, accountCoordinator: ac, dryRun: false,
     });
 
     // Begin start(): it will create engine #0 and block on its gate.
@@ -112,7 +112,7 @@ console.log("\n🛑 Stop-during-warm-up regression\n");
     const c = new MultiStrategyCoordinator({
       userId: "u2", symbol: "BTCUSDT",
       strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
-      totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
+      totalCapital: 1000, engineFactory: factory, accountCoordinator: ac, dryRun: false,
     });
     await c.start();
     t("normal start → coordinator running", c.getState().running === true);

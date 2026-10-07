@@ -65,5 +65,12 @@ test("buildShadowLogPayload marks loss when pWin below threshold", () => {
   assert.strictEqual(payload.prediction, "loss");
 });
 
+test("buildShadowLogPayload preserves execution provenance", () => {
+  const staging = buildShadowLogPayload({ ...sampleRow, dry_run: 1 }, { pWin: 0.7 });
+  const unknown = buildShadowLogPayload(sampleRow, { pWin: 0.7 });
+  assert.strictEqual(staging.mode, "staging");
+  assert.strictEqual(unknown.mode, "unknown");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

@@ -180,6 +180,12 @@ class MarketStructureStrategy extends StrategyBase {
       winningComponent: result.signal ? "MARKET_STRUCTURE" : null,
       strategyLabel: "Dow Theory",
       atr: atrSafe,
+      // Keep the structural fields flat as well as under `meta`. The umbrella
+      // enriches the component result into its own envelope before the
+      // backtest/live risk path sees it; without this spread, the DOW risk
+      // calculator received `meta.lastSwingLow` only at
+      // `structureMeta.meta.lastSwingLow` and silently fell back to entry ATR.
+      ...nested,
       ...result,
       ...msFields,
     };
@@ -222,7 +228,12 @@ class MarketStructureStrategy extends StrategyBase {
     const tpMult = opts.tpMultiplier ?? 3.0;
     const fallbackSlDist = atr * slMult;
     const useStructureStop = opts.msUseStructureStop === true;
-    const structureMeta = opts.structureMeta || opts.entryMeta || null;
+    const rawStructureMeta = opts.structureMeta || opts.entryMeta || null;
+    // Accept both direct component metadata and the umbrella envelope shape.
+    // The latter stores the DOW pivots under `meta` after race attribution.
+    const structureMeta = rawStructureMeta?.meta && typeof rawStructureMeta.meta === "object"
+      ? { ...rawStructureMeta, ...rawStructureMeta.meta }
+      : rawStructureMeta;
     const structuralLevel = signal === "LONG"
       ? structureMeta?.lastSwingLow?.price
       : structureMeta?.lastSwingHigh?.price;

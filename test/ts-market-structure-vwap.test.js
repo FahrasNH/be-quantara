@@ -280,6 +280,7 @@ test("MarketStructureStrategy uses HTF structure, HTF ATR, and entry-TF confirma
   const signal = strategy.detectSignal(indicators, idx, config);
   assert.strictEqual(signal, "LONG");
   assert.strictEqual(strategy.getLastSignalMeta().atr, 2);
+  assert.strictEqual(strategy.getLastSignalMeta().lastSwingLow.price, hl);
   assert.strictEqual(strategy.detectSignal(indicators, idx, config), null);
   assert.strictEqual(strategy.getLastSignalMeta().reason, "duplicate_htf_structure_signal");
   strategy.resetSignalState();
@@ -400,6 +401,20 @@ test("DOW uses structural invalidation for Intraday risk when the stop is bounde
   assert.strictEqual(risk.slDistance, 4);
   assert.strictEqual(risk.tpDistance, 8);
   assert.strictEqual(risk.riskReward, 2);
+
+  const nestedRisk = strategy.calculateRiskConfig(105, 2, "LONG", "Intraday", {
+    slMultiplier: 1.5,
+    tpMultiplier: 3,
+    msUseStructureStop: true,
+    msStructureBufferAtr: 0.25,
+    msMinStopAtr: 0.75,
+    msMaxStopAtr: 2.5,
+    // TrendSurgeUmbrella wraps the component result under `meta`.
+    structureMeta: { meta: { lastSwingLow: { price: 102 } } },
+    structureAtr: 4,
+  });
+  assert.strictEqual(nestedRisk.stopSource, "market_structure");
+  assert.strictEqual(nestedRisk.stopLoss, 101);
 
   const rejected = strategy.calculateRiskConfig(105, 2, "LONG", "Intraday", {
     slMultiplier: 1.5,

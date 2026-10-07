@@ -374,6 +374,55 @@ const BS_COMPONENT_BASE = {
 const STRATEGIES = {
 
   // ─────────────────────────────────────────────
+  // GROK_NEWS_TRADING — Dry-run-only macro-news experiment
+  // ─────────────────────────────────────────────
+  GROK_NEWS_TRADING: {
+    name:          "GROK_NEWS_TRADING",
+    label:         "Grok News Trading (dry-run only)",
+    description:   "Dry-run-only macro-news reaction. Grok determines entry, SL, and TP only after fresh FOMC/Fed/CPI/NFP news.",
+
+    emaFast:       20,
+    emaSlow:       50,
+    emaTrend:      0,
+    rsiPeriod:     14,
+    rsiOverbought: 70,
+    rsiOversold:   30,
+    rsiLongMin:    45,
+    rsiLongMax:    75,
+    rsiShortMin:   25,
+    rsiShortMax:   55,
+    atrPeriod:     14,
+    atrMultiplier: 1.0,
+    riskReward:    1.5,
+    // BotEngine's ATR/price volatility floor. Keep it below 1% because BTC
+    // 15m ATR is normally smaller; the news strategy's SL floor is configured
+    // separately via GROK_NEWS_ATR_MIN_MULT.
+    atrMinMult:    0.05,
+    atrMaxMult:    8.0,
+    higherTf:      "1h",
+    htfEmaFast:    20,
+    htfEmaSlow:    50,
+    sidewaysThresholdPct: 0.2,
+    volSmaMultiplier: 1.0,
+
+    riskPerTrade:       0.01,
+    maxDailyLossPct:    0.03,
+    maxTradesPerDay:    4,
+    cooldownAfterLoss:  60,
+    maxConsecLoss:      2,
+    minConfidenceEntry: 8,
+    minConfidenceTpSl:  7,
+    minRiskReward:      1.5,
+    leverage:           1,
+    interval:           "15m",
+    checkInterval:      300_000,
+    signalType:         "GROK_NEWS_TRADING",
+    trades:             "Event-driven (fresh macro news only)",
+    winrate:            "N/A — dry-run validation",
+    risk:               "Controlled / event-driven",
+  },
+
+  // ─────────────────────────────────────────────
   // TREND_FOLLOWING — Multi-TF Momentum (FORGE Tier)
   // ─────────────────────────────────────────────
   TREND_FOLLOWING: {
@@ -1025,7 +1074,11 @@ STRATEGIES.MARKET_STRUCTURE = {
       msMinBarsAfterConfirmation: 1,
       msRequireLocalTrendAlignment: true,
       msLocalTrendSlopeLookback: 2,
-      msUseStructureStop: true,
+      // Structural-stop wiring is available for controlled research, but the
+      // corrected full-tape replay did not validate it as an edge improvement.
+      // Keep live/default Intraday on the proven entry-ATR geometry until a
+      // walk-forward run supports promoting the structural stop.
+      msUseStructureStop: false,
       msStructureBufferAtr: 0.25,
       msMinStopAtr: 0.75,
       msMaxStopAtr: 2.5,

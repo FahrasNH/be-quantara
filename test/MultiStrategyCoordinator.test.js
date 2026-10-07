@@ -44,7 +44,7 @@ console.log("\n🎛️  MultiStrategyCoordinator Unit Tests\n");
   const c = new MultiStrategyCoordinator({
     userId: "u1", symbol: "ETHUSDT",
     strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"],
-    totalCapital: 1000, engineFactory: factory, accountCoordinator: ac,
+    totalCapital: 1000, engineFactory: factory, accountCoordinator: ac, dryRun: false,
   });
 
   t("capitalPerStrategy = 250 (1000/4)", c.capitalPerStrategy === 250);
@@ -75,7 +75,7 @@ function runConflictTests() {
     const factory = (key, cfg) => { const e = makeFakeEngine(key, cfg); engines[key] = e; return e; };
     const c = new MultiStrategyCoordinator({
       userId: "u2", symbol: "BTCUSDT",
-      strategies: ["AF", "TM"], totalCapital: 100, engineFactory: factory,
+      strategies: ["AF", "TM"], totalCapital: 100, engineFactory: factory, dryRun: false,
     });
 
     c.start().then(() => {
@@ -102,7 +102,7 @@ function runAllLongTest() {
     const factory = (key, cfg) => { const e = makeFakeEngine(key, cfg); engines[key] = e; return e; };
     const c = new MultiStrategyCoordinator({
       userId: "u3", symbol: "SOLUSDT",
-      strategies: ["AF", "TM", "MR"], totalCapital: 90, engineFactory: factory,
+      strategies: ["AF", "TM", "MR"], totalCapital: 90, engineFactory: factory, dryRun: false,
     });
 
     c.start().then(() => {
@@ -130,7 +130,7 @@ function runStateAggTest() {
     const factory = (key, cfg) => { const e = makeFakeEngine(key, cfg); engines[key] = e; return e; };
     const c = new MultiStrategyCoordinator({
       userId: "u4", symbol: "ETHUSDT",
-      strategies: ["AF", "TM"], totalCapital: 200, engineFactory: factory,
+      strategies: ["AF", "TM"], totalCapital: 200, engineFactory: factory, dryRun: false,
     });
 
     c.start().then(() => {
@@ -167,6 +167,7 @@ function runCanEnterTests() {
     const c = new MultiStrategyCoordinator({
       userId: "u5", symbol: "BNBUSDT",
       strategies: ["A", "B", "C", "D"], totalCapital: 1000, engineFactory: factory,
+      dryRun: false,
       maxPositionsPerCoin: 1,
     });
 
@@ -204,7 +205,7 @@ function runCanEnterTests() {
       const fakeDb = { getOpenPositionsForGate: async () => [{ side: "SHORT" }] };
       const c2 = new MultiStrategyCoordinator({
         userId: "u6", symbol: "ETHUSDT", strategies: ["A"], totalCapital: 100,
-        engineFactory: (k, cfg) => makeFakeEngine(k, cfg), maxPositionsPerCoin: 1, db: fakeDb,
+        engineFactory: (k, cfg) => makeFakeEngine(k, cfg), maxPositionsPerCoin: 1, db: fakeDb, dryRun: false,
       });
       await c2.start();
       const dbCap = await c2.canEnter("A", "SHORT");
@@ -216,14 +217,20 @@ function runCanEnterTests() {
 }
 
 function runGuardTests() {
-  // ── Guard konstruktor ─────────────────────────────────────────────────────
+  // ── Guard konstruktor + dry-run policy ───────────────────────────────────
   {
+    const dryDefault = new MultiStrategyCoordinator({
+      userId: "x", symbol: "BTCUSDT", strategies: [], totalCapital: 10,
+      dryRun: true, engineFactory: () => ({}),
+    });
+    t("dry-run tanpa daftar strategi → GROK_NEWS_TRADING", dryDefault.strategies.length === 1 && dryDefault.strategies[0] === "GROK_NEWS_TRADING");
+
     let threw = false;
     try {
       // eslint-disable-next-line no-new
-      new MultiStrategyCoordinator({ userId: "x", symbol: "BTCUSDT", strategies: [], totalCapital: 10, engineFactory: () => {} });
+      new MultiStrategyCoordinator({ userId: "x", symbol: "BTCUSDT", strategies: [], totalCapital: 10, dryRun: false, engineFactory: () => {} });
     } catch { threw = true; }
-    t("tanpa strategi → throw", threw);
+    t("live tanpa strategi → throw", threw);
 
     let threw2 = false;
     try {

@@ -127,6 +127,7 @@ function applyDedicatedBsBrBacktestConfig(cfg = {}) {
  */
 const EXPERIMENTAL_STRATEGIES = {
   GROK_AI_TRADING: "GROK_AI_TRADING", // VAULT bonus; LLM entry engine — use sparingly
+  GROK_NEWS_TRADING: "GROK_NEWS_TRADING", // dry-run-only macro-news experiment
 };
 
 // Gen1→Gen2 mapping lives in strategyKeyNormalizer.js (ACL SSOT).
@@ -259,6 +260,25 @@ const STRATEGY_CATALOG = Object.fromEntries(
   })
 );
 
+const EXPERIMENTAL_STRATEGY_CATALOG = Object.freeze([
+  {
+    key: "GROK_AI_TRADING",
+    label: "Grok AI Trading",
+    description: "Experimental Grok entry engine; not part of the automatic tier race.",
+    status: "experimental",
+    tier: "VAULT",
+    abbrev: STRATEGY_ABBREV.GROK_AI_TRADING,
+  },
+  {
+    key: "GROK_NEWS_TRADING",
+    label: "Grok News Trading (dry-run only)",
+    description: "Paper-only macro-news reaction strategy using FOMC/Fed/CPI/NFP headlines.",
+    status: "dry-run-only",
+    tier: null,
+    abbrev: STRATEGY_ABBREV.GROK_NEWS_TRADING,
+  },
+]);
+
 const CANONICAL_ENGINE_KEYS = ["SMART_MONEY_CONCEPTS", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT_RETEST"];
 const LIVE_COMPONENT_KEYS = [
   "SMART_MONEY_CONCEPTS", "WYCKOFF", "VOLUME_SPREAD_ANALYSIS",
@@ -294,6 +314,7 @@ function getStrategyCatalog() {
   return {
     engines,
     components,
+    experimental: EXPERIMENTAL_STRATEGY_CATALOG,
     umbrellas,
     aliases: { ...STRATEGY_MIGRATION_MAP },
   };
@@ -348,6 +369,7 @@ module.exports = {
   STRATEGY_ABBREV,
   TIER_COMPONENT_MAP,
   STRATEGY_CATALOG,
+  EXPERIMENTAL_STRATEGY_CATALOG,
   STRATEGY_RECAP_CATALOG,
   LIVE_RECAP_KEYS,
   CANONICAL_ENGINE_KEYS,

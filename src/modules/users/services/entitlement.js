@@ -10,11 +10,10 @@ const { canUseStrategy, getTierConfig, migrateLegacyTier } = require("../../../c
 const { DRY_RUN_ONLY_STRATEGIES } = require("../../../shared/middleware/strategyGuard");
 const {
   isBsBrHaltedKey,
-  getComponentPoolUpToTier,
-  getAllDryRunComponentPool,
 } = require("../../../config/strategies");
+const { DRY_RUN_NEWS_STRATEGY_KEY } = require("../../../config/dryRunNewsStrategy");
 
-/** When true, dry-run bots run every live component racer (staging observation). */
+/** Retained for backwards-compatible config/reporting; dry-run execution is now news-only. */
 const DRY_RUN_ALL_STRATEGIES = process.env.DRY_RUN_ALL_STRATEGIES === "true";
 
 // PrismaClient bersama (satu instance untuk seluruh proses) — lihat prismaClient.js
@@ -44,14 +43,16 @@ function filterStrategiesByMode(strategies, mode) {
   if (mode === "live") {
     return list.filter((s) => !isBsBrHaltedKey(s)).filter(isStrategyLiveReady);
   }
-  // Dry-run: keep halted BR when explicitly in pool (DRY_RUN_ALL_STRATEGIES / component pool).
-  return list.slice();
+  // Dry-run is one controlled experiment now. Ignore any stale tier/component
+  // list supplied by a caller so legacy paper bots cannot re-enable technical
+  // strategies through this helper.
+  return [DRY_RUN_NEWS_STRATEGY_KEY];
 }
 
 /**
  * Resolve which strategy keys to spawn for auto multi-strategy execution.
- * Live: umbrella keys from tierConfig (1–4). Dry-run: component race pool
- * from TIER_COMPONENT_MAP (3 per umbrella tier) so all racers observe signals.
+ * Live: umbrella keys from tierConfig (1–4). Dry-run: one controlled
+ * GROK_NEWS_TRADING paper strategy; technical strategies are disabled.
  *
  * @param {string} tier
  * @param {("dry"|"live")} mode
@@ -61,10 +62,10 @@ function resolveExecutionStrategies(tier, mode) {
   if (mode === "live") {
     return getTierConfig(tier)?.strategies ?? [];
   }
-  if (DRY_RUN_ALL_STRATEGIES) {
-    return getAllDryRunComponentPool();
-  }
-  return getComponentPoolUpToTier(tier);
+  // Dry-run is intentionally a single controlled experiment. Do not spawn
+  // the tier component pool: that would let technical strategies open paper
+  // trades outside the news/Grok test being validated.
+  return [DRY_RUN_NEWS_STRATEGY_KEY];
 }
 
 /**

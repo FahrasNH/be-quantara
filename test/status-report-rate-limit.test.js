@@ -37,7 +37,7 @@ test("coordinator emits ONE aggregated status report via the leader (not N)", ()
   const c = new MultiStrategyCoordinator({
     userId: "u1", symbol: "ZECUSDT",
     strategies: ["ADAPTIVE_FUSION", "TREND_FOLLOWING"],
-    totalCapital: 210, engineFactory: () => ({}),
+    totalCapital: 210, engineFactory: () => ({}), dryRun: false,
   });
   const leader = fakeEngine("ADAPTIVE_FUSION", {
     capital: 105, trades: [{ pnl: 5 }, { pnl: -2 }], openPositions: [{ side: "LONG" }],
@@ -68,7 +68,7 @@ test("coordinator emits ONE aggregated status report via the leader (not N)", ()
 test("unified status is emitted as one multi-line block (one log card, not 4 logs)", () => {
   const c = new MultiStrategyCoordinator({
     userId: "u1", symbol: "ETHUSDT",
-    strategies: ["ADAPTIVE_FUSION"], totalCapital: 105, engineFactory: () => ({}),
+    strategies: ["ADAPTIVE_FUSION"], totalCapital: 105, engineFactory: () => ({}), dryRun: false,
   });
   const leader = fakeEngine("ADAPTIVE_FUSION", { capital: 105, trades: [], openPositions: [] });
   c.engines.set("ADAPTIVE_FUSION", leader);

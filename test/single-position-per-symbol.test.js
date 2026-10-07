@@ -52,7 +52,7 @@ console.log("\n🔒 Single-Position-Per-Symbol Regression (GRASS/USDT)\n");
   const coord = new MultiStrategyCoordinator({
     userId: "grass", symbol: "GRASSUSDT",
     strategies, totalCapital: 100,
-    engineFactory: factory, accountCoordinator: ac, dryRun: true,
+    engineFactory: factory, accountCoordinator: ac, dryRun: false,
     maxPositionsPerCoin: 1,
   });
   await coord.start();

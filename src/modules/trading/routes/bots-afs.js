@@ -25,6 +25,10 @@ module.exports = function createBotsRouter(helpers) {
   // Cap account-wide posisi terbuka per-tier (fix meter "8/4").
   const { getMaxConcurrentPositions, getMaxActiveBots, getTierConfig } = require("../../../core/risk-engine/tierConfig");
   const { ingressNormalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
+  const {
+    DRY_RUN_NEWS_STRATEGY_KEY,
+    isDryRunMode,
+  } = require("../../../config/dryRunNewsStrategy");
   const { mergeBotStartOverrides } = require("../services/botConfigMerge");
   const db = require("../../../infrastructure/db/database");
   const envCfg = require("../../../config/env");
@@ -162,7 +166,9 @@ module.exports = function createBotsRouter(helpers) {
       // fall back to tierStrategies so the card shows the tier count even if the in-memory
       // instance is a legacy BotEngine (will be upgraded on next restart).
       const liveSg = live.strategyGroup ?? botRecord.strategyGroup ?? [];
-      const effectiveSg = liveSg.length > 0 ? liveSg : tierStrategies;
+      const effectiveSg = liveSg.length > 0
+        ? liveSg
+        : (botRecord.dryRun ? tierStrategies : []);
       // Posisi: utamakan live (sudah di-enrich unrealizedPL/mark). Bila engine baru
       // warm-up & belum memuat posisinya, fallback ke DB → posisi tetap tampil.
       const livePositions = Array.isArray(live.openPositions) ? live.openPositions : [];
@@ -208,7 +214,7 @@ module.exports = function createBotsRouter(helpers) {
     const unrealizedPnL = sumUnrealizedPnL(openPositions);
     const dbSg = Array.isArray(botRecord.strategyGroup) && botRecord.strategyGroup.length > 0
       ? botRecord.strategyGroup
-      : tierStrategies;  // legacy bots with strategyGroup=[] show tier count
+      : (botRecord.dryRun ? tierStrategies : []);
     const historicalPnL = closedPnlMap ? (closedPnlMap.get(botRecord.symbol) ?? 0) : 0;
     return {
       ...botRecord,
@@ -509,9 +515,9 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       const tpMode = tpModeRaw === "partial" ? "partial" : "full";
-      const isLive = dryRun === false;
+      const isLive = !isDryRunMode(dryRun);
       const mode   = isLive ? "live" : "dry";
-      const useMulti = MULTI_STRATEGY_ENABLED && !explicitStrategyKey;
+      const useMulti = MULTI_STRATEGY_ENABLED && isLive && !explicitStrategyKey;
 
       let strategies;
       if (useMulti) {
@@ -522,6 +528,8 @@ module.exports = function createBotsRouter(helpers) {
             message: `Tier kamu belum punya strategi yang siap untuk mode ${mode}.`,
           });
         }
+      } else if (!isLive) {
+        strategies = [DRY_RUN_NEWS_STRATEGY_KEY];
       } else {
         const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "SMART_MONEY_CONCEPTS", {
           source: "bots-afs.create",
@@ -613,14 +621,22 @@ module.exports = function createBotsRouter(helpers) {
       const tpMode = tpModeRaw === "partial" ? "partial" : "full"; // whitelist
       // FE lama mengirim strategyKey; FE baru (multi-strategy) tidak. Bedakan keduanya.
       const explicitStrategyKey = req.body.strategyKey;
-      const mode = dryRun === false ? "live" : "dry";
+      // Read the existing bot before choosing the execution mode. When the FE
+      // omits dryRun, the persisted bot mode remains authoritative.
+      let bot = await prisma.bot.findUnique({
+        where: { userId_symbol: { userId, symbol } },
+      });
+      const effectiveDryRun = dryRun !== undefined
+        ? isDryRunMode(dryRun)
+        : (bot?.dryRun ?? true);
+      const mode = effectiveDryRun ? "dry" : "live";
       const legacyMonitorOnly = !isAllowedSymbol(symbol);
 
       // ── Tentukan jalur eksekusi: multi-strategy (otomatis dari tier) vs legacy ──
       // Multi aktif hanya bila flag ON DAN FE tidak memilih strategi manual.
-      const useMulti = MULTI_STRATEGY_ENABLED && !explicitStrategyKey;
+      const useMulti = MULTI_STRATEGY_ENABLED && !effectiveDryRun && !explicitStrategyKey;
 
-      let strategies = null;
+      let strategies = effectiveDryRun ? [DRY_RUN_NEWS_STRATEGY_KEY] : null;
       if (useMulti) {
         strategies = await getTierStrategies(userId, mode);
         if (!strategies.length) {
@@ -630,7 +646,7 @@ module.exports = function createBotsRouter(helpers) {
             message: `Tier kamu belum punya strategi yang siap dijalankan pada mode ${mode}.`,
           });
         }
-      } else {
+      } else if (!effectiveDryRun) {
         // Legacy: entitlement check untuk strategi tunggal yang dipilih.
         const strategyKey = ingressNormalizeStrategyKey(explicitStrategyKey || "SMART_MONEY_CONCEPTS", {
           source: "bots-afs.create",
@@ -681,6 +697,11 @@ module.exports = function createBotsRouter(helpers) {
         }
       }
 
+      // Pair-tier filters are for live strategy selection only. They must not
+      // replace the single controlled dry-run news strategy with a technical
+      // fallback such as MEAN_REVERSION.
+      if (effectiveDryRun) strategies = [DRY_RUN_NEWS_STRATEGY_KEY];
+
       // Build strategy warning if pair tier is not LIQUID
       let strategyWarning = pairClass.tier !== "LIQUID"
         ? `${symbol} adalah pair ${pairClass.tier} (risiko ${pairClass.riskLevel}). SL diperlebar ${tierOverrides.slMultiplier}×, ukuran posisi dikurangi ke ${Math.round(tierOverrides.positionSizeAdjustment * 100)}%.`
@@ -690,11 +711,6 @@ module.exports = function createBotsRouter(helpers) {
       }
 
       const capitalPerStrategy = (capital || 500) / strategies.length;
-
-      // Check if bot exists for this user
-      let bot = await prisma.bot.findUnique({
-        where: { userId_symbol: { userId, symbol } },
-      });
 
       if (legacyMonitorOnly && !bot) {
         return res.status(400).json({
@@ -726,7 +742,7 @@ module.exports = function createBotsRouter(helpers) {
         strategyKey:        strategies[0],
         strategyGroup:      useMulti ? strategies : [],
         capitalPerStrategy: useMulti ? capitalPerStrategy : 0,
-        dryRun:             dryRun !== undefined ? dryRun !== false : (bot?.dryRun ?? true),
+        dryRun:             effectiveDryRun,
         tpMode,
       };
 
@@ -1239,6 +1255,14 @@ module.exports = function createBotsRouter(helpers) {
 
       const data = {};
 
+      // A paper bot has no selectable technical strategy anymore. Keep this
+      // endpoint from reintroducing an old key through the settings screen and
+      // migrate legacy dry-run records while they are edited.
+      if (bot.dryRun) {
+        data.strategyKey = DRY_RUN_NEWS_STRATEGY_KEY;
+        data.strategyGroup = [];
+      }
+
       // Validasi strategyKey (entitlement per tier) bila dikirim
       if (strategyKey !== undefined) {
         if (typeof strategyKey !== "string" || !strategyKey) {
@@ -1248,8 +1272,16 @@ module.exports = function createBotsRouter(helpers) {
           source: "bots-afs.config",
           mode: "live",
         });
+        if (bot.dryRun && canonicalKey !== DRY_RUN_NEWS_STRATEGY_KEY) {
+          return res.status(400).json({
+            ok: false,
+            statusCode: 400,
+            message: `Dry Run hanya menggunakan ${DRY_RUN_NEWS_STRATEGY_KEY}; strategi teknikal dinonaktifkan.`,
+            code: "DRY_RUN_NEWS_STRATEGY_ONLY",
+          });
+        }
         try {
-          await assertStrategyAllowed(userId, canonicalKey);
+          if (!bot.dryRun) await assertStrategyAllowed(userId, canonicalKey);
         } catch (e) {
           return res.status(e.status).json(e.body);
         }

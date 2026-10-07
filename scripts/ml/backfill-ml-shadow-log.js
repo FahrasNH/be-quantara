@@ -88,6 +88,9 @@ function buildShadowLogPayload(row, { pWin, threshold = DEFAULT_THRESHOLD }) {
     strategyKey,
     symbol:        row.symbol,
     regime:        entryContext.regime ?? entryContext.htfRegime ?? null,
+    // A missing provenance flag must stay unknown; treating it as live would
+    // silently misclassify legacy rows when this pure helper is reused.
+    mode:          row.dry_run == null ? "unknown" : row.dry_run === 1 ? "staging" : "live",
     features:      null, // filled by caller after feature vector build
     createdAt:     openTime,
   };
@@ -97,11 +100,12 @@ async function fetchClosedEngineTradesForBackfill({ days, limit }) {
   const { rows } = await _pool.query(
     `SELECT id, symbol, side, entry_price, open_time, close_time,
             pnl, pnl_pct, reason, strategy_name, indicators, status,
-            entry_context, pair_tier
+            entry_context, pair_tier, dry_run
        FROM trades
       WHERE status = 'closed'
         AND close_time IS NOT NULL
         AND status IS DISTINCT FROM 'cancelled'
+        AND dry_run = 1
         AND open_time > NOW() - ($1 || ' days')::interval
       ORDER BY open_time ASC
       LIMIT $2`,

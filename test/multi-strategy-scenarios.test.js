@@ -57,7 +57,7 @@ function buildCoord(userId, symbol, strategies, capital) {
   const factory = (k, cfg) => { const e = makeEngine(k, cfg, ac); engines[k] = e; return e; };
   const coord = new MultiStrategyCoordinator({
     userId, symbol, strategies, totalCapital: capital,
-    engineFactory: factory, accountCoordinator: ac, dryRun: true,
+    engineFactory: factory, accountCoordinator: ac, dryRun: false,
   });
   return { ac, engines, coord };
 }

@@ -26,10 +26,18 @@ const {
   requiresHtfFailClosed,
   shouldBlockHtfDirectional,
 } = require("../../../config/htfMode");
+const {
+  DRY_RUN_NEWS_STRATEGY_KEY,
+  isDryRunMode,
+  resolveRuntimeStrategyKey,
+} = require("../../../config/dryRunNewsStrategy");
 
 class AdaptiveStrategyEngine extends BotEngine {
   constructor(config = {}) {
-    const strategyKey = config.strategyKey || "ADAPTIVE_FUSION";
+    const strategyKey = resolveRuntimeStrategyKey(
+      config.strategyKey || "ADAPTIVE_FUSION",
+      isDryRunMode(config.dryRun),
+    );
 
     // Validate and load strategy
     const validation = strategyRegistry.validate(strategyKey);
@@ -40,7 +48,7 @@ class AdaptiveStrategyEngine extends BotEngine {
     }
 
     // Initialize parent BotEngine
-    super(config);
+    super({ ...config, strategyKey });
 
     // BotEngine hanya menyimpan this.config.symbol, tidak this.symbol.
     // Kita set eksplisit agar semua method di class ini bisa pakai this.symbol.
@@ -242,6 +250,12 @@ class AdaptiveStrategyEngine extends BotEngine {
     // posisi setelah bot di-stop (langgar aturan: stop harus benar-benar berhenti).
     if (this._stopRequested || !this.state.running) {
       return;
+    }
+    // The dry-run news experiment is owned by BotEngine's Grok/news pipeline,
+    // not the technical AFS detector. Keep this escape hatch here because old
+    // callers can still instantiate AdaptiveStrategyEngine directly.
+    if (this.config.strategyKey === DRY_RUN_NEWS_STRATEGY_KEY) {
+      return super._tick();
     }
     try {
       // 1. Ambil data candle — method BotEngine yang benar

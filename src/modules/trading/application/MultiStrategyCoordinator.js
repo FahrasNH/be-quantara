@@ -36,6 +36,10 @@
 const EventEmitter = require("events");
 const { resolveConflicts } = require("../../../core/signal-engine/SignalConflictResolver");
 const { STRATEGY_ABBREV } = require("../../../config/strategyKeyNormalizer");
+const {
+  isDryRunMode,
+  resolveDryRunStrategies,
+} = require("../../../config/dryRunNewsStrategy");
 
 class MultiStrategyCoordinator extends EventEmitter {
   /**
@@ -70,7 +74,11 @@ class MultiStrategyCoordinator extends EventEmitter {
     if (typeof engineFactory !== "function") {
       throw new Error("MultiStrategyCoordinator: engineFactory (function) wajib di-inject");
     }
-    const list = (Array.isArray(strategies) ? strategies : []).filter(Boolean);
+    const effectiveDryRun = isDryRunMode(dryRun);
+    const list = resolveDryRunStrategies(
+      (Array.isArray(strategies) ? strategies : []).filter(Boolean),
+      effectiveDryRun,
+    );
     if (list.length === 0) {
       throw new Error("MultiStrategyCoordinator: minimal satu strategi diperlukan");
     }
@@ -82,7 +90,7 @@ class MultiStrategyCoordinator extends EventEmitter {
     this.capitalPerStrategy = this.totalCapital / list.length;
     this.engineFactory = engineFactory;
     this.accountCoordinator = accountCoordinator;
-    this.dryRun = dryRun !== false;
+    this.dryRun = effectiveDryRun;
     this.conflictMode = conflictMode === "majority" ? "majority" : "skip";
     this.pollIntervalMs = Number(pollIntervalMs) || 0;
     this.engineConfig = engineConfig;

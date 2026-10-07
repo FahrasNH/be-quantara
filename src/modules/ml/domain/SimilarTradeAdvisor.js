@@ -24,11 +24,11 @@ class SimilarTradeAdvisor {
    *
    * @param {object} entryContext — current trade entry features
    * @param {object} tradeMetadata — { strategyKey, symbol, side }
-   * @param {{ k, regimeFilter, minSimilarTrades }} [options]
+   * @param {{ k, regimeFilter, minSimilarTrades, beforeDate }} [options]
    * @returns {object} analysis card
    */
   async findSimilarAndAnalyze(entryContext, tradeMetadata = {}, options = {}) {
-    const { k = 20, regimeFilter = true, minSimilarTrades = 5 } = options;
+    const { k = 20, regimeFilter = true, minSimilarTrades = 5, beforeDate = null } = options;
 
     const featureVector = this.featureEngineer.buildFeatureVector(entryContext, tradeMetadata);
 
@@ -38,14 +38,18 @@ class SimilarTradeAdvisor {
       filters.regime = entryContext.regime || tradeMetadata.regime;
     }
     if (tradeMetadata.symbol) filters.symbol = tradeMetadata.symbol;
+    if (tradeMetadata.strategyKey) filters.strategyKey = tradeMetadata.strategyKey;
+    if (beforeDate) filters.beforeDate = beforeDate;
 
-    let similar = [];
+    let similar;
     try {
       similar = await this.vectorStore.findSimilar(featureVector, k, filters);
 
       // If too few results with filters, try without regime filter
       if (similar.length < minSimilarTrades && Object.keys(filters).length > 0) {
-        const broader = await this.vectorStore.findSimilar(featureVector, k, {});
+        const broaderFilters = { ...filters };
+        delete broaderFilters.regime;
+        const broader = await this.vectorStore.findSimilar(featureVector, k, broaderFilters);
         if (broader.length > similar.length) similar = broader;
       }
     } catch (err) {

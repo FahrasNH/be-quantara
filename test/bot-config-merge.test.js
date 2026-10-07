@@ -41,6 +41,7 @@ describe("botConfigMerge", () => {
     assert.equal(merged.dryRun, true);
     assert.equal(merged.tpMode, "partial");
     assert.equal(merged.symbol, "BTCUSDT");
+    assert.equal(merged.strategyKey, "GROK_NEWS_TRADING");
   });
 
   test("mergeBotStartOverrides ignores unknown flat root keys", () => {
@@ -50,5 +51,15 @@ describe("botConfigMerge", () => {
       explicit: { strategyKey: "MEAN_REVERSION" },
     });
     assert.equal(merged.flatKnob, undefined);
+    assert.equal(merged.strategyKey, "MEAN_REVERSION");
+  });
+
+  test("mergeBotStartOverrides preserves live strategy when dryRun is explicit false", () => {
+    const merged = mergeBotStartOverrides({
+      strategyKey: "TREND_FOLLOWING",
+      explicit: { dryRun: false },
+    });
+    assert.equal(merged.dryRun, false);
+    assert.equal(merged.strategyKey, "TREND_FOLLOWING");
   });
 });

@@ -277,17 +277,32 @@ module.exports = function createMetaSelectorRouter(wssOrRef = null) {
    */
   router.get("/rag/readiness", async (req, res) => {
     try {
+      const { symbol, strategyKey } = req.query;
       const svc = getMLShadowService();
       if (!svc) {
         return res.json({
           ok: true,
           ready: false,
           failures: ["MLShadowService not available"],
-          auc: 0, accuracy: 0, precision: 0, tradeCount: 0,
+          auc: null, accuracy: null, precision: null, tradeCount: 0,
+          scope: { mode: "staging", symbol: symbol || null, strategyKey: strategyKey || null, windowDays: 90 },
         });
       }
-      const readiness = await svc.checkReadinessThresholds();
-      return res.json({ ok: true, ...readiness });
+      const readiness = await svc.checkReadinessThresholds({ symbol, strategyKey });
+      // RAG_MODE is process-wide, so the promotion action must also satisfy
+      // the all-staging-data gate. The scoped values remain visible for the
+      // selected pair, while this second check prevents a single pair from
+      // promoting a globally unready model.
+      const promotion = symbol || strategyKey
+        ? await svc.checkReadinessThresholds()
+        : readiness;
+      return res.json({
+        ok: true,
+        ...readiness,
+        promotionReady: promotion.ready,
+        promotionFailures: promotion.failures,
+        promotionScope: promotion.scope,
+      });
     } catch (err) {
       console.error("[MetaSelector] rag/readiness error:", err.message);
       return res.status(500).json({ ok: false, error: err.message });

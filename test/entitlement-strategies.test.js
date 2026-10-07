@@ -24,9 +24,7 @@ const vault = ["ADAPTIVE_FUSION", "TREND_FOLLOWING", "MEAN_REVERSION", "BREAKOUT
 
 {
   const dry = filterStrategiesByMode(vault, "dry");
-  // Dry-run keeps halted BR when explicitly in the input list (observation / DRY_RUN_ALL pool).
-  t("dry mode → keeps all 4 umbrella keys including halted BR", dry.length === 4);
-  t("dry mode → BR still present while halted", dry.includes("BREAKOUT_RETEST"));
+  t("dry mode → exactly one Grok news strategy", dry.length === 1 && dry[0] === "GROK_NEWS_TRADING");
 }
 {
   const live = filterStrategiesByMode(vault, "live");

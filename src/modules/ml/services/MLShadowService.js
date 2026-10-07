@@ -15,6 +15,7 @@
  */
 
 const prisma = require("../../../infrastructure/db/prismaClient");
+const { normalizeStrategyKey } = require("../../../config/strategyKeyNormalizer");
 
 const DEFAULT_THRESHOLD = 0.6;
 
@@ -38,6 +39,7 @@ class MLShadowService {
     this.featureEngineer = featureEngineer;
     this.threshold       = parseFloat(process.env.ML_WIN_THRESHOLD || DEFAULT_THRESHOLD);
     this._predictionCount = 0; // in-process counter for auto-log every 100
+    this._ready           = Promise.resolve();
   }
 
   // ── Prediction logging ────────────────────────────────────────────────────
@@ -50,10 +52,22 @@ class MLShadowService {
    */
   async logPrediction(tradeId, entryContext, tradeMetadata = {}) {
     try {
+      // autoStart loads the JSON model asynchronously. Waiting here prevents
+      // the first shadow predictions from being logged with the neutral 0.5
+      // fallback while the model is still loading.
+      await this._ready;
       const features = this.featureEngineer.buildFeatureVector(entryContext, tradeMetadata);
       const { pWin } = this.winPredictor.predict(features);
 
       const prediction = pWin >= this.threshold ? "win" : "loss";
+      const isDryRun = tradeMetadata.dryRun === true
+        || tradeMetadata.dryRun === 1
+        || tradeMetadata.dryRun === "true";
+      const isLive = tradeMetadata.dryRun === false
+        || tradeMetadata.dryRun === 0
+        || tradeMetadata.dryRun === "false";
+      const mode = tradeMetadata.mode
+        || (isDryRun ? "staging" : isLive ? "live" : "unknown");
 
       await prisma.mLShadowLog.create({
         data: {
@@ -64,6 +78,7 @@ class MLShadowService {
           strategyKey: tradeMetadata.strategyKey || null,
           symbol:      tradeMetadata.symbol      || null,
           regime:      tradeMetadata.regime      || entryContext?.regime || null,
+          mode,
           features:    Array.from(features),
         },
       });
@@ -80,6 +95,7 @@ class MLShadowService {
           strategyKey: tradeMetadata.strategyKey,
           symbol:      tradeMetadata.symbol,
           regime:      tradeMetadata.regime || entryContext?.regime,
+          mode,
           timestamp:   new Date().toISOString(),
         }).catch(() => {});
       }
@@ -110,6 +126,7 @@ class MLShadowService {
             strategyKey: log.strategyKey,
             symbol:      log.symbol,
             regime:      log.regime,
+            mode:        log.mode,
             outcome,
             timestamp:   log.createdAt?.toISOString(),
           };
@@ -226,14 +243,24 @@ class MLShadowService {
    *
    * @returns {Promise<{ auc, accuracy, precision, tradeCount, ready, failures }>}
    */
-  async checkReadinessThresholds() {
-    const thirtyDaysAgo = new Date(Date.now() - 90 * 86400000); // 90-day window for sprint 6
+  async checkReadinessThresholds({
+    symbol = null,
+    strategyKey = null,
+    mode = "staging",
+    windowDays = 90,
+  } = {}) {
+    const since = new Date(Date.now() - Math.max(1, windowDays) * 86400000);
+    const canonicalStrategyKey = strategyKey ? normalizeStrategyKey(strategyKey) : null;
+    const where = {
+      createdAt:     { gte: since },
+      actualOutcome: { not: null },
+      ...(mode ? { mode } : {}),
+      ...(symbol ? { symbol: String(symbol).toUpperCase() } : {}),
+      ...(canonicalStrategyKey ? { strategyKey: canonicalStrategyKey } : {}),
+    };
 
     const logs = await prisma.mLShadowLog.findMany({
-      where: {
-        createdAt:     { gte: thirtyDaysAgo },
-        actualOutcome: { not: null },
-      },
+      where,
       orderBy: { createdAt: "asc" },
     });
 
@@ -241,9 +268,18 @@ class MLShadowService {
 
     if (tradeCount === 0) {
       return {
-        auc: 0, accuracy: 0, precision: 0,
+        // No observations is not the same as a measured zero-performance
+        // model. Keep these values null so the dashboard renders Pending.
+        auc: null, accuracy: null, precision: null,
         tradeCount: 0, ready: false,
         failures: ["No trades logged yet"],
+        thresholds: THRESHOLDS,
+        scope: {
+          mode,
+          symbol: symbol ? String(symbol).toUpperCase() : null,
+          strategyKey: canonicalStrategyKey,
+          windowDays,
+        },
       };
     }
 
@@ -284,6 +320,12 @@ class MLShadowService {
       ready,
       failures,
       thresholds: THRESHOLDS,
+      scope: {
+        mode,
+        symbol: symbol ? String(symbol).toUpperCase() : null,
+        strategyKey: canonicalStrategyKey,
+        windowDays,
+      },
     };
   }
 
@@ -371,7 +413,7 @@ class MLShadowService {
       const FeatureEngineer = require("../domain/FeatureEngineer");
 
       const wp = new WinPredictor();
-      wp.load().catch(() => {}); // async, fire-and-forget
+      const modelReady = wp.load().catch(() => {});
 
       // VectorStore/pgvector is optional — shadow log writes must not depend on it.
       let vs = null;
@@ -385,6 +427,7 @@ class MLShadowService {
 
       const fe      = new FeatureEngineer();
       const service = new MLShadowService(wp, vs, fe);
+      service._ready = modelReady;
 
       console.log("[MLShadowService] Auto-started in shadow mode");
       return service;

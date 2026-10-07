@@ -39,31 +39,48 @@ function getSimilarTradeAdvisor() {
 
 // Sprint 6 / RAG-BT-5 — lazy-loaded backtest engines for RAG analytics
 let _ragBacktestEngines = null;
-function getRAGBacktestEngines() {
+let _ragBacktestEnginesPromise = null;
+async function getRAGBacktestEngines() {
   if (_ragBacktestEngines) return _ragBacktestEngines;
-  try {
-    const FeatureEngineer             = require("../../ml/domain/FeatureEngineer");
-    const VectorStore                 = require("../../../infrastructure/db/VectorStore");
-    const { _pool }                   = require("../../../infrastructure/db/database");
-    const ConservativeBacktestEngine  = require("#core/research-engine/ConservativeBacktestEngine.js");
-    const WalkForwardBacktest         = require("../../../core/research-engine/WalkForwardBacktest");
-    const BiasQuantificationReport    = require("../../../core/research-engine/BiasQuantificationReport");
-    const AblationTest                = require("../../../core/research-engine/AblationTest");
-    const SimilarTradeAdvisor         = require("../../ml/domain/SimilarTradeAdvisor");
+  if (_ragBacktestEnginesPromise) return _ragBacktestEnginesPromise;
 
-    const vs = new VectorStore(_pool);
-    const fe = new FeatureEngineer();
-    const sta = new SimilarTradeAdvisor(vs, fe);
-    const cbe = new ConservativeBacktestEngine(vs, fe, null);
-    const abl = new AblationTest(null, sta, fe);
-    const wfb = new WalkForwardBacktest(cbe, abl);
-    const bqr = new BiasQuantificationReport();
+  _ragBacktestEnginesPromise = (async () => {
+    try {
+      const FeatureEngineer             = require("../../ml/domain/FeatureEngineer");
+      const WinPredictor                = require("../../ml/domain/WinPredictor");
+      const VectorStore                 = require("../../../infrastructure/db/VectorStore");
+      const { _pool }                   = require("../../../infrastructure/db/database");
+      const ConservativeBacktestEngine  = require("#core/research-engine/ConservativeBacktestEngine.js");
+      const WalkForwardBacktest         = require("../../../core/research-engine/WalkForwardBacktest");
+      const BiasQuantificationReport    = require("../../../core/research-engine/BiasQuantificationReport");
+      const AblationTest                = require("../../../core/research-engine/AblationTest");
+      const SimilarTradeAdvisor         = require("../../ml/domain/SimilarTradeAdvisor");
 
-    _ragBacktestEngines = { cbe, wfb, bqr, abl, vs, fe };
-  } catch (err) {
-    console.warn("[Analytics] RAG backtest engines unavailable:", err.message);
-  }
-  return _ragBacktestEngines;
+      const vs = new VectorStore(_pool);
+      const fe = new FeatureEngineer();
+      const wp = new WinPredictor();
+      const modelLoaded = await wp.load();
+      const sta = new SimilarTradeAdvisor(vs, fe);
+      // The validation dashboard must exercise the same model used by the
+      // shadow gate. Passing null here silently turned every LGB/RAG comparison
+      // into a neutral fallback and reported "model not loaded" forever.
+      const cbe = new ConservativeBacktestEngine(vs, fe, wp);
+      const abl = new AblationTest(wp, sta, fe);
+      const wfb = new WalkForwardBacktest(cbe, abl);
+      const bqr = new BiasQuantificationReport();
+
+      _ragBacktestEngines = {
+        cbe, wfb, bqr, abl, vs, fe, winPredictor: wp, modelLoaded,
+      };
+      return _ragBacktestEngines;
+    } catch (err) {
+      _ragBacktestEnginesPromise = null;
+      console.warn("[Analytics] RAG backtest engines unavailable:", err.message);
+      return null;
+    }
+  })();
+
+  return _ragBacktestEnginesPromise;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -346,7 +363,9 @@ module.exports = function createAnalyticsRouter() {
   router.get("/rag-backtest/status", async (req, res) => {
     const t0 = Date.now();
     try {
-      const engines = getRAGBacktestEngines();
+      const { symbol, strategyKey: rawStrategyKey } = req.query;
+      const strategyKey = normalizeStrategyKey(rawStrategyKey);
+      const engines = await getRAGBacktestEngines();
 
       let pgvectorOk        = false;
       let pgvectorLatency   = null;
@@ -388,19 +407,35 @@ module.exports = function createAnalyticsRouter() {
         }
       } catch { /* ignore */ }
 
+      const shadowWhere = {
+        mode: "staging",
+        ...(symbol ? { symbol: String(symbol).toUpperCase() } : {}),
+        ...(strategyKey ? { strategyKey } : {}),
+      };
+
       // Similar trade count
       try {
-        similarTradeCount = await prisma.tradeEmbedding.count().catch(() => 0);
+        similarTradeCount = engines?.vs
+          ? await engines.vs.count({
+            ...(symbol ? { symbol: String(symbol).toUpperCase() } : {}),
+            ...(strategyKey ? { strategyKey } : {}),
+          }).catch(() => 0)
+          : 0;
       } catch { /* ignore */ }
 
       // Shadow log count + AUC
       try {
-        shadowLogCount = await prisma.mLShadowLog.count().catch(() => 0);
+        shadowLogCount = await prisma.mLShadowLog.count({ where: shadowWhere }).catch(() => 0);
         if (shadowLogCount > 0) {
           const MLShadowService = require("../../ml/services/MLShadowService");
           const svc = new MLShadowService();
-          const aucResult = await svc.computeAUC().catch(() => null);
-          if (aucResult?.auc != null) modelAuc = aucResult.auc;
+          const labeledLogs = await prisma.mLShadowLog.findMany({
+            where: { ...shadowWhere, actualOutcome: { not: null } },
+            select: { pWin: true, actualOutcome: true },
+            orderBy: { createdAt: "asc" },
+            take: 5000,
+          }).catch(() => []);
+          if (labeledLogs.length > 0) modelAuc = svc.computeAUC(labeledLogs);
         }
       } catch { /* ignore */ }
 
@@ -422,6 +457,20 @@ module.exports = function createAnalyticsRouter() {
           mlShadow:      { ok: shadowLogCount > 0, count: shadowLogCount, label: `${shadowLogCount} logs` },
           similarTrades: { ok: similarTradeCount > 0, count: similarTradeCount, label: `${similarTradeCount} embeddings` },
         },
+        scope: {
+          mode: "staging",
+          symbol: symbol ? String(symbol).toUpperCase() : null,
+          strategyKey: strategyKey || null,
+          label: [strategyKey, symbol ? String(symbol).toUpperCase() : null].filter(Boolean).join(" / ") || "All staging data",
+        },
+        model: engines?.winPredictor?.model
+          ? {
+            loaded: true,
+            trainedAt: engines.winPredictor.model.trainedAt || null,
+            tradeCount: engines.winPredictor.model.tradeCount || null,
+            source: engines.winPredictor.model.source || null,
+          }
+          : { loaded: false },
         ragMode,
         enginesAvailable: !!engines,
       });
@@ -455,7 +504,7 @@ module.exports = function createAnalyticsRouter() {
         });
       }
 
-      const engines = getRAGBacktestEngines();
+      const engines = await getRAGBacktestEngines();
       if (!engines) {
         return res.status(503).json({ ok: false, error: "RAG backtest engines not available" });
       }
@@ -492,9 +541,16 @@ module.exports = function createAnalyticsRouter() {
       // Live metrics from shadow log
       let liveMetrics = null;
       try {
-        const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+        const shadowSince = new Date(Date.now() - periodDays(period) * 86400000);
+        const shadowWhere = {
+          mode: "staging",
+          createdAt: { gte: shadowSince },
+          actualOutcome: { not: null },
+          ...(symbol ? { symbol: String(symbol).toUpperCase() } : {}),
+          ...(strategyKey ? { strategyKey: normalizeStrategyKey(strategyKey) } : {}),
+        };
         const shadowLogs = await prisma.mLShadowLog.findMany({
-          where:   { createdAt: { gte: thirtyDaysAgo }, actualOutcome: { not: null } },
+          where:   shadowWhere,
           orderBy: { createdAt: "asc" },
           take:    1000,
         });
@@ -507,39 +563,46 @@ module.exports = function createAnalyticsRouter() {
             profitFactor: null,
             sharpe:       null,
             avgPnl:       null,
+            mode:         "staging",
+            periodDays:   periodDays(period),
           };
         }
       } catch { /* ignore */ }
 
       // Bias report
+      const btMetrics = backtestResult?.metrics;
+      const hasAcceptedBacktestSignals = Number(btMetrics?.tradeCount) > 0;
       let biasReport = null;
-      if (backtestResult?.metrics && liveMetrics) {
+      if (hasAcceptedBacktestSignals && liveMetrics) {
         try {
-          biasReport = engines.bqr.generate(backtestResult.metrics, liveMetrics);
+          biasReport = engines.bqr.generate(btMetrics, liveMetrics);
         } catch (err) {
           console.warn("[Analytics] Bias report failed:", err.message);
         }
       }
 
-      const btMetrics = backtestResult?.metrics;
+      const hasBacktestData = trades.length > 0;
       const timeAware = {
-        baselineWr:             ablationResult?.baseline?.wr ?? null,
-        baselinePf:             ablationResult?.baseline?.pf ?? null,
-        backTestWr:             btMetrics?.winRate ?? null,
-        backTestPf:             btMetrics?.profitFactor ?? null,
-        conservativeWrEstimate: btMetrics?.conservative?.winRate ?? null,
-        conservativePfEstimate: btMetrics?.conservative?.profitFactor ?? null,
+        baselineWr:             hasBacktestData ? (ablationResult?.baseline?.wr ?? null) : null,
+        baselinePf:             hasBacktestData ? (ablationResult?.baseline?.pf ?? null) : null,
+        backTestWr:             hasAcceptedBacktestSignals ? (btMetrics?.winRate ?? null) : null,
+        backTestPf:             hasAcceptedBacktestSignals ? (btMetrics?.profitFactor ?? null) : null,
+        conservativeWrEstimate: hasAcceptedBacktestSignals ? (btMetrics?.conservative?.winRate ?? null) : null,
+        conservativePfEstimate: hasAcceptedBacktestSignals ? (btMetrics?.conservative?.profitFactor ?? null) : null,
         conservativeDiscount:   btMetrics?.discountFactor != null
           ? +(1 - btMetrics.discountFactor).toFixed(2)
-          : 0.1,
+          : null,
       };
 
       const walkForwardChart = (walkForwardResult?.windows || []).map((w) => ({
-        window: w.windowIndex,
-        lgbWr:  w.lgbWr ?? w.wr,
-        ragWr:  w.ragWr ?? w.wr,
-        lgbPf:  w.lgbPf ?? w.pf,
-        ragPf:  w.ragPf ?? w.pf,
+        window:           w.windowIndex,
+        testCount:        w.testCount ?? 0,
+        lgbWr:            w.lgbWr ?? w.wr,
+        ragWr:            w.ragWr ?? w.wr,
+        lgbPf:            w.lgbPf ?? w.pf,
+        ragPf:            w.ragPf ?? w.pf,
+        lgbSelectedCount: w.lgbSelectedCount ?? w.selectedCount ?? 0,
+        ragSelectedCount: w.ragSelectedCount ?? w.selectedCount ?? 0,
       }));
 
       const payload = {
@@ -554,6 +617,24 @@ module.exports = function createAnalyticsRouter() {
         timeAware,
         liveMetrics,
         biasReport,
+        dataScope: {
+          mode: "staging",
+          backtestSource: "bot_trades",
+          backtestFilter: "dry_run=true",
+          shadowSource: "MLShadowLog",
+          strategyKey: normalizeStrategyKey(strategyKey),
+          symbol: symbol ? String(symbol).toUpperCase() : null,
+          period,
+          shadowPeriodDays: periodDays(period),
+        },
+        dataQuality: {
+          backtest: trades.length === 0
+            ? "no_data"
+            : hasAcceptedBacktestSignals ? "available" : "no_accepted_signals",
+          walkForward: walkForwardResult?.windows?.some((w) => w.testCount > 0) ? "available" : "no_data",
+          ablation: ablationResult && trades.length > 0 ? "available" : "no_data",
+          shadow: liveMetrics ? "available" : "no_data",
+        },
         generatedAt:   new Date().toISOString(),
       };
 
@@ -584,10 +665,17 @@ module.exports = function createAnalyticsRouter() {
 
 function buildDateFilter(period) {
   if (!period || period === "all-time") return {};
-  const days = period === "7d" ? 7 : period === "30d" ? 30 : 90;
+  const days = periodDays(period);
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
   return { enteredAt: { gte: since } };
+}
+
+function periodDays(period) {
+  if (period === "7d") return 7;
+  if (period === "30d") return 30;
+  if (period === "all-time") return 36500;
+  return 90;
 }
 
 /** Normalize strategy keys for analytics filters (SSOT: config/strategies.js). */
@@ -605,7 +693,9 @@ async function fetchBacktestTrades({ symbol, strategyKey, period, limit = 500 } 
   let rows = [];
 
   try {
-    rows = await db.getTradesExport({ symbol: symbol || null, limit: maxRows });
+    // This dashboard is explicitly staging-only. Do not mix real-money
+    // executions into a validation result that may be used for promotion.
+    rows = await db.getTradesExport({ symbol: symbol || null, dryRun: true, limit: maxRows });
   } catch (err) {
     console.warn("[Analytics] getTradesExport failed:", err.message);
   }
@@ -622,13 +712,14 @@ async function fetchBacktestTrades({ symbol, strategyKey, period, limit = 500 } 
       result:       r.result,
       pnlPct:       typeof r.pnlPct === "number" ? r.pnlPct : parseFloat(r.pnlPct) || 0,
       pnl:          typeof r.pnl === "number" ? r.pnl : parseFloat(r.pnl) || 0,
-      entryContext: {},
+      entryContext: r.entryContext || {},
       regime:       null,
+      mode:         "staging",
     }));
 
   // Period filter
   if (period && period !== "all-time") {
-    const days = period === "7d" ? 7 : period === "30d" ? 30 : 90;
+    const days = periodDays(period);
     const sinceMs = Date.now() - days * 86400000;
     trades = trades.filter((t) => new Date(t.entryAt).getTime() >= sinceMs);
   }
@@ -648,7 +739,7 @@ async function fetchBacktestTrades({ symbol, strategyKey, period, limit = 500 } 
   if (trades.length === 0) {
     try {
       const dateFilter = buildDateFilter(period);
-      const where = { status: "CLOSED", ...dateFilter };
+      const where = { status: "CLOSED", bot: { dryRun: true }, ...dateFilter };
       if (symbol) where.symbol = symbol;
       if (strategyKey) {
         const want = normalizeStrategyKey(strategyKey);
@@ -680,6 +771,7 @@ async function fetchBacktestTrades({ symbol, strategyKey, period, limit = 500 } 
           pnl:          pnl,
           entryContext: t.entryContext || {},
           regime:       t.entryContext?.regime ?? null,
+          mode:         "staging",
         };
       });
     } catch (err) {
