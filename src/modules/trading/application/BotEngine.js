@@ -2266,11 +2266,21 @@ class BotEngine extends EventEmitter {
         symbol: this.config.symbol,
       });
     } catch (err) {
-      this._log("warn", `[GROK NEWS] News API gagal — fail-closed: ${err.message}`);
+      const diagnostics = err?.diagnostics || GrokNewsTradingService.newsClient.lastDiagnostics;
+      const detail = diagnostics
+        ? ` — feed ${diagnostics.successfulFeeds}/${diagnostics.feedRequests} OK, `
+          + `search ${diagnostics.successfulSearches}/${diagnostics.searchQueries}`
+        : "";
+      this._log("warn", `[GROK NEWS] News API gagal — fail-closed: ${err.message}${detail}`);
       return;
     }
     if (!Array.isArray(news) || news.length === 0) {
-      this._log("info", `[GROK NEWS] Tidak ada news makro fresh untuk ${this.config.symbol} — skip entry`);
+      const diagnostics = GrokNewsTradingService.newsClient.lastDiagnostics;
+      const detail = diagnostics
+        ? ` — feed ${diagnostics.successfulFeeds}/${diagnostics.feedRequests} OK, `
+          + `search ${diagnostics.successfulSearches}/${diagnostics.searchQueries}, raw ${diagnostics.rawArticles}`
+        : "";
+      this._log("info", `[GROK NEWS] Tidak ada news makro fresh untuk ${this.config.symbol} — skip entry${detail}`);
       return;
     }
 

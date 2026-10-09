@@ -4,10 +4,18 @@ const axios = require("axios");
 const cfg = require("../../config/env");
 
 const DEFAULT_MACRO_QUERIES = Object.freeze([
-  "FOMC Federal Reserve interest rate",
-  "Fed minutes Federal Reserve",
-  "CPI consumer price index inflation",
-  "NFP non-farm payrolls unemployment",
+  // The API search endpoint tokenizes these as keyword searches. Long
+  // conjunctive queries return zero results, so keep the recovery searches
+  // short and let the aggregate feeds handle the normal polling path.
+  "FOMC",
+  "Federal Reserve",
+  "CPI",
+  "NFP",
+]);
+
+const DEFAULT_MACRO_FALLBACK_FEEDS = Object.freeze([
+  { path: "/news", params: { category: "macro" } },
+  { path: "/breaking", params: {} },
 ]);
 
 const MACRO_EVENT_RULES = Object.freeze([
@@ -28,6 +36,8 @@ const MACRO_EVENT_RULES = Object.freeze([
       /federal reserve.{0,40}(rate|interest|decision|hike|cut)/i,
       /\bfed\b.{0,24}(rate|interest|decision|hike|cut)/i,
       /fed funds rate/i,
+      /\brate\s+(pause|decision|cut|hike|rise|hold)\b/i,
+      /interest[-\s]?rate/i,
     ],
   },
   {
@@ -38,6 +48,7 @@ const MACRO_EVENT_RULES = Object.freeze([
       /consumer price index/i,
       /inflation data/i,
       /inflation report/i,
+      /\binflation\b/i,
     ],
   },
   {
@@ -46,6 +57,7 @@ const MACRO_EVENT_RULES = Object.freeze([
     patterns: [
       /\bnfp\b/i,
       /non[- ]farm payroll/i,
+      /\bpayrolls?\b/i,
       /unemployment rate/i,
       /jobs report/i,
       /employment report/i,
@@ -150,47 +162,143 @@ class CryptoNewsClient {
     this.limit = Math.max(1, Number(options.limit ?? cfg.GROK_NEWS_MAX_ARTICLES ?? 20));
     this.http = options.http ?? axios;
     this.now = options.now ?? (() => Date.now());
-    this.cacheTtlMs = Math.max(10_000, Number(options.cacheTtlMs ?? cfg.GROK_NEWS_CACHE_TTL_MS ?? 120_000));
+    this.cacheTtlMs = Math.max(10_000, Number(
+      options.cacheTtlMs
+        ?? cfg.GROK_NEWS_CACHE_TTL_MS
+        ?? cfg.GROK_NEWS_CYCLE_MS
+        ?? 300_000,
+    ));
     this.queries = Array.isArray(options.queries) && options.queries.length
       ? options.queries
       : DEFAULT_MACRO_QUERIES;
+    this.fallbackFeeds = Array.isArray(options.fallbackFeeds)
+      ? options.fallbackFeeds
+      : DEFAULT_MACRO_FALLBACK_FEEDS;
+    this.lastDiagnostics = null;
   }
 
   async _get(path, params = {}) {
-    const response = await this.http.get(`${this.baseUrl}${path}`, {
-      params,
-      timeout: this.timeoutMs,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Quantara/2.0 (dry-run news strategy)",
-      },
-    });
-    return response?.data ?? {};
+    try {
+      const response = await this.http.get(`${this.baseUrl}${path}`, {
+        params,
+        timeout: this.timeoutMs,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Quantara/2.0 (dry-run news strategy)",
+        },
+      });
+      return response?.data ?? {};
+    } catch (err) {
+      const body = err?.response?.data;
+      if (body?.code === "RATE_LIMIT_EXCEEDED") {
+        const retryAfterSeconds = Number(body.retryAfter);
+        const retryText = Number.isFinite(retryAfterSeconds)
+          ? `; retry setelah ${Math.ceil(retryAfterSeconds / 60)} menit`
+          : "";
+        const rateError = new Error(`Crypto news API rate limit tercapai${retryText}`);
+        rateError.code = "NEWS_API_RATE_LIMITED";
+        rateError.retryAfterSeconds = Number.isFinite(retryAfterSeconds)
+          ? retryAfterSeconds
+          : null;
+        throw rateError;
+      }
+      throw err;
+    }
   }
 
-  async getHighImpactNews({ symbol = null, force = false } = {}) {
-    const cacheKey = `${String(symbol || "ALL").toUpperCase()}:${this.queries.join("|")}`;
+  async getHighImpactNews({ force = false } = {}) {
+    // Macro news is global, not symbol-specific. Sharing this cache prevents
+    // every BTC/ETH/SOL paper bot from issuing the same API requests.
+    const cacheKey = [
+      this.baseUrl,
+      this.maxAgeMinutes,
+      this.limit,
+      this.queries.join("|"),
+      this.fallbackFeeds.map((feed) => feed.path).join("|"),
+    ].join(":");
     const cached = cache.get(cacheKey);
     const nowMs = this.now();
-    if (!force && cached && nowMs - cached.at < this.cacheTtlMs) return cached.value;
+    if (!force && cached && nowMs - cached.at < this.cacheTtlMs) {
+      this.lastDiagnostics = { ...cached.diagnostics, cacheHit: true };
+      return cached.value;
+    }
 
-    const responses = await Promise.allSettled(
-      this.queries.map((query) => this._get("/search", { q: query, limit: this.limit })),
-    );
+    const diagnostics = {
+      cacheHit: false,
+      searchQueries: 0,
+      successfulSearches: 0,
+      failedSearches: 0,
+      rateLimitedSearches: 0,
+      feedRequests: 0,
+      successfulFeeds: 0,
+      failedFeeds: 0,
+      rateLimitedFeeds: 0,
+      rawArticles: 0,
+      matchedArticles: 0,
+    };
 
-    const raw = responses.flatMap((result) => (
-      result.status === "fulfilled" ? extractArticles(result.value) : []
-    ));
     const unique = new Map();
-    for (const item of raw) {
-      const normalized = normalizeArticle(item, nowMs, this.maxAgeMinutes);
-      if (normalized && !unique.has(normalized.id)) unique.set(normalized.id, normalized);
+    const addNormalized = (items) => {
+      diagnostics.rawArticles += items.length;
+      for (const item of items) {
+        const normalized = normalizeArticle(item, nowMs, this.maxAgeMinutes);
+        if (normalized && !unique.has(normalized.id)) unique.set(normalized.id, normalized);
+      }
+    };
+
+    // The aggregate feeds are the cheap, high-signal polling path. Search is
+    // deliberately a recovery path so the free API tier is not exhausted by
+    // repeated identical queries every dry-run cycle.
+    const feedResponses = await Promise.allSettled(
+      this.fallbackFeeds.map((feed) => this._get(feed.path, {
+        ...(feed.params || {}),
+        limit: this.limit,
+      })),
+    );
+    diagnostics.feedRequests = this.fallbackFeeds.length;
+    diagnostics.successfulFeeds = feedResponses.filter((result) => result.status === "fulfilled").length;
+    diagnostics.failedFeeds = feedResponses.filter((result) => result.status === "rejected").length;
+    diagnostics.rateLimitedFeeds = feedResponses.filter((result) => (
+      result.status === "rejected" && result.reason?.code === "NEWS_API_RATE_LIMITED"
+    )).length;
+    addNormalized(feedResponses.flatMap((result) => (
+      result.status === "fulfilled" ? extractArticles(result.value) : []
+    )));
+
+    if (unique.size === 0 && this.queries.length > 0) {
+      const searchResponses = await Promise.allSettled(
+        this.queries.map((query) => this._get("/search", { q: query, limit: this.limit })),
+      );
+      diagnostics.searchQueries = this.queries.length;
+      diagnostics.successfulSearches = searchResponses.filter((result) => result.status === "fulfilled").length;
+      diagnostics.failedSearches = searchResponses.filter((result) => result.status === "rejected").length;
+      diagnostics.rateLimitedSearches = searchResponses.filter((result) => (
+        result.status === "rejected" && result.reason?.code === "NEWS_API_RATE_LIMITED"
+      )).length;
+      addNormalized(searchResponses.flatMap((result) => (
+        result.status === "fulfilled" ? extractArticles(result.value) : []
+      )));
+    }
+
+    if (diagnostics.successfulSearches + diagnostics.successfulFeeds === 0) {
+      diagnostics.error = diagnostics.rateLimitedSearches + diagnostics.rateLimitedFeeds > 0
+        ? "NEWS_API_RATE_LIMITED"
+        : "NEWS_API_UNAVAILABLE";
+      this.lastDiagnostics = diagnostics;
+      const error = new Error(diagnostics.error === "NEWS_API_RATE_LIMITED"
+        ? "Crypto news API rate limit tercapai"
+        : "Crypto news API tidak dapat diakses");
+      error.code = diagnostics.error;
+      error.diagnostics = diagnostics;
+      throw error;
     }
 
     const value = [...unique.values()]
       .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
       .slice(0, this.limit);
-    cache.set(cacheKey, { at: nowMs, value });
+    diagnostics.matchedArticles = value.length;
+    this.lastDiagnostics = diagnostics;
+    cache.set(cacheKey, { at: nowMs, value, diagnostics });
     return value;
   }
 }
@@ -198,6 +306,7 @@ class CryptoNewsClient {
 module.exports = {
   CryptoNewsClient,
   DEFAULT_MACRO_QUERIES,
+  DEFAULT_MACRO_FALLBACK_FEEDS,
   MACRO_EVENT_RULES,
   classifyMacroEvent,
   extractArticles,
