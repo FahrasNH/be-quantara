@@ -379,7 +379,7 @@ const STRATEGIES = {
   GROK_NEWS_TRADING: {
     name:          "GROK_NEWS_TRADING",
     label:         "Grok News Trading (dry-run only)",
-    description:   "Dry-run-only macro-news reaction. Grok determines entry, SL, and TP only after fresh FOMC/Fed/CPI/NFP news.",
+    description:   "Dry-run-only Tier A/B news reaction. Grok determines entry, SL, and TP only after a fresh high-impact event.",
 
     emaFast:       20,
     emaSlow:       50,
@@ -417,7 +417,7 @@ const STRATEGIES = {
     interval:           "15m",
     checkInterval:      300_000,
     signalType:         "GROK_NEWS_TRADING",
-    trades:             "Event-driven (fresh macro news only)",
+    trades:             "Event-driven (fresh Tier A/B news only)",
     winrate:            "N/A — dry-run validation",
     risk:               "Controlled / event-driven",
   },

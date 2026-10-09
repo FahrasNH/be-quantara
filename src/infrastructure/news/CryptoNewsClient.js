@@ -2,15 +2,29 @@
 
 const axios = require("axios");
 const cfg = require("../../config/env");
+const {
+  NEWS_EVENT_LABELS,
+  NEWS_EVENT_TIERS,
+} = require("../../config/newsEventTypes");
 
 const DEFAULT_MACRO_QUERIES = Object.freeze([
   // The API search endpoint tokenizes these as keyword searches. Long
-  // conjunctive queries return zero results, so keep the recovery searches
-  // short and let the aggregate feeds handle the normal polling path.
+  // conjunctive queries return zero results. These short recovery queries are
+  // rotated in small batches; aggregate feeds remain the normal polling path.
   "FOMC",
   "Federal Reserve",
   "CPI",
+  "PCE",
   "NFP",
+  "GDP",
+  "PMI",
+  "retail sales",
+  "jobless claims",
+  "ETF",
+  "SEC",
+  "hack",
+  "stablecoin",
+  "liquidation",
 ]);
 
 const DEFAULT_MACRO_FALLBACK_FEEDS = Object.freeze([
@@ -21,7 +35,7 @@ const DEFAULT_MACRO_FALLBACK_FEEDS = Object.freeze([
 const MACRO_EVENT_RULES = Object.freeze([
   {
     type: "FED_MINUTES",
-    label: "Risalah Rapat Fed (Fed Minutes)",
+    label: NEWS_EVENT_LABELS.FED_MINUTES,
     patterns: [
       /fed(eral reserve)?\s+minutes/i,
       /fomc\s+minutes/i,
@@ -29,8 +43,34 @@ const MACRO_EVENT_RULES = Object.freeze([
     ],
   },
   {
+    type: "FED_PRESS_CONFERENCE",
+    label: NEWS_EVENT_LABELS.FED_PRESS_CONFERENCE,
+    patterns: [
+      /(?:fomc|fed|federal reserve|powell).{0,40}press conference/i,
+      /press conference.{0,40}(?:fomc|fed|federal reserve|powell)/i,
+    ],
+  },
+  {
+    type: "FED_PROJECTIONS",
+    label: NEWS_EVENT_LABELS.FED_PROJECTIONS,
+    patterns: [
+      /\bdot plot\b/i,
+      /summary of economic projections/i,
+      /\bsep\b.{0,40}(?:fed|fomc|projection)/i,
+      /(?:fed|fomc|projection).{0,40}\bsep\b/i,
+    ],
+  },
+  {
+    type: "FED_SPEECH",
+    label: NEWS_EVENT_LABELS.FED_SPEECH,
+    patterns: [
+      /\b(?:fed|federal reserve|powell|fomc)\b.{0,70}(?:speech|remarks|testimony|comments|speaks|address|interview)/i,
+      /(?:speech|remarks|testimony|comments|speaks|address|interview).{0,70}\b(?:fed|federal reserve|powell|fomc)\b/i,
+    ],
+  },
+  {
     type: "FOMC_RATE_DECISION",
-    label: "FOMC / Keputusan Suku Bunga Fed",
+    label: NEWS_EVENT_LABELS.FOMC_RATE_DECISION,
     patterns: [
       /\bfomc\b/i,
       /federal reserve.{0,40}(rate|interest|decision|hike|cut)/i,
@@ -41,8 +81,18 @@ const MACRO_EVENT_RULES = Object.freeze([
     ],
   },
   {
+    type: "PCE_INFLATION",
+    label: NEWS_EVENT_LABELS.PCE_INFLATION,
+    patterns: [
+      /\bpce\b/i,
+      /core pce/i,
+      /pce inflation/i,
+      /personal consumption expenditures?/i,
+    ],
+  },
+  {
     type: "CPI_INFLATION",
-    label: "CPI / Data Inflasi",
+    label: NEWS_EVENT_LABELS.CPI_INFLATION,
     patterns: [
       /\bcpi\b/i,
       /consumer price index/i,
@@ -53,7 +103,7 @@ const MACRO_EVENT_RULES = Object.freeze([
   },
   {
     type: "NFP_UNEMPLOYMENT",
-    label: "NFP / Pengangguran",
+    label: NEWS_EVENT_LABELS.NFP_UNEMPLOYMENT,
     patterns: [
       /\bnfp\b/i,
       /non[- ]farm payroll/i,
@@ -61,6 +111,85 @@ const MACRO_EVENT_RULES = Object.freeze([
       /unemployment rate/i,
       /jobs report/i,
       /employment report/i,
+    ],
+  },
+  {
+    type: "REGULATORY_SHOCK",
+    label: NEWS_EVENT_LABELS.REGULATORY_SHOCK,
+    patterns: [
+      /\b(?:sec|cftc)\b.{0,100}\b(?:crypto|bitcoin|ethereum|digital asset|stablecoin|token|coinbase|binance|kraken)\b/i,
+      /\b(?:crypto|bitcoin|ethereum|digital asset|stablecoin|token|coinbase|binance|kraken)\b.{0,100}\b(?:sec|cftc)\b/i,
+      /\b(?:crypto|bitcoin|ethereum|digital asset|stablecoin|token|coinbase|binance|kraken)\b.{0,80}(?:regulat|lawsuit|ban|approval|enforcement|court|legal)/i,
+    ],
+  },
+  {
+    type: "ETF_FLOW_SHOCK",
+    label: NEWS_EVENT_LABELS.ETF_FLOW_SHOCK,
+    patterns: [
+      /\b(?:spot )?(?:bitcoin|btc|ethereum|eth)\s+etf\b.{0,80}(?:inflow|outflow|flow|redemption|approval|launch)/i,
+      /\betf\b.{0,80}(?:inflow|outflow|flow|redemption|approval|launch).{0,80}\b(?:bitcoin|btc|ethereum|eth|crypto)\b/i,
+      /\b(?:inflow|outflow|fund flow|redemption)\b.{0,80}\betf\b.{0,80}\b(?:bitcoin|btc|ethereum|eth|crypto)\b/i,
+    ],
+  },
+  {
+    type: "STABLECOIN_DEPEG",
+    label: NEWS_EVENT_LABELS.STABLECOIN_DEPEG,
+    patterns: [
+      /\b(?:stablecoin|usdt|usdc|dai|fdusd)\b.{0,80}(?:depeg|peg|redemption|insolven|collapse)/i,
+      /(?:depeg|redemption|insolven|collapse).{0,80}\b(?:stablecoin|usdt|usdc|dai|fdusd)\b/i,
+    ],
+  },
+  {
+    type: "SECURITY_INCIDENT",
+    label: NEWS_EVENT_LABELS.SECURITY_INCIDENT,
+    patterns: [
+      /\b(?:crypto|bitcoin|ethereum|defi|protocol|bridge|wallet|coinbase|binance|kraken)\b.{0,80}(?:hack|exploit|breach|outage|halt|suspend|attack)/i,
+      /(?:hack|exploit|breach|outage|halt|suspend|attack).{0,80}\b(?:crypto|bitcoin|ethereum|defi|protocol|bridge|wallet|coinbase|binance|kraken)\b/i,
+    ],
+  },
+  {
+    type: "LIQUIDATION_EVENT",
+    label: NEWS_EVENT_LABELS.LIQUIDATION_EVENT,
+    patterns: [
+      /\b(?:bitcoin|crypto|ethereum|exchange|futures|altcoin)\b.{0,80}(?:liquidation|liquidations|liquidated|forced sell|long squeeze|short squeeze)/i,
+      /\b(?:long|short)\s+liquidations?\b/i,
+    ],
+  },
+  {
+    type: "GDP_GROWTH",
+    label: NEWS_EVENT_LABELS.GDP_GROWTH,
+    patterns: [
+      /\bgdp\b/i,
+      /gross domestic product/i,
+      /economic growth data/i,
+    ],
+  },
+  {
+    type: "PMI_ACTIVITY",
+    label: NEWS_EVENT_LABELS.PMI_ACTIVITY,
+    patterns: [
+      /\bpmi\b/i,
+      /purchasing managers'? index/i,
+      /ism (?:manufacturing|services)/i,
+    ],
+  },
+  {
+    type: "RETAIL_SALES",
+    label: NEWS_EVENT_LABELS.RETAIL_SALES,
+    patterns: [
+      /retail sales/i,
+      /advance monthly sales/i,
+      /retail trade/i,
+    ],
+  },
+  {
+    type: "JOBLESS_CLAIMS",
+    label: NEWS_EVENT_LABELS.JOBLESS_CLAIMS,
+    patterns: [
+      /jobless claims/i,
+      /initial claims/i,
+      /unemployment insurance claims/i,
+      /weekly claims/i,
     ],
   },
 ]);
@@ -117,7 +246,11 @@ function classifyMacroEvent(article) {
   if (!text) return null;
   for (const rule of MACRO_EVENT_RULES) {
     if (rule.patterns.some((pattern) => pattern.test(text))) {
-      return { type: rule.type, label: rule.label };
+      return {
+        type: rule.type,
+        label: rule.label,
+        tier: NEWS_EVENT_TIERS[rule.type] || "A",
+      };
     }
   }
   return null;
@@ -146,6 +279,7 @@ function normalizeArticle(article, nowMs, maxAgeMinutes) {
     publishedAt,
     eventType: macro.type,
     eventLabel: macro.label,
+    eventTier: macro.tier,
     ageMinutes: Math.max(0, Math.round(ageMs / 60_000)),
   };
 }
@@ -171,6 +305,12 @@ class CryptoNewsClient {
     this.queries = Array.isArray(options.queries) && options.queries.length
       ? options.queries
       : DEFAULT_MACRO_QUERIES;
+    this.searchBatchSize = Math.max(1, Number(
+      options.searchBatchSize
+        ?? cfg.GROK_NEWS_SEARCH_BATCH_SIZE
+        ?? 4,
+    ));
+    this.searchCursor = 0;
     this.fallbackFeeds = Array.isArray(options.fallbackFeeds)
       ? options.fallbackFeeds
       : DEFAULT_MACRO_FALLBACK_FEEDS;
@@ -206,6 +346,16 @@ class CryptoNewsClient {
     }
   }
 
+  _getSearchQueries() {
+    if (this.queries.length <= this.searchBatchSize) return this.queries;
+    const start = this.searchCursor % this.queries.length;
+    const count = Math.min(this.searchBatchSize, this.queries.length);
+    this.searchCursor = (start + count) % this.queries.length;
+    return Array.from({ length: count }, (_, index) => (
+      this.queries[(start + index) % this.queries.length]
+    ));
+  }
+
   async getHighImpactNews({ force = false } = {}) {
     // Macro news is global, not symbol-specific. Sharing this cache prevents
     // every BTC/ETH/SOL paper bot from issuing the same API requests.
@@ -213,6 +363,7 @@ class CryptoNewsClient {
       this.baseUrl,
       this.maxAgeMinutes,
       this.limit,
+      this.searchBatchSize,
       this.queries.join("|"),
       this.fallbackFeeds.map((feed) => feed.path).join("|"),
     ].join(":");
@@ -276,11 +427,13 @@ class CryptoNewsClient {
     )));
 
     if (unique.size === 0 && this.queries.length > 0) {
+      const searchQueries = this._getSearchQueries();
       const searchResponses = await Promise.allSettled(
-        this.queries.map((query) => this._get("/search", { q: query, limit: this.limit })),
+        searchQueries.map((query) => this._get("/search", { q: query, limit: this.limit })),
       );
       responseResults.push(...searchResponses);
-      diagnostics.searchQueries = this.queries.length;
+      diagnostics.searchQueries = searchQueries.length;
+      diagnostics.searchQueryNames = searchQueries;
       diagnostics.successfulSearches = searchResponses.filter((result) => result.status === "fulfilled").length;
       diagnostics.failedSearches = searchResponses.filter((result) => result.status === "rejected").length;
       diagnostics.rateLimitedSearches = searchResponses.filter((result) => (

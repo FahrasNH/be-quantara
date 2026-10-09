@@ -2233,8 +2233,8 @@ class BotEngine extends EventEmitter {
   /**
    * Siklus dry-run Grok berbasis news makro.
    *
-   * News adalah prerequisite keras. Tidak ada artikel FOMC/Fed minutes/CPI/NFP
-   * yang masih fresh berarti tidak ada request trade dan tidak ada paper entry.
+   * News adalah prerequisite keras. Tidak ada event Tier A/B yang masih fresh
+   * berarti tidak ada request trade dan tidak ada paper entry.
    * Jalur ini sengaja tidak pernah mengirim order live, bahkan bila ada bot lama
    * yang salah tersimpan dengan strategyKey ini.
    */

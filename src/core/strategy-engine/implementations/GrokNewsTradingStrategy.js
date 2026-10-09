@@ -12,7 +12,7 @@ class GrokNewsTradingStrategy extends StrategyBase {
     super({
       name: "GROK_NEWS_TRADING",
       label: "Grok News Trading (dry-run only)",
-      description: "Dry-run-only macro-news reaction strategy. Grok decides entry, SL, and TP only after fresh FOMC/Fed/CPI/NFP news.",
+      description: "Dry-run-only Tier A/B news reaction strategy. Grok decides entry, SL, and TP only after a fresh high-impact event.",
       version: "1.0.0",
       ...config,
     });

@@ -73,8 +73,23 @@ const prompt = GrokNewsTradingPromptBuilder.build({
 assert.strictEqual(prompt.hasRequiredSections, true);
 assert.match(prompt.text, /NEWS IS A HARD PREREQUISITE/);
 assert.match(prompt.text, /cpi-1/);
+assert.match(prompt.text, /ETF_FLOW_SHOCK/);
 assert.strictEqual(prompt.payload.news_required, true);
 assert.strictEqual(prompt.payload.min_risk_reward, 1.5);
+assert.strictEqual(prompt.payload.allowed_news_types.length, 17);
+assert.strictEqual(prompt.payload.allowed_news_tiers.FOMC_RATE_DECISION, "A");
+assert.strictEqual(prompt.payload.allowed_news_tiers.GDP_GROWTH, "B");
+assert.strictEqual(prompt.payload.allowed_news_types.includes("CRYPTO_GENERAL"), false);
+
+for (const eventType of prompt.payload.allowed_news_types) {
+  const eventNews = [{ ...news[0], id: `news-${eventType}`, eventType }];
+  const eventTrade = { ...validTrade, event_type: eventType, news_id: `news-${eventType}` };
+  assert.strictEqual(
+    GrokNewsTradingService.validateTrade(eventTrade, { ...ctx, news: eventNews }).valid,
+    true,
+    `event type ${eventType} should be accepted`,
+  );
+}
 
 async function runMockDecision() {
   const fixture = JSON.stringify({ trades: [validTrade], position_actions: [] });
