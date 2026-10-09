@@ -99,15 +99,26 @@ async function run() {
   assert.strictEqual(fallbackClient.lastDiagnostics.successfulFeeds, 2);
 
   _cache.clear();
+  let unavailableCalls = 0;
   const unavailableClient = new CryptoNewsClient({
     baseUrl: "https://unavailable.test/api",
     queries: ["macro"],
-    http: { get: async () => { throw new Error("network down"); } },
+    http: {
+      get: async () => {
+        unavailableCalls += 1;
+        throw new Error("network down");
+      },
+    },
   });
   await assert.rejects(
     () => unavailableClient.getHighImpactNews({ symbol: "BTCUSDT" }),
     (err) => err.code === "NEWS_API_UNAVAILABLE",
   );
+  await assert.rejects(
+    () => unavailableClient.getHighImpactNews({ symbol: "ETHUSDT" }),
+    (err) => err.code === "NEWS_API_UNAVAILABLE" && err.diagnostics.cacheHit === true,
+  );
+  assert.strictEqual(unavailableCalls, 3, "cached API failures must not re-hit the provider");
 }
 
 run().then(() => {

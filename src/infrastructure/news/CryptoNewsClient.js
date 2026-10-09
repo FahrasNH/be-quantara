@@ -218,8 +218,16 @@ class CryptoNewsClient {
     ].join(":");
     const cached = cache.get(cacheKey);
     const nowMs = this.now();
-    if (!force && cached && nowMs - cached.at < this.cacheTtlMs) {
+    const cachedTtlMs = cached?.error?.retryAfterMs || this.cacheTtlMs;
+    if (!force && cached && nowMs - cached.at < cachedTtlMs) {
       this.lastDiagnostics = { ...cached.diagnostics, cacheHit: true };
+      if (cached.error) {
+        const cachedError = new Error(cached.error.message);
+        cachedError.code = cached.error.code;
+        cachedError.retryAfterSeconds = cached.error.retryAfterSeconds;
+        cachedError.diagnostics = this.lastDiagnostics;
+        throw cachedError;
+      }
       return cached.value;
     }
 
@@ -238,6 +246,7 @@ class CryptoNewsClient {
     };
 
     const unique = new Map();
+    const responseResults = [];
     const addNormalized = (items) => {
       diagnostics.rawArticles += items.length;
       for (const item of items) {
@@ -255,6 +264,7 @@ class CryptoNewsClient {
         limit: this.limit,
       })),
     );
+    responseResults.push(...feedResponses);
     diagnostics.feedRequests = this.fallbackFeeds.length;
     diagnostics.successfulFeeds = feedResponses.filter((result) => result.status === "fulfilled").length;
     diagnostics.failedFeeds = feedResponses.filter((result) => result.status === "rejected").length;
@@ -269,6 +279,7 @@ class CryptoNewsClient {
       const searchResponses = await Promise.allSettled(
         this.queries.map((query) => this._get("/search", { q: query, limit: this.limit })),
       );
+      responseResults.push(...searchResponses);
       diagnostics.searchQueries = this.queries.length;
       diagnostics.successfulSearches = searchResponses.filter((result) => result.status === "fulfilled").length;
       diagnostics.failedSearches = searchResponses.filter((result) => result.status === "rejected").length;
@@ -284,12 +295,30 @@ class CryptoNewsClient {
       diagnostics.error = diagnostics.rateLimitedSearches + diagnostics.rateLimitedFeeds > 0
         ? "NEWS_API_RATE_LIMITED"
         : "NEWS_API_UNAVAILABLE";
+      const retryAfterSeconds = responseResults.reduce((max, result) => Math.max(
+        max,
+        Number(result.reason?.retryAfterSeconds) || 0,
+      ), 0);
+      if (retryAfterSeconds > 0) diagnostics.retryAfterSeconds = retryAfterSeconds;
       this.lastDiagnostics = diagnostics;
-      const error = new Error(diagnostics.error === "NEWS_API_RATE_LIMITED"
+      const errorMessage = diagnostics.error === "NEWS_API_RATE_LIMITED"
         ? "Crypto news API rate limit tercapai"
-        : "Crypto news API tidak dapat diakses");
+        : "Crypto news API tidak dapat diakses";
+      const error = new Error(errorMessage);
       error.code = diagnostics.error;
+      error.retryAfterSeconds = retryAfterSeconds > 0 ? retryAfterSeconds : null;
       error.diagnostics = diagnostics;
+      cache.set(cacheKey, {
+        at: nowMs,
+        value: [],
+        diagnostics,
+        error: {
+          code: error.code,
+          message: error.message,
+          retryAfterSeconds: error.retryAfterSeconds,
+          retryAfterMs: retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : this.cacheTtlMs,
+        },
+      });
       throw error;
     }
 
