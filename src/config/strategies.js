@@ -272,7 +272,7 @@ const EXPERIMENTAL_STRATEGY_CATALOG = Object.freeze([
   {
     key: "GROK_NEWS_TRADING",
     label: "Grok News Trading (dry-run only)",
-    description: "Paper-only macro-news reaction strategy using FOMC/Fed/CPI/NFP headlines.",
+    description: "Paper-only Tier A/B news reaction strategy; Tier C commentary is excluded.",
     status: "dry-run-only",
     tier: null,
     abbrev: STRATEGY_ABBREV.GROK_NEWS_TRADING,

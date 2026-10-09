@@ -77,6 +77,7 @@ const cfg = {
   GROK_NEWS_MAX_AGE_MINUTES:        parseInt(process.env.GROK_NEWS_MAX_AGE_MINUTES, 10) || 180,
   GROK_NEWS_MAX_ARTICLES:           parseInt(process.env.GROK_NEWS_MAX_ARTICLES, 10) || 20,
   GROK_NEWS_CACHE_TTL_MS:           parseInt(process.env.GROK_NEWS_CACHE_TTL_MS, 10) || 300_000,
+  GROK_NEWS_SEARCH_BATCH_SIZE:      parseInt(process.env.GROK_NEWS_SEARCH_BATCH_SIZE, 10) || 4,
   GROK_NEWS_ATR_MIN_MULT:           parseFloat(process.env.GROK_NEWS_ATR_MIN_MULT) || 1.0,
   GROK_NEWS_MIN_RISK_REWARD:        parseFloat(process.env.GROK_NEWS_MIN_RISK_REWARD) || 1.5,
   CRYPTO_NEWS_ENABLED:              process.env.CRYPTO_NEWS_ENABLED !== "false",
