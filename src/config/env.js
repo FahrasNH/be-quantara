@@ -49,6 +49,8 @@ const cfg = {
   XAI_COLLECTION_ID:      process.env.XAI_COLLECTION_ID || "",
   XAI_MODEL:              process.env.XAI_MODEL || "grok-4.3",
   XAI_TIMEOUT_MS:         parseInt(process.env.XAI_TIMEOUT_MS, 10) || 60_000,
+  // Hindari retry berulang ketika xAI key/team terkena 401/403/429.
+  XAI_ERROR_COOLDOWN_MS:  parseInt(process.env.XAI_ERROR_COOLDOWN_MS, 10) || 900_000,
   // Izinkan AI optimizer tanpa tier VAULT (dev/staging)
   XAI_OPTIMIZER_OPEN:     process.env.XAI_OPTIMIZER_OPEN === "true",
 
