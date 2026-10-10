@@ -2369,7 +2369,9 @@ class BotEngine extends EventEmitter {
         );
       }
     } catch (err) {
-      this._log("error", `[GROK NEWS] Request trade gagal — fail-closed: ${err.message}`);
+      const level = err?.code?.startsWith("XAI_") ? "warn" : "error";
+      const code = err?.code ? ` [${err.code}]` : "";
+      this._log(level, `[GROK NEWS] Request trade gagal${code} — fail-closed: ${err.message}`);
     }
   }
 
